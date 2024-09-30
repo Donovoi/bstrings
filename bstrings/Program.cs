@@ -42,7 +42,8 @@ internal class Program
         "\r\n\r\nAuthor: Eric Zimmerman (saericzimmerman@gmail.com)" +
         "\r\nhttps://github.com/EricZimmerman/bstrings";
 
-    private static readonly string Footer = @"Examples: bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls URL" + "\r\n\t " +
+    private static readonly string Footer = @"Examples: bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls URL" +
+                                            "\r\n\t " +
                                             @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr guid" + "\r\n\t " +
                                             @"   bstrings.exe -f ""C:\Temp\aBigFile.bin"" --fs c:\temp\searchStrings.txt --fr c:\temp\searchRegex.txt" +
                                             "\r\n\t " +
@@ -50,8 +51,10 @@ internal class Program
                                             @"   bstrings.exe -d ""C:\Temp"" --ar ""[\x20-\x37]""" + "\r\n\t " +
                                             @"   bstrings.exe -d ""C:\Temp"" --cp 10007" + "\r\n\t " +
                                             @"   bstrings.exe -d ""C:\Temp"" --ls test" + "\r\n\t " +
-                                            @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa" + "\r\n\t " +
-                                            @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa -m 15 -x 22" + "\r\n\t " +
+                                            @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa" +
+                                            "\r\n\t " +
+                                            @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa -m 15 -x 22" +
+                                            "\r\n\t " +
                                             @"   bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls mui --sl";
 
     private static RootCommand _rootCommand;
@@ -196,7 +199,9 @@ internal class Program
     }
 
 
-    private static void DoWork(string f, string d, string o, bool a, bool u, int m, int b, bool q, bool s, int x, bool p, string ls, string lr, string fs, string fr, string ar, string ur, int cp, string mask, int ms, bool ro, bool off, bool sa, bool sl, bool debug, bool trace)
+    private static void DoWork(string f, string d, string o, bool a, bool u, int m, int b, bool q, bool s, int x,
+        bool p, string ls, string lr, string fs, string fr, string ar, string ur, int cp, string mask, int ms, bool ro,
+        bool off, bool sa, bool sl, bool debug, bool trace)
     {
         var levelSwitch = new LoggingLevelSwitch();
         var template = "{Message:lj}{NewLine}{Exception}";
@@ -237,7 +242,9 @@ internal class Program
 
         if (cpTest == null)
         {
-            Log.Warning("Invalid codepage: '{Cp}'. Use the Identifier value for code pages at https://goo.gl/ig6DxW. Verify codepage value and try again", cp);
+            Log.Warning(
+                "Invalid codepage: '{Cp}'. Use the Identifier value for code pages at https://goo.gl/ig6DxW. Verify codepage value and try again",
+                cp);
             return;
         }
 
@@ -411,11 +418,15 @@ internal class Program
             {
                 if (totalChunks == 1)
                 {
-                    Log.Information("Searching {TotalChunks:N0} chunk ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'", totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
+                    Log.Information(
+                        "Searching {TotalChunks:N0} chunk ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
+                        totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
                 }
                 else
                 {
-                    Log.Information("Searching {TotalChunks:N0} chunks ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'", totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
+                    Log.Information(
+                        "Searching {TotalChunks:N0} chunks ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
+                        totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
                 }
 
 
@@ -468,7 +479,7 @@ internal class Program
 
                         if (u)
                         {
-                            var uh = GetUnicodeHits(chunk, minLength, maxLength, offset,
+                            var uh = GPUAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
                                 off, ur);
                             foreach (var h in uh)
                             {
@@ -492,7 +503,9 @@ internal class Program
                         if (!q)
                         {
                             Log.Information(
-                                "Chunk {ChunkIndex:N0} of {TotalChunks:N0} finished. Total strings so far: {HitsCount:N0} Elapsed time: {TotalSeconds:N3} seconds. Average strings/sec: {Speed:N0}", chunkIndex, totalChunks, hits.Count, _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
+                                "Chunk {ChunkIndex:N0} of {TotalChunks:N0} finished. Total strings so far: {HitsCount:N0} Elapsed time: {TotalSeconds:N3} seconds. Average strings/sec: {Speed:N0}",
+                                chunkIndex, totalChunks, hits.Count, _sw.Elapsed.TotalSeconds,
+                                hits.Count / _sw.Elapsed.TotalSeconds);
                         }
 
                         chunkIndex += 1;
@@ -527,7 +540,7 @@ internal class Program
 
                         if (u)
                         {
-                            var uh = GetUnicodeHits(chunk, minLength, maxLength, offset,
+                            var uh = GPUAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
                                 off, ur);
                             foreach (var h in uh)
                             {
@@ -727,7 +740,8 @@ internal class Program
                         }
                         catch (Exception ex)
                         {
-                            Log.Error(ex, "Error setting up regular expression '{RegString}': {Message}", regString, ex.Message);
+                            Log.Error(ex, "Error setting up regular expression '{RegString}': {Message}", regString,
+                                ex.Message);
                         }
                     }
                 }
@@ -761,11 +775,15 @@ internal class Program
 
             if (counter == 1)
             {
-                Log.Information("Found {Counter:N0} string in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter, _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
+                Log.Information(
+                    "Found {Counter:N0} string in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter,
+                    _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
             }
             else
             {
-                Log.Information("Found {Counter:N0} strings in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter, _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
+                Log.Information(
+                    "Found {Counter:N0} strings in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter,
+                    _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
             }
 
             globalCounter += counter;
@@ -773,7 +791,8 @@ internal class Program
             globalTimespan += _sw.Elapsed.TotalSeconds;
             if (files.Count > 1)
             {
-                Log.Information("-------------------------------------------------------------------------------------");
+                Log.Information(
+                    "-------------------------------------------------------------------------------------");
                 Console.WriteLine();
             }
         }
@@ -792,11 +811,15 @@ internal class Program
 
         if (globalCounter == 1)
         {
-            Log.Information("Total across {FilesCount:N0} files: Found {GlobalCounter:N0} string in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}", files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
+            Log.Information(
+                "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} string in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
+                files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
         }
         else
         {
-            Log.Information("Total across {FilesCount:N0} files: Found {GlobalCounter:N0} strings in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}", files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
+            Log.Information(
+                "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} strings in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
+                files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
         }
 
         Console.WriteLine();
@@ -926,8 +949,10 @@ internal class Program
         RegExPatterns.Add("mac", "\\b[0-9A-F]{2}([-:]?)(?:[0-9A-F]{2}\\1){4}[0-9A-F]{2}\\b");
         RegExPatterns.Add("ssn", "\\b(?!000)(?!666)[0-8][0-9]{2}[- ](?!00)[0-9]{2}[- ](?!0000)[0-9]{4}\\b");
         // RegExPatterns.Add("cc","^(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|6(?:011|5[0-9][0-9])[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|(?:2131|1800|35\\d{3})\\d{11})$");
-        RegExPatterns.Add("cc", @"^[ -]*(?:4[ -]*(?:\d[ -]*){11}(?:(?:\d[ -]*){3})?\d|5[ -]*[1-5](?:[ -]*[0-9]){14}|6[ -]*(?:0[ -]*1[ -]*1|5[ -]*\d[ -]*\d)(?:[ -]*[0-9]){12}|3[ -]*[47](?:[ -]*[0-9]){13}|3[ -]*(?:0[ -]*[0-5]|[68][ -]*[0-9])(?:[ -]*[0-9]){11}|(?:2[ -]*1[ -]*3[ -]*1|1[ -]*8[ -]*0[ -]*0|3[ -]*5(?:[ -]*[0-9]){3})(?:[ -]*[0-9]){11})[ -]*$");
-        RegExPatterns.Add("ipv4", @"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b");
+        RegExPatterns.Add("cc",
+            @"^[ -]*(?:4[ -]*(?:\d[ -]*){11}(?:(?:\d[ -]*){3})?\d|5[ -]*[1-5](?:[ -]*[0-9]){14}|6[ -]*(?:0[ -]*1[ -]*1|5[ -]*\d[ -]*\d)(?:[ -]*[0-9]){12}|3[ -]*[47](?:[ -]*[0-9]){13}|3[ -]*(?:0[ -]*[0-5]|[68][ -]*[0-9])(?:[ -]*[0-9]){11}|(?:2[ -]*1[ -]*3[ -]*1|1[ -]*8[ -]*0[ -]*0|3[ -]*5(?:[ -]*[0-9]){3})(?:[ -]*[0-9]){11})[ -]*$");
+        RegExPatterns.Add("ipv4",
+            @"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b");
         RegExPatterns.Add("ipv6", @"(?<![:.\w])(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}(?![:.\w])");
         //         RegExPatterns.Add("email",@"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?");
         RegExPatterns.Add("email", @"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,6}\b");
@@ -988,38 +1013,77 @@ internal class Program
         return sorted;
     }
 
-    private static List<string> GetUnicodeHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-        bool withOffsets, string ur)
-    {
-        var maxString = maxSize == -1 ? "" : maxSize.ToString();
-        var mi2 = $"{"{"}{minSize}{","}{maxString}{"}"}";
+    //private static List<string> GetUnicodeHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
+    //    bool withOffsets, string ur)
+    //{
+    //    var maxString = maxSize == -1 ? "" : maxSize.ToString();
+    //    var mi2 = $"{"{"}{minSize}{","}{maxString}{"}"}";
 
-        var uniRange = ur;
-        var regUni = new Regex($"{uniRange}{mi2}", RegexOptions.Compiled);
-        var uniString = Encoding.Unicode.GetString(bytes);
+    //    var uniRange = ur;
+    //    var regUni = new Regex($"{uniRange}{mi2}", RegexOptions.Compiled);
+    //    var uniString = Encoding.Unicode.GetString(bytes);
 
-        var hits = new List<string>();
+    //    var hits = new List<string>();
 
-        foreach (Match match in regUni.Matches(uniString))
-        {
-            if (withOffsets)
-            {
-                var actualOffset = (currentOffset + match.Index) * 2;
+    //    foreach (Match match in regUni.Matches(uniString))
+    //    {
+    //        if (withOffsets)
+    //        {
+    //            var actualOffset = (currentOffset + match.Index) * 2;
 
-                hits.Add($"{match.Value.Trim()}{'\t'}0x{actualOffset:X} (U)");
-            }
-            else
-            {
-                hits.Add(match.Value.Trim());
-            }
-        }
+    //            hits.Add($"{match.Value.Trim()}{'\t'}0x{actualOffset:X} (U)");
+    //        }
+    //        else
+    //        {
+    //            hits.Add(match.Value.Trim());
+    //        }
+    //    }
 
-        return hits;
-    }
+    //    return hits;
+    //}
+
+    //    private static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
+    //        bool withOffsets, int cp, string ar)
+    //    {
+    //        var maxString = maxSize == -1 ? "" : maxSize.ToString();
+    //        var mi2 = $"{"{"}{minSize}{","}{maxString}{"}"}";
+
+    //        var ascRange = ar;
+    //        var regAsc = new Regex($"{ascRange}{mi2}", RegexOptions.Compiled);
+
+    //        var codePage = CodePagesEncodingProvider.Instance.GetEncoding(cp);
+    //        var ascString = codePage!.GetString(bytes);
+
+    //        var hits = new List<string>();
+
+    //        foreach (Match match in regAsc.Matches(ascString))
+    //        {
+    //            if (withOffsets)
+    //            {
+    //                var matchBytes = codePage!
+    //                    .GetBytes(match.Value);
+
+    //                var pos = ByteSearch(bytes, matchBytes, match.Index);
+
+    //                var actualOffset = currentOffset + pos;
+
+    //                hits.Add($"{match.Value.Trim()}{'\t'}0x{actualOffset:X} (A)");
+    //            }
+    //            else
+    //            {
+    //                hits.Add(match.Value.Trim());
+    //            }
+    //        }
+
+    //        return hits;
+    //    }
+    //}
 
     public static class GPUAcceleratedSearch
     {
-        public static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset, bool withOffsets, int cp, string ar)
+        // ASCII Hits Function
+        public static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
+            bool withOffsets, int cp, string ar)
         {
             var maxString = maxSize == -1 ? "" : maxSize.ToString();
             var mi2 = $"{{{minSize},{maxString}}}";
@@ -1031,17 +1095,9 @@ internal class Program
 
             var hits = new List<string>();
 
-            // Create ILGPU Context and select OpenCL Accelerator
-            using Context context = Context.Create(builder => builder.OpenCL());
-            var openCLDevices = context.GetCLDevices();
-
-            // Check if any OpenCL devices are available
-            if (openCLDevices.Count < 1)
-            {
-                throw new InvalidOperationException("No OpenCL accelerators found.");
-            }
-
-            using Accelerator accelerator = context.CreateCLAccelerator(0);
+            // Create ILGPU Context and select preferred GPU Accelerator
+            using var context = Context.CreateDefault();
+            var accelerator = context.GetPreferredDevice(false).CreateAccelerator(context);
 
             foreach (Match match in regAsc.Matches(ascString))
             {
@@ -1050,25 +1106,25 @@ internal class Program
                     var matchBytes = codePage.GetBytes(match.Value);
 
                     // Allocate buffers on the GPU
-                    using MemoryBuffer1D<byte, Stride1D.Dense> searchInBuffer = accelerator.Allocate1D<byte>(bytes);
-                    using MemoryBuffer1D<byte, Stride1D.Dense> searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
-                    using MemoryBuffer1D<int, Stride1D.Dense> resultBuffer = accelerator.Allocate1D<int>(1);
+                    using var searchInBuffer = accelerator.Allocate1D<byte>(bytes);
+                    using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
+                    using var resultBuffer = accelerator.Allocate1D<int>(1);
 
                     // Copy the data into GPU memory
                     searchInBuffer.CopyFromCPU(bytes);
                     searchBytesBuffer.CopyFromCPU(matchBytes);
                     resultBuffer.MemSetToZero();
 
-                    // Define the kernel
-                    var kernel = accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(ByteSearchKernel);
+                    // Define and launch the kernel
+                    var kernel =
+                        accelerator
+                            .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(
+                                ByteSearchKernel);
+                    kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View,
+                        resultBuffer.View);
 
-                    // Launch the kernel using the .View property for ArrayView arguments and casting long to int
-                    kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View, resultBuffer.View);
-
-                    // Wait for the kernel to finish
+                    // Synchronize and retrieve the result
                     accelerator.Synchronize();
-
-                    // Retrieve the result from the GPU
                     var result = new int[1];
                     resultBuffer.CopyToCPU(result);
 
@@ -1087,8 +1143,71 @@ internal class Program
             return hits;
         }
 
-        // ILGPU Kernel function for byte search
-        static void ByteSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<byte> searchBytes, ArrayView<int> result)
+        // Unicode Hits Function
+
+
+        public static List<string> GetUnicodeHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
+            bool withOffsets, string ur)
+        {
+            var maxString = maxSize == -1 ? "" : maxSize.ToString();
+            var mi2 = $"{{{minSize},{maxString}}}";
+            var uniRange = ur;
+            var regUni = new Regex($"{uniRange}{mi2}", RegexOptions.Compiled);
+            var uniString = Encoding.Unicode.GetString(bytes);
+
+            var hits = new List<string>();
+
+            // Create ILGPU Context and select preferred GPU Accelerator
+            using var context = Context.CreateDefault();
+            var accelerator = context.GetPreferredDevice(false).CreateAccelerator(context);
+
+            foreach (Match match in regUni.Matches(uniString))
+            {
+                if (withOffsets)
+                {
+                    var matchBytes = Encoding.Unicode.GetBytes(match.Value);
+
+                    // Allocate buffers on the GPU
+                    using var searchInBuffer = accelerator.Allocate1D<byte>(bytes);
+                    using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
+                    using var resultBuffer = accelerator.Allocate1D<int>(1);
+
+                    // Copy the data into GPU memory
+                    searchInBuffer.CopyFromCPU(bytes);
+                    searchBytesBuffer.CopyFromCPU(matchBytes);
+                    resultBuffer.MemSetToZero();
+
+                    // Define and launch the kernel
+                    var kernel =
+                        accelerator
+                            .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(
+                                ByteSearchKernel);
+                    kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View,
+                        resultBuffer.View);
+
+                    // Synchronize and retrieve the result
+                    accelerator.Synchronize();
+                    var result = new int[1];
+                    resultBuffer.CopyToCPU(result);
+
+                    if (result[0] >= 0)
+                    {
+                        var actualOffset = currentOffset + result[0] * 2; // Adjust for Unicode size
+                        hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (U)");
+                    }
+                }
+                else
+                {
+                    hits.Add(match.Value.Trim());
+                }
+            }
+
+            return hits;
+        }
+
+        // Kernel function for byte pattern search
+        private static void ByteSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<byte> searchBytes,
+            ArrayView<int> result)
         {
             int start = index;
             if (start + searchBytes.Length > searchIn.Length)
@@ -1112,5 +1231,4 @@ internal class Program
             }
         }
     }
-
 }
