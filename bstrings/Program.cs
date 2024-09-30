@@ -37,6 +37,8 @@ internal class Program
     private static readonly Dictionary<string, string> RegExPatterns = new Dictionary<string, string>();
     private static readonly Dictionary<string, string> RegExDesc = new Dictionary<string, string>();
 
+    public static int ChunkSizeBytes;
+
     private static readonly string Header =
         $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version}" +
         "\r\n\r\nAuthor: Eric Zimmerman (saericzimmerman@gmail.com)" +
@@ -392,7 +394,8 @@ internal class Program
                                   b > 1024
                     ? 512
                     : b;
-                var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
+                int chunkSizeBytes = chunkSizeMb * 1024 * 1024;
+                GPUAcceleratedSearch.ChunkSizeBytes = chunkSizeBytes;
 
                 var fileSizeBytes = new FileInfo(file).Length;
 
@@ -436,16 +439,15 @@ internal class Program
 
                     try
                     {
-                        FileStream fileStream;
+                        var fileStream =
+                            //#if NET6_0
+                            File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
 
-                        //#if NET6_0
-                        fileStream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
                         //#else
                         //                    fileStream =
                         //                        File.Open(File.GetFileSystemEntryInfo(file).LongFullPath, FileMode.Open, FileAccess.Read,
                         //                            FileShare.Read, PathFormat.LongFullPath);
                         //#endif
-
                         mappedStream = MappedStream.FromStream(fileStream, Ownership.None);
                     }
                     catch (Exception)
@@ -793,8 +795,8 @@ internal class Program
                     Console.WriteLine();
                 }
             }
-
-            if (sw != null)
+            // if sw is not closed and not null, close it
+            if (sw != null && sw.BaseStream != null && sw.BaseStream.CanWrite)
             {
                 sw.Flush();
                 sw.Close();
@@ -1079,124 +1081,129 @@ internal class Program
 
     public static class GPUAcceleratedSearch
     {
-        // ASCII Hits Function
+        public static int ChunkSizeBytes { get; internal set; }
+
+        // ASCII Hits Function with Chunk Processing
         public static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-            bool withOffsets, int cp, string ar)
+                                                bool withOffsets, int cp, string ar)
         {
             var maxString = maxSize == -1 ? "" : maxSize.ToString();
             var mi2 = $"{{{minSize},{maxString}}}";
             var ascRange = ar;
             var regAsc = new Regex($"{ascRange}{mi2}", RegexOptions.Compiled);
-
             var codePage = CodePagesEncodingProvider.Instance.GetEncoding(cp);
-            var ascString = codePage!.GetString(bytes);
-
             var hits = new List<string>();
 
             // Create ILGPU Context and select preferred GPU Accelerator
             using var context = Context.CreateDefault();
-            var accelerator = context.GetPreferredDevice(false).CreateAccelerator(context);
+            using var accelerator = context.GetPreferredDevice(false).CreateAccelerator(context);
 
-            foreach (Match match in regAsc.Matches(ascString))
+            // Process data in chunks
+            for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
-                if (withOffsets)
+                int chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
+                var chunk = new ArraySegment<byte>(bytes, (int)i, chunkSize).ToArray();
+
+                var ascString = codePage!.GetString(chunk);
+                foreach (Match match in regAsc.Matches(ascString))
                 {
-                    var matchBytes = codePage.GetBytes(match.Value);
-
-                    // Allocate buffers on the GPU
-                    using var searchInBuffer = accelerator.Allocate1D<byte>(bytes);
-                    using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
-                    using var resultBuffer = accelerator.Allocate1D<int>(1);
-
-                    // Copy the data into GPU memory
-                    searchInBuffer.CopyFromCPU(bytes);
-                    searchBytesBuffer.CopyFromCPU(matchBytes);
-                    resultBuffer.MemSetToZero();
-
-                    // Define and launch the kernel
-                    var kernel =
-                        accelerator
-                            .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(
-                                ByteSearchKernel);
-                    kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View,
-                        resultBuffer.View);
-
-                    // Synchronize and retrieve the result
-                    accelerator.Synchronize();
-                    var result = new int[1];
-                    resultBuffer.CopyToCPU(result);
-
-                    if (result[0] >= 0)
+                    if (withOffsets)
                     {
-                        var actualOffset = currentOffset + result[0];
-                        hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (A)");
+                        var matchBytes = codePage.GetBytes(match.Value);
+
+                        // Allocate buffers on the GPU
+                        using var searchInBuffer = accelerator.Allocate1D<byte>(chunk);
+                        using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
+                        using var resultBuffer = accelerator.Allocate1D<int>(1);
+
+                        // Copy data into GPU memory
+                        searchInBuffer.CopyFromCPU(chunk);
+                        searchBytesBuffer.CopyFromCPU(matchBytes);
+                        resultBuffer.MemSetToZero();
+
+                        // Define and launch the kernel
+                        var kernel = accelerator
+                            .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(ByteSearchKernel);
+                        kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View, resultBuffer.View);
+
+                        // Synchronize and retrieve the result
+                        accelerator.Synchronize();
+                        var result = new int[1];
+                        resultBuffer.CopyToCPU(result);
+
+                        if (result[0] >= 0)
+                        {
+                            var actualOffset = currentOffset + i + result[0];
+                            hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (A)");
+                        }
                     }
-                }
-                else
-                {
-                    hits.Add(match.Value.Trim());
+                    else
+                    {
+                        hits.Add(match.Value.Trim());
+                    }
                 }
             }
 
             return hits;
         }
 
-        // Unicode Hits Function
-
-
+        // Unicode Hits Function with Chunk Processing
         public static List<string> GetUnicodeHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-            bool withOffsets, string ur)
+                                                  bool withOffsets, string ur)
         {
             var maxString = maxSize == -1 ? "" : maxSize.ToString();
             var mi2 = $"{{{minSize},{maxString}}}";
             var uniRange = ur;
             var regUni = new Regex($"{uniRange}{mi2}", RegexOptions.Compiled);
-            var uniString = Encoding.Unicode.GetString(bytes);
-
             var hits = new List<string>();
 
             // Create ILGPU Context and select preferred GPU Accelerator
             using var context = Context.CreateDefault();
-            var accelerator = context.GetPreferredDevice(false).CreateAccelerator(context);
+            using var accelerator = context.GetPreferredDevice(false).CreateAccelerator(context);
 
-            foreach (Match match in regUni.Matches(uniString))
+            // Process data in chunks
+            for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
-                if (withOffsets)
+                int chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
+                var chunk = new ArraySegment<byte>(bytes, (int)i, chunkSize).ToArray();
+
+                var uniString = Encoding.Unicode.GetString(chunk);
+                foreach (Match match in regUni.Matches(uniString))
                 {
-                    var matchBytes = Encoding.Unicode.GetBytes(match.Value);
-
-                    // Allocate buffers on the GPU
-                    using var searchInBuffer = accelerator.Allocate1D<byte>(bytes);
-                    using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
-                    using var resultBuffer = accelerator.Allocate1D<int>(1);
-
-                    // Copy the data into GPU memory
-                    searchInBuffer.CopyFromCPU(bytes);
-                    searchBytesBuffer.CopyFromCPU(matchBytes);
-                    resultBuffer.MemSetToZero();
-
-                    // Define and launch the kernel
-                    var kernel =
-                        accelerator
-                            .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(
-                                ByteSearchKernel);
-                    kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View,
-                        resultBuffer.View);
-
-                    // Synchronize and retrieve the result
-                    accelerator.Synchronize();
-                    var result = new int[1];
-                    resultBuffer.CopyToCPU(result);
-
-                    if (result[0] >= 0)
+                    if (withOffsets)
                     {
-                        var actualOffset = currentOffset + result[0] * 2; // Adjust for Unicode size
-                        hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (U)");
+                        var matchBytes = Encoding.Unicode.GetBytes(match.Value);
+
+                        // Allocate buffers on the GPU
+                        using var searchInBuffer = accelerator.Allocate1D<byte>(chunk);
+                        using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
+                        using var resultBuffer = accelerator.Allocate1D<int>(1);
+
+                        // Copy data into GPU memory
+                        searchInBuffer.CopyFromCPU(chunk);
+                        searchBytesBuffer.CopyFromCPU(matchBytes);
+                        resultBuffer.MemSetToZero();
+
+                        // Define and launch the kernel
+                        var kernel = accelerator
+                            .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(ByteSearchKernel);
+                        kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View, resultBuffer.View);
+
+                        // Synchronize and retrieve the result
+                        accelerator.Synchronize();
+                        var result = new int[1];
+                        resultBuffer.CopyToCPU(result);
+
+                        if (result[0] >= 0)
+                        {
+                            var actualOffset = currentOffset + i + result[0] * 2; // Adjust for Unicode size
+                            hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (U)");
+                        }
                     }
-                }
-                else
-                {
-                    hits.Add(match.Value.Trim());
+                    else
+                    {
+                        hits.Add(match.Value.Trim());
+                    }
                 }
             }
 
@@ -1204,8 +1211,7 @@ internal class Program
         }
 
         // Kernel function for byte pattern search
-        private static void ByteSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<byte> searchBytes,
-            ArrayView<int> result)
+        private static void ByteSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<byte> searchBytes, ArrayView<int> result)
         {
             int start = index;
             if (start + searchBytes.Length > searchIn.Length)
