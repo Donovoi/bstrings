@@ -200,7 +200,7 @@ internal class Program
 
 
     private static void DoWork(string f, string d, string o, bool a, bool u, int m, int b, bool q, bool s, int x,
-        bool p, string ls, string lr, string fs, string fr, string ar, string ur, int cp, string mask, int ms, bool ro,
+        bool p, string ls, string[] lr, string fs, string fr, string ar, string ur, int cp, string mask, int ms, bool ro,
         bool off, bool sa, bool sl, bool debug, bool trace)
     {
         var levelSwitch = new LoggingLevelSwitch();
@@ -282,10 +282,7 @@ internal class Program
         {
             try
             {
-                // create an enum for search options to ignore access denied errors
-                var options = DirectoryEnumerationOptions.ContinueOnException;
-                // also add the option to recurse into subdirectories
-                options |= DirectoryEnumerationOptions.Recursive;
+                var options = DirectoryEnumerationOptions.ContinueOnException | DirectoryEnumerationOptions.Recursive;
 
                 files.AddRange(!string.IsNullOrEmpty(mask)
                     ? Directory.EnumerateFiles(Path.GetFullPath(d!), mask, options)
@@ -304,15 +301,13 @@ internal class Program
             Console.WriteLine();
         }
 
-
         StreamWriter sw = null;
-
         var globalCounter = 0;
         var globalHits = 0;
         double globalTimespan = 0;
         var withBoundaryHits = false;
 
-        if (string.IsNullOrEmpty(o) == false && o.Length > 0)
+        if (!string.IsNullOrEmpty(o) && o.Length > 0)
         {
             o = Path.GetFullPath(o).TrimEnd('\\');
 
@@ -352,7 +347,6 @@ internal class Program
             }
         }
 
-
         foreach (var file in files)
         {
             if (File.Exists(file) == false)
@@ -365,322 +359,392 @@ internal class Program
             var counter = 0;
             var hits = new HashSet<string>();
 
-            var regPattern = lr;
-
-            if (regPattern != null && RegExPatterns.ContainsKey(lr))
+            // Iterate over multiple regex patterns
+            foreach (var pattern in lr)
             {
-                regPattern = RegExPatterns[lr];
-            }
+                var regPattern = pattern;
 
-            if (regPattern?.Length > 0 && !q)
-            {
-                Log.Information("Searching via RegEx pattern: {RegPattern}", regPattern);
-                Console.WriteLine();
-            }
-
-            var minLength = 3;
-            if (m > 0)
-            {
-                minLength = m;
-            }
-
-            var maxLength = -1;
-
-            if (x > minLength)
-            {
-                maxLength = x;
-            }
-
-            var chunkSizeMb = b < 1 ||
-                              b > 1024
-                ? 512
-                : b;
-            var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
-
-            var fileSizeBytes = new FileInfo(file).Length;
-
-            if (ms > 0)
-            {
-                if (fileSizeBytes > ms)
+                if (regPattern != null && RegExPatterns.ContainsKey(pattern))
                 {
-                    Log.Warning("'{File}' is bigger than max file size of {Ms:N0} bytes! Skipping...", file, ms);
-                    continue;
-                }
-            }
-
-            var bytesRemaining = fileSizeBytes;
-            long offset = 0;
-
-            var chunkIndex = 1;
-            var totalChunks = fileSizeBytes / chunkSizeBytes + 1;
-
-            if (!q)
-            {
-                if (totalChunks == 1)
-                {
-                    Log.Information(
-                        "Searching {TotalChunks:N0} chunk ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
-                        totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
-                }
-                else
-                {
-                    Log.Information(
-                        "Searching {TotalChunks:N0} chunks ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
-                        totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
+                    regPattern = RegExPatterns[pattern];
                 }
 
+                if (regPattern?.Length > 0 && !q)
+                {
+                    Log.Information("Searching via RegEx pattern: {RegPattern}", regPattern);
+                    Console.WriteLine();
+                }
 
-                Console.WriteLine();
-            }
+                var minLength = 3;
+                if (m > 0)
+                {
+                    minLength = m;
+                }
 
-            try
-            {
-                MappedStream mappedStream = null;
+                var maxLength = -1;
+
+                if (x > minLength)
+                {
+                    maxLength = x;
+                }
+
+                var chunkSizeMb = b < 1 ||
+                                  b > 1024
+                    ? 512
+                    : b;
+                var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
+
+                var fileSizeBytes = new FileInfo(file).Length;
+
+                if (ms > 0)
+                {
+                    if (fileSizeBytes > ms)
+                    {
+                        Log.Warning("'{File}' is bigger than max file size of {Ms:N0} bytes! Skipping...", file, ms);
+                        continue;
+                    }
+                }
+
+                var bytesRemaining = fileSizeBytes;
+                long offset = 0;
+
+                var chunkIndex = 1;
+                var totalChunks = fileSizeBytes / chunkSizeBytes + 1;
+
+                if (!q)
+                {
+                    if (totalChunks == 1)
+                    {
+                        Log.Information(
+                            "Searching {TotalChunks:N0} chunk ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
+                            totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
+                    }
+                    else
+                    {
+                        Log.Information(
+                            "Searching {TotalChunks:N0} chunks ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
+                            totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
+                    }
+
+
+                    Console.WriteLine();
+                }
 
                 try
                 {
-                    FileStream fileStream;
+                    MappedStream mappedStream = null;
 
-                    //#if NET6_0
-                    fileStream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
-                    //#else
-                    //                    fileStream =
-                    //                        File.Open(File.GetFileSystemEntryInfo(file).LongFullPath, FileMode.Open, FileAccess.Read,
-                    //                            FileShare.Read, PathFormat.LongFullPath);
-                    //#endif
-
-                    mappedStream = MappedStream.FromStream(fileStream, Ownership.None);
-                }
-                catch (Exception)
-                {
-                    // ignored
-                }
-
-                if (mappedStream == null)
-                {
-                    //raw mode
-                    var ss = OpenFile(file);
-
-                    mappedStream = MappedStream.FromStream(ss, Ownership.None);
-                }
-
-                using (mappedStream)
-                {
-                    while (bytesRemaining > 0)
+                    try
                     {
-                        if (bytesRemaining <= chunkSizeBytes)
+                        FileStream fileStream;
+
+                        //#if NET6_0
+                        fileStream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+                        //#else
+                        //                    fileStream =
+                        //                        File.Open(File.GetFileSystemEntryInfo(file).LongFullPath, FileMode.Open, FileAccess.Read,
+                        //                            FileShare.Read, PathFormat.LongFullPath);
+                        //#endif
+
+                        mappedStream = MappedStream.FromStream(fileStream, Ownership.None);
+                    }
+                    catch (Exception)
+                    {
+                        // ignored
+                    }
+
+                    if (mappedStream == null)
+                    {
+                        //raw mode
+                        var ss = OpenFile(file);
+
+                        mappedStream = MappedStream.FromStream(ss, Ownership.None);
+                    }
+
+                    using (mappedStream)
+                    {
+                        while (bytesRemaining > 0)
                         {
-                            chunkSizeBytes = (int)bytesRemaining;
-                        }
-
-                        var chunk = new byte[chunkSizeBytes];
-
-                        mappedStream.Read(chunk, 0, chunkSizeBytes);
-
-                        if (u)
-                        {
-                            var uh = GPUAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
-                                off, ur);
-                            foreach (var h in uh)
+                            if (bytesRemaining <= chunkSizeBytes)
                             {
-                                hits.Add(h);
+                                chunkSizeBytes = (int)bytesRemaining;
                             }
-                        }
 
-                        if (a)
-                        {
-                            var ah = GPUAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
-                                off, cp, ar);
-                            foreach (var h in ah)
+                            var chunk = new byte[chunkSizeBytes];
+
+                            mappedStream.Read(chunk, 0, chunkSizeBytes);
+
+                            if (u)
                             {
-                                hits.Add(h);
+                                var uh = GPUAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
+                                    off, ur);
+                                foreach (var h in uh)
+                                {
+                                    hits.Add(h);
+                                }
                             }
+
+                            if (a)
+                            {
+                                var ah = GPUAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
+                                    off, cp, ar);
+                                foreach (var h in ah)
+                                {
+                                    hits.Add(h);
+                                }
+                            }
+
+                            offset += chunkSizeBytes;
+                            bytesRemaining -= chunkSizeBytes;
+
+                            if (!q)
+                            {
+                                Log.Information(
+                                    "Chunk {ChunkIndex:N0} of {TotalChunks:N0} finished. Total strings so far: {HitsCount:N0} Elapsed time: {TotalSeconds:N3} seconds. Average strings/sec: {Speed:N0}",
+                                    chunkIndex, totalChunks, hits.Count, _sw.Elapsed.TotalSeconds,
+                                    hits.Count / _sw.Elapsed.TotalSeconds);
+                            }
+
+                            chunkIndex += 1;
                         }
 
-                        offset += chunkSizeBytes;
-                        bytesRemaining -= chunkSizeBytes;
+                        //do chunk boundary checks to make sure we get everything and not split things
 
                         if (!q)
                         {
-                            Log.Information(
-                                "Chunk {ChunkIndex:N0} of {TotalChunks:N0} finished. Total strings so far: {HitsCount:N0} Elapsed time: {TotalSeconds:N3} seconds. Average strings/sec: {Speed:N0}",
-                                chunkIndex, totalChunks, hits.Count, _sw.Elapsed.TotalSeconds,
-                                hits.Count / _sw.Elapsed.TotalSeconds);
+                            Log.Information("Primary search complete. Looking for strings across chunk boundaries...");
                         }
 
-                        chunkIndex += 1;
-                    }
+                        bytesRemaining = fileSizeBytes;
+                        chunkSizeBytes = chunkSizeMb * 1024 * 1024;
+                        offset = chunkSizeBytes - m * 10 * 2;
+                        //move starting point backwards for our starting point
+                        chunkIndex = 0;
 
-                    //do chunk boundary checks to make sure we get everything and not split things
+                        var boundaryChunkSize = m * 10 * 2 * 2;
+                        //grab the same # of bytes on both sides of the boundary
 
-                    if (!q)
-                    {
-                        Log.Information("Primary search complete. Looking for strings across chunk boundaries...");
-                    }
-
-                    bytesRemaining = fileSizeBytes;
-                    chunkSizeBytes = chunkSizeMb * 1024 * 1024;
-                    offset = chunkSizeBytes - m * 10 * 2;
-                    //move starting point backwards for our starting point
-                    chunkIndex = 0;
-
-                    var boundaryChunkSize = m * 10 * 2 * 2;
-                    //grab the same # of bytes on both sides of the boundary
-
-                    while (bytesRemaining > 0)
-                    {
-                        if (offset + boundaryChunkSize > fileSizeBytes)
+                        while (bytesRemaining > 0)
                         {
-                            break;
+                            if (offset + boundaryChunkSize > fileSizeBytes)
+                            {
+                                break;
+                            }
+
+                            var chunk = new byte[boundaryChunkSize];
+
+                            mappedStream.Read(chunk, 0, boundaryChunkSize);
+
+                            if (u)
+                            {
+                                var uh = GPUAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
+                                    off, ur);
+                                foreach (var h in uh)
+                                {
+                                    hits.Add("  " + h);
+                                }
+
+                                if (withBoundaryHits == false && uh.Count > 0)
+                                {
+                                    withBoundaryHits = uh.Count > 0;
+                                }
+                            }
+
+                            if (a)
+                            {
+                                var ah = GPUAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
+                                    off, cp, ar);
+                                foreach (var h in ah)
+                                {
+                                    hits.Add("  " + h);
+                                }
+
+                                if (withBoundaryHits == false && ah.Count > 0)
+                                {
+                                    withBoundaryHits = true;
+                                }
+                            }
+
+                            offset += chunkSizeBytes;
+                            bytesRemaining -= chunkSizeBytes;
+
+                            chunkIndex += 1;
                         }
-
-                        var chunk = new byte[boundaryChunkSize];
-
-                        mappedStream.Read(chunk, 0, boundaryChunkSize);
-
-                        if (u)
-                        {
-                            var uh = GPUAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
-                                off, ur);
-                            foreach (var h in uh)
-                            {
-                                hits.Add("  " + h);
-                            }
-
-                            if (withBoundaryHits == false && uh.Count > 0)
-                            {
-                                withBoundaryHits = uh.Count > 0;
-                            }
-                        }
-
-                        if (a)
-                        {
-                            var ah = GPUAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
-                                off, cp, ar);
-                            foreach (var h in ah)
-                            {
-                                hits.Add("  " + h);
-                            }
-
-                            if (withBoundaryHits == false && ah.Count > 0)
-                            {
-                                withBoundaryHits = true;
-                            }
-                        }
-
-                        offset += chunkSizeBytes;
-                        bytesRemaining -= chunkSizeBytes;
-
-                        chunkIndex += 1;
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine();
-                Log.Error(ex, "Error: {Message}", ex.Message);
-            }
-
-            _sw.Stop();
-
-            if (!q)
-            {
-                Log.Information("Search complete.");
-                Console.WriteLine();
-            }
-
-            if (sa)
-            {
-                Log.Information("Sorting alphabetically...");
-                Console.WriteLine();
-                var tempList = hits.ToList();
-                tempList.Sort();
-                hits = new HashSet<string>(tempList);
-            }
-            else if (sl)
-            {
-                Log.Information("Sorting by length...");
-                Console.WriteLine();
-                var tempList = SortByLength(hits.ToList()).ToList();
-                hits = new HashSet<string>(tempList);
-            }
-
-            var fileStrings = new HashSet<string>();
-            var regexStrings = new HashSet<string>();
-
-            //set up highlighting
-            if (ls?.Length > 0)
-            {
-                fileStrings.Add(ls);
-            }
-
-            if (lr?.Length > 0)
-            {
-                regexStrings.Add(regPattern);
-            }
-
-            if (string.IsNullOrEmpty(fs) == false || string.IsNullOrEmpty(fr) == false)
-            {
-                if (fs?.Length > 0)
+                catch (Exception ex)
                 {
-                    if (File.Exists(fs))
+                    Console.WriteLine();
+                    Log.Error(ex, "Error: {Message}", ex.Message);
+                }
+
+                _sw.Stop();
+
+                if (!q)
+                {
+                    Log.Information("Search complete.");
+                    Console.WriteLine();
+                }
+
+                if (sa)
+                {
+                    Log.Information("Sorting alphabetically...");
+                    Console.WriteLine();
+                    var tempList = hits.ToList();
+                    tempList.Sort();
+                    hits = new HashSet<string>(tempList);
+                }
+                else if (sl)
+                {
+                    Log.Information("Sorting by length...");
+                    Console.WriteLine();
+                    var tempList = SortByLength(hits.ToList()).ToList();
+                    hits = new HashSet<string>(tempList);
+                }
+
+                var fileStrings = new HashSet<string>();
+                var regexStrings = new HashSet<string>();
+
+                //set up highlighting
+                if (ls?.Length > 0)
+                {
+                    fileStrings.Add(ls);
+                }
+
+                if (lr?.Length > 0)
+                {
+                    regexStrings.Add(regPattern);
+                }
+
+                if (string.IsNullOrEmpty(fs) == false || string.IsNullOrEmpty(fr) == false)
+                {
+                    if (fs?.Length > 0)
                     {
-                        fileStrings.UnionWith(new HashSet<string>(File.ReadAllLines(fs)));
+                        if (File.Exists(fs))
+                        {
+                            fileStrings.UnionWith(new HashSet<string>(File.ReadAllLines(fs)));
+                        }
+                        else
+                        {
+                            Log.Error("Strings file '{Fs}' not found", fs);
+                        }
+                    }
+
+                    if (fr?.Length > 0)
+                    {
+                        if (File.Exists(fr))
+                        {
+                            regexStrings.UnionWith(new HashSet<string>(File.ReadAllLines(fr)));
+                        }
+                        else
+                        {
+                            Log.Error("Regex file '{Fr}' not found", fr);
+                        }
+                    }
+                }
+
+                //AddHighlightingRules(fileStrings.ToList());
+
+                if (ro == false)
+                {
+                    //  AddHighlightingRules(regexStrings.ToList(), true);
+                }
+
+
+                if (!q)
+                {
+                    Log.Information("Processing strings...");
+                    Console.WriteLine();
+                }
+
+                foreach (var hit in hits)
+                {
+                    if (hit.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    if (fileStrings.Count > 0 || regexStrings.Count > 0)
+                    {
+                        foreach (var fileString in fileStrings)
+                        {
+                            if (fileString.Trim().Length == 0)
+                            {
+                                continue;
+                            }
+
+                            if (hit.IndexOf(fileString, StringComparison.InvariantCultureIgnoreCase) < 0)
+                            {
+                                continue;
+                            }
+
+                            counter += 1;
+
+                            if (s == false)
+                            {
+                                Log.Information("{Hit}", hit);
+                            }
+
+                            sw?.WriteLine(hit);
+                        }
+
+                        var hitOffset = "";
+                        if (off)
+                        {
+                            hitOffset = $"~{hit.Split('\t').Last()}";
+                        }
+
+                        foreach (var regString in regexStrings)
+                        {
+                            if (regString.Trim().Length == 0)
+                            {
+                                continue;
+                            }
+
+                            try
+                            {
+                                var reg1 = new Regex(regString,
+                                    RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace);
+
+                                if (reg1.IsMatch(hit) == false)
+                                {
+                                    continue;
+                                }
+
+                                counter += 1;
+
+                                if (ro)
+                                {
+                                    foreach (var match in reg1.Matches(hit))
+                                    {
+                                        if (s == false)
+                                        {
+                                            Log.Information("{Match}\t{HitOffset}", match, hitOffset);
+                                        }
+
+                                        sw?.WriteLine($"{match}\t{hitOffset}");
+                                    }
+                                }
+                                else
+                                {
+                                    if (s == false)
+                                    {
+                                        Log.Information("{Hit}", hit);
+                                    }
+
+                                    sw?.WriteLine(hit);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error(ex, "Error setting up regular expression '{RegString}': {Message}", regString,
+                                    ex.Message);
+                            }
+                        }
                     }
                     else
                     {
-                        Log.Error("Strings file '{Fs}' not found", fs);
-                    }
-                }
-
-                if (fr?.Length > 0)
-                {
-                    if (File.Exists(fr))
-                    {
-                        regexStrings.UnionWith(new HashSet<string>(File.ReadAllLines(fr)));
-                    }
-                    else
-                    {
-                        Log.Error("Regex file '{Fr}' not found", fr);
-                    }
-                }
-            }
-
-            //AddHighlightingRules(fileStrings.ToList());
-
-            if (ro == false)
-            {
-                //  AddHighlightingRules(regexStrings.ToList(), true);
-            }
-
-
-            if (!q)
-            {
-                Log.Information("Processing strings...");
-                Console.WriteLine();
-            }
-
-            foreach (var hit in hits)
-            {
-                if (hit.Length == 0)
-                {
-                    continue;
-                }
-
-                if (fileStrings.Count > 0 || regexStrings.Count > 0)
-                {
-                    foreach (var fileString in fileStrings)
-                    {
-                        if (fileString.Trim().Length == 0)
-                        {
-                            continue;
-                        }
-
-                        if (hit.IndexOf(fileString, StringComparison.InvariantCultureIgnoreCase) < 0)
-                        {
-                            continue;
-                        }
-
+                        //dump all strings
                         counter += 1;
 
                         if (s == false)
@@ -690,139 +754,73 @@ internal class Program
 
                         sw?.WriteLine(hit);
                     }
+                }
 
-                    var hitOffset = "";
-                    if (off)
-                    {
-                        hitOffset = $"~{hit.Split('\t').Last()}";
-                    }
+                if (q)
+                {
+                    continue;
+                }
 
-                    foreach (var regString in regexStrings)
-                    {
-                        if (regString.Trim().Length == 0)
-                        {
-                            continue;
-                        }
 
-                        try
-                        {
-                            var reg1 = new Regex(regString,
-                                RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace);
+                Console.WriteLine();
 
-                            if (reg1.IsMatch(hit) == false)
-                            {
-                                continue;
-                            }
+                if (withBoundaryHits)
+                {
+                    Log.Information("** Strings prefixed with 2 spaces are hits found across chunk boundaries **");
+                    Console.WriteLine();
+                }
 
-                            counter += 1;
-
-                            if (ro)
-                            {
-                                foreach (var match in reg1.Matches(hit))
-                                {
-                                    if (s == false)
-                                    {
-                                        Log.Information("{Match}\t{HitOffset}", match, hitOffset);
-                                    }
-
-                                    sw?.WriteLine($"{match}\t{hitOffset}");
-                                }
-                            }
-                            else
-                            {
-                                if (s == false)
-                                {
-                                    Log.Information("{Hit}", hit);
-                                }
-
-                                sw?.WriteLine(hit);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Error(ex, "Error setting up regular expression '{RegString}': {Message}", regString,
-                                ex.Message);
-                        }
-                    }
+                if (counter == 1)
+                {
+                    Log.Information(
+                        "Found {Counter:N0} string in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter,
+                        _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
                 }
                 else
                 {
-                    //dump all strings
-                    counter += 1;
+                    Log.Information(
+                        "Found {Counter:N0} strings in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter,
+                        _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
+                }
 
-                    if (s == false)
-                    {
-                        Log.Information("{Hit}", hit);
-                    }
-
-                    sw?.WriteLine(hit);
+                globalCounter += counter;
+                globalHits += hits.Count;
+                globalTimespan += _sw.Elapsed.TotalSeconds;
+                if (files.Count > 1)
+                {
+                    Log.Information(
+                        "-------------------------------------------------------------------------------------");
+                    Console.WriteLine();
                 }
             }
 
-            if (q)
+            if (sw != null)
             {
-                continue;
+                sw.Flush();
+                sw.Close();
             }
 
-
-            Console.WriteLine();
-
-            if (withBoundaryHits)
+            if (q || files.Count <= 1)
             {
-                Log.Information("** Strings prefixed with 2 spaces are hits found across chunk boundaries **");
                 Console.WriteLine();
+                return;
             }
 
-            if (counter == 1)
+            if (globalCounter == 1)
             {
                 Log.Information(
-                    "Found {Counter:N0} string in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter,
-                    _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
+                    "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} string in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
+                    files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
             }
             else
             {
                 Log.Information(
-                    "Found {Counter:N0} strings in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter,
-                    _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
+                    "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} strings in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
+                    files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
             }
 
-            globalCounter += counter;
-            globalHits += hits.Count;
-            globalTimespan += _sw.Elapsed.TotalSeconds;
-            if (files.Count > 1)
-            {
-                Log.Information(
-                    "-------------------------------------------------------------------------------------");
-                Console.WriteLine();
-            }
-        }
-
-        if (sw != null)
-        {
-            sw.Flush();
-            sw.Close();
-        }
-
-        if (q || files.Count <= 1)
-        {
             Console.WriteLine();
-            return;
         }
-
-        if (globalCounter == 1)
-        {
-            Log.Information(
-                "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} string in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
-                files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
-        }
-        else
-        {
-            Log.Information(
-                "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} strings in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
-                files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
-        }
-
-        Console.WriteLine();
     }
 
     private static SparseStream OpenFile(string path)
