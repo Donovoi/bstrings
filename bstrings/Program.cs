@@ -395,7 +395,7 @@ internal class Program
                     ? 512
                     : b;
                 int chunkSizeBytes = chunkSizeMb * 1024 * 1024;
-                GPUAcceleratedSearch.ChunkSizeBytes = chunkSizeBytes;
+                GpuAcceleratedSearch.ChunkSizeBytes = chunkSizeBytes;
 
                 var fileSizeBytes = new FileInfo(file).Length;
 
@@ -478,7 +478,7 @@ internal class Program
 
                             if (u)
                             {
-                                var uh = GPUAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
+                                var uh = GpuAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
                                     off, ur);
                                 foreach (var h in uh)
                                 {
@@ -488,7 +488,7 @@ internal class Program
 
                             if (a)
                             {
-                                var ah = GPUAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
+                                var ah = GpuAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
                                     off, cp, ar);
                                 foreach (var h in ah)
                                 {
@@ -539,7 +539,7 @@ internal class Program
 
                             if (u)
                             {
-                                var uh = GPUAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
+                                var uh = GpuAcceleratedSearch.GetUnicodeHits(chunk, minLength, maxLength, offset,
                                     off, ur);
                                 foreach (var h in uh)
                                 {
@@ -554,7 +554,7 @@ internal class Program
 
                             if (a)
                             {
-                                var ah = GPUAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
+                                var ah = GpuAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
                                     off, cp, ar);
                                 foreach (var h in ah)
                                 {
@@ -1079,13 +1079,13 @@ internal class Program
     //    }
     //}
 
-    public static class GPUAcceleratedSearch
+    public static class GpuAcceleratedSearch
     {
         public static int ChunkSizeBytes { get; internal set; }
 
         // ASCII Hits Function with Chunk Processing
         public static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-                                                bool withOffsets, int cp, string ar)
+                                        bool withOffsets, int cp, string ar)
         {
             var maxString = maxSize == -1 ? "" : maxSize.ToString();
             var mi2 = $"{{{minSize},{maxString}}}";
@@ -1098,48 +1098,69 @@ internal class Program
             using var context = Context.CreateDefault();
             using var accelerator = context.GetPreferredDevice(false).CreateAccelerator(context);
 
-            // Process data in chunks
+            // Process data in chunks without converting the entire file into memory
             for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
                 int chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
-                var chunk = new ArraySegment<byte>(bytes, (int)i, chunkSize).ToArray();
+                var chunk = new ReadOnlySpan<byte>(bytes, (int)i, chunkSize);
 
-                var ascString = codePage!.GetString(chunk);
-                foreach (Match match in regAsc.Matches(ascString))
+                // Use MemoryStream and StreamReader with a buffer to read in small parts
+                using var stream = new MemoryStream(chunk.ToArray());
+                using var reader = new StreamReader(stream, codePage!, bufferSize: 8192); // Use a buffer to limit memory usage
+
+                var stringBuilder = new StringBuilder(); // Use StringBuilder to accumulate string data
+
+                while (!reader.EndOfStream)
                 {
-                    if (withOffsets)
+                    // Read in small chunks and accumulate in StringBuilder
+                    char[] readBuffer = new char[8192];
+                    int readBytes = reader.Read(readBuffer, 0, readBuffer.Length);
+                    stringBuilder.Append(readBuffer, 0, readBytes);
+
+                    // Check for matches in the accumulated string
+                    var segment = stringBuilder.ToString();
+                    foreach (Match match in regAsc.Matches(segment))
                     {
-                        var matchBytes = codePage.GetBytes(match.Value);
-
-                        // Allocate buffers on the GPU
-                        using var searchInBuffer = accelerator.Allocate1D<byte>(chunk);
-                        using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
-                        using var resultBuffer = accelerator.Allocate1D<int>(1);
-
-                        // Copy data into GPU memory
-                        searchInBuffer.CopyFromCPU(chunk);
-                        searchBytesBuffer.CopyFromCPU(matchBytes);
-                        resultBuffer.MemSetToZero();
-
-                        // Define and launch the kernel
-                        var kernel = accelerator
-                            .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(ByteSearchKernel);
-                        kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View, resultBuffer.View);
-
-                        // Synchronize and retrieve the result
-                        accelerator.Synchronize();
-                        var result = new int[1];
-                        resultBuffer.CopyToCPU(result);
-
-                        if (result[0] >= 0)
+                        if (withOffsets)
                         {
-                            var actualOffset = currentOffset + i + result[0];
-                            hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (A)");
+                            var matchBytes = codePage?.GetBytes(match.Value);
+
+                            // Allocate buffers on the GPU
+                            using var searchInBuffer = accelerator.Allocate1D<byte>(chunk.ToArray());
+                            using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
+                            using var resultBuffer = accelerator.Allocate1D<int>(1);
+
+                            // Copy data into GPU memory
+                            searchInBuffer.CopyFromCPU(chunk.ToArray());
+                            searchBytesBuffer.CopyFromCPU(matchBytes);
+                            resultBuffer.MemSetToZero();
+
+                            // Define and launch the kernel
+                            var kernel = accelerator
+                                .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(ByteSearchKernel);
+                            kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View, resultBuffer.View);
+
+                            // Synchronize and retrieve the result
+                            accelerator.Synchronize();
+                            var result = new int[1];
+                            resultBuffer.CopyToCPU(result);
+
+                            if (result[0] >= 0)
+                            {
+                                var actualOffset = currentOffset + i + result[0];
+                                hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (A)");
+                            }
+                        }
+                        else
+                        {
+                            hits.Add(match.Value.Trim());
                         }
                     }
-                    else
+
+                    // Avoid accumulating unnecessary memory by keeping a manageable length in the StringBuilder
+                    if (stringBuilder.Length > 8192)
                     {
-                        hits.Add(match.Value.Trim());
+                        stringBuilder.Remove(0, stringBuilder.Length - 8192);
                     }
                 }
             }
@@ -1147,9 +1168,10 @@ internal class Program
             return hits;
         }
 
+
         // Unicode Hits Function with Chunk Processing
         public static List<string> GetUnicodeHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-                                                  bool withOffsets, string ur)
+                                          bool withOffsets, string ur)
         {
             var maxString = maxSize == -1 ? "" : maxSize.ToString();
             var mi2 = $"{{{minSize},{maxString}}}";
@@ -1161,54 +1183,76 @@ internal class Program
             using var context = Context.CreateDefault();
             using var accelerator = context.GetPreferredDevice(false).CreateAccelerator(context);
 
-            // Process data in chunks
+            // Process data in chunks without converting the entire file into memory
             for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
                 int chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
-                var chunk = new ArraySegment<byte>(bytes, (int)i, chunkSize).ToArray();
+                var chunk = new ReadOnlySpan<byte>(bytes, (int)i, chunkSize);
 
-                var uniString = Encoding.Unicode.GetString(chunk);
-                foreach (Match match in regUni.Matches(uniString))
+                // Use MemoryStream and StreamReader with a buffer to read in small parts
+                using var stream = new MemoryStream(chunk.ToArray());
+                using var reader = new StreamReader(stream, Encoding.Unicode, bufferSize: 8192); // Use a buffer to limit memory usage
+
+                var stringBuilder = new StringBuilder(); // Use StringBuilder to accumulate string data
+
+                while (!reader.EndOfStream)
                 {
-                    if (withOffsets)
+                    // Read in small chunks and accumulate in StringBuilder
+                    char[] readBuffer = new char[4096]; // Smaller buffer to avoid large allocations
+                    int readBytes = reader.Read(readBuffer, 0, readBuffer.Length);
+                    stringBuilder.Append(readBuffer, 0, readBytes);
+
+                    // Check for matches in the accumulated string
+                    var segment = stringBuilder.ToString();
+                    foreach (Match match in regUni.Matches(segment))
                     {
-                        var matchBytes = Encoding.Unicode.GetBytes(match.Value);
-
-                        // Allocate buffers on the GPU
-                        using var searchInBuffer = accelerator.Allocate1D<byte>(chunk);
-                        using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
-                        using var resultBuffer = accelerator.Allocate1D<int>(1);
-
-                        // Copy data into GPU memory
-                        searchInBuffer.CopyFromCPU(chunk);
-                        searchBytesBuffer.CopyFromCPU(matchBytes);
-                        resultBuffer.MemSetToZero();
-
-                        // Define and launch the kernel
-                        var kernel = accelerator
-                            .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(ByteSearchKernel);
-                        kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View, resultBuffer.View);
-
-                        // Synchronize and retrieve the result
-                        accelerator.Synchronize();
-                        var result = new int[1];
-                        resultBuffer.CopyToCPU(result);
-
-                        if (result[0] >= 0)
+                        if (withOffsets)
                         {
-                            var actualOffset = currentOffset + i + result[0] * 2; // Adjust for Unicode size
-                            hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (U)");
+                            var matchBytes = Encoding.Unicode.GetBytes(match.Value);
+
+                            // Allocate buffers on the GPU
+                            using var searchInBuffer = accelerator.Allocate1D<byte>(chunk.ToArray());
+                            using var searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
+                            using var resultBuffer = accelerator.Allocate1D<int>(1);
+
+                            // Copy data into GPU memory
+                            searchInBuffer.CopyFromCPU(chunk.ToArray());
+                            searchBytesBuffer.CopyFromCPU(matchBytes);
+                            resultBuffer.MemSetToZero();
+
+                            // Define and launch the kernel
+                            var kernel = accelerator
+                                .LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(ByteSearchKernel);
+                            kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View, resultBuffer.View);
+
+                            // Synchronize and retrieve the result
+                            accelerator.Synchronize();
+                            var result = new int[1];
+                            resultBuffer.CopyToCPU(result);
+
+                            if (result[0] >= 0)
+                            {
+                                var actualOffset = currentOffset + i + result[0] * 2; // Adjust for Unicode size
+                                hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (U)");
+                            }
+                        }
+                        else
+                        {
+                            hits.Add(match.Value.Trim());
                         }
                     }
-                    else
+
+                    // Avoid accumulating unnecessary memory by keeping a manageable length in the StringBuilder
+                    if (stringBuilder.Length > 8192)
                     {
-                        hits.Add(match.Value.Trim());
+                        stringBuilder.Remove(0, stringBuilder.Length - 4096);
                     }
                 }
             }
 
             return hits;
         }
+
 
         // Kernel function for byte pattern search
         private static void ByteSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<byte> searchBytes, ArrayView<int> result)
@@ -1235,4 +1279,5 @@ internal class Program
             }
         }
     }
+
 }
