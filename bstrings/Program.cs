@@ -195,10 +195,10 @@ internal class Program
         Log.CloseAndFlush();
     }
 
+
     private static void DoWork(string f, string d, string o, bool a, bool u, int m, int b, bool q, bool s, int x, bool p, string ls, string lr, string fs, string fr, string ar, string ur, int cp, string mask, int ms, bool ro, bool off, bool sa, bool sl, bool debug, bool trace)
     {
         var levelSwitch = new LoggingLevelSwitch();
-
         var template = "{Message:lj}{NewLine}{Exception}";
 
         if (debug)
@@ -219,7 +219,6 @@ internal class Program
 
         Log.Logger = conf.CreateLogger();
 
-
         if (p)
         {
             Log.Information("Name \t\tDescription");
@@ -230,8 +229,7 @@ internal class Program
             }
 
             Console.WriteLine();
-            Log.Information("To use a built in pattern, supply the Name to the --lr switch\r\n");
-
+            Log.Information("To use a built-in pattern, supply the Name to the --lr switch\r\n");
             return;
         }
 
@@ -245,26 +243,17 @@ internal class Program
 
         if (string.IsNullOrEmpty(f) && string.IsNullOrEmpty(d))
         {
-            var helpBld = new HelpBuilder(LocalizationResources.Instance, Console.WindowWidth);
-            var hc = new HelpContext(helpBld, _rootCommand, Console.Out);
-
-            helpBld.Write(hc);
-
             Log.Warning("Either -f or -d is required. Exiting");
             return;
         }
 
-        if (string.IsNullOrEmpty(f) == false &&
-            !File.Exists(f) &&
-            mask?.Length == 0)
+        if (!string.IsNullOrEmpty(f) && !File.Exists(f) && string.IsNullOrEmpty(mask))
         {
             Log.Warning("File '{F}' not found. Exiting", f);
             return;
         }
 
-        if (string.IsNullOrEmpty(d) == false &&
-            !Directory.Exists(d) &&
-            mask?.Length == 0)
+        if (!string.IsNullOrEmpty(d) && !Directory.Exists(d) && string.IsNullOrEmpty(mask))
         {
             Log.Warning("Directory '{D}' not found. Exiting", d);
             return;
@@ -278,7 +267,7 @@ internal class Program
 
         var files = new List<string>();
 
-        if (string.IsNullOrEmpty(f) == false)
+        if (!string.IsNullOrEmpty(f))
         {
             files.Add(Path.GetFullPath(f));
         }
@@ -286,16 +275,14 @@ internal class Program
         {
             try
             {
-                if (mask?.Length > 0)
-                {
-                    files.AddRange(Directory.EnumerateFiles(Path.GetFullPath(d!),
-                        mask, SearchOption.AllDirectories));
-                }
-                else
-                {
-                    files.AddRange(Directory.EnumerateFiles(Path.GetFullPath(d!), "*",
-                        SearchOption.AllDirectories));
-                }
+                // create an enum for search options to ignore access denied errors
+                var options = DirectoryEnumerationOptions.ContinueOnException;
+                // also add the option to recurse into subdirectories
+                options |= DirectoryEnumerationOptions.Recursive;
+
+                files.AddRange(!string.IsNullOrEmpty(mask)
+                    ? Directory.EnumerateFiles(Path.GetFullPath(d!), mask, options)
+                    : Directory.EnumerateFiles(Path.GetFullPath(d!), "*", options));
             }
             catch (Exception ex)
             {
@@ -309,6 +296,7 @@ internal class Program
             Log.Information("Command line: {Args}", string.Join(" ", Environment.GetCommandLineArgs().Skip(1)));
             Console.WriteLine();
         }
+
 
         StreamWriter sw = null;
 

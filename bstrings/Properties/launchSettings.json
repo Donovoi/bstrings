@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "bstrings": {
+      "commandName": "Project",
+      "commandLineArgs": "-d C:\\\\Users\\\\testing\\\\Desktop\\\\sans\\\\B\r\n-a\r\n-u false\r\n-b 1024\r\n-q\r\n-o C:\\\\Users\\\\testing\\\\results.txt"
+    }
+  }
+}
