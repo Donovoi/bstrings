@@ -20,18 +20,14 @@ using RawDiskLib;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
-#if !NET6_0
 using Directory = Alphaleonis.Win32.Filesystem.Directory;
 using File = Alphaleonis.Win32.Filesystem.File;
 using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
 using Path = Alphaleonis.Win32.Filesystem.Path;
+using ILGPU;
+using ILGPU.Runtime;
+using ILGPU.Runtime.OpenCL;
 
-#else
-using Path = System.IO.Path;
-using Directory = System.IO.Directory;
-using File = System.IO.File;
-using FileInfo = System.IO.FileInfo;
-#endif
 
 namespace bstrings;
 
@@ -40,7 +36,6 @@ internal class Program
     private static Stopwatch _sw;
     private static readonly Dictionary<string, string> RegExPatterns = new Dictionary<string, string>();
     private static readonly Dictionary<string, string> RegExDesc = new Dictionary<string, string>();
-
 
     private static readonly string Header =
         $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version}" +
@@ -135,7 +130,7 @@ internal class Program
             new Option<string>(
                 "--fr",
                 "File containing regex patterns to look for. When set, only strings matching regex patterns are returned"),
-		
+
             new Option<string>(
                 "--ar",
                 () => "[\x20-\x7E]",
@@ -325,7 +320,7 @@ internal class Program
         if (string.IsNullOrEmpty(o) == false && o.Length > 0)
         {
             o = Path.GetFullPath(o).TrimEnd('\\');
-            
+
             var dir = Path.GetDirectoryName(o);
 
             if (dir != null && Directory.Exists(dir) == false)
@@ -447,13 +442,13 @@ internal class Program
                 {
                     FileStream fileStream;
 
-#if NET6_0
-                        fileStream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
-#else
-                    fileStream =
-                        File.Open(File.GetFileSystemEntryInfo(file).LongFullPath, FileMode.Open, FileAccess.Read,
-                            FileShare.Read, PathFormat.LongFullPath);
-#endif
+                    //#if NET6_0
+                    fileStream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    //#else
+                    //                    fileStream =
+                    //                        File.Open(File.GetFileSystemEntryInfo(file).LongFullPath, FileMode.Open, FileAccess.Read,
+                    //                            FileShare.Read, PathFormat.LongFullPath);
+                    //#endif
 
                     mappedStream = MappedStream.FromStream(fileStream, Ownership.None);
                 }
@@ -495,7 +490,7 @@ internal class Program
 
                         if (a)
                         {
-                            var ah = GetAsciiHits(chunk, minLength, maxLength, offset,
+                            var ah = GPUAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
                                 off, cp, ar);
                             foreach (var h in ah)
                             {
@@ -559,7 +554,7 @@ internal class Program
 
                         if (a)
                         {
-                            var ah = GetAsciiHits(chunk, minLength, maxLength, offset,
+                            var ah = GPUAcceleratedSearch.GetAsciiHits(chunk, minLength, maxLength, offset,
                                 off, cp, ar);
                             foreach (var h in ah)
                             {
@@ -1000,8 +995,8 @@ internal class Program
     private static IEnumerable<string> SortByLength(IEnumerable<string> e)
     {
         var sorted = from s in e
-            orderby s.Length ascending
-            select s;
+                     orderby s.Length ascending
+                     select s;
         return sorted;
     }
 
@@ -1034,86 +1029,99 @@ internal class Program
         return hits;
     }
 
-
-    private static int ByteSearch(byte[] searchIn, byte[] searchBytes, int start = 0)
+    public static class GPUAcceleratedSearch
     {
-        var found = -1;
-        //only look at this if we have a populated search array and search bytes with a sensible start
-        if (searchIn.Length > 0 && searchBytes.Length > 0 && start <= searchIn.Length - searchBytes.Length &&
-            searchIn.Length >= searchBytes.Length)
+        public static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset, bool withOffsets, int cp, string ar)
         {
-            //iterate through the array to be searched
-            for (var i = start; i <= searchIn.Length - searchBytes.Length; i++)
-            {
-                //if the start bytes match we will start comparing all other bytes
-                if (searchIn[i] == searchBytes[0])
-                {
-                    if (searchIn.Length > 1)
-                    {
-                        //multiple bytes to be searched we have to compare byte by byte
-                        var matched = true;
-                        for (var y = 1; y <= searchBytes.Length - 1; y++)
-                        {
-                            if (searchIn[i + y] != searchBytes[y])
-                            {
-                                matched = false;
-                                break;
-                            }
-                        }
+            var maxString = maxSize == -1 ? "" : maxSize.ToString();
+            var mi2 = $"{{{minSize},{maxString}}}";
+            var ascRange = ar;
+            var regAsc = new Regex($"{ascRange}{mi2}", RegexOptions.Compiled);
 
-                        //everything matched up
-                        if (matched)
-                        {
-                            found = i;
-                            break;
-                        }
-                    }
-                    else
+            var codePage = CodePagesEncodingProvider.Instance.GetEncoding(cp);
+            var ascString = codePage!.GetString(bytes);
+
+            var hits = new List<string>();
+
+            // Create ILGPU Context and select OpenCL Accelerator
+            using Context context = Context.Create(builder => builder.OpenCL());
+            var openCLDevices = context.GetCLDevices();
+
+            // Check if any OpenCL devices are available
+            if (openCLDevices.Count < 1)
+            {
+                throw new InvalidOperationException("No OpenCL accelerators found.");
+            }
+
+            using Accelerator accelerator = context.CreateCLAccelerator(0);
+
+            foreach (Match match in regAsc.Matches(ascString))
+            {
+                if (withOffsets)
+                {
+                    var matchBytes = codePage.GetBytes(match.Value);
+
+                    // Allocate buffers on the GPU
+                    using MemoryBuffer1D<byte, Stride1D.Dense> searchInBuffer = accelerator.Allocate1D<byte>(bytes.Length);
+                    using MemoryBuffer1D<byte, Stride1D.Dense> searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes.Length);
+                    using var resultBuffer = accelerator.Allocate1D<int>(1);
+
+                    // Copy the data into GPU memory
+                    
+                    resultBuffer.MemSetToZero();
+
+                    // Define the kernel
+                    var kernel = accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<byte>, ArrayView<int>>(ByteSearchKernel);
+
+                    // Launch the kernel using the .View property for ArrayView arguments and casting long to int
+                    kernel(new Index1D((int)searchInBuffer.Length), searchInBuffer.View, searchBytesBuffer.View, resultBuffer.View);
+
+                    // Wait for the kernel to finish
+                    accelerator.Synchronize();
+
+                    // Retrieve the result from the GPU
+                    var result = new int[1];
+                    resultBuffer.CopyToCPU(result);
+
+                    if (result[0] >= 0)
                     {
-                        //search byte is only one bit nothing else to do
-                        found = i;
-                        break; //stop the loop
+                        var actualOffset = currentOffset + result[0];
+                        hits.Add($"{match.Value.Trim()}\t0x{actualOffset:X} (A)");
                     }
                 }
+                else
+                {
+                    hits.Add(match.Value.Trim());
+                }
             }
+
+            return hits;
         }
 
-        return found;
-    }
-
-    private static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-        bool withOffsets, int cp, string ar)
-    {
-        var maxString = maxSize == -1 ? "" : maxSize.ToString();
-        var mi2 = $"{"{"}{minSize}{","}{maxString}{"}"}";
-
-        var ascRange = ar;
-        var regAsc = new Regex($"{ascRange}{mi2}", RegexOptions.Compiled);
-
-        var codePage = CodePagesEncodingProvider.Instance.GetEncoding(cp);
-        var ascString = codePage!.GetString(bytes);
-
-        var hits = new List<string>();
-
-        foreach (Match match in regAsc.Matches(ascString))
+        // ILGPU Kernel function for byte search
+        static void ByteSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<byte> searchBytes, ArrayView<int> result)
         {
-            if (withOffsets)
+            int start = index;
+            if (start + searchBytes.Length > searchIn.Length)
             {
-                var matchBytes = codePage!
-                    .GetBytes(match.Value);
-
-                var pos = ByteSearch(bytes, matchBytes, match.Index);
-
-                var actualOffset = currentOffset + pos;
-
-                hits.Add($"{match.Value.Trim()}{'\t'}0x{actualOffset:X} (A)");
+                return;
             }
-            else
+
+            bool match = true;
+            for (int i = 0; i < searchBytes.Length; i++)
             {
-                hits.Add(match.Value.Trim());
+                if (searchIn[start + i] != searchBytes[i])
+                {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (match)
+            {
+                result[0] = start;
             }
         }
-
-        return hits;
     }
+
 }

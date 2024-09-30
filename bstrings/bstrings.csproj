@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFrameworks>net462;net6.0</TargetFrameworks>
+    <TargetFrameworks>net6.0</TargetFrameworks>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <AssemblyTitle>bstrings</AssemblyTitle>
     <Company>Eric Zimmerman</Company>
@@ -37,5 +37,10 @@
         <PackageReference Include="RawDiskLib" Version="0.2.1" />
         <PackageReference Include="System.CommandLine" Version="2.0.0-beta2.21617.1" />
         <PackageReference Include="System.CommandLine.NamingConventionBinder" Version="2.0.0-beta2.21617.1" />
+    </ItemGroup>
+    <ItemGroup Condition="'$(TargetFramework)' == 'net6.0'">
+      <PackageReference Include="ILGPU">
+        <Version>1.5.1</Version>
+      </PackageReference>
     </ItemGroup>
 </Project>
