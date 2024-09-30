@@ -1062,12 +1062,13 @@ internal class Program
                     var matchBytes = codePage.GetBytes(match.Value);
 
                     // Allocate buffers on the GPU
-                    using MemoryBuffer1D<byte, Stride1D.Dense> searchInBuffer = accelerator.Allocate1D<byte>(bytes.Length);
-                    using MemoryBuffer1D<byte, Stride1D.Dense> searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes.Length);
-                    using var resultBuffer = accelerator.Allocate1D<int>(1);
+                    using MemoryBuffer1D<byte, Stride1D.Dense> searchInBuffer = accelerator.Allocate1D<byte>(bytes);
+                    using MemoryBuffer1D<byte, Stride1D.Dense> searchBytesBuffer = accelerator.Allocate1D<byte>(matchBytes);
+                    using MemoryBuffer1D<int, Stride1D.Dense> resultBuffer = accelerator.Allocate1D<int>(1);
 
                     // Copy the data into GPU memory
-                    
+                    searchInBuffer.CopyFromCPU(bytes);
+                    searchBytesBuffer.CopyFromCPU(matchBytes);
                     resultBuffer.MemSetToZero();
 
                     // Define the kernel
