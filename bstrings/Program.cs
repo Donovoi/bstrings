@@ -1015,8 +1015,8 @@ internal class Program
     private static IEnumerable<string> SortByLength(IEnumerable<string> e)
     {
         var sorted = from s in e
-            orderby s.Length ascending
-            select s;
+                     orderby s.Length ascending
+                     select s;
         return sorted;
     }
 
@@ -1091,49 +1091,43 @@ internal class Program
         public static int ChunkSizeBytes { get; internal set; } = 1 << 20; // 1 MB default chunk size
 
         // Optimized ASCII Hits Function with GPU Integration
-        public static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-            bool withOffsets, int cp, string ar)
+        public static HashSet<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
+            bool withOffsets, int cp, string pattern)
         {
-            var maxString = maxSize == -1 ? "" : maxSize.ToString();
             var codePage = CodePagesEncodingProvider.Instance.GetEncoding(cp);
-            var hits = new List<string>();
+            var patternBytes = Encoding.ASCII.GetBytes(pattern);
+            var hits = new HashSet<string>();
 
-            // Create a context specifically targeting CUDA devices
+            // Prepare for GPU execution
             using var context = Context.Create(builder => builder.Cuda());
-
-            // Select the first CUDA device available (assuming there is one)
             using Accelerator accelerator = context.CreateCudaAccelerator(0);
-            if (accelerator == null)
-                throw new InvalidOperationException(
-                    "No CUDA device found. Please ensure a CUDA-compatible GPU is available.");
 
-            // Allocate a result buffer to hold search results (int buffer)
             using var resultBuffer = accelerator.Allocate1D<int>(bytes.Length);
+            using var patternBuffer = accelerator.Allocate1D<byte>(patternBytes.Length);
+            using var searchInBuffer = accelerator.Allocate1D<byte>(ChunkSizeBytes);
 
-            // Iterate through byte array in chunks to avoid large memory accesses
+            // Copy the pattern to GPU
+            patternBuffer.CopyFromCPU(patternBytes);
+
             for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
                 int chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
+                searchInBuffer.CopyFromCPU(bytes);
 
-                // Allocate and copy the current chunk to the GPU
-                using var searchInBuffer = accelerator.Allocate1D<byte>(chunkSize);
-                searchInBuffer.CopyFromCPU(bytes); // Copy only the chunk data
-
-                // Create and launch the kernel
+                // Load and execute the pattern matching kernel
                 var kernel =
-                    accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<int>>(
-                        OptimizedSearchKernel);
-                kernel((int)searchInBuffer.Length, searchInBuffer.View, resultBuffer.View);
+                    accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<int>, ArrayView<byte>>(
+                        OptimizedPatternSearchKernel);
+                kernel((int)searchInBuffer.Length, searchInBuffer.View, resultBuffer.View, patternBuffer.View);
                 accelerator.Synchronize();
 
-                // Retrieve and process results
                 var result = resultBuffer.GetAsArray1D();
                 for (int j = 0; j < result.Length; j++)
                 {
                     if (result[j] >= 0)
                     {
                         var actualOffset = currentOffset + i + result[j];
-                        hits.Add($"ASCII pattern found at offset: 0x{actualOffset:X}");
+                        hits.Add($"Pattern found at offset: 0x{actualOffset:X}");
                     }
                 }
             }
@@ -1142,11 +1136,11 @@ internal class Program
         }
 
         // Optimized Unicode Hits Function with GPU Integration
-        public static List<string> GetUnicodeHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-            bool withOffsets, string ur)
+        public static List<string> GetUnicodeHits(byte[] bytes, int minSize, int maxSize, long currentOffset, bool withOffsets, string ur)
         {
             var maxString = maxSize == -1 ? "" : maxSize.ToString();
             var hits = new List<string>();
+            var regexPattern = $"{ur}{{{minSize},{maxString}}}";
 
             // Create a context specifically targeting CUDA devices
             using var context = Context.Create(builder => builder.Cuda());
@@ -1158,17 +1152,37 @@ internal class Program
                     "No CUDA device found. Please ensure a CUDA-compatible GPU is available.");
 
             // Allocate a result buffer to hold search results (int buffer)
-            using var resultBuffer =
-                accelerator.Allocate1D<int>(bytes.Length / (minSize * 2)); // Unicode uses 2 bytes per character
+            using var resultBuffer = accelerator.Allocate1D<int>(bytes.Length / 2); // Unicode uses 2 bytes per character
 
             // Iterate through byte array in chunks to avoid large memory accesses
             for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
-                int chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
+                // Calculate the remaining bytes and ensure chunkSize is valid
+                int chunkSize = (int)Math.Min(ChunkSizeBytes, bytes.LongLength - i);
+
+                // Ensure that the chunk is not empty or invalid
+                if (chunkSize <= 0)
+                {
+                    Console.WriteLine($"Skipping chunk at offset {i} due to invalid chunk size.");
+                    continue; // Skip this chunk
+                }
 
                 // Allocate and copy the current chunk to the GPU
                 using var searchInBuffer = accelerator.Allocate1D<byte>(chunkSize);
-                searchInBuffer.CopyFromCPU(bytes); // Correctly copy only the current chunk
+
+                // Check if the chunk data is valid before copying
+                var chunkData = new byte[chunkSize];
+                Array.Copy(bytes, i, chunkData, 0, chunkSize);
+
+                try
+                {
+                    searchInBuffer.CopyFromCPU(chunkData); // Copy only the chunk data
+                }
+                catch (ArgumentOutOfRangeException ex)
+                {
+                    Console.WriteLine($"Error copying data to GPU: {ex.Message}. Skipping this chunk.");
+                    continue; // Skip this chunk in case of an error
+                }
 
                 // Create and launch the kernel
                 var kernel =
@@ -1178,36 +1192,64 @@ internal class Program
                 accelerator.Synchronize();
 
                 // Retrieve and process results
-                var result = resultBuffer.GetAsArray1D();
-                for (int j = 0; j < result.Length; j++)
+                var results = resultBuffer.GetAsArray1D();
+                foreach (var result in results)
                 {
-                    if (result[j] >= 0)
-                    {
-                        var actualOffset = currentOffset + i + result[j] * 2; // Adjust for Unicode size
-                        hits.Add($"Unicode pattern found at offset: 0x{actualOffset:X}");
-                    }
+                    if (result < 0) continue;
+                    var actualOffset = currentOffset + i + result * 2; // Adjust for Unicode size
+                    hits.Add($"Unicode pattern found at offset: 0x{actualOffset:X}");
+                    Log.Information($"Unicode Match found at 0x{actualOffset:X} the match is: {result}");
                 }
             }
 
             return hits;
         }
 
-        // Kernel function for optimized byte pattern search
+        // Kernel function for optimized pattern search using byte arrays
         private static void OptimizedSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<int> result)
         {
-            // Check bounds to avoid illegal memory access
-            if (index >= searchIn.Length || index >= result.Length) return;
+            // Check if the index is within the bounds of the data to avoid illegal memory access
+            if (index >= searchIn.Length || index >= result.Length)
+                return;
 
             // Clear the result array before starting
             result[index] = -1;
 
-            // Simple pattern search logic - adjust based on requirements
+            // Perform a simple search for repeating patterns
             for (int i = index + 1; i < searchIn.Length; i++)
             {
-                if (searchIn[index] == searchIn[i])
+                if (searchIn[index] == searchIn[i]) // Simple pattern search logic (adjust based on requirements)
                 {
                     result[index] = i; // Store the match index
                     break;
+                }
+            }
+        }
+
+        // Kernel function for optimized pattern search using byte arrays
+        private static void OptimizedPatternSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<int> result,
+            ArrayView<byte> pattern)
+        {
+            if (index >= searchIn.Length || index >= result.Length) return;
+
+            result[index] = -1; // Default result is -1 (no match)
+
+            // Check for pattern match starting at the current index
+            if (index + pattern.Length <= searchIn.Length)
+            {
+                bool match = true;
+                for (int i = 0; i < pattern.Length; i++)
+                {
+                    if (searchIn[index + i] != pattern[i])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match)
+                {
+                    result[index] = index; // Store the starting index of the match
                 }
             }
         }
