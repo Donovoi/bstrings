@@ -1111,24 +1111,22 @@ internal class Program
 
             for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
-                int chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
+                var chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
                 searchInBuffer.CopyFromCPU(bytes);
 
                 // Load and execute the pattern matching kernel
                 var kernel =
                     accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<int>, ArrayView<byte>>(
-                        OptimizedPatternSearchKernel);
+                        UnicodeOptimizedSearchKernel);
                 kernel((int)searchInBuffer.Length, searchInBuffer.View, resultBuffer.View, patternBuffer.View);
                 accelerator.Synchronize();
 
-                var result = resultBuffer.GetAsArray1D();
-                for (int j = 0; j < result.Length; j++)
+                var results = resultBuffer.GetAsArray1D();
+                foreach (var result in results)
                 {
-                    if (result[j] >= 0)
-                    {
-                        var actualOffset = currentOffset + i + result[j];
-                        hits.Add($"Pattern found at offset: 0x{actualOffset:X}");
-                    }
+                    if (result < 0) continue;
+                    var actualOffset = currentOffset + i + result;
+                    hits.Add($"Pattern found at offset: 0x{actualOffset:X}");
                 }
             }
 
@@ -1158,7 +1156,7 @@ internal class Program
             for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
                 // Calculate the remaining bytes and ensure chunkSize is valid
-                int chunkSize = (int)Math.Min(ChunkSizeBytes, bytes.LongLength - i);
+                var chunkSize = (int)Math.Min(ChunkSizeBytes, bytes.LongLength - i);
 
                 // Ensure that the chunk is not empty or invalid
                 if (chunkSize <= 0)
@@ -1187,7 +1185,7 @@ internal class Program
                 // Create and launch the kernel
                 var kernel =
                     accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<int>>(
-                        OptimizedSearchKernel);
+                        AsciiOptimizedSearchKernel);
                 kernel(chunkSize, searchInBuffer.View, resultBuffer.View);
                 accelerator.Synchronize();
 
@@ -1206,7 +1204,7 @@ internal class Program
         }
 
         // Kernel function for optimized pattern search using byte arrays
-        private static void OptimizedSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<int> result)
+        private static void AsciiOptimizedSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<int> result)
         {
             // Check if the index is within the bounds of the data to avoid illegal memory access
             if (index >= searchIn.Length || index >= result.Length)
@@ -1218,16 +1216,14 @@ internal class Program
             // Perform a simple search for repeating patterns
             for (int i = index + 1; i < searchIn.Length; i++)
             {
-                if (searchIn[index] == searchIn[i]) // Simple pattern search logic (adjust based on requirements)
-                {
-                    result[index] = i; // Store the match index
-                    break;
-                }
+                if (searchIn[index] != searchIn[i]) continue; // Simple pattern search logic (adjust based on requirements)
+                result[index] = i; // Store the match index
+                break;
             }
         }
 
         // Kernel function for optimized pattern search using byte arrays
-        private static void OptimizedPatternSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<int> result,
+        private static void UnicodeOptimizedSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<int> result,
             ArrayView<byte> pattern)
         {
             if (index >= searchIn.Length || index >= result.Length) return;
@@ -1235,22 +1231,18 @@ internal class Program
             result[index] = -1; // Default result is -1 (no match)
 
             // Check for pattern match starting at the current index
-            if (index + pattern.Length <= searchIn.Length)
+            if (index + pattern.Length > searchIn.Length) return;
+            var match = true;
+            for (var i = 0; i < pattern.Length; i++)
             {
-                bool match = true;
-                for (int i = 0; i < pattern.Length; i++)
-                {
-                    if (searchIn[index + i] != pattern[i])
-                    {
-                        match = false;
-                        break;
-                    }
-                }
+                if (searchIn[index + i] == pattern[i]) continue;
+                match = false;
+                break;
+            }
 
-                if (match)
-                {
-                    result[index] = index; // Store the starting index of the match
-                }
+            if (match)
+            {
+                result[index] = index; // Store the starting index of the match
             }
         }
     }
