@@ -205,7 +205,8 @@ internal class Program
 
 
     private static void DoWork(string f, string d, string o, bool a, bool u, int m, int b, bool q, bool s, int x,
-        bool p, string ls, string[] lr, string fs, string fr, string ar, string ur, int cp, string mask, int ms, bool ro,
+        bool p, string ls, string[] lr, string fs, string fr, string ar, string ur, int cp, string mask, int ms,
+        bool ro,
         bool off, bool sa, bool sl, bool debug, bool trace)
     {
         var levelSwitch = new LoggingLevelSwitch();
@@ -778,13 +779,15 @@ internal class Program
                 if (counter == 1)
                 {
                     Log.Information(
-                        "Found {Counter:N0} string in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter,
+                        "Found {Counter:N0} string in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}",
+                        counter,
                         _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
                 }
                 else
                 {
                     Log.Information(
-                        "Found {Counter:N0} strings in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter,
+                        "Found {Counter:N0} strings in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}",
+                        counter,
                         _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
                 }
 
@@ -798,6 +801,7 @@ internal class Program
                     Console.WriteLine();
                 }
             }
+
             // if sw is not closed and not null, close it
             if (sw != null && sw.BaseStream != null && sw.BaseStream.CanWrite)
             {
@@ -1011,8 +1015,8 @@ internal class Program
     private static IEnumerable<string> SortByLength(IEnumerable<string> e)
     {
         var sorted = from s in e
-                     orderby s.Length ascending
-                     select s;
+            orderby s.Length ascending
+            select s;
         return sorted;
     }
 
@@ -1088,28 +1092,41 @@ internal class Program
 
         // Optimized ASCII Hits Function with GPU Integration
         public static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-                                                bool withOffsets, int cp, string ar)
+            bool withOffsets, int cp, string ar)
         {
             var maxString = maxSize == -1 ? "" : maxSize.ToString();
             var codePage = CodePagesEncodingProvider.Instance.GetEncoding(cp);
             var hits = new List<string>();
 
-            using var context = Context.Create(builder => builder.Default());
-            
-            using var accelerator = context.GetPreferredDevice(preferCPU: false).CreateAccelerator(context);
-            
-            using var resultBuffer = accelerator.Allocate1D<int>(bytes.Length / minSize);
+            // Create a context specifically targeting CUDA devices
+            using var context = Context.Create(builder => builder.Cuda());
 
+            // Select the first CUDA device available (assuming there is one)
+            using Accelerator accelerator = context.CreateCudaAccelerator(0);
+            if (accelerator == null)
+                throw new InvalidOperationException(
+                    "No CUDA device found. Please ensure a CUDA-compatible GPU is available.");
+
+            // Allocate a result buffer to hold search results (int buffer)
+            using var resultBuffer = accelerator.Allocate1D<int>(bytes.Length);
+
+            // Iterate through byte array in chunks to avoid large memory accesses
             for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
                 int chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
-                using var searchInBuffer = accelerator.Allocate1D<byte>(chunkSize);
-                searchInBuffer.CopyFromCPU(bytes);
 
-                var kernel = accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<int>>(OptimizedSearchKernel);
+                // Allocate and copy the current chunk to the GPU
+                using var searchInBuffer = accelerator.Allocate1D<byte>(chunkSize);
+                searchInBuffer.CopyFromCPU(bytes); // Copy only the chunk data
+
+                // Create and launch the kernel
+                var kernel =
+                    accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<int>>(
+                        OptimizedSearchKernel);
                 kernel((int)searchInBuffer.Length, searchInBuffer.View, resultBuffer.View);
                 accelerator.Synchronize();
 
+                // Retrieve and process results
                 var result = resultBuffer.GetAsArray1D();
                 for (int j = 0; j < result.Length; j++)
                 {
@@ -1126,26 +1143,41 @@ internal class Program
 
         // Optimized Unicode Hits Function with GPU Integration
         public static List<string> GetUnicodeHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-                                                  bool withOffsets, string ur)
+            bool withOffsets, string ur)
         {
             var maxString = maxSize == -1 ? "" : maxSize.ToString();
             var hits = new List<string>();
 
-            using var context = Context.Create(builder => builder.Default());
-            using var accelerator = context.GetPreferredDevice(preferCPU: false).CreateAccelerator(context);
+            // Create a context specifically targeting CUDA devices
+            using var context = Context.Create(builder => builder.Cuda());
 
-            using var resultBuffer = accelerator.Allocate1D<int>(bytes.Length / (minSize * 2)); // Unicode uses 2 bytes per char
+            // Select the first CUDA device available (assuming there is one)
+            using var accelerator = context.CreateCudaAccelerator(0);
+            if (accelerator == null)
+                throw new InvalidOperationException(
+                    "No CUDA device found. Please ensure a CUDA-compatible GPU is available.");
 
+            // Allocate a result buffer to hold search results (int buffer)
+            using var resultBuffer =
+                accelerator.Allocate1D<int>(bytes.Length / (minSize * 2)); // Unicode uses 2 bytes per character
+
+            // Iterate through byte array in chunks to avoid large memory accesses
             for (long i = 0; i < bytes.LongLength; i += ChunkSizeBytes)
             {
                 int chunkSize = (i + ChunkSizeBytes > bytes.Length) ? (int)(bytes.Length - i) : ChunkSizeBytes;
-                using var searchInBuffer = accelerator.Allocate1D<byte>(chunkSize);
-                searchInBuffer.CopyFromCPU(bytes);
 
-                var kernel = accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<int>>(OptimizedSearchKernel);
-                kernel((int)searchInBuffer.Length, searchInBuffer.View, resultBuffer.View);
+                // Allocate and copy the current chunk to the GPU
+                using var searchInBuffer = accelerator.Allocate1D<byte>(chunkSize);
+                searchInBuffer.CopyFromCPU(bytes); // Correctly copy only the current chunk
+
+                // Create and launch the kernel
+                var kernel =
+                    accelerator.LoadAutoGroupedStreamKernel<Index1D, ArrayView<byte>, ArrayView<int>>(
+                        OptimizedSearchKernel);
+                kernel(chunkSize, searchInBuffer.View, resultBuffer.View);
                 accelerator.Synchronize();
 
+                // Retrieve and process results
                 var result = resultBuffer.GetAsArray1D();
                 for (int j = 0; j < result.Length; j++)
                 {
@@ -1163,10 +1195,14 @@ internal class Program
         // Kernel function for optimized byte pattern search
         private static void OptimizedSearchKernel(Index1D index, ArrayView<byte> searchIn, ArrayView<int> result)
         {
-            if (index >= searchIn.Length) return;
+            // Check bounds to avoid illegal memory access
+            if (index >= searchIn.Length || index >= result.Length) return;
+
+            // Clear the result array before starting
+            result[index] = -1;
 
             // Simple pattern search logic - adjust based on requirements
-            for (int i = index; i < searchIn.Length; i++)
+            for (int i = index + 1; i < searchIn.Length; i++)
             {
                 if (searchIn[index] == searchIn[i])
                 {
@@ -1176,6 +1212,4 @@ internal class Program
             }
         }
     }
-
-
 }

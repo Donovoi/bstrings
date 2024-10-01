@@ -2,7 +2,7 @@
   "profiles": {
     "bstrings": {
       "commandName": "Project",
-      "commandLineArgs": "-f C:\\\\Users\\\\testing\\\\MEMORY.DMP\r\n--lr cc,ipv4,ipv6,guid,bitcoin,bitlocker,b64\r\n-u false\r\n-b 1024\r\n-o C:\\\\Users\\\\testing\\\\results.txt"
+      "commandLineArgs": "-f C:\\\\Users\\\\testing\\\\MEMORY.DMP\r\n--lr cc,ipv4,ipv6,guid,bitcoin,bitlocker,b64\r\n--debug\r\n--trace\r\n-b 1024\r\n-o C:\\\\Users\\\\testing\\\\results.txt"
     }
   }
 }
