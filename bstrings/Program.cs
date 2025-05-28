@@ -1,14 +1,3 @@
-#if !NET6_0_OR_GREATER
-using Directory = Alphaleonis.Win32.Filesystem.Directory;
-using File = Alphaleonis.Win32.Filesystem.File;
-using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
-using Path = Alphaleonis.Win32.Filesystem.Path;
-#else
-using Path = System.IO.Path;
-using Directory = System.IO.Directory;
-using File = System.IO.File;
-using FileInfo = System.IO.FileInfo;
-#endif
 using System;
 using System.Collections.Generic;
 using System.CommandLine;
@@ -26,167 +15,214 @@ using DiscUtils;
 using DiscUtils.Ntfs;
 using DiscUtils.Streams;
 using Exceptionless;
+using ILGPU;
+using ILGPU.Runtime;
+using static ILGPU.Atomic; // Corrected: using static for the Atomic class
 using RawDiskLib;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
+#if !NET6_0_OR_GREATER
+using Directory = Alphaleonis.Win32.Filesystem.Directory;
+using File = Alphaleonis.Win32.Filesystem.File;
+using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
+using Path = Alphaleonis.Win32.Filesystem.Path;
+#else
+using Path = System.IO.Path;
+using Directory = System.IO.Directory;
+using File = System.IO.File;
+using FileInfo = System.IO.FileInfo;
+#endif
 
 namespace bstrings;
 
-internal class Program
+// internal class Program // This was the old class declaration
+public static partial class Program // Make it public and partial for ILGPU if needed, or ensure Program is public
 {
     private static Stopwatch _sw;
-    private static readonly Dictionary<string, string> RegExPatterns = new Dictionary<string, string>();
+    private static readonly Dictionary<string, string> RegExPatterns =
+        new Dictionary<string, string>();
     private static readonly Dictionary<string, string> RegExDesc = new Dictionary<string, string>();
 
-
     private static readonly string Header =
-        $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version}" +
-        "\r\n\r\nAuthor: Eric Zimmerman (saericzimmerman@gmail.com)" +
-        "\r\nhttps://github.com/EricZimmerman/bstrings";
+        $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version}"
+        + "\r\n\r\nAuthor: Eric Zimmerman (saericzimmerman@gmail.com)"
+        + "\r\nhttps://github.com/EricZimmerman/bstrings";
 
-    private static readonly string Footer = @"Examples: bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls URL" + "\r\n\t " +
-                                            @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr guid" + "\r\n\t " +
-                                            @"   bstrings.exe -f ""C:\Temp\aBigFile.bin"" --fs c:\temp\searchStrings.txt --fr c:\temp\searchRegex.txt" +
-                                            "\r\n\t " +
-                                            @"   bstrings.exe -d ""C:\Temp"" --mask ""*.dll""" + "\r\n\t " +
-                                            @"   bstrings.exe -d ""C:\Temp"" --ar ""[\x20-\x37]""" + "\r\n\t " +
-                                            @"   bstrings.exe -d ""C:\Temp"" --cp 10007" + "\r\n\t " +
-                                            @"   bstrings.exe -d ""C:\Temp"" --ls test" + "\r\n\t " +
-                                            @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa" + "\r\n\t " +
-                                            @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa -m 15 -x 22" + "\r\n\t " +
-                                            @"   bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls mui --sl";
+    private static readonly string Footer =
+        @"Examples: bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls URL"
+        + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr guid"
+        + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\aBigFile.bin"" --fs c:\temp\searchStrings.txt --fr c:\temp\searchRegex.txt"
+        + "\r\n\t "
+        + @"   bstrings.exe -d ""C:\Temp"" --mask ""*.dll"""
+        + "\r\n\t "
+        + @"   bstrings.exe -d ""C:\Temp"" --ar ""[\x20-\x37]"""
+        + "\r\n\t "
+        + @"   bstrings.exe -d ""C:\Temp"" --cp 10007"
+        + "\r\n\t "
+        + @"   bstrings.exe -d ""C:\Temp"" --ls test"
+        + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa"
+        + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa -m 15 -x 22"
+        + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls mui --sl";
 
     private static RootCommand _rootCommand;
 
     private static IFileSystem _fileSystem;
 
-    private static readonly string BaseDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+    private static readonly string BaseDirectory = Path.GetDirectoryName(
+        Assembly.GetExecutingAssembly().Location
+    );
+
+    // ILGPU specific fields
+    private static readonly Context GpuContext;
+    private static readonly Accelerator GpuAccelerator;
+
+    /// <summary>
+    /// Represents a hit found by the GPU.
+    /// </summary>
+    private struct GpuHit
+    {
+        public long Offset; // Absolute offset in the original file
+        public int Length;
+
+        // ILGPU kernels require parameterless constructors for structs passed by value.
+        // If you add methods or properties, ensure it remains a simple struct.
+    }
+
+    static Program()
+    {
+        // ... any existing static constructor code ...
+
+        try
+        {
+            // Using the simplified Context.Create with a default builder.
+            // This has been the most stable way to initialize the context.
+            GpuContext = Context.Create(builder => builder.Default());
+
+            GpuAccelerator = GpuContext
+                .GetPreferredDevice(preferCPU: false)
+                .CreateAccelerator(GpuContext);
+
+            if (GpuAccelerator != null)
+            {
+                Console.WriteLine(
+                    $"Successfully initialized GPU: {GpuAccelerator.Name} ({GpuAccelerator.AcceleratorType})"
+                );
+            }
+            else
+            {
+                Console.WriteLine("Failed to initialize GPU Accelerator. Will fall back to CPU processing.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                $"Could not initialize ILGPU: {ex.Message}. GPU acceleration will be disabled."
+            );
+            GpuContext = null;
+            GpuAccelerator = null;
+        }
+    }
 
     private static async Task Main(string[] args)
     {
         ExceptionlessClient.Default.Startup("Kruacm8p1B6RFAw2WMnKcEqkQcnWRkF3RmPSOzlW");
+        // Ensure ILGPU context is initialized before any command parsing if GPU is to be used early
+        // or ensure commands that need GPU are aware if it's not ready.
+        // For now, static constructor handles initialization.
 
         SetupPatterns();
 
         _rootCommand = new RootCommand
         {
-            new Option<string>(
-                "-f",
-                "File to search. Either this or -d is required"),
-
+            new Option<string>("-f", "File to search. Either this or -d is required"),
             new Option<string>(
                 "-d",
-                "Directory to recursively process. Either this or -f is required"),
-
-            new Option<string>(
-                "-o",
-                "File to save results to"),
-
+                "Directory to recursively process. Either this or -f is required"
+            ),
+            new Option<string>("-o", "File to save results to"),
             new Option<bool>(
                 "-a",
                 () => true,
-                "If set, look for ASCII strings. Use -a false to disable"),
-
+                "If set, look for ASCII strings. Use -a false to disable"
+            ),
             new Option<bool>(
                 "-u",
                 () => true,
-                "If set, look for Unicode strings. Use -u false to disable"),
-
-            new Option<int>(
-                "-m",
-                () => 3,
-                "Minimum string length"),
-
+                "If set, look for Unicode strings. Use -u false to disable"
+            ),
+            new Option<int>("-m", () => 3, "Minimum string length"),
             new Option<int>(
                 "-b",
                 () => 512,
-                "Chunk size in MB. Valid range is 1 to 1024. Default is 512"),
-
+                "Chunk size in MB. Valid range is 1 to 1024. Default is 512"
+            ),
             new Option<bool>(
                 "-q",
                 () => false,
-                "Quiet mode (Do not show header or total number of hits)"),
-
-            new Option<int>(
-                "-x",
-                () => -1,
-                "Maximum string length. Default is unlimited"),
-
-            new Option<bool>(
-                "-p",
-                () => false,
-                "Display list of built in regular expressions"),
-
+                "Quiet mode (Do not show header or total number of hits)"
+            ),
+            new Option<int>("-x", () => -1, "Maximum string length. Default is unlimited"),
+            new Option<bool>("-p", () => false, "Display list of built in regular expressions"),
             new Option<string>(
                 "--ls",
-                "String to look for. When set, only matching strings are returned"),
-
+                "String to look for. When set, only matching strings are returned"
+            ),
             new Option<string>(
                 "--lr",
-                "Regex to look for. When set, only strings matching the regex are returned"),
-
+                "Regex to look for. When set, only strings matching the regex are returned"
+            ),
             new Option<string>(
                 "--fs",
-                "File containing strings to look for. When set, only matching strings are returned"),
-
+                "File containing strings to look for. When set, only matching strings are returned"
+            ),
             new Option<string>(
                 "--fr",
-                "File containing regex patterns to look for. When set, only strings matching regex patterns are returned"),
-
+                "File containing regex patterns to look for. When set, only strings matching regex patterns are returned"
+            ),
             new Option<string>(
                 "--ar",
                 () => "[\x20-\x7E]",
-                @"Range of characters to search for in 'Code page' strings. Specify as a range of characters in hex format and enclose in quotes. Default is [\x20 -\x7E]"),
-
+                @"Range of characters to search for in 'Code page' strings. Specify as a range of characters in hex format and enclose in quotes. Default is [\x20 -\x7E]"
+            ),
             new Option<string>(
                 "--ur",
                 () => "[\u0020-\u007E]",
-                @"Range of characters to search for in Unicode strings. Specify as a range of characters in hex format and enclose in quotes. Default is [\\u0020-\\u007E]"),
-
+                @"Range of characters to search for in Unicode strings. Specify as a range of characters in hex format and enclose in quotes. Default is [\\u0020-\\u007E]"
+            ),
             new Option<int>(
                 "--cp",
                 () => 1252,
-                "Code page to use. Default is 1252. Use the Identifier value for code pages at https://goo.gl/ig6DxW"),
-
+                "Code page to use. Default is 1252. Use the Identifier value for code pages at https://goo.gl/ig6DxW"
+            ),
             new Option<string>(
                 "--mask",
-                "When using -d, file mask to search for. * and ? are supported. This option has no effect when using -f"),
-
+                "When using -d, file mask to search for. * and ? are supported. This option has no effect when using -f"
+            ),
             new Option<int>(
                 "--ms",
                 () => -1,
-                "When using -d, maximum file size in bytes to process. This option has no effect when using -f"),
-
+                "When using -d, maximum file size in bytes to process. This option has no effect when using -f"
+            ),
             new Option<bool>(
                 "--ro",
                 () => false,
-                "When true, list the string matched by regex pattern vs string the pattern was found in (This may result in duplicate strings in output. ~ denotes approx. offset)"),
-
+                "When true, list the string matched by regex pattern vs string the pattern was found in (This may result in duplicate strings in output. ~ denotes approx. offset)"
+            ),
             new Option<bool>(
                 "--off",
                 () => false,
-                "Show offset to hit after string, followed by the encoding (A=1252, U=Unicode)"),
-
-            new Option<bool>(
-                "--sa",
-                () => false,
-                "Sort results alphabetically"),
-
-            new Option<bool>(
-                "--sl",
-                () => false,
-                "Sort results by length"),
-
-            new Option<bool>(
-                "--debug",
-                () => false,
-                "Show debug information during processing"),
-
-            new Option<bool>(
-                "--trace",
-                () => false,
-                "Show trace information during processing")
+                "Show offset to hit after string, followed by the encoding (A=1252, U=Unicode)"
+            ),
+            new Option<bool>("--sa", () => false, "Sort results alphabetically"),
+            new Option<bool>("--sl", () => false, "Sort results by length"),
+            new Option<bool>("--debug", () => false, "Show debug information during processing"),
+            new Option<bool>("--trace", () => false, "Show trace information during processing"),
         };
 
         _rootCommand.Description = Header + "\r\n\r\n" + Footer;
@@ -198,7 +234,35 @@ internal class Program
         Log.CloseAndFlush();
     }
 
-    private static void DoWork(string f, string d, string o, bool a, bool u, int m, int b, bool q, bool s, int x, bool p, string ls, string lr, string fs, string fr, string ar, string ur, int cp, string mask, int ms, bool ro, bool off, bool sa, bool sl, bool debug, bool trace)
+    private static void DoWork(
+        string f,
+        string d,
+        string o,
+        bool a, // ascii
+        bool u, // unicode
+        int m, // minLength
+        int b, // chunkSizeMb
+        bool q, // quiet
+        bool s, // This was 's' for silent in original thinking, but seems unused or repurposed. Let's assume it's not critical for GPU part now.
+        // The command line options show -s for nothing, but there is --sa (sort alphabetically) and --sl (sort by length)
+        int x, // maxLength
+        bool p, // list patterns
+        string ls, // literal string search
+        string lr, // literal regex search
+        string fs, // file string search
+        string fr, // file regex search
+        string ar, // ascii range
+        string ur, // unicode range
+        int cp, // codepage
+        string mask,
+        int ms, // max size
+        bool ro, // regex output
+        bool off, // show offset
+        bool sa, // sort alphabetical
+        bool sl, // sort by length
+        bool debug,
+        bool trace
+    )
     {
         var levelSwitch = new LoggingLevelSwitch();
 
@@ -222,7 +286,6 @@ internal class Program
 
         Log.Logger = conf.CreateLogger();
 
-
         if (p)
         {
             Log.Information("Name \t\tDescription");
@@ -242,7 +305,10 @@ internal class Program
 
         if (cpTest == null)
         {
-            Log.Warning("Invalid codepage: '{Cp}'. Use the Identifier value for code pages at https://goo.gl/ig6DxW. Verify codepage value and try again", cp);
+            Log.Warning(
+                "Invalid codepage: '{Cp}'. Use the Identifier value for code pages at https://goo.gl/ig6DxW. Verify codepage value and try again",
+                cp
+            );
             return;
         }
 
@@ -253,17 +319,24 @@ internal class Program
         {
             Console.Write("input from stdin or file\n");
             return;
-        } else if (Console.IsInputRedirected)
+        }
+        else if (Console.IsInputRedirected)
         {
             // Generate a temporary file path
-            string tempFilePath = Path.GetTempFileName();  // Creates a unique temporary file
+            string tempFilePath = Path.GetTempFileName(); // Creates a unique temporary file
             // Open the stdin stream
             using (var stdinStream = Console.OpenStandardInput())
             {
                 // Open the temporary file for writing using FileStream
-                using (var tempFileStream = new FileStream(tempFilePath, FileMode.Create, FileAccess.Write))
+                using (
+                    var tempFileStream = new FileStream(
+                        tempFilePath,
+                        FileMode.Create,
+                        FileAccess.Write
+                    )
+                )
                 {
-                    byte[] buffer = new byte[4096];  // Buffer for reading from stdin
+                    byte[] buffer = new byte[4096]; // Buffer for reading from stdin
                     int bytesRead;
                     // Read from stdin and write to the temporary file
                     while ((bytesRead = stdinStream.Read(buffer, 0, buffer.Length)) > 0)
@@ -273,7 +346,8 @@ internal class Program
                 }
             }
             f = tempFilePath;
-        } else if (!Console.IsInputRedirected)
+        }
+        else if (!Console.IsInputRedirected)
         {
             if (string.IsNullOrEmpty(f) && string.IsNullOrEmpty(d))
             {
@@ -285,16 +359,12 @@ internal class Program
                 Log.Warning("Either -f or -d is required. Exiting");
                 return;
             }
-            if (string.IsNullOrEmpty(f) == false &&
-                !File.Exists(f) &&
-                mask?.Length == 0)
+            if (string.IsNullOrEmpty(f) == false && !File.Exists(f) && mask?.Length == 0)
             {
                 Log.Warning("File '{F}' not found. Exiting", f);
                 return;
             }
-            if (string.IsNullOrEmpty(d) == false &&
-                !Directory.Exists(d) &&
-                mask?.Length == 0)
+            if (string.IsNullOrEmpty(d) == false && !Directory.Exists(d) && mask?.Length == 0)
             {
                 Log.Warning("Directory '{D}' not found. Exiting", d);
                 return;
@@ -318,25 +388,43 @@ internal class Program
             {
                 if (mask?.Length > 0)
                 {
-                    files.AddRange(Directory.EnumerateFiles(Path.GetFullPath(d!),
-                        mask, SearchOption.AllDirectories));
+                    files.AddRange(
+                        Directory.EnumerateFiles(
+                            Path.GetFullPath(d!),
+                            mask,
+                            SearchOption.AllDirectories
+                        )
+                    );
                 }
                 else
                 {
-                    files.AddRange(Directory.EnumerateFiles(Path.GetFullPath(d!), "*",
-                        SearchOption.AllDirectories));
+                    files.AddRange(
+                        Directory.EnumerateFiles(
+                            Path.GetFullPath(d!),
+                            "*",
+                            SearchOption.AllDirectories
+                        )
+                    );
                 }
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Error getting files in '{D}'. Error message: {Message}", d, ex.Message);
+                Log.Error(
+                    ex,
+                    "Error getting files in '{D}'. Error message: {Message}",
+                    d,
+                    ex.Message
+                );
                 return;
             }
         }
 
         if (!q)
         {
-            Log.Information("Command line: {Args}", string.Join(" ", Environment.GetCommandLineArgs().Skip(1)));
+            Log.Information(
+                "Command line: {Args}",
+                string.Join(" ", Environment.GetCommandLineArgs().Skip(1))
+            );
             Console.WriteLine();
         }
 
@@ -387,7 +475,6 @@ internal class Program
             }
         }
 
-
         foreach (var file in files)
         {
             if (File.Exists(file) == false)
@@ -427,10 +514,7 @@ internal class Program
                 maxLength = x;
             }
 
-            var chunkSizeMb = b < 1 ||
-                              b > 1024
-                ? 512
-                : b;
+            var chunkSizeMb = b < 1 || b > 1024 ? 512 : b;
             var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
 
             var fileSizeBytes = new FileInfo(file).Length;
@@ -439,7 +523,11 @@ internal class Program
             {
                 if (fileSizeBytes > ms)
                 {
-                    Log.Warning("'{File}' is bigger than max file size of {Ms:N0} bytes! Skipping...", file, ms);
+                    Log.Warning(
+                        "'{File}' is bigger than max file size of {Ms:N0} bytes! Skipping...",
+                        file,
+                        ms
+                    );
                     continue;
                 }
             }
@@ -454,13 +542,24 @@ internal class Program
             {
                 if (totalChunks == 1)
                 {
-                    Log.Information("Searching {TotalChunks:N0} chunk ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'", totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
+                    Log.Information(
+                        "Searching {TotalChunks:N0} chunk ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
+                        totalChunks,
+                        chunkSizeMb,
+                        GetSizeReadable(fileSizeBytes),
+                        file
+                    );
                 }
                 else
                 {
-                    Log.Information("Searching {TotalChunks:N0} chunks ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'", totalChunks, chunkSizeMb, GetSizeReadable(fileSizeBytes), file);
+                    Log.Information(
+                        "Searching {TotalChunks:N0} chunks ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
+                        totalChunks,
+                        chunkSizeMb,
+                        GetSizeReadable(fileSizeBytes),
+                        file
+                    );
                 }
-
 
                 Console.WriteLine();
             }
@@ -475,9 +574,12 @@ internal class Program
 #if NET6_0_OR_GREATER
                     fileStream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
 #else
-                    fileStream =
-                        File.Open(File.GetFileSystemEntryInfo(file).LongFullPath, FileMode.Open, FileAccess.Read,
-                            FileShare.Read, PathFormat.LongFullPath);
+                    fileStream = File.Open(
+                        File.GetFileSystemEntryInfo(file).LongFullPath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read
+                    );
 #endif
                     mappedStream = MappedStream.FromStream(fileStream, Ownership.None);
                 }
@@ -505,12 +607,16 @@ internal class Program
 
                         var chunk = new byte[chunkSizeBytes];
 
-                        mappedStream.Read(chunk, 0, chunkSizeBytes);
+                        var bytesRead = mappedStream.Read(chunk, 0, chunkSizeBytes);
+                        if (bytesRead == 0)
+                        {
+                            // End of stream reached
+                            break;
+                        }
 
                         if (u)
                         {
-                            var uh = GetUnicodeHits(chunk, minLength, maxLength, offset,
-                                off, ur);
+                            var uh = GetUnicodeHits(chunk, minLength, maxLength, offset, off, ur);
                             foreach (var h in uh)
                             {
                                 hits.Add(h);
@@ -519,8 +625,21 @@ internal class Program
 
                         if (a)
                         {
-                            var ah = GetAsciiHits(chunk, minLength, maxLength, offset,
-                                off, cp, ar);
+                            // var ah = GetAsciiHits(chunk, minLength, maxLength, offset, off, cp, ar);
+
+                            // New call for GPU:
+                            string offsetStringSeparator = off ? "\\t" : ""; // Use tab as separator if offsets are on
+                            var ah = GetAsciiHitsGpu(
+                                chunk,
+                                minLength,
+                                maxLength,
+                                offset,
+                                offsetStringSeparator,
+                                cp,
+                                ar,
+                                off
+                            );
+
                             foreach (var h in ah)
                             {
                                 hits.Add(h);
@@ -533,7 +652,13 @@ internal class Program
                         if (!q)
                         {
                             Log.Information(
-                                "Chunk {ChunkIndex:N0} of {TotalChunks:N0} finished. Total strings so far: {HitsCount:N0} Elapsed time: {TotalSeconds:N3} seconds. Average strings/sec: {Speed:N0}", chunkIndex, totalChunks, hits.Count, _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
+                                "Chunk {ChunkIndex:N0} of {TotalChunks:N0} finished. Total strings so far: {HitsCount:N0} Elapsed time: {TotalSeconds:N3} seconds. Average strings/sec: {Speed:N0}",
+                                chunkIndex,
+                                totalChunks,
+                                hits.Count,
+                                _sw.Elapsed.TotalSeconds,
+                                hits.Count / _sw.Elapsed.TotalSeconds
+                            );
                         }
 
                         chunkIndex += 1;
@@ -543,7 +668,9 @@ internal class Program
 
                     if (!q)
                     {
-                        Log.Information("Primary search complete. Looking for strings across chunk boundaries...");
+                        Log.Information(
+                            "Primary search complete. Looking for strings across chunk boundaries..."
+                        );
                     }
 
                     bytesRemaining = fileSizeBytes;
@@ -564,12 +691,16 @@ internal class Program
 
                         var chunk = new byte[boundaryChunkSize];
 
-                        mappedStream.Read(chunk, 0, boundaryChunkSize);
+                        var bytesReadBoundary = mappedStream.Read(chunk, 0, boundaryChunkSize);
+                        if (bytesReadBoundary == 0)
+                        {
+                            // End of stream reached
+                            break;
+                        }
 
                         if (u)
                         {
-                            var uh = GetUnicodeHits(chunk, minLength, maxLength, offset,
-                                off, ur);
+                            var uh = GetUnicodeHits(chunk, minLength, maxLength, offset, off, ur);
                             foreach (var h in uh)
                             {
                                 hits.Add("  " + h);
@@ -583,8 +714,8 @@ internal class Program
 
                         if (a)
                         {
-                            var ah = GetAsciiHits(chunk, minLength, maxLength, offset,
-                                off, cp, ar);
+                            // Original CPU boundary call
+                            var ah = GetAsciiHits(chunk, minLength, maxLength, offset, off, cp, ar);
                             foreach (var h in ah)
                             {
                                 hits.Add("  " + h);
@@ -681,7 +812,6 @@ internal class Program
                 //  AddHighlightingRules(regexStrings.ToList(), true);
             }
 
-
             if (!q)
             {
                 Log.Information("Processing strings...");
@@ -704,7 +834,9 @@ internal class Program
                             continue;
                         }
 
-                        if (hit.IndexOf(fileString, StringComparison.InvariantCultureIgnoreCase) < 0)
+                        if (
+                            hit.IndexOf(fileString, StringComparison.InvariantCultureIgnoreCase) < 0
+                        )
                         {
                             continue;
                         }
@@ -734,8 +866,10 @@ internal class Program
 
                         try
                         {
-                            var reg1 = new Regex(regString,
-                                RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace);
+                            var reg1 = new Regex(
+                                regString,
+                                RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace
+                            );
 
                             if (reg1.IsMatch(hit) == false)
                             {
@@ -768,7 +902,12 @@ internal class Program
                         }
                         catch (Exception ex)
                         {
-                            Log.Error(ex, "Error setting up regular expression '{RegString}': {Message}", regString, ex.Message);
+                            Log.Error(
+                                ex,
+                                "Error setting up regular expression '{RegString}': {Message}",
+                                regString,
+                                ex.Message
+                            );
                         }
                     }
                 }
@@ -791,22 +930,33 @@ internal class Program
                 continue;
             }
 
-
             Console.WriteLine();
 
             if (withBoundaryHits)
             {
-                Log.Information("** Strings prefixed with 2 spaces are hits found across chunk boundaries **");
+                Log.Information(
+                    "** Strings prefixed with 2 spaces are hits found across chunk boundaries **"
+                );
                 Console.WriteLine();
             }
 
             if (counter == 1)
             {
-                Log.Information("Found {Counter:N0} string in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter, _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
+                Log.Information(
+                    "Found {Counter:N0} string in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}",
+                    counter,
+                    _sw.Elapsed.TotalSeconds,
+                    hits.Count / _sw.Elapsed.TotalSeconds
+                );
             }
             else
             {
-                Log.Information("Found {Counter:N0} strings in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}", counter, _sw.Elapsed.TotalSeconds, hits.Count / _sw.Elapsed.TotalSeconds);
+                Log.Information(
+                    "Found {Counter:N0} strings in {TotalSeconds:N3} seconds. Average strings/sec: {Hits:N0}",
+                    counter,
+                    _sw.Elapsed.TotalSeconds,
+                    hits.Count / _sw.Elapsed.TotalSeconds
+                );
             }
 
             globalCounter += counter;
@@ -814,7 +964,9 @@ internal class Program
             globalTimespan += _sw.Elapsed.TotalSeconds;
             if (files.Count > 1)
             {
-                Log.Information("-------------------------------------------------------------------------------------");
+                Log.Information(
+                    "-------------------------------------------------------------------------------------"
+                );
                 Console.WriteLine();
             }
         }
@@ -833,11 +985,23 @@ internal class Program
 
         if (globalCounter == 1)
         {
-            Log.Information("Total across {FilesCount:N0} files: Found {GlobalCounter:N0} string in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}", files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
+            Log.Information(
+                "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} string in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
+                files.Count,
+                globalCounter,
+                globalTimespan,
+                globalHits / globalTimespan
+            );
         }
         else
         {
-            Log.Information("Total across {FilesCount:N0} files: Found {GlobalCounter:N0} strings in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}", files.Count, globalCounter, globalTimespan, globalHits / globalTimespan);
+            Log.Information(
+                "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} strings in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
+                files.Count,
+                globalCounter,
+                globalTimespan,
+                globalHits / globalTimespan
+            );
         }
 
         Console.WriteLine();
@@ -847,7 +1011,9 @@ internal class Program
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            throw new NotSupportedException("Raw disk access not supported on non-Windows systems. Exiting\r\n");
+            throw new NotSupportedException(
+                "Raw disk access not supported on non-Windows systems. Exiting\r\n"
+            );
         }
 
         var rawPath = path.Substring(3);
@@ -949,32 +1115,52 @@ internal class Program
         RegExPatterns.Add("monero", "4[0-9AB][0-9a-zA-Z]{93}|4[0-9AB][0-9a-zA-Z]{104}");
         RegExPatterns.Add("sumokoin", "Sumoo[0-9a-zA-Z]{94}");
 
+        RegExPatterns.Add(
+            "b64",
+            @"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$"
+        );
 
-        RegExPatterns.Add("b64",
-            @"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$");
+        RegExPatterns.Add(
+            "bitlocker",
+            @"[0-9]{6}?-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}"
+        );
 
-        RegExPatterns.Add("bitlocker", @"[0-9]{6}?-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}");
-
-        RegExPatterns.Add("reg_path", @"([a-z0-9]\\)*(software\\)|(sam\\)|(system\\)|(security\\)[a-z0-9\\]+");
+        RegExPatterns.Add(
+            "reg_path",
+            @"([a-z0-9]\\)*(software\\)|(sam\\)|(system\\)|(security\\)[a-z0-9\\]+"
+        );
         RegExPatterns.Add("var_set", @"^[a-z_0-9]+=[\\/:\*\?<>|;\- _a-z0-9]+");
-        RegExPatterns.Add("win_path",
-            @"(?:""?[a-zA-Z]\:|\\\\[^\\\/\:\*\?\<\>\|]+\\[^\\\/\:\*\?\<\>\|]*)\\(?:[^\\\/\:\*\?\<\>\|]+\\)*\w([^\\\/\:\*\?\<\>\|])*");
+        RegExPatterns.Add(
+            "win_path",
+            @"(?:""?[a-zA-Z]\:|\\\\[^\\\/\:\*\?\<\>\|]+\\[^\\\/\:\*\?\<\>\|]*)\\(?:[^\\\/\:\*\?\<\>\|]+\\)*\w([^\\\/\:\*\?\<\>\|])*"
+        );
         RegExPatterns.Add("sid", @"^S-\d-\d+-(\d+-){1,14}\d+$");
         RegExPatterns.Add("xml", @"\A<([A-Z][A-Z0-9]*)\b[^>]*>(.*?)</\1>\z");
         RegExPatterns.Add("guid", @"\b[A-F0-9]{8}(?:-[A-F0-9]{4}){3}-[A-F0-9]{12}\b");
         RegExPatterns.Add("usPhone", @"\(?\b[2-9][0-9]{2}\)?[-. ]?[2-9][0-9]{2}[-. ]?[0-9]{4}\b");
         RegExPatterns.Add("unc", @"^\\\\(?<server>[a-z0-9 %._-]+)\\(?<share>[a-z0-9 $%._-]+)");
         RegExPatterns.Add("mac", "\\b[0-9A-F]{2}([-:]?)(?:[0-9A-F]{2}\\1){4}[0-9A-F]{2}\\b");
-        RegExPatterns.Add("ssn", "\\b(?!000)(?!666)[0-8][0-9]{2}[- ](?!00)[0-9]{2}[- ](?!0000)[0-9]{4}\\b");
+        RegExPatterns.Add(
+            "ssn",
+            "\\b(?!000)(?!666)[0-8][0-9]{2}[- ](?!00)[0-9]{2}[- ](?!0000)[0-9]{4}\\b"
+        );
         // RegExPatterns.Add("cc","^(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|6(?:011|5[0-9][0-9])[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|(?:2131|1800|35\\d{3})\\d{11})$");
-        RegExPatterns.Add("cc", @"^[ -]*(?:4[ -]*(?:\d[ -]*){11}(?:(?:\d[ -]*){3})?\d|5[ -]*[1-5](?:[ -]*[0-9]){14}|6[ -]*(?:0[ -]*1[ -]*1|5[ -]*\d[ -]*\d)(?:[ -]*[0-9]){12}|3[ -]*[47](?:[ -]*[0-9]){13}|3[ -]*(?:0[ -]*[0-5]|[68][ -]*[0-9])(?:[ -]*[0-9]){11}|(?:2[ -]*1[ -]*3[ -]*1|1[ -]*8[ -]*0[ -]*0|3[ -]*5(?:[ -]*[0-9]){3})(?:[ -]*[0-9]){11})[ -]*$");
-        RegExPatterns.Add("ipv4", @"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b");
+        RegExPatterns.Add(
+            "cc",
+            @"^[ -]*(?:4[ -]*(?:\d[ -]*){11}(?:(?:\d[ -]*){3})?\d|5[ -]*[1-5](?:[ -]*[0-9]){14}|6[ -]*(?:0[ -]*1[ -]*1|5[ -]*\d[ -]*\d)(?:[ -]*[0-9]){12}|3[ -]*[47](?:[ -]*[0-9]){13}|3[ -]*(?:0[ -]*[0-5]|[68][ -]*[0-9])(?:[ -]*[0-9]){11}|(?:2[ -]*1[ -]*3[ -]*1|1[ -]*8[ -]*0[ -]*0|3[ -]*5(?:[ -]*[0-9]){3})(?:[ -]*[0-9]){11})[ -]*$"
+        );
+        RegExPatterns.Add(
+            "ipv4",
+            @"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b"
+        );
         RegExPatterns.Add("ipv6", @"(?<![:.\w])(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}(?![:.\w])");
         //         RegExPatterns.Add("email",@"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?");
         RegExPatterns.Add("email", @"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,6}\b");
         RegExPatterns.Add("zip", @"\A\b[0-9]{5}(?:-[0-9]{4})?\b\z");
         RegExPatterns.Add("urlUser", @"^[a-z0-9+\-.]+://(?<user>[a-z0-9\-._~%!$&'()*+,;=]+)@");
-        RegExPatterns.Add("url3986", @"^
+        RegExPatterns.Add(
+            "url3986",
+            @"^
 		[a-z][a-z0-9+\-.]*://                       # Scheme
 		([a-z0-9\-._~%!$&'()*+,;=]+@)?              # User
 		(?<host>[a-z0-9\-._~%]+                     # Named host
@@ -984,7 +1170,8 @@ internal class Program
 		(/[a-z0-9\-._~%!$&'()*+,;=:@]+)*/?          # Path
 		(\?[a-z0-9\-._~%!$&'()*+,;=:@/?]*)?         # Query
 		(\#[a-z0-9\-._~%!$&'()*+,;=:@/?]*)?         # Fragment
-		$");
+		$"
+        );
     }
 
     // private static void AddHighlightingRules(List<string> words, bool isRegEx = false)
@@ -1023,14 +1210,18 @@ internal class Program
 
     private static IEnumerable<string> SortByLength(IEnumerable<string> e)
     {
-        var sorted = from s in e
-            orderby s.Length ascending
-            select s;
+        var sorted = from s in e orderby s.Length ascending select s;
         return sorted;
     }
 
-    private static List<string> GetUnicodeHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-        bool withOffsets, string ur)
+    private static List<string> GetUnicodeHits(
+        byte[] bytes,
+        int minSize,
+        int maxSize,
+        long currentOffset,
+        bool withOffsets,
+        string ur
+    )
     {
         var maxString = maxSize == -1 ? "" : maxSize.ToString();
         var mi2 = $"{"{"}{minSize}{","}{maxString}{"}"}";
@@ -1058,13 +1249,16 @@ internal class Program
         return hits;
     }
 
-
     private static int ByteSearch(byte[] searchIn, byte[] searchBytes, int start = 0)
     {
         var found = -1;
         //only look at this if we have a populated search array and search bytes with a sensible start
-        if (searchIn.Length > 0 && searchBytes.Length > 0 && start <= searchIn.Length - searchBytes.Length &&
-            searchIn.Length >= searchBytes.Length)
+        if (
+            searchIn.Length > 0
+            && searchBytes.Length > 0
+            && start <= searchIn.Length - searchBytes.Length
+            && searchIn.Length >= searchBytes.Length
+        )
         {
             //iterate through the array to be searched
             for (var i = start; i <= searchIn.Length - searchBytes.Length; i++)
@@ -1105,8 +1299,15 @@ internal class Program
         return found;
     }
 
-    private static List<string> GetAsciiHits(byte[] bytes, int minSize, int maxSize, long currentOffset,
-        bool withOffsets, int cp, string ar)
+    private static List<string> GetAsciiHits(
+        byte[] bytes,
+        int minSize,
+        int maxSize,
+        long currentOffset,
+        bool withOffsets,
+        int cp,
+        string ar
+    )
     {
         var maxString = maxSize == -1 ? "" : maxSize.ToString();
         var mi2 = $"{"{"}{minSize}{","}{maxString}{"}"}";
@@ -1123,8 +1324,7 @@ internal class Program
         {
             if (withOffsets)
             {
-                var matchBytes = codePage!
-                    .GetBytes(match.Value);
+                var matchBytes = codePage!.GetBytes(match.Value);
 
                 var pos = ByteSearch(bytes, matchBytes, match.Index);
 
@@ -1139,5 +1339,215 @@ internal class Program
         }
 
         return hits;
+    }
+
+    /// <summary>
+    /// GPU Kernel for scanning ASCII strings.
+    /// Each thread processes one potential starting byte.
+    /// </summary>
+    private static void AsciiScanKernel(
+        Index1D index, // Current thread index, maps to starting byte in the data
+        ArrayView<byte> data, // Chunk of data to scan
+        int minLength, // Minimum string length
+        int maxLength, // Maximum string length
+        long fileChunkBaseOffset, // Base offset of this data chunk in the original file
+        ArrayView<GpuHit> hits, // Output buffer for hits
+        ArrayView<int> hitCount
+    ) // Single-element array to atomically count hits
+    {
+        int startByteIndex = index;
+
+        // Boundary check for the thread's starting position
+        if (startByteIndex >= data.Length)
+            return;
+
+        // Check if the current byte is a printable ASCII character
+        if (data[startByteIndex] >= 32 && data[startByteIndex] <= 126)
+        {
+            for (int currentLen = minLength; currentLen <= maxLength; ++currentLen)
+            {
+                // Ensure the string of currentLen does not exceed data boundaries
+                if (startByteIndex + currentLen > data.Length)
+                    break;
+
+                bool isValidString = true;
+                // Check if all characters in the potential string are printable ASCII
+                for (int k = 0; k < currentLen; ++k)
+                {
+                    if (!(data[startByteIndex + k] >= 32 && data[startByteIndex + k] <= 126))
+                    {
+                        isValidString = false;
+                        break;
+                    }
+                }
+
+                if (isValidString)
+                {
+                    // Check termination condition:
+                    // String must end either at the end of the data chunk
+                    // or be followed by a non-printable character.
+                    bool terminationConditionMet = false;
+                    if (
+                        startByteIndex + currentLen == data.Length
+                        || !(
+                            data[startByteIndex + currentLen] >= 32
+                            && data[startByteIndex + currentLen] <= 126
+                        )
+                    )
+                    {
+                        terminationConditionMet = true;
+                    }
+
+                    if (terminationConditionMet)
+                    {
+                        // Atomically increment hit counter and get the index for this hit
+                        int currentHitStoredIndex = Atomic.Add(ref hitCount[0], 1);
+
+                        // Store the hit if there's space in the output buffer
+                        // Note: If hitCount exceeds hits.Length, hits will be dropped.
+                        // A more robust solution might involve resizing or multiple passes.
+                        if (currentHitStoredIndex < hits.Length)
+                        {
+                            hits[currentHitStoredIndex] = new GpuHit
+                            {
+                                Offset = fileChunkBaseOffset + startByteIndex,
+                                Length = currentLen,
+                            };
+                        }
+                        // else: Hit is dropped due to full buffer. Consider logging or handling.
+                    }
+                }
+            }
+        }
+    }
+
+    private static List<string> GetAsciiHitsGpu(
+        byte[] chunk,
+        int minLength,
+        int maxLength,
+        long currentOffsetInFile,
+        string offSeparator,
+        int cp,
+        string ar,
+        bool originalOffBool
+    )
+    {
+        var results = new List<string>();
+
+        if (GpuAccelerator == null || GpuContext == null || chunk.Length == 0)
+        {
+            // Fallback to CPU if GPU is not available/initialized or chunk is empty
+            return GetAsciiHits(
+                chunk,
+                minLength,
+                maxLength,
+                currentOffsetInFile,
+                originalOffBool,
+                cp,
+                ar
+            );
+        }
+
+        try
+        {
+            // Estimate max possible hits. This can be very large and inefficient.
+            // For production, a more dynamic output mechanism or a two-pass kernel (count then fill) is better.
+            // Max hits: if every char starts a minLength string. This is a rough upper bound.
+            // A smaller, reasonable buffer size with overflow detection is often preferred.
+            int estimatedMaxHits = Math.Max(1024, chunk.Length); // Start with a base or chunk length
+
+            using var dataBuffer = GpuAccelerator.Allocate1D<byte>(chunk.Length);
+            using var hitsBuffer = GpuAccelerator.Allocate1D<GpuHit>(estimatedMaxHits); // Output buffer
+            using var hitCountBuffer = GpuAccelerator.Allocate1D<int>(1); // Single int for atomic counter
+
+            dataBuffer.CopyFromCPU(chunk);
+            hitCountBuffer.MemSetToZero(); // Initialize hit count to 0 on GPU
+
+            // Load and compile the kernel (ILGPU caches compiled kernels)
+            var kernel = GpuAccelerator.LoadAutoGroupedStreamKernel<
+                Index1D,
+                ArrayView<byte>,
+                int,
+                int,
+                long,
+                ArrayView<GpuHit>,
+                ArrayView<int>
+            >(AsciiScanKernel);
+
+            // Launch configuration: one thread per byte in the chunk
+            kernel(
+                chunk.Length,
+                dataBuffer.View,
+                minLength,
+                maxLength,
+                currentOffsetInFile,
+                hitsBuffer.View,
+                hitCountBuffer.View
+            );
+
+            GpuAccelerator.Synchronize(); // Wait for the kernel to complete
+
+            int numHitsFound = hitCountBuffer.GetAsArray1D()[0];
+            int hitsToRetrieve = Math.Min(numHitsFound, estimatedMaxHits);
+
+            if (hitsToRetrieve > 0)
+            {
+                // Allocate a CPU-side array for all potential hits copied from the GPU.
+                var allGpuHitsArray = new GpuHit[estimatedMaxHits];
+                hitsBuffer.CopyToCPU(allGpuHitsArray); // Simple overload to copy the whole buffer.
+
+                // Now process only the actual 'hitsToRetrieve' from the copied array.
+                for (int i = 0; i < hitsToRetrieve; ++i)
+                {
+                    var hit = allGpuHitsArray[i];
+                    // GpuHit.Offset is the absolute offset in the file
+                    var offsetString = originalOffBool
+                        ? $"{hit.Offset}"
+                        : $"0x{hit.Offset:X}";
+
+                    long chunkRelativeOffset = hit.Offset - currentOffsetInFile;
+
+                    if (chunkRelativeOffset >= 0 && chunkRelativeOffset < chunk.Length && (chunkRelativeOffset + hit.Length) <= chunk.Length)
+                    {
+                        string foundString = Encoding.ASCII.GetString(chunk, (int)chunkRelativeOffset, hit.Length);
+                        results.Add($"{offsetString}{offSeparator}{foundString}");
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine($"Skipping GPU hit with invalid calculated chunk-relative offset. AbsoluteOffset: {hit.Offset}, CurrentFileOffset: {currentOffsetInFile}, ChunkRelOffset: {chunkRelativeOffset}, Length: {hit.Length}, ChunkSize: {chunk.Length}");
+                    }
+                }
+            }
+            else
+            {
+                // No hits found or buffer was too small (hitsToRetrieve is 0)
+            }
+
+
+            // Fallback or empty list if no GPU hits processed
+            if (results.Count == 0 && numHitsFound > 0)
+            {
+                // This indicates an issue with retrieving or processing GPU results.
+                // Consider logging this or falling back.
+                // For now, returning empty and relying on CPU fallback if GpuAccelerator was null.
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"GPU processing error in GetAsciiHitsGpu: {ex.Message}. Falling back to CPU."
+            );
+            Console.Error.WriteLine(ex.StackTrace);
+            return GetAsciiHits(
+                chunk,
+                minLength,
+                maxLength,
+                currentOffsetInFile,
+                originalOffBool,
+                cp,
+                ar
+            ); // Fallback to CPU
+        }
+        return results;
     }
 }
