@@ -8,9 +8,11 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices; // Added for Marshal.SizeOf
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using Alphaleonis.Win32.Filesystem;
 using DiscUtils;
 using DiscUtils.Ntfs;
 using DiscUtils.Streams;
@@ -19,11 +21,11 @@ using ILGPU;
 using ILGPU.Runtime;
 using ILGPU.Runtime.Cuda; // Required for Cuda specific operations
 using ILGPU.Runtime.OpenCL; // Required for OpenCL specific operations
-using static ILGPU.Atomic; // Corrected: using static for the Atomic class
 using RawDiskLib;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
+using static ILGPU.Atomic; // Corrected: using static for the Atomic class
 #if !NET6_0_OR_GREATER
 using Directory = Alphaleonis.Win32.Filesystem.Directory;
 using File = Alphaleonis.Win32.Filesystem.File;
@@ -84,6 +86,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static readonly Context GpuContext;
     private static readonly Accelerator GpuAccelerator;
 
+    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed
+
     /// <summary>
     /// Represents a hit found by the GPU.
     /// </summary>
@@ -108,22 +112,28 @@ public static partial class Program // Make it public and partial for ILGPU if n
             {
                 // Attempt to create a context with only the Cuda backend enabled
                 tempContext = Context.Create(builder => builder.Cuda());
-                
+
                 // Get the first available Cuda device.
                 // This will throw an exception if no Cuda device is found or Cuda support isn't properly loaded.
-                var cudaDevice = tempContext.GetCudaDevice(0); 
+                var cudaDevice = tempContext.GetCudaDevice(0);
                 if (cudaDevice != null)
                 {
                     tempAccelerator = cudaDevice.CreateAccelerator(tempContext);
-                    Console.Error.WriteLine($"ILGPU Initialized with Cuda. Using: {tempAccelerator.Name}");
-                    Console.Error.WriteLine($"Type: {tempAccelerator.AcceleratorType}, Max Threads: {tempAccelerator.MaxNumThreads}");
+                    Console.Error.WriteLine(
+                        $"ILGPU Initialized with Cuda. Using: {tempAccelerator.Name}"
+                    );
+                    Console.Error.WriteLine(
+                        $"Type: {tempAccelerator.AcceleratorType}, Max Threads: {tempAccelerator.MaxNumThreads}"
+                    );
                 }
                 else
                 {
                     // This case might not be reached if GetCudaDevice(0) throws when no device is found.
-                    Console.Error.WriteLine("Cuda backend initialized, but no Cuda device found by GetCudaDevice(0).");
-                    tempContext.Dispose(); 
-                    tempContext = null; 
+                    Console.Error.WriteLine(
+                        "Cuda backend initialized, but no Cuda device found by GetCudaDevice(0)."
+                    );
+                    tempContext.Dispose();
+                    tempContext = null;
                 }
             }
             catch (Exception cudaEx)
@@ -137,11 +147,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 // tempAccelerator remains null, so we will fall through to the default initialization
             }
 
-            if (tempAccelerator == null) 
+            if (tempAccelerator == null)
             {
                 Console.Error.WriteLine("Falling back to default ILGPU initialization...");
                 // Ensure any previous context (e.g., from a failed Cuda attempt) is disposed
-                if (tempContext != null) 
+                if (tempContext != null)
                 {
                     tempContext.Dispose();
                     tempContext = null;
@@ -153,15 +163,21 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 if (preferredDevice != null)
                 {
                     tempAccelerator = preferredDevice.CreateAccelerator(tempContext);
-                    Console.Error.WriteLine($"ILGPU Initialized with Default. Using: {tempAccelerator.Name}");
-                    Console.Error.WriteLine($"Type: {tempAccelerator.AcceleratorType}, Max Threads: {tempAccelerator.MaxNumThreads}");
+                    Console.Error.WriteLine(
+                        $"ILGPU Initialized with Default. Using: {tempAccelerator.Name}"
+                    );
+                    Console.Error.WriteLine(
+                        $"Type: {tempAccelerator.AcceleratorType}, Max Threads: {tempAccelerator.MaxNumThreads}"
+                    );
                 }
                 else
                 {
-                    Console.Error.WriteLine("ILGPU: No suitable GPU device found with default backend.");
+                    Console.Error.WriteLine(
+                        "ILGPU: No suitable GPU device found with default backend."
+                    );
                     if (tempContext != null)
                     {
-                        tempContext.Dispose(); 
+                        tempContext.Dispose();
                         tempContext = null;
                     }
                     // tempAccelerator remains null
@@ -172,18 +188,72 @@ public static partial class Program // Make it public and partial for ILGPU if n
             GpuContext = tempContext;
             GpuAccelerator = tempAccelerator;
 
-            if (GpuAccelerator == null)
+            if (GpuAccelerator != null)
             {
-                Console.Error.WriteLine("GPU acceleration will be disabled as no suitable accelerator was found.");
-                // If GpuAccelerator is null, GpuContext might still be non-null if a context was created 
-                // but no device was found (e.g. default context with no GPUs).
-                // The GetAsciiHitsGpu method checks for GpuAccelerator == null, so this state is handled.
+                try
+                {
+                    long totalGpuMemoryBytes = GpuAccelerator.MemorySize;
+                    long reserveMemoryBytes = 2L * 1024 * 1024 * 1024; // 2GB
+                    long usableGpuMemoryBytes = totalGpuMemoryBytes - reserveMemoryBytes;
+
+                    if (usableGpuMemoryBytes > 0)
+                    {
+                        const int defaultMinStringLengthForCalc = 3; // Based on mOption default
+                        int sizeOfGpuHit = Marshal.SizeOf<GpuHit>(); // Should be 12 bytes
+                        double memoryFactor =
+                            1.0 + ((double)sizeOfGpuHit / defaultMinStringLengthForCalc);
+
+                        long calculatedChunkSizeBytes = (long)(usableGpuMemoryBytes / memoryFactor);
+
+                        int calculatedMB = (int)(calculatedChunkSizeBytes / (1024 * 1024));
+
+                        // Clamp the dynamic chunk size to practical limits
+                        const int minPracticalMB = 64;
+                        const int maxPracticalMB = 6144; // 6GB, adjustable
+
+                        DynamicChunkSizeMB = Math.Max(
+                            minPracticalMB,
+                            Math.Min(maxPracticalMB, calculatedMB)
+                        );
+
+                        Console.Error.WriteLine(
+                            $"Total GPU VRAM: {totalGpuMemoryBytes / (1024 * 1024)} MB. Usable (Total - 2GB): {usableGpuMemoryBytes / (1024 * 1024)} MB."
+                        );
+                        Console.Error.WriteLine(
+                            $"Calculated dynamic chunk size for GPU: {DynamicChunkSizeMB} MB (using factor {memoryFactor:F2} for hits buffer)."
+                        );
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine(
+                            "Not enough GPU VRAM to reserve 2GB and calculate dynamic chunk size. Using standard default."
+                        );
+                        DynamicChunkSizeMB = 512; // Fallback to a standard default
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine(
+                        $"Error calculating dynamic GPU chunk size: {ex.Message}. Using standard default."
+                    );
+                    DynamicChunkSizeMB = 512; // Fallback
+                }
+            }
+            else
+            {
+                Console.Error.WriteLine(
+                    "GPU not available. Dynamic chunk size calculation skipped. Using standard default for chunk size if not specified."
+                );
+                DynamicChunkSizeMB = 512; // Standard default if no GPU
             }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"ILGPU General Initialization Error: {ex.Message}. GPU acceleration will be disabled.");
-            if (tempContext != null) tempContext.Dispose();
+            Console.Error.WriteLine(
+                $"ILGPU General Initialization Error: {ex.Message}. GPU acceleration will be disabled."
+            );
+            if (tempContext != null)
+                tempContext.Dispose();
             GpuContext = null;
             GpuAccelerator = null;
         }
@@ -220,8 +290,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
             new Option<int>(
                 "-b",
                 () => 512,
-                "Chunk size in MB. Valid range is 1 to 1024. Default is 512"
-            ),
+                "Chunk size in MB. Valid range is 1 to 8192. Default is 512 MB, or dynamically calculated for GPU."
+            )
+            {
+                ArgumentHelpName = "sizeMB",
+            },
             new Option<bool>(
                 "-q",
                 () => false,
@@ -376,7 +449,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
         if (!string.IsNullOrEmpty(f) && !string.IsNullOrEmpty(d))
         {
-            Log.Error("Both -f (file) and -d (directory) options were specified. Please use only one. Exiting.");
+            Log.Error(
+                "Both -f (file) and -d (directory) options were specified. Please use only one. Exiting."
+            );
             return;
         }
 
@@ -401,24 +476,44 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 string fullDirectoryPath = Path.GetFullPath(d);
                 if (!string.IsNullOrEmpty(mask))
                 {
-                    files.AddRange(Directory.EnumerateFiles(fullDirectoryPath, mask, SearchOption.AllDirectories));
+                    files.AddRange(
+                        Directory.EnumerateFiles(
+                            fullDirectoryPath,
+                            mask,
+                            SearchOption.AllDirectories
+                        )
+                    );
                 }
                 else
                 {
-                    files.AddRange(Directory.EnumerateFiles(fullDirectoryPath, "*", SearchOption.AllDirectories));
+                    files.AddRange(
+                        Directory.EnumerateFiles(
+                            fullDirectoryPath,
+                            "*",
+                            SearchOption.AllDirectories
+                        )
+                    );
                 }
 
                 if (!files.Any() && !q)
                 {
-                    Log.Information("No files found in directory '{D}' matching the specified criteria.", d);
+                    Log.Information(
+                        "No files found in directory '{D}' matching the specified criteria.",
+                        d
+                    );
                     // Exiting if no files found in directory mode, as there's nothing to process.
                     // If the intent is to proceed (e.g. to create an empty output file), this 'return' can be removed.
-                    return; 
+                    return;
                 }
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Error enumerating files in directory '{D}'. Message: {ExMessage}", d, ex.Message);
+                Log.Error(
+                    ex,
+                    "Error enumerating files in directory '{D}'. Message: {ExMessage}",
+                    d,
+                    ex.Message
+                );
                 return;
             }
         }
@@ -431,26 +526,36 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 tempFilePath = Path.GetTempFileName();
                 using (var stdinStream = Console.OpenStandardInput())
                 {
-                    using (var tempFileStream = new FileStream(tempFilePath, FileMode.Create, FileAccess.Write))
+                    using (
+                        var tempFileStream = new FileStream(
+                            tempFilePath,
+                            FileMode.Create,
+                            FileAccess.Write
+                        )
+                    )
                     {
                         stdinStream.CopyTo(tempFileStream);
                     }
                 }
-                
+
                 if (new FileInfo(tempFilePath).Length == 0)
                 {
-                     Log.Warning("Stdin was redirected, but no data was received. Exiting.");
-                     File.Delete(tempFilePath); 
-                     return;
+                    Log.Warning("Stdin was redirected, but no data was received. Exiting.");
+                    File.Delete(tempFilePath);
+                    return;
                 }
                 files.Add(Path.GetFullPath(tempFilePath));
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Error reading from stdin or writing to temporary file. Message: {ExMessage}", ex.Message);
+                Log.Error(
+                    ex,
+                    "Error reading from stdin or writing to temporary file. Message: {ExMessage}",
+                    ex.Message
+                );
                 if (!string.IsNullOrEmpty(tempFilePath) && File.Exists(tempFilePath))
                 {
-                    File.Delete(tempFilePath); 
+                    File.Delete(tempFilePath);
                 }
                 return;
             }
@@ -565,7 +670,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 maxLength = x;
             }
 
-            var chunkSizeMb = b < 1 || b > 1024 ? 512 : b;
+            var chunkSizeMb = b < 1 || b > 8192 ? 512 : b; // Increased upper limit
             var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
 
             var fileSizeBytes = new FileInfo(currentFile).Length; // Use currentFile
@@ -623,7 +728,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 {
                     FileStream fileStream;
 #if NET6_0_OR_GREATER
-                    fileStream = File.Open(currentFile, FileMode.Open, FileAccess.Read, FileShare.Read); // Use currentFile
+                    fileStream = File.Open(
+                        currentFile,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read
+                    ); // Use currentFile
 #else
                     fileStream = File.Open(
                         File.GetFileSystemEntryInfo(currentFile).LongFullPath, // Use currentFile
@@ -1552,20 +1662,28 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 {
                     var hit = allGpuHitsArray[i];
                     // GpuHit.Offset is the absolute offset in the file
-                    var offsetString = originalOffBool
-                        ? $"{hit.Offset}"
-                        : $"0x{hit.Offset:X}";
+                    var offsetString = originalOffBool ? $"{hit.Offset}" : $"0x{hit.Offset:X}";
 
                     long chunkRelativeOffset = hit.Offset - currentOffsetInFile;
 
-                    if (chunkRelativeOffset >= 0 && chunkRelativeOffset < chunk.Length && (chunkRelativeOffset + hit.Length) <= chunk.Length)
+                    if (
+                        chunkRelativeOffset >= 0
+                        && chunkRelativeOffset < chunk.Length
+                        && (chunkRelativeOffset + hit.Length) <= chunk.Length
+                    )
                     {
-                        string foundString = Encoding.ASCII.GetString(chunk, (int)chunkRelativeOffset, hit.Length);
+                        string foundString = Encoding.ASCII.GetString(
+                            chunk,
+                            (int)chunkRelativeOffset,
+                            hit.Length
+                        );
                         results.Add($"{offsetString}{offSeparator}{foundString}");
                     }
                     else
                     {
-                        Console.Error.WriteLine($"Skipping GPU hit with invalid calculated chunk-relative offset. AbsoluteOffset: {hit.Offset}, CurrentFileOffset: {currentOffsetInFile}, ChunkRelOffset: {chunkRelativeOffset}, Length: {hit.Length}, ChunkSize: {chunk.Length}");
+                        Console.Error.WriteLine(
+                            $"Skipping GPU hit with invalid calculated chunk-relative offset. AbsoluteOffset: {hit.Offset}, CurrentFileOffset: {currentOffsetInFile}, ChunkRelOffset: {chunkRelativeOffset}, Length: {hit.Length}, ChunkSize: {chunk.Length}"
+                        );
                     }
                 }
             }
@@ -1573,7 +1691,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
             {
                 // No hits found or buffer was too small (hitsToRetrieve is 0)
             }
-
 
             // Fallback or empty list if no GPU hits processed
             if (results.Count == 0 && numHitsFound > 0)
