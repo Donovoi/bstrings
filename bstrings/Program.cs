@@ -17,6 +17,8 @@ using DiscUtils.Streams;
 using Exceptionless;
 using ILGPU;
 using ILGPU.Runtime;
+using ILGPU.Runtime.Cuda; // Required for Cuda specific operations
+using ILGPU.Runtime.OpenCL; // Required for OpenCL specific operations
 using static ILGPU.Atomic; // Corrected: using static for the Atomic class
 using RawDiskLib;
 using Serilog;
@@ -85,7 +87,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <summary>
     /// Represents a hit found by the GPU.
     /// </summary>
-    private struct GpuHit
+    public struct GpuHit
     {
         public long Offset; // Absolute offset in the original file
         public int Length;
@@ -96,34 +98,92 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
     static Program()
     {
-        // ... any existing static constructor code ...
+        Context tempContext = null;
+        Accelerator tempAccelerator = null;
 
         try
         {
-            // Using the simplified Context.Create with a default builder.
-            // This has been the most stable way to initialize the context.
-            GpuContext = Context.Create(builder => builder.Default());
-
-            GpuAccelerator = GpuContext
-                .GetPreferredDevice(preferCPU: false)
-                .CreateAccelerator(GpuContext);
-
-            if (GpuAccelerator != null)
+            Console.Error.WriteLine("Attempting to initialize ILGPU with Cuda backend...");
+            try
             {
-                Console.WriteLine(
-                    $"Successfully initialized GPU: {GpuAccelerator.Name} ({GpuAccelerator.AcceleratorType})"
-                );
+                // Attempt to create a context with only the Cuda backend enabled
+                tempContext = Context.Create(builder => builder.Cuda());
+                
+                // Get the first available Cuda device.
+                // This will throw an exception if no Cuda device is found or Cuda support isn't properly loaded.
+                var cudaDevice = tempContext.GetCudaDevice(0); 
+                if (cudaDevice != null)
+                {
+                    tempAccelerator = cudaDevice.CreateAccelerator(tempContext);
+                    Console.Error.WriteLine($"ILGPU Initialized with Cuda. Using: {tempAccelerator.Name}");
+                    Console.Error.WriteLine($"Type: {tempAccelerator.AcceleratorType}, Max Threads: {tempAccelerator.MaxNumThreads}");
+                }
+                else
+                {
+                    // This case might not be reached if GetCudaDevice(0) throws when no device is found.
+                    Console.Error.WriteLine("Cuda backend initialized, but no Cuda device found by GetCudaDevice(0).");
+                    tempContext.Dispose(); 
+                    tempContext = null; 
+                }
             }
-            else
+            catch (Exception cudaEx)
             {
-                Console.WriteLine("Failed to initialize GPU Accelerator. Will fall back to CPU processing.");
+                Console.Error.WriteLine($"Failed to initialize ILGPU with Cuda: {cudaEx.Message}");
+                if (tempContext != null)
+                {
+                    tempContext.Dispose();
+                    tempContext = null;
+                }
+                // tempAccelerator remains null, so we will fall through to the default initialization
+            }
+
+            if (tempAccelerator == null) 
+            {
+                Console.Error.WriteLine("Falling back to default ILGPU initialization...");
+                // Ensure any previous context (e.g., from a failed Cuda attempt) is disposed
+                if (tempContext != null) 
+                {
+                    tempContext.Dispose();
+                    tempContext = null;
+                }
+
+                // Fallback to default initialization (might pick OpenCL, CPU, or another available backend)
+                tempContext = Context.Create(builder => builder.Default());
+                var preferredDevice = tempContext.GetPreferredDevice(preferCPU: false);
+                if (preferredDevice != null)
+                {
+                    tempAccelerator = preferredDevice.CreateAccelerator(tempContext);
+                    Console.Error.WriteLine($"ILGPU Initialized with Default. Using: {tempAccelerator.Name}");
+                    Console.Error.WriteLine($"Type: {tempAccelerator.AcceleratorType}, Max Threads: {tempAccelerator.MaxNumThreads}");
+                }
+                else
+                {
+                    Console.Error.WriteLine("ILGPU: No suitable GPU device found with default backend.");
+                    if (tempContext != null)
+                    {
+                        tempContext.Dispose(); 
+                        tempContext = null;
+                    }
+                    // tempAccelerator remains null
+                }
+            }
+
+            // Assign to readonly fields
+            GpuContext = tempContext;
+            GpuAccelerator = tempAccelerator;
+
+            if (GpuAccelerator == null)
+            {
+                Console.Error.WriteLine("GPU acceleration will be disabled as no suitable accelerator was found.");
+                // If GpuAccelerator is null, GpuContext might still be non-null if a context was created 
+                // but no device was found (e.g. default context with no GPUs).
+                // The GetAsciiHitsGpu method checks for GpuAccelerator == null, so this state is handled.
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine(
-                $"Could not initialize ILGPU: {ex.Message}. GPU acceleration will be disabled."
-            );
+            Console.Error.WriteLine($"ILGPU General Initialization Error: {ex.Message}. GPU acceleration will be disabled.");
+            if (tempContext != null) tempContext.Dispose();
             GpuContext = null;
             GpuAccelerator = null;
         }
@@ -243,8 +303,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
         int m, // minLength
         int b, // chunkSizeMb
         bool q, // quiet
-        bool s, // This was 's' for silent in original thinking, but seems unused or repurposed. Let's assume it's not critical for GPU part now.
-        // The command line options show -s for nothing, but there is --sa (sort alphabetically) and --sl (sort by length)
+        bool s, // This was 's' for silent in original thinking, but seems unused or repurposed.
         int x, // maxLength
         bool p, // list patterns
         string ls, // literal string search
@@ -313,110 +372,102 @@ public static partial class Program // Make it public and partial for ILGPU if n
         }
 
         // ########################### EDITED ###########################
-        var files = new List<string>();
-        // Check if input is redirected (i.e., piped in)
-        if (Console.IsInputRedirected && !string.IsNullOrEmpty(f) || !string.IsNullOrEmpty(d))
+        var files = new List<string>(); // This is the main list of files to process
+
+        if (!string.IsNullOrEmpty(f) && !string.IsNullOrEmpty(d))
         {
-            Console.Write("input from stdin or file\n");
+            Log.Error("Both -f (file) and -d (directory) options were specified. Please use only one. Exiting.");
             return;
         }
-        else if (Console.IsInputRedirected)
+
+        if (!string.IsNullOrEmpty(f)) // -f (file) argument is present
         {
-            // Generate a temporary file path
-            string tempFilePath = Path.GetTempFileName(); // Creates a unique temporary file
-            // Open the stdin stream
-            using (var stdinStream = Console.OpenStandardInput())
+            if (!File.Exists(f))
             {
-                // Open the temporary file for writing using FileStream
-                using (
-                    var tempFileStream = new FileStream(
-                        tempFilePath,
-                        FileMode.Create,
-                        FileAccess.Write
-                    )
-                )
+                Log.Error("File specified with -f not found: '{F}'. Exiting.", f);
+                return;
+            }
+            files.Add(Path.GetFullPath(f));
+        }
+        else if (!string.IsNullOrEmpty(d)) // -d (directory) argument is present
+        {
+            if (!Directory.Exists(d))
+            {
+                Log.Error("Directory specified with -d not found: '{D}'. Exiting.", d);
+                return;
+            }
+            try
+            {
+                string fullDirectoryPath = Path.GetFullPath(d);
+                if (!string.IsNullOrEmpty(mask))
                 {
-                    byte[] buffer = new byte[4096]; // Buffer for reading from stdin
-                    int bytesRead;
-                    // Read from stdin and write to the temporary file
-                    while ((bytesRead = stdinStream.Read(buffer, 0, buffer.Length)) > 0)
-                    {
-                        tempFileStream.Write(buffer, 0, bytesRead);
-                    }
+                    files.AddRange(Directory.EnumerateFiles(fullDirectoryPath, mask, SearchOption.AllDirectories));
+                }
+                else
+                {
+                    files.AddRange(Directory.EnumerateFiles(fullDirectoryPath, "*", SearchOption.AllDirectories));
+                }
+
+                if (!files.Any() && !q)
+                {
+                    Log.Information("No files found in directory '{D}' matching the specified criteria.", d);
+                    // Exiting if no files found in directory mode, as there's nothing to process.
+                    // If the intent is to proceed (e.g. to create an empty output file), this 'return' can be removed.
+                    return; 
                 }
             }
-            f = tempFilePath;
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error enumerating files in directory '{D}'. Message: {ExMessage}", d, ex.Message);
+                return;
+            }
         }
-        else if (!Console.IsInputRedirected)
+        else if (Console.IsInputRedirected) // Neither -f nor -d, so check for piped input
         {
-            if (string.IsNullOrEmpty(f) && string.IsNullOrEmpty(d))
+            Log.Information("No -f or -d specified; attempting to read from stdin...");
+            string tempFilePath = string.Empty;
+            try
             {
-                var helpBld = new HelpBuilder(LocalizationResources.Instance, Console.WindowWidth);
-                var hc = new HelpContext(helpBld, _rootCommand, Console.Out);
-
-                helpBld.Write(hc);
-
-                Log.Warning("Either -f or -d is required. Exiting");
-                return;
+                tempFilePath = Path.GetTempFileName();
+                using (var stdinStream = Console.OpenStandardInput())
+                {
+                    using (var tempFileStream = new FileStream(tempFilePath, FileMode.Create, FileAccess.Write))
+                    {
+                        stdinStream.CopyTo(tempFileStream);
+                    }
+                }
+                
+                if (new FileInfo(tempFilePath).Length == 0)
+                {
+                     Log.Warning("Stdin was redirected, but no data was received. Exiting.");
+                     File.Delete(tempFilePath); 
+                     return;
+                }
+                files.Add(Path.GetFullPath(tempFilePath));
             }
-            if (string.IsNullOrEmpty(f) == false && !File.Exists(f) && mask?.Length == 0)
+            catch (Exception ex)
             {
-                Log.Warning("File '{F}' not found. Exiting", f);
-                return;
-            }
-            if (string.IsNullOrEmpty(d) == false && !Directory.Exists(d) && mask?.Length == 0)
-            {
-                Log.Warning("Directory '{D}' not found. Exiting", d);
+                Log.Error(ex, "Error reading from stdin or writing to temporary file. Message: {ExMessage}", ex.Message);
+                if (!string.IsNullOrEmpty(tempFilePath) && File.Exists(tempFilePath))
+                {
+                    File.Delete(tempFilePath); 
+                }
                 return;
             }
         }
-        // ########################### EDITED ###########################
+        else // No -f, no -d, and no piped input
+        {
+            var helpBld = new HelpBuilder(LocalizationResources.Instance, Console.WindowWidth);
+            var hc = new HelpContext(helpBld, _rootCommand, Console.Out);
+            helpBld.Write(hc);
+            Log.Warning("A file (-f), directory (-d), or piped input is required. Exiting.");
+            return;
+        }
 
         if (!q)
         {
             Log.Information("{Header}", Header);
             Console.WriteLine();
-        }
-
-        if (string.IsNullOrEmpty(f) == false)
-        {
-            files.Add(Path.GetFullPath(f));
-        }
-        else
-        {
-            try
-            {
-                if (mask?.Length > 0)
-                {
-                    files.AddRange(
-                        Directory.EnumerateFiles(
-                            Path.GetFullPath(d!),
-                            mask,
-                            SearchOption.AllDirectories
-                        )
-                    );
-                }
-                else
-                {
-                    files.AddRange(
-                        Directory.EnumerateFiles(
-                            Path.GetFullPath(d!),
-                            "*",
-                            SearchOption.AllDirectories
-                        )
-                    );
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error(
-                    ex,
-                    "Error getting files in '{D}'. Error message: {Message}",
-                    d,
-                    ex.Message
-                );
-                return;
-            }
         }
 
         if (!q)
@@ -475,11 +526,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
             }
         }
 
-        foreach (var file in files)
+        foreach (var currentFile in files) // Renamed 'file' to 'currentFile'
         {
-            if (File.Exists(file) == false)
+            if (File.Exists(currentFile) == false) // Use currentFile
             {
-                Log.Warning("'{File}' does not exist! Skipping", file);
+                Log.Warning("'{CurrentFile}' does not exist! Skipping", currentFile); // Use currentFile
                 continue;
             }
 
@@ -517,7 +568,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             var chunkSizeMb = b < 1 || b > 1024 ? 512 : b;
             var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
 
-            var fileSizeBytes = new FileInfo(file).Length;
+            var fileSizeBytes = new FileInfo(currentFile).Length; // Use currentFile
 
             if (ms > 0)
             {
@@ -525,7 +576,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 {
                     Log.Warning(
                         "'{File}' is bigger than max file size of {Ms:N0} bytes! Skipping...",
-                        file,
+                        currentFile,
                         ms
                     );
                     continue;
@@ -543,21 +594,21 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 if (totalChunks == 1)
                 {
                     Log.Information(
-                        "Searching {TotalChunks:N0} chunk ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
+                        "Searching {TotalChunks:N0} chunk ({ChunkSizeMb} MB each) across {SizeReadable} in '{CurrentFile}'", // Use currentFile
                         totalChunks,
                         chunkSizeMb,
                         GetSizeReadable(fileSizeBytes),
-                        file
+                        currentFile // Use currentFile
                     );
                 }
                 else
                 {
                     Log.Information(
-                        "Searching {TotalChunks:N0} chunks ({ChunkSizeMb} MB each) across {SizeReadable} in '{File}'",
+                        "Searching {TotalChunks:N0} chunks ({ChunkSizeMb} MB each) across {SizeReadable} in '{CurrentFile}'", // Use currentFile
                         totalChunks,
                         chunkSizeMb,
                         GetSizeReadable(fileSizeBytes),
-                        file
+                        currentFile // Use currentFile
                     );
                 }
 
@@ -572,10 +623,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 {
                     FileStream fileStream;
 #if NET6_0_OR_GREATER
-                    fileStream = File.Open(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    fileStream = File.Open(currentFile, FileMode.Open, FileAccess.Read, FileShare.Read); // Use currentFile
 #else
                     fileStream = File.Open(
-                        File.GetFileSystemEntryInfo(file).LongFullPath,
+                        File.GetFileSystemEntryInfo(currentFile).LongFullPath, // Use currentFile
                         FileMode.Open,
                         FileAccess.Read,
                         FileShare.Read
@@ -591,7 +642,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 if (mappedStream == null)
                 {
                     //raw mode
-                    var ss = OpenFile(file);
+                    var ss = OpenFile(currentFile); // Use currentFile
 
                     mappedStream = MappedStream.FromStream(ss, Ownership.None);
                 }
