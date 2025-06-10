@@ -87,11 +87,13 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static readonly Context GpuContext;
     private static readonly Accelerator GpuAccelerator;
 
-    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused fields _quiet and _debug
+    // GPU concurrency control - limit simultaneous GPU operations
+    private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(2, 2); // Max 2 concurrent GPU operations
 
-    // private static bool _quiet;
+    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused fields _quiet and _debug    // private static bool _quiet;
+
     // private static bool _debug;
-    private static bool _trace; // Keep _trace as it might be used for tracing
+    private static bool _trace = false; // Explicitly initialize to fix compiler warning
 
     /// <summary>
     /// Represents a hit found by the GPU.
@@ -220,6 +222,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
         public long TotalStrings => _totalStrings;
         public double ElapsedSeconds => _stopwatch.Elapsed.TotalSeconds;
+        public bool HasCompletedChunks => _completedChunks > 0;
     }
 
     static Program()
@@ -896,16 +899,18 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 Console.WriteLine();
             }
 
-            Console.Error.WriteLine("Starting chunk processing...");            // Heartbeat: print a message every second if no progress has been reported
+            Console.Error.WriteLine("Starting chunk processing...");
+
+            // Heartbeat: print a message every second if no progress has been reported
             var heartbeatCts = new CancellationTokenSource();
-            var lastProgress = DateTime.Now;
-            _ = Task.Run(
+            var heartbeatTask = Task.Run(
                 async () =>
                 {
                     while (!heartbeatCts.Token.IsCancellationRequested)
                     {
                         await Task.Delay(1000);
-                        if ((DateTime.Now - lastProgress).TotalSeconds >= 1.0)
+                        // Only show "No chunks complete yet" if no chunks have actually been completed
+                        if (!progressTracker.HasCompletedChunks)
                         {
                             Console.Error.Write(
                                 "\r[Working...] No chunks complete yet. Still processing..."
@@ -938,19 +943,25 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         FileShare.Read
                     );
 #endif
+                    Console.Error.WriteLine("Creating memory map for file...");
                     mappedStream = MappedStream.FromStream(fileStream, Ownership.None);
+                    Console.Error.WriteLine("Memory map created successfully.");
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    Console.Error.WriteLine($"Failed to create memory map: {ex.Message}");
                     // ignored
                 }
 
                 if (mappedStream == null)
                 {
+                    Console.Error.WriteLine("Falling back to raw file access...");
                     //raw mode
                     var ss = OpenFile(currentFile); // Use currentFile
 
+                    Console.Error.WriteLine("Creating memory map from raw stream...");
                     mappedStream = MappedStream.FromStream(ss, Ownership.None);
+                    Console.Error.WriteLine("Raw stream memory map created successfully.");
                 }
                 using (mappedStream)
                 {
@@ -1288,6 +1299,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string ur
     )
     {
+        Console.Error.WriteLine(
+            $"[Chunk {chunk.ChunkIndex}] Starting processing of {chunk.ValidBytes:N0} bytes at offset {chunk.FileOffset:N0}"
+        );
+        var chunkStopwatch = Stopwatch.StartNew();
+
         var results = new List<string>();
         var validChunk = chunk.Data.AsSpan(0, chunk.ValidBytes);
 
@@ -1330,6 +1346,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 results.Add(chunk.IsBoundaryChunk ? "  " + h : h);
             }
         }
+
+        chunkStopwatch.Stop();
+        Console.Error.WriteLine(
+            $"[Chunk {chunk.ChunkIndex}] Completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {results.Count} strings"
+        );
 
         return results;
     }
@@ -1896,6 +1917,23 @@ public static partial class Program // Make it public and partial for ILGPU if n
             );
         }
 
+        // Wait for GPU semaphore with timeout- if too many GPU operations are running, fallback to CPU
+        if (!GpuSemaphore.Wait(TimeSpan.FromSeconds(1)))
+        {
+            Console.Error.WriteLine(
+                $"[GPU] Too many concurrent GPU operations, falling back to CPU for chunk at offset {currentOffsetInFile}"
+            );
+            return GetAsciiHits(
+                chunk.AsSpan(0, bytesRead),
+                minLength,
+                maxLength,
+                currentOffsetInFile,
+                originalOffBool,
+                cp,
+                ar
+            );
+        }
+
         // GPU processing enabled - add profiling information
         var gpuStopwatch = Stopwatch.StartNew();
 
@@ -1959,7 +1997,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             // Optimize thread block configuration for better GPU utilization
             // For small data, use fewer threads to reduce overhead
             var threadsPerBlock = bytesRead < 1000 ? 32 : 256;
-            
+
             // Parse ASCII range for GPU processing
             var (minChar, maxChar) = ParseCharRange(ar);
 
@@ -2067,6 +2105,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 ar
             ); // Fallback to CPU
         }
+        finally
+        {
+            // Always release the GPU semaphore
+            GpuSemaphore.Release();
+        }
+
         gpuStopwatch.Stop();
         Console.Error.WriteLine(
             $"[GPU] Completed processing {bytesRead:N0} bytes in {gpuStopwatch.ElapsedMilliseconds}ms, found {results.Count} strings"
@@ -2156,6 +2200,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     if (hitIndex < hits.Length)
                     {
                         // Use actual string length or maxLength, whichever is smaller
+
                         int emitLength =
                             (maxLength > 0 && stringLength > maxLength) ? maxLength : stringLength;
                         hits[hitIndex] = new GpuHit
