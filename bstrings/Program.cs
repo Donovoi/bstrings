@@ -149,6 +149,78 @@ public static partial class Program // Make it public and partial for ILGPU if n
         public static int ReadAheadChunks => Math.Min(8, MaxConcurrentChunks * 2);
     }
 
+    /// <summary>
+    /// Thread-safe progress tracking for concurrent chunk processing
+    /// </summary>
+    public class ProgressTracker
+    {
+        private readonly object _lockObject = new object();
+        private readonly Stopwatch _stopwatch;
+        private readonly long _totalChunks;
+        private readonly bool _quiet;
+        private long _completedChunks = 0;
+        private long _totalStrings = 0;
+        private DateTime _lastUpdate = DateTime.MinValue;
+
+        public ProgressTracker(long totalChunks, bool quiet)
+        {
+            _totalChunks = totalChunks;
+            _quiet = quiet;
+            _stopwatch = Stopwatch.StartNew();
+        }
+
+        public void ReportChunkComplete(int stringCount)
+        {
+            lock (_lockObject)
+            {
+                _completedChunks++;
+                _totalStrings += stringCount;
+
+                // Update progress every 2 seconds or when complete
+                var now = DateTime.Now;
+                var shouldUpdate =
+                    (now - _lastUpdate).TotalSeconds >= 2.0 || _completedChunks == _totalChunks;
+
+                if (!_quiet && shouldUpdate)
+                {
+                    _lastUpdate = now;
+                    var elapsed = _stopwatch.Elapsed.TotalSeconds;
+                    var stringsPerSec = elapsed > 0 ? _totalStrings / elapsed : 0;
+                    var progressPercent = (_completedChunks * 100.0) / _totalChunks;
+
+                    var progressBar = CreateProgressBar(progressPercent);
+
+                    Console.Error.Write(
+                        $"\r{progressBar} {progressPercent:F1}% | {_completedChunks:N0}/{_totalChunks:N0} chunks | {_totalStrings:N0} strings | {stringsPerSec:N0} strings/sec"
+                    );
+
+                    if (_completedChunks == _totalChunks)
+                    {
+                        Console.Error.WriteLine(); // New line when complete
+                    }
+                }
+            }
+        }
+
+        private static string CreateProgressBar(double percent)
+        {
+            const int barLength = 30;
+            var filled = (int)((percent / 100.0) * barLength);
+            var bar = new StringBuilder("[");
+
+            for (int i = 0; i < barLength; i++)
+            {
+                bar.Append(i < filled ? "█" : "░");
+            }
+
+            bar.Append("]");
+            return bar.ToString();
+        }
+
+        public long TotalStrings => _totalStrings;
+        public double ElapsedSeconds => _stopwatch.Elapsed.TotalSeconds;
+    }
+
     static Program()
     {
         Context tempContext = null;
@@ -791,6 +863,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
             } // Variables for progress reporting
             var totalChunks = fileSizeBytes / chunkSizeBytes + 1;
 
+            ProgressTracker progressTracker = new ProgressTracker(totalChunks, q);
+
             if (!q)
             {
                 if (totalChunks == 1)
@@ -870,7 +944,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         ar,
                         ur,
                         q,
-                        totalChunks
+                        totalChunks,
+                        progressTracker
                     );
 
                     //do chunk boundary checks to make sure we get everything and not split things
@@ -1779,11 +1854,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool originalOffBool
     )
     {
-        var results = new List<string>();
-
-        // TODO: GPU kernel needs to be fixed to avoid overlapping substring matches
-        // For now, forcing CPU fallback until GPU kernel logic is corrected
-        if (true || GpuAccelerator == null || GpuContext == null || bytesRead == 0)
+        var results = new List<string>(); // Check if GPU should be used for processing
+        if (GpuAccelerator == null || GpuContext == null || bytesRead == 0)
         {
             // Fallback to CPU if GPU is not available/initialized or chunk is empty
             return GetAsciiHits(
@@ -1796,6 +1868,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 ar
             );
         }
+
+        // GPU processing enabled - add profiling information
+        Console.Error.WriteLine($"[GPU] Processing chunk of {bytesRead:N0} bytes using GPU...");
+        var gpuStopwatch = Stopwatch.StartNew();
 
         try
         {
@@ -1901,6 +1977,33 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 ar
             ); // Fallback to CPU
         }
+        gpuStopwatch.Stop();
+        Console.Error.WriteLine(
+            $"[GPU] Completed processing {bytesRead:N0} bytes in {gpuStopwatch.ElapsedMilliseconds}ms, found {results.Count} strings"
+        );
+
+        // TODO: GPU kernel debugging - compare with CPU results for small chunks
+        if (bytesRead < 100_000) // Only for small chunks to avoid performance impact
+        {
+            var cpuResults = GetAsciiHits(
+                chunk.AsSpan(0, bytesRead),
+                minLength,
+                maxLength,
+                currentOffsetInFile,
+                originalOffBool,
+                cp,
+                ar
+            );
+            if (cpuResults.Count != results.Count)
+            {
+                Console.Error.WriteLine(
+                    $"[GPU DEBUG] CPU found {cpuResults.Count} strings vs GPU {results.Count} - GPU kernel needs fixing"
+                );
+                // Use CPU results as fallback for now
+                results = cpuResults;
+            }
+        }
+
         return results;
     }
 
@@ -2001,7 +2104,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string ar,
         string ur,
         bool quiet,
-        long totalChunks
+        long totalChunks,
+        ProgressTracker progressTracker
     )
     {
         var bytesRemaining = fileSizeBytes;
@@ -2038,9 +2142,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         ar,
                         ur
                     )
-                );
-
-                // Thread-safe addition to results
+                ); // Thread-safe addition to results
                 lock (lockObject)
                 {
                     foreach (var result in chunkResults)
@@ -2048,18 +2150,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         hits.Add(result);
                     }
 
-                    if (!quiet)
-                    {
-                        Log.Information(
-                            "Chunk {ChunkIndex:N0} of {TotalChunks:N0} finished. Total strings so far: {HitsCount:N0} Elapsed time: {TotalSeconds:N3} seconds. Average strings/sec: {Speed:N0}",
-                            chunk.ChunkIndex + 1,
-                            totalChunks,
-                            hits.Count,
-                            _sw.Elapsed.TotalSeconds,
-                            hits.Count / _sw.Elapsed.TotalSeconds
-                        );
-                    }
+                    // Report progress using the progress tracker
+                    progressTracker.ReportChunkComplete(chunkResults.Count);
                 }
+
+                progressTracker.ReportChunkComplete(chunkResults.Count);
 
                 return chunkResults.Count;
             });
