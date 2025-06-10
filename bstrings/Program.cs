@@ -86,7 +86,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static readonly Context GpuContext;
     private static readonly Accelerator GpuAccelerator;
 
-    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused fields _quiet and _debug 
+    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused fields _quiet and _debug
+
     // private static bool _quiet;
     // private static bool _debug;
     private static bool _trace; // Keep _trace as it might be used for tracing
@@ -125,6 +126,27 @@ public static partial class Program // Make it public and partial for ILGPU if n
             Encoding = encoding;
             Value = value;
         }
+    }
+
+    /// <summary>
+    /// Represents a chunk of data to be processed
+    /// </summary>
+    public struct DataChunk
+    {
+        public byte[] Data;
+        public int ValidBytes;
+        public long FileOffset;
+        public int ChunkIndex;
+        public bool IsBoundaryChunk;
+    }
+
+    /// <summary>
+    /// Configuration for concurrent processing
+    /// </summary>
+    public static class ConcurrentConfig
+    {
+        public static int MaxConcurrentChunks => Math.Max(2, Environment.ProcessorCount / 2);
+        public static int ReadAheadChunks => Math.Min(8, MaxConcurrentChunks * 2);
     }
 
     static Program()
@@ -236,12 +258,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
                         // Clamp the dynamic chunk size to practical limits
                         const int minPracticalMB = 64;
-                        const int maxPracticalMB = 6144; // 6GB, adjustable
-
-                        DynamicChunkSizeMB = Math.Max(
-                            minPracticalMB,
-                            Math.Min(maxPracticalMB, calculatedMB)
-                        );
+                        const int maxPracticalMB = 6144; // 6GB, adjustable                        // Use the new function which has better bounds checking
+                        DynamicChunkSizeMB = Math.Max(minPracticalMB, Math.Min(2047, calculatedMB)); // Max 2047 MB to avoid int overflow
 
                         Console.Error.WriteLine(
                             $"Total GPU VRAM: {totalGpuMemoryBytes / (1024 * 1024)} MB. Usable (Total - 2GB): {usableGpuMemoryBytes / (1024 * 1024)} MB."
@@ -253,25 +271,25 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     else
                     {
                         Console.Error.WriteLine(
-                            "Not enough GPU VRAM to reserve 2GB and calculate dynamic chunk size. Using standard default."
+                            "Not enough GPU VRAM to reserve 2GB and calculate dynamic chunk size. Will use CPU calculation."
                         );
-                        DynamicChunkSizeMB = 512; // Fallback to a standard default
+                        DynamicChunkSizeMB = 0; // Will use CPU calculation
                     }
                 }
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine(
-                        $"Error calculating dynamic GPU chunk size: {ex.Message}. Using standard default."
+                        $"Error calculating dynamic GPU chunk size: {ex.Message}. Will use CPU calculation."
                     );
-                    DynamicChunkSizeMB = 512; // Fallback
+                    DynamicChunkSizeMB = 0; // Will use CPU calculation
                 }
             }
             else
             {
                 Console.Error.WriteLine(
-                    "GPU not available. Dynamic chunk size calculation skipped. Using standard default for chunk size if not specified."
+                    "GPU not available. Dynamic chunk size will be calculated based on CPU/RAM."
                 );
-                DynamicChunkSizeMB = 512; // Standard default if no GPU
+                DynamicChunkSizeMB = 0; // Will use CPU calculation at runtime
             }
         }
         catch (Exception ex)
@@ -316,8 +334,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
             new Option<int>("-m", () => 3, "Minimum string length"),
             new Option<int>(
                 "-b",
-                () => 512,
-                "Chunk size in MB. Valid range is 1 to 8192. Default is 512 MB, or dynamically calculated for GPU."
+                () => 0,
+                "Chunk size in MB. Valid range is 1 to 8192. Default is 0 (auto-calculated based on available GPU memory or system RAM)."
             )
             {
                 ArgumentHelpName = "sizeMB",
@@ -386,15 +404,73 @@ public static partial class Program // Make it public and partial for ILGPU if n
         };
 
         _rootCommand.Description = Header + "\r\n\r\n" + Footer;
-
-        _rootCommand.Handler = CommandHandler.Create(DoWork);
+        _rootCommand.Handler = CommandHandler.Create(
+            async (
+                string f,
+                string d,
+                string o,
+                bool a,
+                bool u,
+                int m,
+                int b,
+                bool q,
+                bool s,
+                int x,
+                bool p,
+                string ls,
+                string lr,
+                string fs,
+                string fr,
+                string ar,
+                string ur,
+                int cp,
+                string mask,
+                int ms,
+                bool ro,
+                bool off,
+                bool sa,
+                bool sl,
+                bool debug,
+                bool trace
+            ) =>
+            {
+                await DoWork(
+                    f,
+                    d,
+                    o,
+                    a,
+                    u,
+                    m,
+                    b,
+                    q,
+                    s,
+                    x,
+                    p,
+                    ls,
+                    lr,
+                    fs,
+                    fr,
+                    ar,
+                    ur,
+                    cp,
+                    mask,
+                    ms,
+                    ro,
+                    off,
+                    sa,
+                    sl,
+                    debug,
+                    trace
+                );
+            }
+        );
 
         await _rootCommand.InvokeAsync(args);
 
         Log.CloseAndFlush();
     }
 
-    private static void DoWork(
+    private static async Task DoWork(
         string f,
         string d,
         string o,
@@ -695,9 +771,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
             if (x > minLength)
             {
                 maxLength = x;
-            }
-
-            var chunkSizeMb = b < 1 || b > 8192 ? 512 : b; // Increased upper limit
+            } // Use dynamic chunk size if no chunk size specified by user (b=0) or invalid range
+            var chunkSizeMb = (b <= 0 || b > 8192) ? GetOptimalChunkSize() : b; // Use dynamic if not specified
             var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
 
             var fileSizeBytes = new FileInfo(currentFile).Length; // Use currentFile
@@ -713,12 +788,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     );
                     continue;
                 }
-            }
-
-            var bytesRemaining = fileSizeBytes;
-            long offset = 0;
-
-            var chunkIndex = 1;
+            } // Variables for progress reporting
             var totalChunks = fileSizeBytes / chunkSizeBytes + 1;
 
             if (!q)
@@ -783,75 +853,27 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
                     mappedStream = MappedStream.FromStream(ss, Ownership.None);
                 }
-
                 using (mappedStream)
                 {
-                    while (bytesRemaining > 0)
-                    {
-                        if (bytesRemaining <= chunkSizeBytes)
-                        {
-                            chunkSizeBytes = (int)bytesRemaining;
-                        }
-
-                        var chunk = new byte[chunkSizeBytes];
-
-                        var bytesRead = mappedStream.Read(chunk, 0, chunkSizeBytes);
-                        if (bytesRead == 0)
-                        {
-                            // End of stream reached
-                            break;
-                        }                        var validChunk = chunk.AsSpan(0, bytesRead);
-
-                        if (u)
-                        {
-                            var uh = GetUnicodeHits(validChunk, minLength, maxLength, offset, off, ur);
-                            foreach (var h in uh)
-                            {
-                                hits.Add(h);
-                            }
-                        }
-
-                        if (a)
-                        {
-                            string offsetStringSeparator = off ? "\\t" : "";
-                            var ah = GetAsciiHitsGpu(
-                                chunk,
-                                bytesRead,
-                                minLength,
-                                maxLength,
-                                offset,
-                                offsetStringSeparator,
-                                cp,
-                                ar,
-                                off
-                            );
-
-                            foreach (var h in ah)
-                            {
-                                hits.Add(h);
-                            }
-                        }
-
-                        offset += bytesRead;
-                        bytesRemaining -= bytesRead;
-
-                        if (!q)
-                        {
-                            Log.Information(
-                                "Chunk {ChunkIndex:N0} of {TotalChunks:N0} finished. Total strings so far: {HitsCount:N0} Elapsed time: {TotalSeconds:N3} seconds. Average strings/sec: {Speed:N0}",
-                                chunkIndex,
-                                totalChunks,
-                                hits.Count,
-                                _sw.Elapsed.TotalSeconds,
-                                hits.Count / _sw.Elapsed.TotalSeconds
-                            );
-                        }
-
-                        chunkIndex += 1;
-                    }
+                    // Process main chunks concurrently
+                    await ProcessFileChunksConcurrentlyAsync(
+                        mappedStream,
+                        fileSizeBytes,
+                        chunkSizeBytes,
+                        hits,
+                        minLength,
+                        maxLength,
+                        a,
+                        u,
+                        off,
+                        cp,
+                        ar,
+                        ur,
+                        q,
+                        totalChunks
+                    );
 
                     //do chunk boundary checks to make sure we get everything and not split things
-
                     if (!q)
                     {
                         Log.Information(
@@ -859,66 +881,23 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         );
                     }
 
-                    bytesRemaining = fileSizeBytes;
-                    chunkSizeBytes = chunkSizeMb * 1024 * 1024;
-                    offset = chunkSizeBytes - m * 10 * 2;
-                    //move starting point backwards for our starting point
-                    chunkIndex = 0;
-
-                    var boundaryChunkSize = m * 10 * 2 * 2;
-                    //grab the same # of bytes on both sides of the boundary
-
-                    while (bytesRemaining > 0)
-                    {
-                        if (offset + boundaryChunkSize > fileSizeBytes)
-                        {
-                            break;
-                        }
-
-                        var chunk = new byte[boundaryChunkSize];
-
-                        var bytesReadBoundary = mappedStream.Read(chunk, 0, boundaryChunkSize);
-                        if (bytesReadBoundary == 0)
-                        {
-                            // End of stream reached
-                            break;                        }
-                        
-                        var validBoundaryChunk = chunk.AsSpan(0, bytesReadBoundary);
-
-                        if (u)
-                        {
-                            var uh = GetUnicodeHits(validBoundaryChunk, minLength, maxLength, offset, off, ur);
-                            foreach (var h in uh)
-                            {
-                                hits.Add("  " + h);
-                            }
-
-                            if (withBoundaryHits == false && uh.Count > 0)
-                            {
-                                withBoundaryHits = uh.Count > 0;
-                            }
-                        }
-
-                        if (a)
-                        {
-                            // Original CPU boundary call
-                            var ah = GetAsciiHits(validBoundaryChunk, minLength, maxLength, offset, off, cp, ar);
-                            foreach (var h in ah)
-                            {
-                                hits.Add("  " + h);
-                            }
-
-                            if (withBoundaryHits == false && ah.Count > 0)
-                            {
-                                withBoundaryHits = true;
-                            }
-                        }
-
-                        offset += chunkSizeBytes;
-                        bytesRemaining -= chunkSizeBytes;
-
-                        chunkIndex += 1;
-                    }
+                    // Process boundary chunks concurrently
+                    await ProcessBoundaryChunksConcurrentlyAsync(
+                        mappedStream,
+                        fileSizeBytes,
+                        chunkSizeMb * 1024 * 1024,
+                        m * 10 * 2 * 2, // boundaryChunkSize
+                        hits,
+                        minLength,
+                        maxLength,
+                        a,
+                        u,
+                        off,
+                        cp,
+                        ar,
+                        ur,
+                        q
+                    );
                 }
             }
             catch (Exception ex)
@@ -1194,6 +1173,157 @@ public static partial class Program // Make it public and partial for ILGPU if n
         Console.WriteLine();
     }
 
+    /// <summary>
+    /// Processes a single chunk of data for string extraction
+    /// </summary>
+    private static List<string> ProcessChunk(
+        DataChunk chunk,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        bool off,
+        int cp,
+        string ar,
+        string ur
+    )
+    {
+        var results = new List<string>();
+        var validChunk = chunk.Data.AsSpan(0, chunk.ValidBytes);
+
+        if (unicodeSearch)
+        {
+            var uh = GetUnicodeHits(validChunk, minLength, maxLength, chunk.FileOffset, off, ur);
+            foreach (var h in uh)
+            {
+                results.Add(chunk.IsBoundaryChunk ? "  " + h : h);
+            }
+        }
+
+        if (asciiSearch)
+        {
+            List<string> ah;
+            if (chunk.IsBoundaryChunk)
+            {
+                // Use CPU for boundary chunks (smaller, simpler)
+                ah = GetAsciiHits(validChunk, minLength, maxLength, chunk.FileOffset, off, cp, ar);
+            }
+            else
+            {
+                // Use GPU/CPU hybrid for main chunks
+                string offsetStringSeparator = off ? "\\t" : "";
+                ah = GetAsciiHitsGpu(
+                    chunk.Data,
+                    chunk.ValidBytes,
+                    minLength,
+                    maxLength,
+                    chunk.FileOffset,
+                    offsetStringSeparator,
+                    cp,
+                    ar,
+                    off
+                );
+            }
+
+            foreach (var h in ah)
+            {
+                results.Add(chunk.IsBoundaryChunk ? "  " + h : h);
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Reads chunks from the stream in a producer-consumer pattern
+    /// </summary>
+    private static async Task<List<DataChunk>> ReadChunksAsync(
+        MappedStream mappedStream,
+        long totalBytes,
+        int chunkSizeBytes,
+        long startOffset = 0,
+        bool isBoundaryMode = false,
+        int boundaryChunkSize = 0,
+        int maxLength = 0
+    )
+    {
+        var chunks = new List<DataChunk>();
+        var bytesRemaining = totalBytes;
+        var offset = startOffset;
+        var chunkIndex = 0;
+
+        if (isBoundaryMode)
+        {
+            // Boundary chunk reading logic
+            while (bytesRemaining > 0 && offset + boundaryChunkSize <= totalBytes)
+            {
+                var chunk = new byte[boundaryChunkSize];
+                mappedStream.Position = offset;
+                var bytesRead = await Task.Run(() =>
+                    mappedStream.Read(chunk, 0, boundaryChunkSize)
+                );
+
+                if (bytesRead == 0)
+                    break;
+
+                chunks.Add(
+                    new DataChunk
+                    {
+                        Data = chunk,
+                        ValidBytes = bytesRead,
+                        FileOffset = offset,
+                        ChunkIndex = chunkIndex,
+                        IsBoundaryChunk = true,
+                    }
+                );
+
+                offset += chunkSizeBytes;
+                bytesRemaining -= chunkSizeBytes;
+                chunkIndex++;
+
+                // Limit boundary chunks to prevent excessive memory usage
+                if (chunks.Count >= ConcurrentConfig.ReadAheadChunks)
+                    break;
+            }
+        }
+        else
+        {
+            // Main chunk reading logic
+            mappedStream.Position = startOffset;
+
+            while (bytesRemaining > 0)
+            {
+                var currentChunkSize = (int)Math.Min(chunkSizeBytes, bytesRemaining);
+                var chunk = new byte[currentChunkSize];
+
+                var bytesRead = await Task.Run(() => mappedStream.Read(chunk, 0, currentChunkSize));
+                if (bytesRead == 0)
+                    break;
+
+                chunks.Add(
+                    new DataChunk
+                    {
+                        Data = chunk,
+                        ValidBytes = bytesRead,
+                        FileOffset = offset,
+                        ChunkIndex = chunkIndex,
+                        IsBoundaryChunk = false,
+                    }
+                );
+
+                offset += bytesRead;
+                bytesRemaining -= bytesRead;
+                chunkIndex++;
+
+                // Limit read-ahead to prevent excessive memory usage
+                if (chunks.Count >= ConcurrentConfig.ReadAheadChunks)
+                    break;
+            }
+        }
+
+        return chunks;
+    }
+
     private static SparseStream OpenFile(string path)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -1378,8 +1508,20 @@ public static partial class Program // Make it public and partial for ILGPU if n
         {
             var minHex = match.Groups[1].Value;
             var maxHex = match.Groups[2].Value;
-                  if (byte.TryParse(minHex, System.Globalization.NumberStyles.HexNumber, null, out byte min) &&
-            byte.TryParse(maxHex, System.Globalization.NumberStyles.HexNumber, null, out byte max))
+            if (
+                byte.TryParse(
+                    minHex,
+                    System.Globalization.NumberStyles.HexNumber,
+                    null,
+                    out byte min
+                )
+                && byte.TryParse(
+                    maxHex,
+                    System.Globalization.NumberStyles.HexNumber,
+                    null,
+                    out byte max
+                )
+            )
             {
                 return (min, max);
             }
@@ -1439,15 +1581,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
     {
         var results = new List<string>();
         var sb = new StringBuilder();
-        
+
         // Process Unicode strings (2 bytes per character)
         for (var i = 0; i < chunk.Length - 1; i += 2)
         {
             if (i + 1 >= chunk.Length)
                 break;
-            
+
             char c = (char)(chunk[i] | (chunk[i + 1] << 8));
-            
+
             // Check if character is printable Unicode (basic ASCII range for simplicity)
             if (c >= 32 && c <= 126)
             {
@@ -1464,15 +1606,13 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         stringToAdd = stringToAdd.Substring(0, maxLength);
                     }
                     var hitOffset = currentOffset + i - sb.Length * 2;
-                    var offsetOut = originalOffBool
-                        ? $"{hitOffset}"
-                        : $"0x{hitOffset:X}";
+                    var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
                     results.Add($"{offsetOut}\\t{stringToAdd}");
                 }
                 sb.Clear();
             }
         }
-        
+
         // Handle string at end of buffer
         if (sb.Length >= minLength)
         {
@@ -1482,12 +1622,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 stringToAdd = stringToAdd.Substring(0, maxLength);
             }
             var hitOffset = currentOffset + chunk.Length - sb.Length * 2;
-            var offsetOut = originalOffBool
-                ? $"{hitOffset}"
-                : $"0x{hitOffset:X}";
+            var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
             results.Add($"{offsetOut}\\t{stringToAdd}");
         }
-        
+
         return results;
     }
 
@@ -1562,7 +1700,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             // Process the hitString as needed
         }
-    }    private static List<string> GetAsciiHits(
+    }
+
+    private static List<string> GetAsciiHits(
         ReadOnlySpan<byte> chunk,
         int minLength,
         int maxLength,
@@ -1593,13 +1733,13 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 if (sb.Length >= minLength)
                 {
                     var stringToAdd = sb.ToString();
-                    
+
                     // Apply max length limit
                     if (maxLength > 0 && stringToAdd.Length > maxLength)
                     {
                         stringToAdd = stringToAdd.Substring(0, maxLength);
                     }
-                    
+
                     var hitOffset = currentOffsetInFile + i - sb.Length;
                     var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
                     results.Add($"{offsetOut}\\t{stringToAdd}");
@@ -1612,20 +1752,22 @@ public static partial class Program // Make it public and partial for ILGPU if n
         if (sb.Length >= minLength)
         {
             var stringToAdd = sb.ToString();
-            
+
             // Apply max length limit
             if (maxLength > 0 && stringToAdd.Length > maxLength)
             {
                 stringToAdd = stringToAdd.Substring(0, maxLength);
             }
-            
+
             var hitOffset = currentOffsetInFile + chunk.Length - sb.Length;
             var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
             results.Add($"{offsetOut}\\t{stringToAdd}");
         }
 
         return results;
-    }private static List<string> GetAsciiHitsGpu(
+    }
+
+    private static List<string> GetAsciiHitsGpu(
         byte[] chunk,
         int bytesRead,
         int minLength,
@@ -1636,8 +1778,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string ar,
         bool originalOffBool
     )
-    {        var results = new List<string>();
-        
+    {
+        var results = new List<string>();
+
         // TODO: GPU kernel needs to be fixed to avoid overlapping substring matches
         // For now, forcing CPU fallback until GPU kernel logic is corrected
         if (true || GpuAccelerator == null || GpuContext == null || bytesRead == 0)
@@ -1677,7 +1820,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 long,
                 ArrayView<GpuHit>,
                 ArrayView<int>
-            >(AsciiScanKernel);            // Launch configuration: one thread per valid byte
+            >(AsciiScanKernel); // Launch configuration: one thread per valid byte
             kernel(
                 bytesRead,
                 dataBuffer.View,
@@ -1838,6 +1981,318 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Processes main file chunks concurrently
+    /// </summary>
+    private static async Task ProcessFileChunksConcurrentlyAsync(
+        MappedStream mappedStream,
+        long fileSizeBytes,
+        int chunkSizeBytes,
+        HashSet<string> hits,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        bool off,
+        int cp,
+        string ar,
+        string ur,
+        bool quiet,
+        long totalChunks
+    )
+    {
+        var bytesRemaining = fileSizeBytes;
+        long offset = 0;
+        int chunkIndex = 0;
+        var lockObject = new object();
+
+        while (bytesRemaining > 0)
+        {
+            // Read ahead a batch of chunks
+            var chunks = await ReadChunksAsync(
+                mappedStream,
+                bytesRemaining,
+                chunkSizeBytes,
+                offset,
+                false // not boundary mode
+            );
+
+            if (chunks.Count == 0)
+                break;
+
+            // Process chunks concurrently
+            var processingTasks = chunks.Select(async chunk =>
+            {
+                var chunkResults = await Task.Run(() =>
+                    ProcessChunk(
+                        chunk,
+                        minLength,
+                        maxLength,
+                        asciiSearch,
+                        unicodeSearch,
+                        off,
+                        cp,
+                        ar,
+                        ur
+                    )
+                );
+
+                // Thread-safe addition to results
+                lock (lockObject)
+                {
+                    foreach (var result in chunkResults)
+                    {
+                        hits.Add(result);
+                    }
+
+                    if (!quiet)
+                    {
+                        Log.Information(
+                            "Chunk {ChunkIndex:N0} of {TotalChunks:N0} finished. Total strings so far: {HitsCount:N0} Elapsed time: {TotalSeconds:N3} seconds. Average strings/sec: {Speed:N0}",
+                            chunk.ChunkIndex + 1,
+                            totalChunks,
+                            hits.Count,
+                            _sw.Elapsed.TotalSeconds,
+                            hits.Count / _sw.Elapsed.TotalSeconds
+                        );
+                    }
+                }
+
+                return chunkResults.Count;
+            });
+
+            // Wait for all chunks in this batch to complete
+            await Task.WhenAll(processingTasks);
+
+            // Update for next batch
+            var lastChunk = chunks.Last();
+            offset = lastChunk.FileOffset + lastChunk.ValidBytes;
+            bytesRemaining = fileSizeBytes - offset;
+            chunkIndex = lastChunk.ChunkIndex + 1;
+        }
+    }
+
+    /// <summary>
+    /// Processes boundary chunks concurrently
+    /// </summary>
+    private static async Task ProcessBoundaryChunksConcurrentlyAsync(
+        MappedStream mappedStream,
+        long fileSizeBytes,
+        int chunkSizeBytes,
+        int boundaryChunkSize,
+        HashSet<string> hits,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        bool off,
+        int cp,
+        string ar,
+        string ur,
+        bool quiet
+    )
+    {
+        var bytesRemaining = fileSizeBytes;
+        long offset = chunkSizeBytes - minLength * 10 * 2; // Move starting point backwards
+        var lockObject = new object();
+        bool withBoundaryHits = false;
+
+        while (bytesRemaining > 0 && offset + boundaryChunkSize <= fileSizeBytes)
+        {
+            // Read ahead a batch of boundary chunks
+            var chunks = await ReadChunksAsync(
+                mappedStream,
+                bytesRemaining,
+                chunkSizeBytes,
+                offset,
+                true, // boundary mode
+                boundaryChunkSize,
+                maxLength
+            );
+
+            if (chunks.Count == 0)
+                break;
+
+            // Process boundary chunks concurrently
+            var processingTasks = chunks.Select(async chunk =>
+            {
+                var chunkResults = await Task.Run(() =>
+                    ProcessChunk(
+                        chunk,
+                        minLength,
+                        maxLength,
+                        asciiSearch,
+                        unicodeSearch,
+                        off,
+                        cp,
+                        ar,
+                        ur
+                    )
+                );
+
+                // Thread-safe addition to results
+                lock (lockObject)
+                {
+                    foreach (var result in chunkResults)
+                    {
+                        hits.Add(result);
+                    }
+
+                    if (!withBoundaryHits && chunkResults.Count > 0)
+                    {
+                        withBoundaryHits = true;
+                    }
+                }
+
+                return chunkResults.Count;
+            });
+
+            // Wait for all boundary chunks in this batch to complete
+            await Task.WhenAll(processingTasks);
+
+            // Update for next batch
+            var lastChunk = chunks.Last();
+            offset = lastChunk.FileOffset + chunkSizeBytes;
+            bytesRemaining -= (long)chunkSizeBytes * chunks.Count;
+        }
+    }
+
+    /// <summary>
+    /// Calculates optimal chunk size based on available system memory
+    /// </summary>
+    private static int CalculateOptimalCpuChunkSizeMB()
+    {
+        try
+        {
+            // Get available physical memory using GC and process information
+            long workingSet = Environment.WorkingSet;
+
+            // Estimate available memory - use a conservative approach
+            // For most systems, we'll use 1/8 of working set as a reasonable chunk size
+            // This provides good performance without being too aggressive with memory
+            long estimatedAvailableMemory = workingSet * 4; // Assume working set is ~1/4 of available
+
+            // Use 12.5% of estimated available memory for chunk processing
+            // This accounts for concurrent processing overhead
+            double usableMemoryFraction = 0.125;
+            long usableMemory = (long)(estimatedAvailableMemory * usableMemoryFraction);
+
+            // Account for concurrent processing - divide by max concurrent chunks
+            int maxConcurrentChunks = ConcurrentConfig.MaxConcurrentChunks;
+            long memoryPerChunk = usableMemory / maxConcurrentChunks;
+
+            // Convert to MB
+            int chunkSizeMB = (int)(memoryPerChunk / (1024 * 1024));
+
+            // Apply practical limits
+            const int minPracticalMB = 32; // Minimum for efficiency
+            const int maxPracticalMB = 2048; // Maximum for reasonable memory usage
+
+            chunkSizeMB = Math.Max(minPracticalMB, Math.Min(maxPracticalMB, chunkSizeMB));
+
+            Console.Error.WriteLine(
+                $"Working Set: {workingSet / (1024 * 1024)} MB, Estimated Available: {estimatedAvailableMemory / (1024 * 1024)} MB"
+            );
+            Console.Error.WriteLine(
+                $"Calculated optimal CPU chunk size: {chunkSizeMB} MB (max {maxConcurrentChunks} concurrent chunks)"
+            );
+
+            return chunkSizeMB;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"Error calculating optimal CPU chunk size: {ex.Message}. Using fallback."
+            );
+            return 512; // Fallback
+        }
+    }
+
+    /// <summary>
+    /// Gets the optimal chunk size by choosing between GPU and CPU calculations
+    /// </summary>
+    private static int GetOptimalChunkSize()
+    {
+        try
+        {
+            // If GPU is available and we have calculated a GPU chunk size, use it
+            if (GpuAccelerator != null && DynamicChunkSizeMB > 0)
+            {
+                Console.Error.WriteLine($"Using GPU-optimized chunk size: {DynamicChunkSizeMB} MB");
+                return DynamicChunkSizeMB;
+            }
+
+            // Fall back to CPU-optimized chunk size
+            int cpuChunkSize = CalculateOptimalCpuChunkSizeMB();
+            Console.Error.WriteLine($"Using CPU-optimized chunk size: {cpuChunkSize} MB");
+            return cpuChunkSize;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error in GetOptimalChunkSize: {ex.Message}. Using fallback.");
+            return 512; // Safe fallback
+        }
+    }
+
+    /// <summary>
+    /// Calculates optimal GPU chunk size based on available VRAM
+    /// </summary>
+    private static int CalculateOptimalGpuChunkSizeMB()
+    {
+        try
+        {
+            if (GpuAccelerator == null)
+            {
+                return 0; // Indicate GPU not available
+            }
+
+            long totalGpuMemoryBytes = GpuAccelerator.MemorySize;
+            long reserveMemoryBytes = 2L * 1024 * 1024 * 1024; // 2GB
+            long usableGpuMemoryBytes = totalGpuMemoryBytes - reserveMemoryBytes;
+
+            if (usableGpuMemoryBytes <= 0)
+            {
+                Console.Error.WriteLine(
+                    "Not enough GPU VRAM to reserve 2GB. Will use CPU calculation."
+                );
+                return 0;
+            }
+
+            const int defaultMinStringLengthForCalc = 3; // Based on mOption default
+            int sizeOfGpuHit = Marshal.SizeOf<GpuHit>(); // Should be 12 bytes
+            double memoryFactor = 1.0 + ((double)sizeOfGpuHit / defaultMinStringLengthForCalc);
+
+            long calculatedChunkSizeBytes = (long)(usableGpuMemoryBytes / memoryFactor);
+            int calculatedMB = (int)(calculatedChunkSizeBytes / (1024 * 1024));
+
+            // Clamp the dynamic chunk size to practical limits
+            const int minPracticalMB = 64;
+            const int maxPracticalMB = 2048; // 2GB max to avoid int overflow in byte calculations
+            const int maxSafeBytesForInt = int.MaxValue / (1024 * 1024); // ~2047 MB
+
+            int finalMB = Math.Max(
+                minPracticalMB,
+                Math.Min(Math.Min(maxPracticalMB, maxSafeBytesForInt), calculatedMB)
+            );
+
+            Console.Error.WriteLine(
+                $"Total GPU VRAM: {totalGpuMemoryBytes / (1024 * 1024)} MB. Usable (Total - 2GB): {usableGpuMemoryBytes / (1024 * 1024)} MB."
+            );
+            Console.Error.WriteLine(
+                $"Calculated dynamic chunk size for GPU: {finalMB} MB (using factor {memoryFactor:F2} for hits buffer)."
+            );
+
+            return finalMB;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"Error calculating optimal GPU chunk size: {ex.Message}. Will use CPU calculation."
+            );
+            return 0;
         }
     }
 }
