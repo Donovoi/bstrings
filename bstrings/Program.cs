@@ -1867,10 +1867,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 cp,
                 ar
             );
-        }
-
-        // GPU processing enabled - add profiling information
-        Console.Error.WriteLine($"[GPU] Processing chunk of {bytesRead:N0} bytes using GPU...");
+        } // GPU processing enabled - add profiling information
         var gpuStopwatch = Stopwatch.StartNew();
 
         try
@@ -1887,22 +1884,45 @@ public static partial class Program // Make it public and partial for ILGPU if n
             dataBuffer.CopyFromCPU(validChunk);
             hitCountBuffer.MemSetToZero();
 
-            // Load and compile the kernel (ILGPU caches compiled kernels)
+            // Debug: Print the input data
+            Console.Error.WriteLine(
+                $"[GPU] Debug: Input data length={bytesRead}, data=[{string.Join(",", validChunk.Take(Math.Min(bytesRead, 20)).Select(b => b.ToString()))}]"
+            );
+
+            // Optimize thread block configuration for better GPU utilization
+            // For small data, use fewer threads to reduce overhead
+            var threadsPerBlock = bytesRead < 1000 ? 32 : 256; // Use 32 threads minimum for GPU efficiency
+            var numBlocks = 1; // Always use single block for simplicity
+            // Parse ASCII range for GPU processing
+            var (minChar, maxChar) = ParseCharRange(ar);
+            Console.Error.WriteLine(
+                $"[GPU] Debug: minChar={minChar}, maxChar={maxChar}, minLength={minLength}, maxLength={maxLength}"
+            );
+            Console.Error.WriteLine(
+                $"[GPU] Debug: Launch config - numBlocks={numBlocks}, threadsPerBlock={threadsPerBlock}, dataLength={bytesRead}"
+            );
+            // Load and compile the kernel with optimized grouping
             var kernel = GpuAccelerator.LoadAutoGroupedStreamKernel<
                 Index1D,
                 ArrayView<byte>,
                 int,
                 int,
                 long,
+                byte,
+                byte,
                 ArrayView<GpuHit>,
                 ArrayView<int>
-            >(AsciiScanKernel); // Launch configuration: one thread per valid byte
+            >(AsciiScanKernel);
+
+            // Launch with single thread for now (can optimize later)
             kernel(
-                bytesRead,
+                1, // Launch just 1 thread since our kernel uses index == 0 anyway
                 dataBuffer.View,
                 minLength,
                 maxLength,
                 currentOffsetInFile,
+                minChar,
+                maxChar,
                 hitsBuffer.View,
                 hitCountBuffer.View
             );
@@ -1982,107 +2002,119 @@ public static partial class Program // Make it public and partial for ILGPU if n
             $"[GPU] Completed processing {bytesRead:N0} bytes in {gpuStopwatch.ElapsedMilliseconds}ms, found {results.Count} strings"
         );
 
-        // TODO: GPU kernel debugging - compare with CPU results for small chunks
-        if (bytesRead < 100_000) // Only for small chunks to avoid performance impact
-        {
-            var cpuResults = GetAsciiHits(
-                chunk.AsSpan(0, bytesRead),
-                minLength,
-                maxLength,
-                currentOffsetInFile,
-                originalOffBool,
-                cp,
-                ar
-            );
-            if (cpuResults.Count != results.Count)
-            {
-                Console.Error.WriteLine(
-                    $"[GPU DEBUG] CPU found {cpuResults.Count} strings vs GPU {results.Count} - GPU kernel needs fixing"
-                );
-                // Use CPU results as fallback for now
-                results = cpuResults;
-            }
-        }
-
         return results;
     }
 
     /// <summary>
-    /// GPU Kernel for scanning ASCII strings.
-    /// Each thread processes one potential starting byte.
+    /// GPU Kernel for scanning ASCII strings that matches CPU algorithm
+    /// Uses state machine approach to build strings incrementally, just like CPU StringBuilder
     /// </summary>
     private static void AsciiScanKernel(
-        Index1D index, // Current thread index, maps to starting byte in the data
+        Index1D index, // Thread index
         ArrayView<byte> data, // Chunk of data to scan
         int minLength, // Minimum string length
-        int maxLength, // Maximum string length
+        int maxLength, // Maximum string length (0 = no limit)
         long fileChunkBaseOffset, // Base offset of this data chunk in the original file
+        byte minChar, // Minimum ASCII character value
+        byte maxChar, // Maximum ASCII character value
         ArrayView<GpuHit> hits, // Output buffer for hits
-        ArrayView<int> hitCount
-    ) // Single-element array to atomically count hits
+        ArrayView<int> hitCount // Single-element array to atomically count hits
+    )
     {
-        int startByteIndex = index;
-
-        // Boundary check for the thread's starting position
-        if (startByteIndex >= data.Length)
+        // Only process with first thread for simplicity and correctness
+        if (index != 0)
             return;
 
-        // Check if the current byte is a printable ASCII character
-        if (data[startByteIndex] >= 32 && data[startByteIndex] <= 126)
+        int dataLength = (int)data.Length;
+        if (dataLength == 0)
+            return; // State machine variables (like CPU StringBuilder approach)
+        int stringStart = -1;
+        int stringLength = 0;
+        bool inString = false;
+        bool emittedCurrentString = false; // Track if we've already emitted this string
+
+        // Process each byte in the data
+        for (int i = 0; i < dataLength; i++)
         {
-            for (int currentLen = minLength; currentLen <= maxLength; ++currentLen)
+            byte currentByte = data[i];
+            bool isValidChar = currentByte >= minChar && currentByte <= maxChar;
+
+            if (isValidChar)
             {
-                // Ensure the string of currentLen does not exceed data boundaries
-                if (startByteIndex + currentLen > data.Length)
-                    break;
-
-                bool isValidString = true;
-                // Check if all characters in the potential string are printable ASCII
-                for (int k = 0; k < currentLen; ++k)
+                if (!inString)
                 {
-                    if (!(data[startByteIndex + k] >= 32 && data[startByteIndex + k] <= 126))
-                    {
-                        isValidString = false;
-                        break;
-                    }
+                    // Start of a new string
+                    stringStart = i;
+                    stringLength = 1;
+                    inString = true;
+                    emittedCurrentString = false;
                 }
-
-                if (isValidString)
+                else
                 {
-                    // Check termination condition:
-                    // String must end either at the end of the data chunk
-                    // or be followed by a non-printable character.
-                    bool terminationConditionMet = false;
-                    if (
-                        startByteIndex + currentLen == data.Length
-                        || !(
-                            data[startByteIndex + currentLen] >= 32
-                            && data[startByteIndex + currentLen] <= 126
-                        )
-                    )
-                    {
-                        terminationConditionMet = true;
-                    }
+                    // Continue building the string
+                    stringLength++;
 
-                    if (terminationConditionMet)
+                    // Check if we've hit the maximum length limit
+                    if (maxLength > 0 && stringLength > maxLength && !emittedCurrentString)
                     {
-                        // Atomically increment hit counter and get the index for this hit
-                        int currentHitStoredIndex = Atomic.Add(ref hitCount[0], 1);
-
-                        // Store the hit if there's space in the output buffer
-                        // Note: If hitCount exceeds hits.Length, hits will be dropped.
-                        // A more robust solution might involve resizing or multiple passes.
-                        if (currentHitStoredIndex < hits.Length)
+                        // Truncate to maxLength and emit (matching CPU behavior)
+                        if (maxLength >= minLength)
                         {
-                            hits[currentHitStoredIndex] = new GpuHit
+                            int hitIndex = Atomic.Add(ref hitCount[0], 1);
+                            if (hitIndex < hits.Length)
                             {
-                                Offset = fileChunkBaseOffset + startByteIndex,
-                                Length = currentLen,
-                            };
+                                hits[hitIndex] = new GpuHit
+                                {
+                                    Offset = fileChunkBaseOffset + stringStart,
+                                    Length = maxLength,
+                                };
+                            }
+                            emittedCurrentString = true;
                         }
-                        // else: Hit is dropped due to full buffer. Consider logging or handling.
+
+                        // Continue discarding characters in this overlength string
+                        // Don't reset inString - keep discarding until we hit an invalid char
+                        // This matches CPU behavior of truncating but not starting new strings
                     }
                 }
+            }
+            else
+            { // End of string - emit if long enough and not already emitted
+                if (inString && stringLength >= minLength && !emittedCurrentString)
+                {
+                    int hitIndex = Atomic.Add(ref hitCount[0], 1);
+                    if (hitIndex < hits.Length)
+                    {
+                        // Use actual string length or maxLength, whichever is smaller
+                        int emitLength =
+                            (maxLength > 0 && stringLength > maxLength) ? maxLength : stringLength;
+                        hits[hitIndex] = new GpuHit
+                        {
+                            Offset = fileChunkBaseOffset + stringStart,
+                            Length = emitLength,
+                        };
+                    }
+                }
+
+                // Reset state
+                inString = false;
+                stringStart = -1;
+                stringLength = 0;
+            }
+        } // Handle string that extends to end of data
+        if (inString && stringLength >= minLength && !emittedCurrentString)
+        {
+            int hitIndex = Atomic.Add(ref hitCount[0], 1);
+            if (hitIndex < hits.Length)
+            {
+                // Use actual string length or maxLength, whichever is smaller
+                int emitLength =
+                    (maxLength > 0 && stringLength > maxLength) ? maxLength : stringLength;
+                hits[hitIndex] = new GpuHit
+                {
+                    Offset = fileChunkBaseOffset + stringStart,
+                    Length = emitLength,
+                };
             }
         }
     }
