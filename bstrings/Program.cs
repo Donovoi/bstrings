@@ -11,6 +11,7 @@ using System.Runtime.InteropServices; // Keep one instance
 using System.Security.AccessControl;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Alphaleonis.Win32.Filesystem;
 using DiscUtils;
@@ -176,10 +177,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 _completedChunks++;
                 _totalStrings += stringCount;
 
-                // Update progress every 2 seconds or when complete
+                // Update progress every 1 second or when complete
                 var now = DateTime.Now;
                 var shouldUpdate =
-                    (now - _lastUpdate).TotalSeconds >= 2.0 || _completedChunks == _totalChunks;
+                    (now - _lastUpdate).TotalSeconds >= 1.0 || _completedChunks == _totalChunks;
 
                 if (!_quiet && shouldUpdate)
                 {
@@ -894,6 +895,26 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
                 Console.WriteLine();
             }
+
+            Console.Error.WriteLine("Starting chunk processing...");            // Heartbeat: print a message every second if no progress has been reported
+            var heartbeatCts = new CancellationTokenSource();
+            var lastProgress = DateTime.Now;
+            _ = Task.Run(
+                async () =>
+                {
+                    while (!heartbeatCts.Token.IsCancellationRequested)
+                    {
+                        await Task.Delay(1000);
+                        if ((DateTime.Now - lastProgress).TotalSeconds >= 1.0)
+                        {
+                            Console.Error.Write(
+                                "\r[Working...] No chunks complete yet. Still processing..."
+                            );
+                        }
+                    }
+                },
+                heartbeatCts.Token
+            );
 
             try
             {
@@ -1938,7 +1959,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             // Optimize thread block configuration for better GPU utilization
             // For small data, use fewer threads to reduce overhead
             var threadsPerBlock = bytesRead < 1000 ? 32 : 256;
-            var numBlocks = 1; // Always use single block for simplicity
+            
             // Parse ASCII range for GPU processing
             var (minChar, maxChar) = ParseCharRange(ar);
 
