@@ -330,8 +330,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
                         // Clamp the dynamic chunk size to practical limits
                         const int minPracticalMB = 64;
-                        const int maxPracticalMB = 6144; // 6GB, adjustable                        // Use the new function which has better bounds checking
-                        DynamicChunkSizeMB = Math.Max(minPracticalMB, Math.Min(2047, calculatedMB)); // Max 2047 MB to avoid int overflow
+                        const int maxPracticalMB = 512; // 512MB max for GPU - much more reasonable
+
+                        DynamicChunkSizeMB = Math.Max(
+                            minPracticalMB,
+                            Math.Min(maxPracticalMB, calculatedMB)
+                        );
 
                         Console.Error.WriteLine(
                             $"Total GPU VRAM: {totalGpuMemoryBytes / (1024 * 1024)} MB. Usable (Total - 2GB): {usableGpuMemoryBytes / (1024 * 1024)} MB."
@@ -1854,7 +1858,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool originalOffBool
     )
     {
-        var results = new List<string>(); // Check if GPU should be used for processing
+        var results = new List<string>();
+
+        // Check if GPU should be used for processing
         if (GpuAccelerator == null || GpuContext == null || bytesRead == 0)
         {
             // Fallback to CPU if GPU is not available/initialized or chunk is empty
@@ -1867,40 +1873,75 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 cp,
                 ar
             );
-        } // GPU processing enabled - add profiling information
+        }
+
+        // GPU processing enabled - add profiling information
         var gpuStopwatch = Stopwatch.StartNew();
 
         try
         {
-            int estimatedMaxHits = Math.Max(1024, bytesRead); // Base on bytesRead
+            // Implement smart memory management for GPU processing
+            // First, check if this chunk is too large for GPU processing
+            const long MAX_GPU_CHUNK_SIZE = 512L * 1024 * 1024; // 512 MB max per chunk
+
+            if (bytesRead > MAX_GPU_CHUNK_SIZE)
+            {
+                Console.Error.WriteLine(
+                    $"[GPU] Chunk size ({bytesRead / (1024 * 1024)} MB) exceeds GPU processing limit ({MAX_GPU_CHUNK_SIZE / (1024 * 1024)} MB). Falling back to CPU."
+                );
+                return GetAsciiHits(
+                    chunk.AsSpan(0, bytesRead),
+                    minLength,
+                    maxLength,
+                    currentOffsetInFile,
+                    originalOffBool,
+                    cp,
+                    ar
+                );
+            }
+
+            // Limit hits buffer to a reasonable size to avoid memory issues
+            // For large chunks, we don't expect every byte to be a hit
+            int maxReasonableHits = Math.Min(1024 * 1024, bytesRead / 10); // At most 1M hits or 10% of chunk size
+            int estimatedMaxHits = Math.Max(1024, maxReasonableHits);
+
+            // Check if we can allocate the required GPU memory before attempting
+            long requiredMemory =
+                bytesRead + (estimatedMaxHits * Marshal.SizeOf<GpuHit>()) + (1024 * 1024); // data + hits + 1MB misc
+
+            long availableMemory = GpuAccelerator.MemorySize - (GpuAccelerator.MemorySize / 5); // Leave 20% buffer
+
+            if (requiredMemory > availableMemory)
+            {
+                Console.Error.WriteLine(
+                    $"[GPU] Insufficient GPU memory ({requiredMemory / (1024 * 1024)} MB required, {availableMemory / (1024 * 1024)} MB available). Falling back to CPU."
+                );
+                return GetAsciiHits(
+                    chunk.AsSpan(0, bytesRead),
+                    minLength,
+                    maxLength,
+                    currentOffsetInFile,
+                    originalOffBool,
+                    cp,
+                    ar
+                );
+            }
 
             using var dataBuffer = GpuAccelerator.Allocate1D<byte>(bytesRead);
             using var hitsBuffer = GpuAccelerator.Allocate1D<GpuHit>(estimatedMaxHits);
-            using var hitCountBuffer = GpuAccelerator.Allocate1D<int>(1);
-
-            // Copy only the valid bytes to GPU
+            using var hitCountBuffer = GpuAccelerator.Allocate1D<int>(1); // Copy only the valid bytes to GPU
             var validChunk = new byte[bytesRead];
             Array.Copy(chunk, 0, validChunk, 0, bytesRead);
             dataBuffer.CopyFromCPU(validChunk);
             hitCountBuffer.MemSetToZero();
 
-            // Debug: Print the input data
-            Console.Error.WriteLine(
-                $"[GPU] Debug: Input data length={bytesRead}, data=[{string.Join(",", validChunk.Take(Math.Min(bytesRead, 20)).Select(b => b.ToString()))}]"
-            );
-
             // Optimize thread block configuration for better GPU utilization
             // For small data, use fewer threads to reduce overhead
-            var threadsPerBlock = bytesRead < 1000 ? 32 : 256; // Use 32 threads minimum for GPU efficiency
+            var threadsPerBlock = bytesRead < 1000 ? 32 : 256;
             var numBlocks = 1; // Always use single block for simplicity
             // Parse ASCII range for GPU processing
             var (minChar, maxChar) = ParseCharRange(ar);
-            Console.Error.WriteLine(
-                $"[GPU] Debug: minChar={minChar}, maxChar={maxChar}, minLength={minLength}, maxLength={maxLength}"
-            );
-            Console.Error.WriteLine(
-                $"[GPU] Debug: Launch config - numBlocks={numBlocks}, threadsPerBlock={threadsPerBlock}, dataLength={bytesRead}"
-            );
+
             // Load and compile the kernel with optimized grouping
             var kernel = GpuAccelerator.LoadAutoGroupedStreamKernel<
                 Index1D,
@@ -1928,7 +1969,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
             );
 
             GpuAccelerator.Synchronize(); // Wait for the kernel to complete
-
             int numHitsFound = hitCountBuffer.GetAsArray1D()[0];
             int hitsToRetrieve = Math.Min(numHitsFound, estimatedMaxHits);
 
@@ -1942,9 +1982,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 for (int i = 0; i < hitsToRetrieve; ++i)
                 {
                     var hit = allGpuHitsArray[i];
-                    // GpuHit.Offset is the absolute offset in the file
-                    var offsetString = originalOffBool ? $"{hit.Offset}" : $"0x{hit.Offset:X}";
-
                     long chunkRelativeOffset = hit.Offset - currentOffsetInFile;
 
                     if (
@@ -1958,7 +1995,19 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             (int)chunkRelativeOffset,
                             hit.Length
                         );
-                        results.Add($"{offsetString}{offSeparator}{foundString}");
+                        // Only add offset if the user requested it (--off flag)
+                        if (!string.IsNullOrEmpty(offSeparator))
+                        {
+                            var offsetString = originalOffBool
+                                ? $"{hit.Offset}"
+                                : $"0x{hit.Offset:X}";
+                            results.Add($"{offsetString}{offSeparator}{foundString}");
+                        }
+                        else
+                        {
+                            // Just the string, no offset
+                            results.Add(foundString);
+                        }
                     }
                     else
                     {
