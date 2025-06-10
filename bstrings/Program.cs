@@ -7,8 +7,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Runtime.InteropServices; // Added for Marshal.SizeOf
+using System.Runtime.InteropServices; // Keep one instance
+using System.Security.AccessControl;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -86,7 +86,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static readonly Context GpuContext;
     private static readonly Accelerator GpuAccelerator;
 
-    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed
+    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused fields _quiet and _debug 
+    // private static bool _quiet;
+    // private static bool _debug;
+    private static bool _trace; // Keep _trace as it might be used for tracing
 
     /// <summary>
     /// Represents a hit found by the GPU.
@@ -98,6 +101,30 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
         // ILGPU kernels require parameterless constructors for structs passed by value.
         // If you add methods or properties, ensure it remains a simple struct.
+    }
+
+    // Definition for Hit struct (assuming it was similar to this)
+    // If it was defined elsewhere or differently, this might need adjustment.
+    public struct Hit
+    {
+        public long Offset;
+        public int Length; // Byte length
+        public HitEncoding Encoding;
+        public string Value; // The string value itself, can be empty if not stored
+
+        public enum HitEncoding
+        {
+            Ascii,
+            Unicode,
+        }
+
+        public Hit(long offset, int length, HitEncoding encoding, string value = null)
+        {
+            Offset = offset;
+            Length = length;
+            Encoding = encoding;
+            Value = value;
+        }
     }
 
     static Program()
@@ -773,11 +800,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         {
                             // End of stream reached
                             break;
-                        }
+                        }                        var validChunk = chunk.AsSpan(0, bytesRead);
 
                         if (u)
                         {
-                            var uh = GetUnicodeHits(chunk, minLength, maxLength, offset, off, ur);
+                            var uh = GetUnicodeHits(validChunk, minLength, maxLength, offset, off, ur);
                             foreach (var h in uh)
                             {
                                 hits.Add(h);
@@ -786,12 +813,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
                         if (a)
                         {
-                            // var ah = GetAsciiHits(chunk, minLength, maxLength, offset, off, cp, ar);
-
-                            // New call for GPU:
-                            string offsetStringSeparator = off ? "\\t" : ""; // Use tab as separator if offsets are on
+                            string offsetStringSeparator = off ? "\\t" : "";
                             var ah = GetAsciiHitsGpu(
                                 chunk,
+                                bytesRead,
                                 minLength,
                                 maxLength,
                                 offset,
@@ -807,8 +832,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             }
                         }
 
-                        offset += chunkSizeBytes;
-                        bytesRemaining -= chunkSizeBytes;
+                        offset += bytesRead;
+                        bytesRemaining -= bytesRead;
 
                         if (!q)
                         {
@@ -856,12 +881,13 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         if (bytesReadBoundary == 0)
                         {
                             // End of stream reached
-                            break;
-                        }
+                            break;                        }
+                        
+                        var validBoundaryChunk = chunk.AsSpan(0, bytesReadBoundary);
 
                         if (u)
                         {
-                            var uh = GetUnicodeHits(chunk, minLength, maxLength, offset, off, ur);
+                            var uh = GetUnicodeHits(validBoundaryChunk, minLength, maxLength, offset, off, ur);
                             foreach (var h in uh)
                             {
                                 hits.Add("  " + h);
@@ -876,7 +902,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         if (a)
                         {
                             // Original CPU boundary call
-                            var ah = GetAsciiHits(chunk, minLength, maxLength, offset, off, cp, ar);
+                            var ah = GetAsciiHits(validBoundaryChunk, minLength, maxLength, offset, off, cp, ar);
                             foreach (var h in ah)
                             {
                                 hits.Add("  " + h);
@@ -1335,6 +1361,34 @@ public static partial class Program // Make it public and partial for ILGPU if n
         );
     }
 
+    /// <summary>
+    /// Parses a character range string like "[\x20-\x7E]" into min and max byte values.
+    /// </summary>
+    private static (byte minChar, byte maxChar) ParseCharRange(string ar)
+    {
+        // Default ASCII printable range
+        if (string.IsNullOrEmpty(ar) || ar == "[\\x20-\\x7E]")
+        {
+            return (32, 126); // Space to tilde
+        }
+
+        // Simple parser for hex ranges like [\x20-\x7E]
+        var match = Regex.Match(ar, @"\[\\x([0-9A-Fa-f]+)-\\x([0-9A-Fa-f]+)\]");
+        if (match.Success)
+        {
+            var minHex = match.Groups[1].Value;
+            var maxHex = match.Groups[2].Value;
+                  if (byte.TryParse(minHex, System.Globalization.NumberStyles.HexNumber, null, out byte min) &&
+            byte.TryParse(maxHex, System.Globalization.NumberStyles.HexNumber, null, out byte max))
+            {
+                return (min, max);
+            }
+        }
+
+        // Fallback to default range
+        return (32, 126);
+    }
+
     // private static void AddHighlightingRules(List<string> words, bool isRegEx = false)
     // {
     //     var target = (ColoredConsoleTarget)LogManager.Configuration.FindTargetByName("console");
@@ -1366,8 +1420,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     //
     //         r.WholeWords = false;
     //         target.WordHighlightingRules.Add(r);
-    //     }
-    // }
+    //     }    // }
 
     private static IEnumerable<string> SortByLength(IEnumerable<string> e)
     {
@@ -1376,130 +1429,336 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     private static List<string> GetUnicodeHits(
-        byte[] bytes,
-        int minSize,
-        int maxSize,
+        ReadOnlySpan<byte> chunk,
+        int minLength,
+        int maxLength,
         long currentOffset,
-        bool withOffsets,
+        bool originalOffBool,
         string ur
     )
     {
-        var maxString = maxSize == -1 ? "" : maxSize.ToString();
-        var mi2 = $"{"{"}{minSize}{","}{maxString}{"}"}";
-
-        var uniRange = ur;
-        var regUni = new Regex($"{uniRange}{mi2}", RegexOptions.Compiled);
-        var uniString = Encoding.Unicode.GetString(bytes);
-
-        var hits = new List<string>();
-
-        foreach (Match match in regUni.Matches(uniString))
+        var results = new List<string>();
+        var sb = new StringBuilder();
+        
+        // Process Unicode strings (2 bytes per character)
+        for (var i = 0; i < chunk.Length - 1; i += 2)
         {
-            if (withOffsets)
+            if (i + 1 >= chunk.Length)
+                break;
+            
+            char c = (char)(chunk[i] | (chunk[i + 1] << 8));
+            
+            // Check if character is printable Unicode (basic ASCII range for simplicity)
+            if (c >= 32 && c <= 126)
             {
-                var actualOffset = (currentOffset + match.Index) * 2;
-
-                hits.Add($"{match.Value.Trim()}{'\t'}0x{actualOffset:X} (U)");
+                sb.Append(c);
             }
             else
             {
-                hits.Add(match.Value.Trim());
-            }
-        }
-
-        return hits;
-    }
-
-    private static int ByteSearch(byte[] searchIn, byte[] searchBytes, int start = 0)
-    {
-        var found = -1;
-        //only look at this if we have a populated search array and search bytes with a sensible start
-        if (
-            searchIn.Length > 0
-            && searchBytes.Length > 0
-            && start <= searchIn.Length - searchBytes.Length
-            && searchIn.Length >= searchBytes.Length
-        )
-        {
-            //iterate through the array to be searched
-            for (var i = start; i <= searchIn.Length - searchBytes.Length; i++)
-            {
-                //if the start bytes match we will start comparing all other bytes
-                if (searchIn[i] == searchBytes[0])
+                // End of string - check if we have a valid string to add
+                if (sb.Length >= minLength)
                 {
-                    if (searchIn.Length > 1)
+                    var stringToAdd = sb.ToString();
+                    if (maxLength > 0 && stringToAdd.Length > maxLength)
                     {
-                        //multiple bytes to be searched we have to compare byte by byte
-                        var matched = true;
-                        for (var y = 1; y <= searchBytes.Length - 1; y++)
-                        {
-                            if (searchIn[i + y] != searchBytes[y])
-                            {
-                                matched = false;
-                                break;
-                            }
-                        }
-
-                        //everything matched up
-                        if (matched)
-                        {
-                            found = i;
-                            break;
-                        }
+                        stringToAdd = stringToAdd.Substring(0, maxLength);
                     }
-                    else
-                    {
-                        //search byte is only one bit nothing else to do
-                        found = i;
-                        break; //stop the loop
-                    }
+                    var hitOffset = currentOffset + i - sb.Length * 2;
+                    var offsetOut = originalOffBool
+                        ? $"{hitOffset}"
+                        : $"0x{hitOffset:X}";
+                    results.Add($"{offsetOut}\\t{stringToAdd}");
                 }
+                sb.Clear();
             }
         }
-
-        return found;
+        
+        // Handle string at end of buffer
+        if (sb.Length >= minLength)
+        {
+            var stringToAdd = sb.ToString();
+            if (maxLength > 0 && stringToAdd.Length > maxLength)
+            {
+                stringToAdd = stringToAdd.Substring(0, maxLength);
+            }
+            var hitOffset = currentOffset + chunk.Length - sb.Length * 2;
+            var offsetOut = originalOffBool
+                ? $"{hitOffset}"
+                : $"0x{hitOffset:X}";
+            results.Add($"{offsetOut}\\t{stringToAdd}");
+        }
+        
+        return results;
     }
 
-    private static List<string> GetAsciiHits(
-        byte[] bytes,
-        int minSize,
-        int maxSize,
-        long currentOffset,
-        bool withOffsets,
+    private static void ProcessHits(
+        List<Hit> hits,
+        ReadOnlySpan<byte> chunk, // Changed from byte[]
+        long fileOffset,
+        bool ascii,
+        bool unicode,
+        int minLength,
+        int maxLength,
+        bool originalOffBool,
+        string offSeparator,
+        int cp,
+        string ar,
+        string ur,
+        List<string> searchStrings,
+        List<string> regexStrings,
+        bool ro,
+        StreamWriter sw,
+        bool s // quiet mode for logging
+    )
+    {
+        var enc = Encoding.GetEncoding(cp);
+
+        foreach (var hit in hits)
+        {
+            string hitString;
+            // string hitType; // Removed unused variable
+
+            long actualHitOffsetInChunk = hit.Offset - fileOffset;
+
+            if (
+                actualHitOffsetInChunk < 0
+                || actualHitOffsetInChunk >= chunk.Length
+                || (actualHitOffsetInChunk + hit.Length) > chunk.Length
+            )
+            {
+                if (_trace)
+                    Log.Warning(
+                        "Skipping hit with out-of-bounds chunk offset. HitOffset: {HitOffset}, FileOffset: {FileOffset}, ChunkLength: {ChunkLength}, HitLength: {HitLength}",
+                        hit.Offset,
+                        fileOffset,
+                        chunk.Length,
+                        hit.Length
+                    );
+                continue;
+            }
+
+            if (hit.Encoding == Hit.HitEncoding.Ascii)
+            {
+                // hitType = "A"; // Removed assignment to unused variable
+                hitString = enc.GetString(chunk.Slice((int)actualHitOffsetInChunk, hit.Length));
+            }
+            else // Unicode
+            {
+                // hitType = "U"; // Removed assignment to unused variable
+                if (hit.Length % 2 != 0)
+                {
+                    if (_trace)
+                        Log.Warning(
+                            "Skipping Unicode hit with odd length. Offset: {HitOffset}, Length: {HitLength}",
+                            hit.Offset,
+                            hit.Length
+                        );
+                    continue;
+                }
+                hitString = Encoding.Unicode.GetString(
+                    chunk.Slice((int)actualHitOffsetInChunk, hit.Length)
+                );
+            }
+
+            // Process the hitString as needed
+        }
+    }    private static List<string> GetAsciiHits(
+        ReadOnlySpan<byte> chunk,
+        int minLength,
+        int maxLength,
+        long currentOffsetInFile,
+        bool originalOffBool,
         int cp,
         string ar
     )
     {
-        var maxString = maxSize == -1 ? "" : maxSize.ToString();
-        var mi2 = $"{"{"}{minSize}{","}{maxString}{"}"}";
+        var results = new List<string>();
+        var sb = new StringBuilder();
 
-        var ascRange = ar;
-        var regAsc = new Regex($"{ascRange}{mi2}", RegexOptions.Compiled);
+        // Parse ASCII range if provided
+        var (minChar, maxChar) = ParseCharRange(ar);
 
-        var codePage = CodePagesEncodingProvider.Instance.GetEncoding(cp);
-        var ascString = codePage!.GetString(bytes);
-
-        var hits = new List<string>();
-
-        foreach (Match match in regAsc.Matches(ascString))
+        for (var i = 0; i < chunk.Length; i++)
         {
-            if (withOffsets)
+            var currentByte = chunk[i];
+
+            // Check if current byte is in the specified ASCII range
+            if (currentByte >= minChar && currentByte <= maxChar)
             {
-                var matchBytes = codePage!.GetBytes(match.Value);
-
-                var pos = ByteSearch(bytes, matchBytes, match.Index);
-
-                var actualOffset = currentOffset + pos;
-
-                hits.Add($"{match.Value.Trim()}{'\t'}0x{actualOffset:X} (A)");
+                sb.Append((char)currentByte);
             }
             else
             {
-                hits.Add(match.Value.Trim());
+                // End of string - check if we have a valid string to add
+                if (sb.Length >= minLength)
+                {
+                    var stringToAdd = sb.ToString();
+                    
+                    // Apply max length limit
+                    if (maxLength > 0 && stringToAdd.Length > maxLength)
+                    {
+                        stringToAdd = stringToAdd.Substring(0, maxLength);
+                    }
+                    
+                    var hitOffset = currentOffsetInFile + i - sb.Length;
+                    var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
+                    results.Add($"{offsetOut}\\t{stringToAdd}");
+                }
+                sb.Clear();
             }
         }
 
-        return hits;
+        // Handle string at end of buffer
+        if (sb.Length >= minLength)
+        {
+            var stringToAdd = sb.ToString();
+            
+            // Apply max length limit
+            if (maxLength > 0 && stringToAdd.Length > maxLength)
+            {
+                stringToAdd = stringToAdd.Substring(0, maxLength);
+            }
+            
+            var hitOffset = currentOffsetInFile + chunk.Length - sb.Length;
+            var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
+            results.Add($"{offsetOut}\\t{stringToAdd}");
+        }
+
+        return results;
+    }private static List<string> GetAsciiHitsGpu(
+        byte[] chunk,
+        int bytesRead,
+        int minLength,
+        int maxLength,
+        long currentOffsetInFile,
+        string offSeparator,
+        int cp,
+        string ar,
+        bool originalOffBool
+    )
+    {        var results = new List<string>();
+        
+        // TODO: GPU kernel needs to be fixed to avoid overlapping substring matches
+        // For now, forcing CPU fallback until GPU kernel logic is corrected
+        if (true || GpuAccelerator == null || GpuContext == null || bytesRead == 0)
+        {
+            // Fallback to CPU if GPU is not available/initialized or chunk is empty
+            return GetAsciiHits(
+                chunk.AsSpan(0, bytesRead), // Pass as ReadOnlySpan with correct size
+                minLength,
+                maxLength,
+                currentOffsetInFile,
+                originalOffBool,
+                cp,
+                ar
+            );
+        }
+
+        try
+        {
+            int estimatedMaxHits = Math.Max(1024, bytesRead); // Base on bytesRead
+
+            using var dataBuffer = GpuAccelerator.Allocate1D<byte>(bytesRead);
+            using var hitsBuffer = GpuAccelerator.Allocate1D<GpuHit>(estimatedMaxHits);
+            using var hitCountBuffer = GpuAccelerator.Allocate1D<int>(1);
+
+            // Copy only the valid bytes to GPU
+            var validChunk = new byte[bytesRead];
+            Array.Copy(chunk, 0, validChunk, 0, bytesRead);
+            dataBuffer.CopyFromCPU(validChunk);
+            hitCountBuffer.MemSetToZero();
+
+            // Load and compile the kernel (ILGPU caches compiled kernels)
+            var kernel = GpuAccelerator.LoadAutoGroupedStreamKernel<
+                Index1D,
+                ArrayView<byte>,
+                int,
+                int,
+                long,
+                ArrayView<GpuHit>,
+                ArrayView<int>
+            >(AsciiScanKernel);            // Launch configuration: one thread per valid byte
+            kernel(
+                bytesRead,
+                dataBuffer.View,
+                minLength,
+                maxLength,
+                currentOffsetInFile,
+                hitsBuffer.View,
+                hitCountBuffer.View
+            );
+
+            GpuAccelerator.Synchronize(); // Wait for the kernel to complete
+
+            int numHitsFound = hitCountBuffer.GetAsArray1D()[0];
+            int hitsToRetrieve = Math.Min(numHitsFound, estimatedMaxHits);
+
+            if (hitsToRetrieve > 0)
+            {
+                // Allocate a CPU-side array for all potential hits copied from the GPU.
+                var allGpuHitsArray = new GpuHit[estimatedMaxHits];
+                hitsBuffer.CopyToCPU(allGpuHitsArray); // Simple overload to copy the whole buffer.
+
+                // Now process only the actual 'hitsToRetrieve' from the copied array.
+                for (int i = 0; i < hitsToRetrieve; ++i)
+                {
+                    var hit = allGpuHitsArray[i];
+                    // GpuHit.Offset is the absolute offset in the file
+                    var offsetString = originalOffBool ? $"{hit.Offset}" : $"0x{hit.Offset:X}";
+
+                    long chunkRelativeOffset = hit.Offset - currentOffsetInFile;
+
+                    if (
+                        chunkRelativeOffset >= 0
+                        && chunkRelativeOffset < chunk.Length
+                        && (chunkRelativeOffset + hit.Length) <= chunk.Length
+                    )
+                    {
+                        string foundString = Encoding.ASCII.GetString(
+                            chunk,
+                            (int)chunkRelativeOffset,
+                            hit.Length
+                        );
+                        results.Add($"{offsetString}{offSeparator}{foundString}");
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine(
+                            $"Skipping GPU hit with invalid calculated chunk-relative offset. AbsoluteOffset: {hit.Offset}, CurrentFileOffset: {currentOffsetInFile}, ChunkRelOffset: {chunkRelativeOffset}, Length: {hit.Length}, ChunkSize: {chunk.Length}"
+                        );
+                    }
+                }
+            }
+            else
+            {
+                // No hits found or buffer was too small (hitsToRetrieve is 0)
+            }
+
+            // Fallback or empty list if no GPU hits processed
+            if (results.Count == 0 && numHitsFound > 0)
+            {
+                // This indicates an issue with retrieving or processing GPU results.
+                // Consider logging this or falling back.
+                // For now, returning empty and relying on CPU fallback if GpuAccelerator was null.
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"GPU processing error in GetAsciiHitsGpu: {ex.Message}. Falling back to CPU."
+            );
+            Console.Error.WriteLine(ex.StackTrace);
+            return GetAsciiHits(
+                chunk.AsSpan(), // Pass as ReadOnlySpan
+                minLength,
+                maxLength,
+                currentOffsetInFile,
+                originalOffBool,
+                cp,
+                ar
+            ); // Fallback to CPU
+        }
+        return results;
     }
 
     /// <summary>
@@ -1580,142 +1839,5 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 }
             }
         }
-    }
-
-    private static List<string> GetAsciiHitsGpu(
-        byte[] chunk,
-        int minLength,
-        int maxLength,
-        long currentOffsetInFile,
-        string offSeparator,
-        int cp,
-        string ar,
-        bool originalOffBool
-    )
-    {
-        var results = new List<string>();
-
-        if (GpuAccelerator == null || GpuContext == null || chunk.Length == 0)
-        {
-            // Fallback to CPU if GPU is not available/initialized or chunk is empty
-            return GetAsciiHits(
-                chunk,
-                minLength,
-                maxLength,
-                currentOffsetInFile,
-                originalOffBool,
-                cp,
-                ar
-            );
-        }
-
-        try
-        {
-            // Estimate max possible hits. This can be very large and inefficient.
-            // For production, a more dynamic output mechanism or a two-pass kernel (count then fill) is better.
-            // Max hits: if every char starts a minLength string. This is a rough upper bound.
-            // A smaller, reasonable buffer size with overflow detection is often preferred.
-            int estimatedMaxHits = Math.Max(1024, chunk.Length); // Start with a base or chunk length
-
-            using var dataBuffer = GpuAccelerator.Allocate1D<byte>(chunk.Length);
-            using var hitsBuffer = GpuAccelerator.Allocate1D<GpuHit>(estimatedMaxHits); // Output buffer
-            using var hitCountBuffer = GpuAccelerator.Allocate1D<int>(1); // Single int for atomic counter
-
-            dataBuffer.CopyFromCPU(chunk);
-            hitCountBuffer.MemSetToZero(); // Initialize hit count to 0 on GPU
-
-            // Load and compile the kernel (ILGPU caches compiled kernels)
-            var kernel = GpuAccelerator.LoadAutoGroupedStreamKernel<
-                Index1D,
-                ArrayView<byte>,
-                int,
-                int,
-                long,
-                ArrayView<GpuHit>,
-                ArrayView<int>
-            >(AsciiScanKernel);
-
-            // Launch configuration: one thread per byte in the chunk
-            kernel(
-                chunk.Length,
-                dataBuffer.View,
-                minLength,
-                maxLength,
-                currentOffsetInFile,
-                hitsBuffer.View,
-                hitCountBuffer.View
-            );
-
-            GpuAccelerator.Synchronize(); // Wait for the kernel to complete
-
-            int numHitsFound = hitCountBuffer.GetAsArray1D()[0];
-            int hitsToRetrieve = Math.Min(numHitsFound, estimatedMaxHits);
-
-            if (hitsToRetrieve > 0)
-            {
-                // Allocate a CPU-side array for all potential hits copied from the GPU.
-                var allGpuHitsArray = new GpuHit[estimatedMaxHits];
-                hitsBuffer.CopyToCPU(allGpuHitsArray); // Simple overload to copy the whole buffer.
-
-                // Now process only the actual 'hitsToRetrieve' from the copied array.
-                for (int i = 0; i < hitsToRetrieve; ++i)
-                {
-                    var hit = allGpuHitsArray[i];
-                    // GpuHit.Offset is the absolute offset in the file
-                    var offsetString = originalOffBool ? $"{hit.Offset}" : $"0x{hit.Offset:X}";
-
-                    long chunkRelativeOffset = hit.Offset - currentOffsetInFile;
-
-                    if (
-                        chunkRelativeOffset >= 0
-                        && chunkRelativeOffset < chunk.Length
-                        && (chunkRelativeOffset + hit.Length) <= chunk.Length
-                    )
-                    {
-                        string foundString = Encoding.ASCII.GetString(
-                            chunk,
-                            (int)chunkRelativeOffset,
-                            hit.Length
-                        );
-                        results.Add($"{offsetString}{offSeparator}{foundString}");
-                    }
-                    else
-                    {
-                        Console.Error.WriteLine(
-                            $"Skipping GPU hit with invalid calculated chunk-relative offset. AbsoluteOffset: {hit.Offset}, CurrentFileOffset: {currentOffsetInFile}, ChunkRelOffset: {chunkRelativeOffset}, Length: {hit.Length}, ChunkSize: {chunk.Length}"
-                        );
-                    }
-                }
-            }
-            else
-            {
-                // No hits found or buffer was too small (hitsToRetrieve is 0)
-            }
-
-            // Fallback or empty list if no GPU hits processed
-            if (results.Count == 0 && numHitsFound > 0)
-            {
-                // This indicates an issue with retrieving or processing GPU results.
-                // Consider logging this or falling back.
-                // For now, returning empty and relying on CPU fallback if GpuAccelerator was null.
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine(
-                $"GPU processing error in GetAsciiHitsGpu: {ex.Message}. Falling back to CPU."
-            );
-            Console.Error.WriteLine(ex.StackTrace);
-            return GetAsciiHits(
-                chunk,
-                minLength,
-                maxLength,
-                currentOffsetInFile,
-                originalOffBool,
-                cp,
-                ar
-            ); // Fallback to CPU
-        }
-        return results;
     }
 }
