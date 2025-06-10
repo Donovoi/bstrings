@@ -179,10 +179,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 _completedChunks++;
                 _totalStrings += stringCount;
 
-                // Update progress every 1 second or when complete
+                // Update progress more frequently - every chunk completion or every 0.5 seconds, whichever comes first
                 var now = DateTime.Now;
                 var shouldUpdate =
-                    (now - _lastUpdate).TotalSeconds >= 1.0 || _completedChunks == _totalChunks;
+                    (now - _lastUpdate).TotalSeconds >= 0.5 || _completedChunks == _totalChunks;
 
                 if (!_quiet && shouldUpdate)
                 {
@@ -223,6 +223,34 @@ public static partial class Program // Make it public and partial for ILGPU if n
         public long TotalStrings => _totalStrings;
         public double ElapsedSeconds => _stopwatch.Elapsed.TotalSeconds;
         public bool HasCompletedChunks => _completedChunks > 0;
+
+        /// <summary>
+        /// Forces a progress update regardless of time elapsed
+        /// </summary>
+        public void ForceProgressUpdate()
+        {
+            lock (_lockObject)
+            {
+                if (!_quiet)
+                {
+                    _lastUpdate = DateTime.Now;
+                    var elapsed = _stopwatch.Elapsed.TotalSeconds;
+                    var stringsPerSec = elapsed > 0 ? _totalStrings / elapsed : 0;
+                    var progressPercent = (_completedChunks * 100.0) / _totalChunks;
+
+                    var progressBar = CreateProgressBar(progressPercent);
+
+                    Console.Error.Write(
+                        $"\r{progressBar} {progressPercent:F1}% | {_completedChunks:N0}/{_totalChunks:N0} chunks | {_totalStrings:N0} strings | {stringsPerSec:N0} strings/sec"
+                    );
+
+                    if (_completedChunks == _totalChunks)
+                    {
+                        Console.Error.WriteLine(); // New line when complete
+                    }
+                }
+            }
+        }
     }
 
     static Program()
@@ -901,24 +929,30 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             Console.Error.WriteLine("Starting chunk processing...");
 
-            // Heartbeat: print a message every second if no progress has been reported
-            var heartbeatCts = new CancellationTokenSource();
-            var heartbeatTask = Task.Run(
+            // Progress updater: updates progress every second and shows heartbeat when no progress
+            var progressCts = new CancellationTokenSource();
+            var progressTask = Task.Run(
                 async () =>
                 {
-                    while (!heartbeatCts.Token.IsCancellationRequested)
+                    while (!progressCts.Token.IsCancellationRequested)
                     {
                         await Task.Delay(1000);
-                        // Only show "No chunks complete yet" if no chunks have actually been completed
+
                         if (!progressTracker.HasCompletedChunks)
                         {
+                            // Show heartbeat only if no chunks have completed yet
                             Console.Error.Write(
                                 "\r[Working...] No chunks complete yet. Still processing..."
                             );
                         }
+                        else
+                        {
+                            // Force a progress update every second once chunks start completing
+                            progressTracker.ForceProgressUpdate();
+                        }
                     }
                 },
-                heartbeatCts.Token
+                progressCts.Token
             );
 
             try
@@ -1015,6 +1049,20 @@ public static partial class Program // Make it public and partial for ILGPU if n
             {
                 Console.WriteLine();
                 Log.Error(ex, "Error: {Message}", ex.Message);
+            }
+            finally
+            {
+                // Clean up the progress updater task
+                progressCts.Cancel();
+                try
+                {
+                    await progressTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected when cancelling the task
+                }
+                progressCts.Dispose();
             }
 
             _sw.Stop();
@@ -2300,8 +2348,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     // Report progress using the progress tracker
                     progressTracker.ReportChunkComplete(chunkResults.Count);
                 }
-
-                progressTracker.ReportChunkComplete(chunkResults.Count);
 
                 return chunkResults.Count;
             });
