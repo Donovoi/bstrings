@@ -250,9 +250,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
         public static int OptimalDegreeOfParallelism =>
             Math.Max(2, Environment.ProcessorCount * 3 / 4);
         public static int ProducerConsumerBufferSize => Math.Max(16, MaxConcurrentChunks * 4);
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Thread-safe progress tracking for concurrent chunk processing
     /// </summary>
     public class ProgressTracker
@@ -264,12 +262,32 @@ public static partial class Program // Make it public and partial for ILGPU if n
         private long _completedChunks = 0;
         private long _totalStrings = 0;
         private DateTime _lastUpdate = DateTime.MinValue;
+        private bool _isCompleted = false;
 
         public ProgressTracker(long totalChunks, bool quiet)
         {
             _totalChunks = totalChunks;
             _quiet = quiet;
             _stopwatch = Stopwatch.StartNew();
+        }
+
+        public void MarkCompleted()
+        {
+            lock (_lockObject)
+            {
+                _isCompleted = true;
+            }
+        }
+
+        public bool IsCompleted
+        {
+            get
+            {
+                lock (_lockObject)
+                {
+                    return _isCompleted || _completedChunks >= _totalChunks;
+                }
+            }
         }
 
         public void ReportChunkComplete(int stringCount)
@@ -1032,13 +1050,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
             Console.Error.WriteLine("Starting chunk processing...");
 
             // Progress updater: updates progress every second and shows heartbeat when no progress
-            var progressCts = new CancellationTokenSource();
-            var progressTask = Task.Run(
+            var progressCts = new CancellationTokenSource();            var progressTask = Task.Run(
                 async () =>
                 {
-                    while (!progressCts.Token.IsCancellationRequested)
+                    while (!progressCts.Token.IsCancellationRequested && !progressTracker.IsCompleted)
                     {
-                        await Task.Delay(1000);
+                        await Task.Delay(1000, progressCts.Token);
+
+                        if (progressCts.Token.IsCancellationRequested || progressTracker.IsCompleted)
+                            break;
 
                         if (!progressTracker.HasCompletedChunks)
                         {
@@ -1136,8 +1156,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         m * 10 * 2 * 2, // boundaryChunkSize
                         hits,
                         minLength,
-                        maxLength,
-                        a,
+                        maxLength,                        a,
                         u,
                         off,
                         cp,
@@ -1146,6 +1165,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         q
                     );
                 }
+
+                // Mark progress as completed to stop the progress task
+                progressTracker.MarkCompleted();
             }
             catch (Exception ex)
             {
