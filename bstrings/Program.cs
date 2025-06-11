@@ -1040,7 +1040,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 Console.WriteLine();
             }
 
-            Console.Error.WriteLine("Starting chunk processing...");
+            if (!q && _debug)
+            {
+                Console.Error.WriteLine("Starting chunk processing...");
+            }
 
             // Progress updater: updates progress every second and shows heartbeat when no progress
             var progressCts = new CancellationTokenSource();
@@ -1057,13 +1060,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             progressCts.Token.IsCancellationRequested || progressTracker.IsCompleted
                         )
                             break;
-
                         if (!progressTracker.HasCompletedChunks)
                         {
-                            // Show heartbeat only if no chunks have completed yet
-                            Console.Error.Write(
-                                "\r[Working...] No chunks complete yet. Still processing..."
-                            );
+                            // Show heartbeat only if no chunks have completed yet and in debug mode
+                            if (_debug)
+                            {
+                                Console.Error.Write(
+                                    "\r[Working...] No chunks complete yet. Still processing..."
+                                );
+                            }
                         }
                         else
                         {
@@ -1097,25 +1102,39 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         FileShare.Read
                     );
 #endif
-                    Console.Error.WriteLine("Creating memory map for file...");
+                    if (!q && _debug)
+                    {
+                        Console.Error.WriteLine("Creating memory map for file...");
+                    }
                     mappedStream = MappedStream.FromStream(fileStream, Ownership.None);
-                    Console.Error.WriteLine("Memory map created successfully.");
+                    if (!q && _debug)
+                    {
+                        Console.Error.WriteLine("Memory map created successfully.");
+                    }
                 }
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine($"Failed to create memory map: {ex.Message}");
                     // ignored
                 }
-
                 if (mappedStream == null)
                 {
-                    Console.Error.WriteLine("Falling back to raw file access...");
+                    if (!q && _debug)
+                    {
+                        Console.Error.WriteLine("Falling back to raw file access...");
+                    }
                     //raw mode
                     var ss = OpenFile(currentFile); // Use currentFile
 
-                    Console.Error.WriteLine("Creating memory map from raw stream...");
+                    if (!q && _debug)
+                    {
+                        Console.Error.WriteLine("Creating memory map from raw stream...");
+                    }
                     mappedStream = MappedStream.FromStream(ss, Ownership.None);
-                    Console.Error.WriteLine("Raw stream memory map created successfully.");
+                    if (!q && _debug)
+                    {
+                        Console.Error.WriteLine("Raw stream memory map created successfully.");
+                    }
                 }
                 using (mappedStream)
                 {
@@ -1470,9 +1489,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string ur
     )
     {
-        Console.Error.WriteLine(
-            $"[Chunk {chunk.ChunkIndex}] Starting processing of {chunk.ValidBytes:N0} bytes at offset {chunk.FileOffset:N0}"
-        );
+        if (_debug)
+        {
+            Console.Error.WriteLine(
+                $"[Chunk {chunk.ChunkIndex}] Starting processing of {chunk.ValidBytes:N0} bytes at offset {chunk.FileOffset:N0}"
+            );
+        }
         var chunkStopwatch = Stopwatch.StartNew();
 
         var results = StringListPool.Get();
@@ -1509,9 +1531,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
             }
         }
         chunkStopwatch.Stop();
-        Console.Error.WriteLine(
-            $"[Chunk {chunk.ChunkIndex}] Completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {results.Count} strings"
-        );
+        if (_debug)
+        {
+            Console.Error.WriteLine(
+                $"[Chunk {chunk.ChunkIndex}] Completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {results.Count} strings"
+            );
+        }
 
         // Return objects to pools and return the final result
         var finalResults = new List<string>(results);
