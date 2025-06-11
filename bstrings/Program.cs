@@ -95,9 +95,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
     // GPU concurrency control - limit simultaneous GPU operations
     private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(2, 4); // Max 2 concurrent GPU operations
 
-    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused fields _quiet and _debug    // private static bool _quiet;
+    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed
 
-    // private static bool _debug;
+    // Removed unused field _quiet
+    private static bool _debug = false;
     private static bool _trace = false; // Explicitly initialize to fix compiler warning
 
     /// <summary>
@@ -250,7 +251,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
         public static int OptimalDegreeOfParallelism =>
             Math.Max(2, Environment.ProcessorCount * 3 / 4);
         public static int ProducerConsumerBufferSize => Math.Max(16, MaxConcurrentChunks * 4);
-    }    /// <summary>
+    }
+
+    /// <summary>
     /// Thread-safe progress tracking for concurrent chunk processing
     /// </summary>
     public class ProgressTracker
@@ -331,7 +334,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             for (int i = 0; i < barLength; i++)
             {
-                bar.Append(i < filled ? "█" : "░");
+                bar.Append(i < filled ? "#" : "-");
             }
 
             bar.Append("]");
@@ -378,7 +381,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
         try
         {
-            Console.Error.WriteLine("Attempting to initialize ILGPU with Cuda backend...");
+            // Initialize ILGPU with Cuda backend (output suppressed)
             try
             {
                 // Attempt to create a context with only the Cuda backend enabled
@@ -390,26 +393,19 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 if (cudaDevice != null)
                 {
                     tempAccelerator = cudaDevice.CreateAccelerator(tempContext);
-                    Console.Error.WriteLine(
-                        $"ILGPU Initialized with Cuda. Using: {tempAccelerator.Name}"
-                    );
-                    Console.Error.WriteLine(
-                        $"Type: {tempAccelerator.AcceleratorType}, Max Threads: {tempAccelerator.MaxNumThreads}"
-                    );
+                    // GPU initialization successful (messages suppressed unless debug mode)
                 }
                 else
                 {
                     // This case might not be reached if GetCudaDevice(0) throws when no device is found.
-                    Console.Error.WriteLine(
-                        "Cuda backend initialized, but no Cuda device found by GetCudaDevice(0)."
-                    );
+                    // Cuda backend initialized, but no Cuda device found by GetCudaDevice(0) (message suppressed unless debug mode)
                     tempContext.Dispose();
                     tempContext = null;
                 }
             }
             catch (Exception cudaEx)
             {
-                Console.Error.WriteLine($"Failed to initialize ILGPU with Cuda: {cudaEx.Message}");
+                // Failed to initialize ILGPU with Cuda (message suppressed unless debug mode)
                 if (tempContext != null)
                 {
                     tempContext.Dispose();
@@ -417,10 +413,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 }
                 // tempAccelerator remains null, so we will fall through to the default initialization
             }
-
             if (tempAccelerator == null)
             {
-                Console.Error.WriteLine("Falling back to default ILGPU initialization...");
+                // Falling back to default ILGPU initialization (message suppressed unless debug mode)
                 // Ensure any previous context (e.g., from a failed Cuda attempt) is disposed
                 if (tempContext != null)
                 {
@@ -434,18 +429,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 if (preferredDevice != null)
                 {
                     tempAccelerator = preferredDevice.CreateAccelerator(tempContext);
-                    Console.Error.WriteLine(
-                        $"ILGPU Initialized with Default. Using: {tempAccelerator.Name}"
-                    );
-                    Console.Error.WriteLine(
-                        $"Type: {tempAccelerator.AcceleratorType}, Max Threads: {tempAccelerator.MaxNumThreads}"
-                    );
+                    // ILGPU initialized with default backend (message suppressed unless debug mode)
                 }
                 else
                 {
-                    Console.Error.WriteLine(
-                        "ILGPU: No suitable GPU device found with default backend."
-                    );
+                    // No suitable GPU device found (message suppressed unless debug mode)
                     if (tempContext != null)
                     {
                         tempContext.Dispose();
@@ -487,51 +475,51 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             Math.Min(maxPracticalMB, calculatedMB)
                         );
 
-                        Console.Error.WriteLine(
-                            $"Total GPU VRAM: {totalGpuMemoryBytes / (1024 * 1024)} MB. Usable (Total - 2GB): {usableGpuMemoryBytes / (1024 * 1024)} MB."
-                        );
-                        Console.Error.WriteLine(
-                            $"Calculated dynamic chunk size for GPU: {DynamicChunkSizeMB} MB (using factor {memoryFactor:F2} for hits buffer)."
-                        );
+                        // GPU VRAM information (messages suppressed unless debug mode)
                     }
                     else
                     {
-                        Console.Error.WriteLine(
-                            "Not enough GPU VRAM to reserve 2GB and calculate dynamic chunk size. Will use CPU calculation."
-                        );
+                        // Not enough GPU VRAM (message suppressed unless debug mode)
                         DynamicChunkSizeMB = 0; // Will use CPU calculation
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.Error.WriteLine(
-                        $"Error calculating dynamic GPU chunk size: {ex.Message}. Will use CPU calculation."
-                    );
+                    // Error calculating dynamic GPU chunk size (message suppressed unless debug mode)
                     DynamicChunkSizeMB = 0; // Will use CPU calculation
                 }
             }
             else
             {
-                Console.Error.WriteLine(
-                    "GPU not available. Dynamic chunk size will be calculated based on CPU/RAM."
-                );
+                // GPU not available. Dynamic chunk size will be calculated based on CPU/RAM (message suppressed unless debug mode)
                 DynamicChunkSizeMB = 0; // Will use CPU calculation at runtime
             }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine(
-                $"ILGPU General Initialization Error: {ex.Message}. GPU acceleration will be disabled."
-            );
+            // ILGPU General Initialization Error (message suppressed unless debug mode)
             if (tempContext != null)
                 tempContext.Dispose();
             GpuContext = null;
             GpuAccelerator = null;
         }
+
+        LogGpuInitializationInfo();
     }
 
     private static async Task Main(string[] args)
     {
+        // Set console encoding to support Unicode characters (including emojis)
+        try
+        {
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+            Console.InputEncoding = System.Text.Encoding.UTF8;
+        }
+        catch
+        {
+            // Ignore encoding setup errors on systems that don't support it
+        }
+
         ExceptionlessClient.Default.Startup("Kruacm8p1B6RFAw2WMnKcEqkQcnWRkF3RmPSOzlW");
         // Ensure ILGPU context is initialized before any command parsing if GPU is to be used early
         // or ensure commands that need GPU are aware if it's not ready.
@@ -724,7 +712,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool debug,
         bool trace
     )
-    {
+    { // Set the global debug flag
+        _debug = debug;
+
+        // Log GPU initialization info if debug is enabled
+        LogGpuInitializationInfo();
+
         var levelSwitch = new LoggingLevelSwitch();
 
         var template = "{Message:lj}{NewLine}{Exception}";
@@ -1050,14 +1043,19 @@ public static partial class Program // Make it public and partial for ILGPU if n
             Console.Error.WriteLine("Starting chunk processing...");
 
             // Progress updater: updates progress every second and shows heartbeat when no progress
-            var progressCts = new CancellationTokenSource();            var progressTask = Task.Run(
+            var progressCts = new CancellationTokenSource();
+            var progressTask = Task.Run(
                 async () =>
                 {
-                    while (!progressCts.Token.IsCancellationRequested && !progressTracker.IsCompleted)
+                    while (
+                        !progressCts.Token.IsCancellationRequested && !progressTracker.IsCompleted
+                    )
                     {
                         await Task.Delay(1000, progressCts.Token);
 
-                        if (progressCts.Token.IsCancellationRequested || progressTracker.IsCompleted)
+                        if (
+                            progressCts.Token.IsCancellationRequested || progressTracker.IsCompleted
+                        )
                             break;
 
                         if (!progressTracker.HasCompletedChunks)
@@ -1156,7 +1154,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         m * 10 * 2 * 2, // boundaryChunkSize
                         hits,
                         minLength,
-                        maxLength,                        a,
+                        maxLength,
+                        a,
                         u,
                         off,
                         cp,
@@ -1486,14 +1485,22 @@ public static partial class Program // Make it public and partial for ILGPU if n
             {
                 results.Add(chunk.IsBoundaryChunk ? "  " + h : h);
             }
-        }        if (asciiSearch)
+        }
+        if (asciiSearch)
         {
             List<string> ah;
             // PERFORMANCE OPTIMIZATION: Use optimized CPU processing for all chunks for now
             // Skip GPU processing to avoid overhead issues
             var (minChar, maxChar) = ParseCharRange(ar);
-              // PERFORMANCE OPTIMIZATION: Use hit-based extraction for all chunks
-            var hits = FindAsciiStringHits(validChunk, minLength, maxLength, chunk.FileOffset, minChar, maxChar);
+            // PERFORMANCE OPTIMIZATION: Use hit-based extraction for all chunks
+            var hits = FindAsciiStringHits(
+                validChunk,
+                minLength,
+                maxLength,
+                chunk.FileOffset,
+                minChar,
+                maxChar
+            );
             ah = MaterializeStringHits(validChunk, hits, off);
 
             foreach (var h in ah)
@@ -1985,7 +1992,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 );
             } // Process the hitString as needed
         }
-    }    private static List<string> GetAsciiHits(
+    }
+
+    private static List<string> GetAsciiHits(
         ReadOnlySpan<byte> chunk,
         int minLength,
         int maxLength,
@@ -1999,11 +2008,20 @@ public static partial class Program // Make it public and partial for ILGPU if n
         var (minChar, maxChar) = ParseCharRange(ar);
 
         // PERFORMANCE OPTIMIZATION: Use SIMD-optimized hit detection instead of StringBuilder
-        var hits = FindAsciiStringHits(chunk, minLength, maxLength, currentOffsetInFile, minChar, maxChar);
-        
+        var hits = FindAsciiStringHits(
+            chunk,
+            minLength,
+            maxLength,
+            currentOffsetInFile,
+            minChar,
+            maxChar
+        );
+
         // Materialize strings only when needed
         return MaterializeStringHits(chunk, hits, originalOffBool);
-    }    /// <summary>
+    }
+
+    /// <summary>
     /// Optimized ASCII string scanning - uses vectorized operations when possible
     /// </summary>
     private static List<string> GetAsciiHitsOptimized(
@@ -2019,7 +2037,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
         var (minChar, maxChar) = ParseCharRange(ar);
 
         // PERFORMANCE OPTIMIZATION: Use hit-based extraction directly
-        var hits = FindAsciiStringHits(chunk, minLength, maxLength, currentOffsetInFile, minChar, maxChar);
+        var hits = FindAsciiStringHits(
+            chunk,
+            minLength,
+            maxLength,
+            currentOffsetInFile,
+            minChar,
+            maxChar
+        );
         return MaterializeStringHits(chunk, hits, originalOffBool);
     }
 
@@ -2037,7 +2062,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
     )
     {
         // PERFORMANCE OPTIMIZATION: Use hit-position detection for minimal allocations
-        var hits = FindAsciiStringHits(chunk, minLength, maxLength, currentOffsetInFile, minChar, maxChar);
+        var hits = FindAsciiStringHits(
+            chunk,
+            minLength,
+            maxLength,
+            currentOffsetInFile,
+            minChar,
+            maxChar
+        );
         return MaterializeStringHits(chunk, hits, originalOffBool);
     }
 
@@ -3169,63 +3201,97 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// SIMD-optimized ASCII string hit detection - 10-20x faster than original
     /// </summary>
     private static unsafe List<StringHit> FindAsciiStringHits(
-        ReadOnlySpan<byte> data, 
-        int minLength, 
+        ReadOnlySpan<byte> data,
+        int minLength,
         int maxLength,
         long fileOffset,
-        byte minChar = 32, 
-        byte maxChar = 126)
+        byte minChar = 32,
+        byte maxChar = 126
+    )
     {
         var hits = new List<StringHit>(data.Length / 20); // Pre-size based on typical density
-        
-        if (data.Length == 0) return hits;
+
+        if (data.Length == 0)
+            return hits;
 
         fixed (byte* dataPtr = data)
         {
             int stringStart = -1;
             int i = 0;
-            
+
             // SIMD processing for bulk of data
             if (System.Runtime.Intrinsics.X86.Sse2.IsSupported && data.Length >= 16)
             {
                 var minVec = System.Runtime.Intrinsics.Vector128.Create(minChar);
                 var maxVec = System.Runtime.Intrinsics.Vector128.Create(maxChar);
-                
+
                 for (; i <= data.Length - 16; i += 16)
                 {
                     var chunk = System.Runtime.Intrinsics.X86.Sse2.LoadVector128(dataPtr + i);
-                      // Check if bytes are in valid range [minChar, maxChar]
+                    // Check if bytes are in valid range [minChar, maxChar]
                     // SSE2 doesn't have unsigned byte comparison, so we use a different approach
-                    var minVecSigned = System.Runtime.Intrinsics.Vector128.Create((sbyte)(minChar - 128));
-                    var maxVecSigned = System.Runtime.Intrinsics.Vector128.Create((sbyte)(maxChar - 128));
-                    var chunkSigned = System.Runtime.Intrinsics.X86.Sse2.Subtract(chunk.AsSByte(), 
-                        System.Runtime.Intrinsics.Vector128.Create(unchecked((sbyte)128)));
-                    
-                    var geMin = System.Runtime.Intrinsics.X86.Sse2.CompareGreaterThan(chunkSigned, 
-                        System.Runtime.Intrinsics.X86.Sse2.Subtract(minVecSigned, System.Runtime.Intrinsics.Vector128.Create((sbyte)1)));
+                    var minVecSigned = System.Runtime.Intrinsics.Vector128.Create(
+                        (sbyte)(minChar - 128)
+                    );
+                    var maxVecSigned = System.Runtime.Intrinsics.Vector128.Create(
+                        (sbyte)(maxChar - 128)
+                    );
+                    var chunkSigned = System.Runtime.Intrinsics.X86.Sse2.Subtract(
+                        chunk.AsSByte(),
+                        System.Runtime.Intrinsics.Vector128.Create(unchecked((sbyte)128))
+                    );
+
+                    var geMin = System.Runtime.Intrinsics.X86.Sse2.CompareGreaterThan(
+                        chunkSigned,
+                        System.Runtime.Intrinsics.X86.Sse2.Subtract(
+                            minVecSigned,
+                            System.Runtime.Intrinsics.Vector128.Create((sbyte)1)
+                        )
+                    );
                     var leMax = System.Runtime.Intrinsics.X86.Sse2.CompareGreaterThan(
-                        System.Runtime.Intrinsics.X86.Sse2.Add(maxVecSigned, System.Runtime.Intrinsics.Vector128.Create((sbyte)1)), chunkSigned);
+                        System.Runtime.Intrinsics.X86.Sse2.Add(
+                            maxVecSigned,
+                            System.Runtime.Intrinsics.Vector128.Create((sbyte)1)
+                        ),
+                        chunkSigned
+                    );
                     var isValid = System.Runtime.Intrinsics.X86.Sse2.And(geMin, leMax);
-                    
+
                     uint mask = (uint)System.Runtime.Intrinsics.X86.Sse2.MoveMask(isValid);
-                    
+
                     // Process each bit in the mask
                     for (int bit = 0; bit < 16; bit++)
                     {
                         bool charValid = (mask & (1u << bit)) != 0;
-                        ProcessCharForStringHit(charValid, i + bit, ref stringStart, minLength, maxLength, fileOffset, hits);
+                        ProcessCharForStringHit(
+                            charValid,
+                            i + bit,
+                            ref stringStart,
+                            minLength,
+                            maxLength,
+                            fileOffset,
+                            hits
+                        );
                     }
                 }
             }
-            
+
             // Handle remaining bytes with scalar processing
             for (; i < data.Length; i++)
             {
                 byte b = dataPtr[i];
                 bool charValid = b >= minChar && b <= maxChar;
-                ProcessCharForStringHit(charValid, i, ref stringStart, minLength, maxLength, fileOffset, hits);
+                ProcessCharForStringHit(
+                    charValid,
+                    i,
+                    ref stringStart,
+                    minLength,
+                    maxLength,
+                    fileOffset,
+                    hits
+                );
             }
-            
+
             // Handle string at end of buffer
             if (stringStart != -1)
             {
@@ -3241,15 +3307,18 @@ public static partial class Program // Make it public and partial for ILGPU if n
         return hits;
     }
 
-    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining
+    )]
     private static void ProcessCharForStringHit(
-        bool charValid, 
-        int pos, 
-        ref int stringStart, 
-        int minLength, 
+        bool charValid,
+        int pos,
+        ref int stringStart,
+        int minLength,
         int maxLength,
         long fileOffset,
-        List<StringHit> hits)
+        List<StringHit> hits
+    )
     {
         if (charValid)
         {
@@ -3285,17 +3354,18 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static List<string> MaterializeStringHits(
         ReadOnlySpan<byte> data,
         List<StringHit> hits,
-        bool includeOffset)
+        bool includeOffset
+    )
     {
         var results = new List<string>(hits.Count);
-        
+
         foreach (var hit in hits)
         {
             if (hit.Start + hit.Length <= data.Length)
             {
                 var stringBytes = data.Slice(hit.Start, hit.Length);
                 var str = Encoding.ASCII.GetString(stringBytes);
-                
+
                 if (includeOffset)
                 {
                     results.Add($"0x{hit.FileOffset + hit.Start:X}\t{str}");
@@ -3306,7 +3376,29 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 }
             }
         }
-        
+
         return results;
+    }
+
+    /// <summary>
+    /// Logs GPU initialization information if debug mode is enabled
+    /// </summary>
+    private static void LogGpuInitializationInfo()
+    {
+        if (!_debug)
+            return;
+
+        if (GpuAccelerator != null)
+        {
+            Console.Error.WriteLine($"[DEBUG] GPU accelerator available: {GpuAccelerator.Name}");
+            Console.Error.WriteLine(
+                $"[DEBUG] GPU memory size: {GpuAccelerator.MemorySize / (1024 * 1024)} MB"
+            );
+            Console.Error.WriteLine($"[DEBUG] Dynamic chunk size: {DynamicChunkSizeMB} MB");
+        }
+        else
+        {
+            Console.Error.WriteLine("[DEBUG] GPU acceleration not available, using CPU only");
+        }
     }
 }
