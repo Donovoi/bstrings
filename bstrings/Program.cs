@@ -1862,72 +1862,61 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string ur
     )
     {
-        var results = StringListPool.Get();
+        return GetStringHitsUnified(
+            chunk,
+            minLength,
+            maxLength,
+            currentOffset,
+            originalOffBool,
+            true // isUnicode = true
+        );
+    }
+
+    /// <summary>
+    /// Optimized helper method to add Unicode string results with minimal allocations
+    /// </summary>
+    private static void AddOptimizedUnicodeStringResult(
+        List<string> results,
+        ReadOnlySpan<byte> chunk,
+        int stringStart,
+        int stringLength,
+        int maxLength,
+        long currentOffsetInFile,
+        bool originalOffBool
+    )
+    {
+        var actualLength = maxLength > 0 && stringLength > maxLength ? maxLength : stringLength;
         var sb = StringBuilderPool.Get();
 
-        // Process Unicode strings (2 bytes per character)
-        for (var i = 0; i < chunk.Length - 1; i += 2)
+        try
         {
-            if (i + 1 >= chunk.Length)
-                break;
-
-            char c = (char)(chunk[i] | (chunk[i + 1] << 8));
-
-            // Check if character is printable Unicode (basic ASCII range for simplicity)
-            if (c >= 32 && c <= 126)
+            // Build the Unicode string efficiently
+            for (var i = 0; i < actualLength; i++)
             {
-                sb.Append(c);
-            }
-            else
-            {
-                // End of string - check if we have a valid string to add
-                if (sb.Length >= minLength)
+                var byteIndex = stringStart + i * 2;
+                if (byteIndex + 1 < chunk.Length)
                 {
-                    var stringToAdd = sb.ToString();
-                    if (maxLength > 0 && stringToAdd.Length > maxLength)
-                    {
-                        stringToAdd = stringToAdd.Substring(0, maxLength);
-                    }
-
-                    if (originalOffBool)
-                    {
-                        var hitOffset = currentOffset + i - sb.Length * 2;
-                        var offsetOut = $"0x{hitOffset:X}";
-                        results.Add($"{offsetOut}\t{stringToAdd}");
-                    }
-                    else
-                    {
-                        results.Add(stringToAdd);
-                    }
+                    char c = (char)(chunk[byteIndex] | (chunk[byteIndex + 1] << 8));
+                    sb.Append(c);
                 }
-                sb.Clear();
-            }
-        } // Handle string at end of buffer
-        if (sb.Length >= minLength)
-        {
-            var stringToAdd = sb.ToString();
-            if (maxLength > 0 && stringToAdd.Length > maxLength)
-            {
-                stringToAdd = stringToAdd.Substring(0, maxLength);
             }
 
+            var stringResult = sb.ToString();
             if (originalOffBool)
             {
-                var hitOffset = currentOffset + chunk.Length - sb.Length * 2;
+                var hitOffset = currentOffsetInFile + stringStart;
                 var offsetOut = $"0x{hitOffset:X}";
-                results.Add($"{offsetOut}\t{stringToAdd}");
+                results.Add($"{offsetOut}\t{stringResult}");
             }
             else
             {
-                results.Add(stringToAdd);
+                results.Add(stringResult);
             }
         }
-
-        // Return objects to pools and return the final result
-        StringBuilderPool.Return(sb);
-        var finalResults = new List<string>(results);
-        StringListPool.Return(results);
-        return finalResults;
+        finally
+        {
+            StringBuilderPool.Return(sb);
+        }
     }
 
     private static void ProcessHits(
@@ -2122,66 +2111,16 @@ public static partial class Program // Make it public and partial for ILGPU if n
         byte maxChar
     )
     {
-        var results = StringListPool.Get();
-        var stringStart = -1;
-        var stringLength = 0;
-
-        // Process bytes with optimized loop
-        for (var i = 0; i < chunk.Length; i++)
-        {
-            var currentByte = chunk[i];
-
-            // Fast range check - this is much faster than multiple comparisons
-            if (currentByte >= minChar && currentByte <= maxChar)
-            {
-                if (stringStart == -1)
-                {
-                    stringStart = i;
-                    stringLength = 1;
-                }
-                else
-                {
-                    stringLength++;
-                }
-            }
-            else
-            {
-                // End of string - check if we have a valid string to add
-                if (stringStart != -1 && stringLength >= minLength)
-                {
-                    AddOptimizedStringResult(
-                        results,
-                        chunk,
-                        stringStart,
-                        stringLength,
-                        maxLength,
-                        currentOffsetInFile,
-                        originalOffBool
-                    );
-                }
-                stringStart = -1;
-                stringLength = 0;
-            }
-        }
-
-        // Handle string at end of buffer
-        if (stringStart != -1 && stringLength >= minLength)
-        {
-            AddOptimizedStringResult(
-                results,
-                chunk,
-                stringStart,
-                stringLength,
-                maxLength,
-                currentOffsetInFile,
-                originalOffBool
-            );
-        }
-
-        // Return objects to pools and return the final result
-        var finalResults = new List<string>(results);
-        StringListPool.Return(results);
-        return finalResults;
+        return GetStringHitsUnified(
+            chunk,
+            minLength,
+            maxLength,
+            currentOffsetInFile,
+            originalOffBool,
+            false, // isUnicode = false
+            minChar,
+            maxChar
+        );
     }
 
     /// <summary>
@@ -2227,9 +2166,28 @@ public static partial class Program // Make it public and partial for ILGPU if n
         var results = new List<string>();
 
         // Check if GPU should be used for processing
-        if (GpuAccelerator == null || GpuContext == null || bytesRead == 0)
+        // GPU processing has significant overhead, so only use it for larger chunks
+        const int MIN_GPU_CHUNK_SIZE = 1024 * 1024; // 1MB minimum for GPU processing
+
+        if (
+            GpuAccelerator == null
+            || GpuContext == null
+            || bytesRead == 0
+            || bytesRead < MIN_GPU_CHUNK_SIZE
+        )
         {
-            // Fallback to CPU if GPU is not available/initialized or chunk is empty
+            // Fallback to CPU if GPU is not available/initialized, chunk is empty, or chunk is too small
+            // Only log for debugging purposes if chunk is too small but GPU is available
+            if (
+                GpuAccelerator != null
+                && GpuContext != null
+                && bytesRead > 0
+                && bytesRead < MIN_GPU_CHUNK_SIZE
+            )
+            {
+                // Uncomment for debugging: Console.WriteLine($"[GPU] Chunk too small ({bytesRead} bytes < {MIN_GPU_CHUNK_SIZE}), using CPU");
+            }
+
             return GetAsciiHits(
                 chunk.AsSpan(0, bytesRead), // Pass as ReadOnlySpan with correct size
                 minLength,
@@ -2308,6 +2266,23 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     ar
                 );
             }
+
+            // Additional validation for ILGPU buffer allocation requirements
+            // ILGPU requires minimum buffer sizes to avoid allocation errors
+            const int MIN_BUFFER_SIZE = 256; // Minimum buffer size for ILGPU
+            if (bytesRead < MIN_BUFFER_SIZE || estimatedMaxHits < 1)
+            {
+                return GetAsciiHits(
+                    chunk.AsSpan(0, bytesRead),
+                    minLength,
+                    maxLength,
+                    currentOffsetInFile,
+                    originalOffBool,
+                    cp,
+                    ar
+                );
+            }
+
             using var dataBuffer = GpuAccelerator.Allocate1D<byte>(bytesRead);
             using var hitsBuffer = GpuAccelerator.Allocate1D<GpuHit>(estimatedMaxHits);
             using var hitCountBuffer = GpuAccelerator.Allocate1D<int>(1);
@@ -3132,5 +3107,126 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 yield return batch;
             }
         }
+    }
+
+    /// <summary>
+    /// Unified optimized scanning function for both ASCII and Unicode with minimal allocations
+    /// </summary>
+    private static List<string> GetStringHitsUnified(
+        ReadOnlySpan<byte> chunk,
+        int minLength,
+        int maxLength,
+        long currentOffsetInFile,
+        bool originalOffBool,
+        bool isUnicode,
+        byte minChar = 32,
+        byte maxChar = 126
+    )
+    {
+        var results = StringListPool.Get();
+        var stringStart = -1;
+        var stringLength = 0;
+        var stepSize = isUnicode ? 2 : 1;
+
+        for (var i = 0; i < chunk.Length - (stepSize - 1); i += stepSize)
+        {
+            bool isValidChar;
+
+            if (isUnicode)
+            {
+                // Unicode processing (2 bytes per character)
+                if (i + 1 >= chunk.Length)
+                    break;
+
+                char c = (char)(chunk[i] | (chunk[i + 1] << 8));
+                isValidChar = c >= 32 && c <= 126;
+            }
+            else
+            {
+                // ASCII processing (1 byte per character)
+                var currentByte = chunk[i];
+                isValidChar = currentByte >= minChar && currentByte <= maxChar;
+            }
+
+            if (isValidChar)
+            {
+                if (stringStart == -1)
+                {
+                    stringStart = i;
+                    stringLength = 1;
+                }
+                else
+                {
+                    stringLength++;
+                }
+            }
+            else
+            {
+                // End of string - check if we have a valid string to add
+                if (stringStart != -1 && stringLength >= minLength)
+                {
+                    if (isUnicode)
+                    {
+                        AddOptimizedUnicodeStringResult(
+                            results,
+                            chunk,
+                            stringStart,
+                            stringLength,
+                            maxLength,
+                            currentOffsetInFile,
+                            originalOffBool
+                        );
+                    }
+                    else
+                    {
+                        AddOptimizedStringResult(
+                            results,
+                            chunk,
+                            stringStart,
+                            stringLength,
+                            maxLength,
+                            currentOffsetInFile,
+                            originalOffBool
+                        );
+                    }
+                }
+                stringStart = -1;
+                stringLength = 0;
+            }
+        }
+
+        // Handle string at end of buffer
+        if (stringStart != -1 && stringLength >= minLength)
+        {
+            if (isUnicode)
+            {
+                AddOptimizedUnicodeStringResult(
+                    results,
+                    chunk,
+                    stringStart,
+                    stringLength,
+                    maxLength,
+                    currentOffsetInFile,
+                    originalOffBool
+                );
+            }
+            else
+            {
+                AddOptimizedStringResult(
+                    results,
+                    chunk,
+                    stringStart,
+                    stringLength,
+                    maxLength,
+                    currentOffsetInFile,
+                    originalOffBool
+                );
+            }
+        }
+
+        // Return objects to pools and return the final result
+        var finalResults = new List<string>(results);
+        StringListPool.Return(results);
+        return finalResults;
     }
 }
