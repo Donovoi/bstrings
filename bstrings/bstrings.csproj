@@ -1,16 +1,17 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
+﻿<Project Sdk="Microsoft.NET.Sdk">  <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFrameworks>net9.0</TargetFrameworks>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <AssemblyTitle>bstrings</AssemblyTitle>
     <Company>Eric Zimmerman</Company>
-    <LangVersion>10</LangVersion>
+    <LangVersion>12</LangVersion>
     <Product>bstrings</Product>
     <Description>A better strings utility</Description>
     <Copyright>Eric Zimmerman</Copyright>
     <Version>1.5.3</Version>
     <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnablePreviewFeatures>true</EnablePreviewFeatures>
   </PropertyGroup>
   <PropertyGroup>
     <ApplicationIcon>Find Again256.ico</ApplicationIcon>
