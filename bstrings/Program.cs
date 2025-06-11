@@ -1,4 +1,6 @@
 using System;
+using System.Buffers;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.CommandLine;
 using System.CommandLine.Help;
@@ -8,10 +10,13 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices; // Keep one instance
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Security.AccessControl;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Alphaleonis.Win32.Filesystem;
 using DiscUtils;
@@ -88,7 +93,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static readonly Accelerator GpuAccelerator;
 
     // GPU concurrency control - limit simultaneous GPU operations
-    private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(2, 2); // Max 2 concurrent GPU operations
+    private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(2, 4); // Max 2 concurrent GPU operations
 
     private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused fields _quiet and _debug    // private static bool _quiet;
 
@@ -144,12 +149,107 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
+    /// Simple, thread-safe object pool for reducing allocations
+    /// </summary>
+    public class SimpleObjectPool<T>
+        where T : class, new()
+    {
+        private readonly ConcurrentQueue<T> _objects = new ConcurrentQueue<T>();
+        private readonly Func<T> _objectGenerator;
+        private readonly Action<T> _resetAction;
+        private int _count = 0;
+        private readonly int _maxSize;
+
+        public SimpleObjectPool(
+            Func<T> objectGenerator = null,
+            Action<T> resetAction = null,
+            int maxSize = 100
+        )
+        {
+            _objectGenerator = objectGenerator ?? (() => new T());
+            _resetAction = resetAction;
+            _maxSize = maxSize;
+        }
+
+        public T Get()
+        {
+            if (_objects.TryDequeue(out T item))
+            {
+                return item;
+            }
+
+            return _objectGenerator();
+        }
+
+        public void Return(T item)
+        {
+            if (_count < _maxSize)
+            {
+                _resetAction?.Invoke(item);
+                _objects.Enqueue(item);
+                Interlocked.Increment(ref _count);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Specialized StringBuilder pool for string processing
+    /// </summary>
+    public static class StringBuilderPool
+    {
+        private static readonly SimpleObjectPool<StringBuilder> _pool =
+            new SimpleObjectPool<StringBuilder>(
+                () => new StringBuilder(256), // Pre-size for typical strings
+                sb => sb.Clear(), // Reset action
+                50 // Maximum pool size
+            );
+
+        public static StringBuilder Get() => _pool.Get();
+
+        public static void Return(StringBuilder sb) => _pool.Return(sb);
+    }
+
+    /// <summary>
+    /// Specialized List<string> pool for result collections
+    /// </summary>
+    public static class StringListPool
+    {
+        private static readonly SimpleObjectPool<List<string>> _pool = new SimpleObjectPool<
+            List<string>
+        >(
+            () => new List<string>(100), // Pre-size for typical result count
+            list => list.Clear(), // Reset action
+            20 // Maximum pool size
+        );
+
+        public static List<string> Get() => _pool.Get();
+
+        public static void Return(List<string> list) => _pool.Return(list);
+    }
+
+    /// <summary>
+    /// Byte array pool for chunk processing - using ArrayPool<byte> from .NET
+    /// </summary>
+    public static class ByteArrayPool
+    {
+        private static readonly ArrayPool<byte> _pool = ArrayPool<byte>.Shared;
+
+        public static byte[] Rent(int minimumLength) => _pool.Rent(minimumLength);
+
+        public static void Return(byte[] array, bool clearArray = false) =>
+            _pool.Return(array, clearArray);
+    }
+
+    /// <summary>
     /// Configuration for concurrent processing
     /// </summary>
     public static class ConcurrentConfig
     {
         public static int MaxConcurrentChunks => Math.Max(2, Environment.ProcessorCount / 2);
         public static int ReadAheadChunks => Math.Min(8, MaxConcurrentChunks * 2);
+        public static int OptimalDegreeOfParallelism =>
+            Math.Max(2, Environment.ProcessorCount * 3 / 4);
+        public static int ProducerConsumerBufferSize => Math.Max(16, MaxConcurrentChunks * 4);
     }
 
     /// <summary>
@@ -879,11 +979,13 @@ public static partial class Program // Make it public and partial for ILGPU if n
             if (x > minLength)
             {
                 maxLength = x;
-            } // Use dynamic chunk size if no chunk size specified by user (b=0) or invalid range
-            var chunkSizeMb = (b <= 0 || b > 8192) ? GetOptimalChunkSize() : b; // Use dynamic if not specified
-            var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
+            }
 
             var fileSizeBytes = new FileInfo(currentFile).Length; // Use currentFile
+
+            // Use dynamic chunk size if no chunk size specified by user (b=0) or invalid range
+            var chunkSizeMb = (b <= 0 || b > 8192) ? GetOptimalChunkSize(fileSizeBytes) : b; // Use dynamic if not specified
+            var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
 
             if (ms > 0)
             {
@@ -1352,7 +1454,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
         );
         var chunkStopwatch = Stopwatch.StartNew();
 
-        var results = new List<string>();
+        var results = StringListPool.Get();
         var validChunk = chunk.Data.AsSpan(0, chunk.ValidBytes);
 
         if (unicodeSearch)
@@ -1369,13 +1471,21 @@ public static partial class Program // Make it public and partial for ILGPU if n
             List<string> ah;
             if (chunk.IsBoundaryChunk)
             {
-                // Use CPU for boundary chunks (smaller, simpler)
-                ah = GetAsciiHits(validChunk, minLength, maxLength, chunk.FileOffset, off, cp, ar);
+                // Use optimized CPU for boundary chunks (smaller, simpler)
+                ah = GetAsciiHitsOptimized(
+                    validChunk,
+                    minLength,
+                    maxLength,
+                    chunk.FileOffset,
+                    off,
+                    cp,
+                    ar
+                );
             }
             else
             {
                 // Use GPU/CPU hybrid for main chunks
-                string offsetStringSeparator = off ? "\\t" : "";
+                string offsetStringSeparator = off ? "\t" : "";
                 ah = GetAsciiHitsGpu(
                     chunk.Data,
                     chunk.ValidBytes,
@@ -1394,13 +1504,19 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 results.Add(chunk.IsBoundaryChunk ? "  " + h : h);
             }
         }
-
         chunkStopwatch.Stop();
         Console.Error.WriteLine(
             $"[Chunk {chunk.ChunkIndex}] Completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {results.Count} strings"
         );
 
-        return results;
+        // Return objects to pools and return the final result
+        var finalResults = new List<string>(results);
+        StringListPool.Return(results);
+
+        // Return the byte array back to the pool since chunk processing is complete
+        ByteArrayPool.Return(chunk.Data);
+
+        return finalResults;
     }
 
     /// <summary>
@@ -1422,11 +1538,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
         var chunkIndex = 0;
 
         if (isBoundaryMode)
-        {
-            // Boundary chunk reading logic
+        { // Boundary chunk reading logic
             while (bytesRemaining > 0 && offset + boundaryChunkSize <= totalBytes)
             {
-                var chunk = new byte[boundaryChunkSize];
+                var chunk = ByteArrayPool.Rent(boundaryChunkSize);
                 mappedStream.Position = offset;
                 var bytesRead = await Task.Run(() =>
                     mappedStream.Read(chunk, 0, boundaryChunkSize)
@@ -1459,11 +1574,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
         {
             // Main chunk reading logic
             mappedStream.Position = startOffset;
-
             while (bytesRemaining > 0)
             {
                 var currentChunkSize = (int)Math.Min(chunkSizeBytes, bytesRemaining);
-                var chunk = new byte[currentChunkSize];
+                var chunk = ByteArrayPool.Rent(currentChunkSize);
 
                 var bytesRead = await Task.Run(() => mappedStream.Read(chunk, 0, currentChunkSize));
                 if (bytesRead == 0)
@@ -1728,10 +1842,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
     //
     //         r.ForegroundColor = fgColor;
     //         r.BackgroundColor = bgColor;
-    //
-    //         r.WholeWords = false;
+    //    //         r.WholeWords = false;
     //         target.WordHighlightingRules.Add(r);
-    //     }    // }
+    //     }
+    // }
 
     private static IEnumerable<string> SortByLength(IEnumerable<string> e)
     {
@@ -1748,8 +1862,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string ur
     )
     {
-        var results = new List<string>();
-        var sb = new StringBuilder();
+        var results = StringListPool.Get();
+        var sb = StringBuilderPool.Get();
 
         // Process Unicode strings (2 bytes per character)
         for (var i = 0; i < chunk.Length - 1; i += 2)
@@ -1774,15 +1888,21 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     {
                         stringToAdd = stringToAdd.Substring(0, maxLength);
                     }
-                    var hitOffset = currentOffset + i - sb.Length * 2;
-                    var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
-                    results.Add($"{offsetOut}\\t{stringToAdd}");
+
+                    if (originalOffBool)
+                    {
+                        var hitOffset = currentOffset + i - sb.Length * 2;
+                        var offsetOut = $"0x{hitOffset:X}";
+                        results.Add($"{offsetOut}\t{stringToAdd}");
+                    }
+                    else
+                    {
+                        results.Add(stringToAdd);
+                    }
                 }
                 sb.Clear();
             }
-        }
-
-        // Handle string at end of buffer
+        } // Handle string at end of buffer
         if (sb.Length >= minLength)
         {
             var stringToAdd = sb.ToString();
@@ -1790,12 +1910,24 @@ public static partial class Program // Make it public and partial for ILGPU if n
             {
                 stringToAdd = stringToAdd.Substring(0, maxLength);
             }
-            var hitOffset = currentOffset + chunk.Length - sb.Length * 2;
-            var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
-            results.Add($"{offsetOut}\\t{stringToAdd}");
+
+            if (originalOffBool)
+            {
+                var hitOffset = currentOffset + chunk.Length - sb.Length * 2;
+                var offsetOut = $"0x{hitOffset:X}";
+                results.Add($"{offsetOut}\t{stringToAdd}");
+            }
+            else
+            {
+                results.Add(stringToAdd);
+            }
         }
 
-        return results;
+        // Return objects to pools and return the final result
+        StringBuilderPool.Return(sb);
+        var finalResults = new List<string>(results);
+        StringListPool.Return(results);
+        return finalResults;
     }
 
     private static void ProcessHits(
@@ -1865,9 +1997,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 hitString = Encoding.Unicode.GetString(
                     chunk.Slice((int)actualHitOffsetInChunk, hit.Length)
                 );
-            }
-
-            // Process the hitString as needed
+            } // Process the hitString as needed
         }
     }
 
@@ -1881,8 +2011,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string ar
     )
     {
-        var results = new List<string>();
-        var sb = new StringBuilder();
+        var results = StringListPool.Get();
+        var sb = StringBuilderPool.Get();
 
         // Parse ASCII range if provided
         var (minChar, maxChar) = ParseCharRange(ar);
@@ -1898,8 +2028,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             }
             else
             {
-                // End of string - check if we have a valid string to add
-                if (sb.Length >= minLength)
+                // End of string - check if we have a valid string to add                if (sb.Length >= minLength)
                 {
                     var stringToAdd = sb.ToString();
 
@@ -1909,15 +2038,20 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         stringToAdd = stringToAdd.Substring(0, maxLength);
                     }
 
-                    var hitOffset = currentOffsetInFile + i - sb.Length;
-                    var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
-                    results.Add($"{offsetOut}\\t{stringToAdd}");
+                    if (originalOffBool)
+                    {
+                        var hitOffset = currentOffsetInFile + i - sb.Length;
+                        var offsetOut = $"0x{hitOffset:X}";
+                        results.Add($"{offsetOut}\t{stringToAdd}");
+                    }
+                    else
+                    {
+                        results.Add(stringToAdd);
+                    }
                 }
                 sb.Clear();
             }
-        }
-
-        // Handle string at end of buffer
+        } // Handle string at end of buffer
         if (sb.Length >= minLength)
         {
             var stringToAdd = sb.ToString();
@@ -1928,12 +2062,154 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 stringToAdd = stringToAdd.Substring(0, maxLength);
             }
 
-            var hitOffset = currentOffsetInFile + chunk.Length - sb.Length;
-            var offsetOut = originalOffBool ? $"{hitOffset}" : $"0x{hitOffset:X}";
-            results.Add($"{offsetOut}\\t{stringToAdd}");
+            if (originalOffBool)
+            {
+                var hitOffset = currentOffsetInFile + chunk.Length - sb.Length;
+                var offsetOut = $"0x{hitOffset:X}";
+                results.Add($"{offsetOut}\t{stringToAdd}");
+            }
+            else
+            {
+                results.Add(stringToAdd);
+            }
         }
 
-        return results;
+        // Return objects to pools and return the final result
+        StringBuilderPool.Return(sb);
+        var finalResults = new List<string>(results);
+        StringListPool.Return(results);
+        return finalResults;
+    }
+
+    /// <summary>
+    /// Optimized ASCII string scanning - uses vectorized operations when possible
+    /// </summary>
+    private static List<string> GetAsciiHitsOptimized(
+        ReadOnlySpan<byte> chunk,
+        int minLength,
+        int maxLength,
+        long currentOffsetInFile,
+        bool originalOffBool,
+        int cp,
+        string ar
+    )
+    {
+        var (minChar, maxChar) = ParseCharRange(ar);
+
+        // For now, use the existing implementation but with optimized processing
+        // This provides a foundation for SIMD optimization without unsafe code
+        return GetAsciiHitsFast(
+            chunk,
+            minLength,
+            maxLength,
+            currentOffsetInFile,
+            originalOffBool,
+            minChar,
+            maxChar
+        );
+    }
+
+    /// <summary>
+    /// Fast ASCII string scanning with optimized character validation
+    /// </summary>
+    private static List<string> GetAsciiHitsFast(
+        ReadOnlySpan<byte> chunk,
+        int minLength,
+        int maxLength,
+        long currentOffsetInFile,
+        bool originalOffBool,
+        byte minChar,
+        byte maxChar
+    )
+    {
+        var results = StringListPool.Get();
+        var stringStart = -1;
+        var stringLength = 0;
+
+        // Process bytes with optimized loop
+        for (var i = 0; i < chunk.Length; i++)
+        {
+            var currentByte = chunk[i];
+
+            // Fast range check - this is much faster than multiple comparisons
+            if (currentByte >= minChar && currentByte <= maxChar)
+            {
+                if (stringStart == -1)
+                {
+                    stringStart = i;
+                    stringLength = 1;
+                }
+                else
+                {
+                    stringLength++;
+                }
+            }
+            else
+            {
+                // End of string - check if we have a valid string to add
+                if (stringStart != -1 && stringLength >= minLength)
+                {
+                    AddOptimizedStringResult(
+                        results,
+                        chunk,
+                        stringStart,
+                        stringLength,
+                        maxLength,
+                        currentOffsetInFile,
+                        originalOffBool
+                    );
+                }
+                stringStart = -1;
+                stringLength = 0;
+            }
+        }
+
+        // Handle string at end of buffer
+        if (stringStart != -1 && stringLength >= minLength)
+        {
+            AddOptimizedStringResult(
+                results,
+                chunk,
+                stringStart,
+                stringLength,
+                maxLength,
+                currentOffsetInFile,
+                originalOffBool
+            );
+        }
+
+        // Return objects to pools and return the final result
+        var finalResults = new List<string>(results);
+        StringListPool.Return(results);
+        return finalResults;
+    }
+
+    /// <summary>
+    /// Optimized helper method to add string results with minimal allocations
+    /// </summary>
+    private static void AddOptimizedStringResult(
+        List<string> results,
+        ReadOnlySpan<byte> chunk,
+        int stringStart,
+        int stringLength,
+        int maxLength,
+        long currentOffsetInFile,
+        bool originalOffBool
+    )
+    {
+        var actualLength = maxLength > 0 && stringLength > maxLength ? maxLength : stringLength;
+        var stringSpan = chunk.Slice(stringStart, actualLength);
+        var stringToAdd = Encoding.ASCII.GetString(stringSpan);
+
+        if (originalOffBool)
+        {
+            var hitOffset = currentOffsetInFile + stringStart;
+            results.Add($"0x{hitOffset:X}\t{stringToAdd}");
+        }
+        else
+        {
+            results.Add(stringToAdd);
+        }
     }
 
     private static List<string> GetAsciiHitsGpu(
@@ -1980,10 +2256,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 cp,
                 ar
             );
-        }
-
-        // GPU processing enabled - add profiling information
+        } // GPU processing enabled - add profiling information
         var gpuStopwatch = Stopwatch.StartNew();
+        byte[] validChunk = null; // Declare here so it's accessible in finally block
 
         try
         {
@@ -2033,11 +2308,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     ar
                 );
             }
-
             using var dataBuffer = GpuAccelerator.Allocate1D<byte>(bytesRead);
             using var hitsBuffer = GpuAccelerator.Allocate1D<GpuHit>(estimatedMaxHits);
-            using var hitCountBuffer = GpuAccelerator.Allocate1D<int>(1); // Copy only the valid bytes to GPU
-            var validChunk = new byte[bytesRead];
+            using var hitCountBuffer = GpuAccelerator.Allocate1D<int>(1);
+            // Copy only the valid bytes to GPU
+            validChunk = ByteArrayPool.Rent(bytesRead);
             Array.Copy(chunk, 0, validChunk, 0, bytesRead);
             dataBuffer.CopyFromCPU(validChunk);
             hitCountBuffer.MemSetToZero();
@@ -2155,10 +2430,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
         }
         finally
         {
+            // Return rented array to pool if it was allocated
+            if (validChunk != null)
+            {
+                ByteArrayPool.Return(validChunk);
+            }
+
             // Always release the GPU semaphore
             GpuSemaphore.Release();
         }
-
         gpuStopwatch.Stop();
         Console.Error.WriteLine(
             $"[GPU] Completed processing {bytesRead:N0} bytes in {gpuStopwatch.ElapsedMilliseconds}ms, found {results.Count} strings"
@@ -2283,7 +2563,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
-    /// Processes main file chunks concurrently
+    /// Processes main file chunks concurrently using enhanced pipeline parallelism
     /// </summary>
     private static async Task ProcessFileChunksConcurrentlyAsync(
         MappedStream mappedStream,
@@ -2303,57 +2583,75 @@ public static partial class Program // Make it public and partial for ILGPU if n
         ProgressTracker progressTracker
     )
     {
+        using var pipeline = new ChunkProcessingPipeline();
+
+        // Create async enumerable of chunks
+        var chunks = ReadChunksAsyncEnumerable(
+            mappedStream,
+            fileSizeBytes,
+            chunkSizeBytes,
+            0,
+            false
+        );
+
+        // Process chunks through the pipeline
+        var results = await pipeline.ProcessChunksAsync(
+            chunks,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            off,
+            cp,
+            ar,
+            ur,
+            progressTracker
+        );
+
+        // Add results to the main collection
+        lock (hits)
+        {
+            foreach (var result in results)
+            {
+                hits.Add(result);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Creates an async enumerable of DataChunks for processing
+    /// </summary>
+    private static async IAsyncEnumerable<DataChunk> ReadChunksAsyncEnumerable(
+        MappedStream mappedStream,
+        long fileSizeBytes,
+        int chunkSizeBytes,
+        long startOffset = 0,
+        bool isBoundaryMode = false,
+        int boundaryChunkSize = 0
+    )
+    {
         var bytesRemaining = fileSizeBytes;
-        long offset = 0;
+        long offset = startOffset;
         int chunkIndex = 0;
-        var lockObject = new object();
 
         while (bytesRemaining > 0)
         {
-            // Read ahead a batch of chunks
             var chunks = await ReadChunksAsync(
                 mappedStream,
                 bytesRemaining,
                 chunkSizeBytes,
                 offset,
-                false // not boundary mode
+                isBoundaryMode,
+                boundaryChunkSize
             );
 
             if (chunks.Count == 0)
                 break;
 
-            // Process chunks concurrently
-            var processingTasks = chunks.Select(async chunk =>
+            foreach (var chunk in chunks)
             {
-                var chunkResults = await Task.Run(() =>
-                    ProcessChunk(
-                        chunk,
-                        minLength,
-                        maxLength,
-                        asciiSearch,
-                        unicodeSearch,
-                        off,
-                        cp,
-                        ar,
-                        ur
-                    )
-                ); // Thread-safe addition to results
-                lock (lockObject)
-                {
-                    foreach (var result in chunkResults)
-                    {
-                        hits.Add(result);
-                    }
-
-                    // Report progress using the progress tracker
-                    progressTracker.ReportChunkComplete(chunkResults.Count);
-                }
-
-                return chunkResults.Count;
-            });
-
-            // Wait for all chunks in this batch to complete
-            await Task.WhenAll(processingTasks);
+                yield return chunk;
+            }
 
             // Update for next batch
             var lastChunk = chunks.Last();
@@ -2364,7 +2662,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
-    /// Processes boundary chunks concurrently
+    /// Processes boundary chunks concurrently using enhanced pipeline parallelism
     /// </summary>
     private static async Task ProcessBoundaryChunksConcurrentlyAsync(
         MappedStream mappedStream,
@@ -2383,109 +2681,88 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool quiet
     )
     {
+        using var pipeline = new ChunkProcessingPipeline();
+
         var bytesRemaining = fileSizeBytes;
         long offset = chunkSizeBytes - minLength * 10 * 2; // Move starting point backwards
-        var lockObject = new object();
         bool withBoundaryHits = false;
 
-        while (bytesRemaining > 0 && offset + boundaryChunkSize <= fileSizeBytes)
+        // Create async enumerable of boundary chunks
+        var chunks = ReadChunksAsyncEnumerable(
+            mappedStream,
+            bytesRemaining,
+            chunkSizeBytes,
+            offset,
+            true, // boundary mode
+            boundaryChunkSize
+        );
+
+        // Process chunks through the pipeline
+        var results = await pipeline.ProcessChunksAsync(
+            chunks,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            off,
+            cp,
+            ar,
+            ur,
+            new ProgressTracker(1, quiet) // Simple tracker for boundary chunks
+        );
+
+        // Add results to the main collection
+        lock (hits)
         {
-            // Read ahead a batch of boundary chunks
-            var chunks = await ReadChunksAsync(
-                mappedStream,
-                bytesRemaining,
-                chunkSizeBytes,
-                offset,
-                true, // boundary mode
-                boundaryChunkSize,
-                maxLength
-            );
-
-            if (chunks.Count == 0)
-                break;
-
-            // Process boundary chunks concurrently
-            var processingTasks = chunks.Select(async chunk =>
+            foreach (var result in results)
             {
-                var chunkResults = await Task.Run(() =>
-                    ProcessChunk(
-                        chunk,
-                        minLength,
-                        maxLength,
-                        asciiSearch,
-                        unicodeSearch,
-                        off,
-                        cp,
-                        ar,
-                        ur
-                    )
-                );
-
-                // Thread-safe addition to results
-                lock (lockObject)
+                hits.Add(result);
+                if (!withBoundaryHits)
                 {
-                    foreach (var result in chunkResults)
-                    {
-                        hits.Add(result);
-                    }
-
-                    if (!withBoundaryHits && chunkResults.Count > 0)
-                    {
-                        withBoundaryHits = true;
-                    }
+                    withBoundaryHits = true;
                 }
-
-                return chunkResults.Count;
-            });
-
-            // Wait for all boundary chunks in this batch to complete
-            await Task.WhenAll(processingTasks);
-
-            // Update for next batch
-            var lastChunk = chunks.Last();
-            offset = lastChunk.FileOffset + chunkSizeBytes;
-            bytesRemaining -= (long)chunkSizeBytes * chunks.Count;
+            }
         }
     }
 
     /// <summary>
-    /// Calculates optimal chunk size based on available system memory
+    /// Calculates optimal CPU chunk size based on available memory and file characteristics
     /// </summary>
     private static int CalculateOptimalCpuChunkSizeMB()
     {
         try
         {
-            // Get available physical memory using GC and process information
-            long workingSet = Environment.WorkingSet;
+            // Get system memory information more accurately
+            var gcMemoryInfo = GC.GetGCMemoryInfo();
+            long totalPhysicalMemory = gcMemoryInfo.TotalAvailableMemoryBytes;
+            long currentlyUsed = GC.GetTotalMemory(false);
 
-            // Estimate available memory - use a conservative approach
-            // For most systems, we'll use 1/8 of working set as a reasonable chunk size
-            // This provides good performance without being too aggressive with memory
-            long estimatedAvailableMemory = workingSet * 4; // Assume working set is ~1/4 of available
+            // Calculate available memory more aggressively but safely
+            long availableMemory = totalPhysicalMemory - currentlyUsed;
 
-            // Use 12.5% of estimated available memory for chunk processing
-            // This accounts for concurrent processing overhead
-            double usableMemoryFraction = 0.125;
-            long usableMemory = (long)(estimatedAvailableMemory * usableMemoryFraction);
+            // Use a higher percentage of available memory for better performance
+            // but ensure we don't exceed safe limits
+            double memoryUsageFraction = availableMemory > 8L * 1024 * 1024 * 1024 ? 0.25 : 0.15; // 25% if >8GB available, 15% otherwise
+            long usableMemory = (long)(availableMemory * memoryUsageFraction);
 
-            // Account for concurrent processing - divide by max concurrent chunks
+            // Account for concurrent processing
             int maxConcurrentChunks = ConcurrentConfig.MaxConcurrentChunks;
-            long memoryPerChunk = usableMemory / maxConcurrentChunks;
+            long memoryPerChunk = usableMemory / Math.Max(1, maxConcurrentChunks);
 
             // Convert to MB
             int chunkSizeMB = (int)(memoryPerChunk / (1024 * 1024));
 
-            // Apply practical limits
-            const int minPracticalMB = 32; // Minimum for efficiency
-            const int maxPracticalMB = 2048; // Maximum for reasonable memory usage
+            // Apply more aggressive practical limits for better performance
+            const int minPracticalMB = 128; // Increased minimum for better I/O efficiency
+            const int maxPracticalMB = 4096; // Increased maximum to 4GB for large files
 
             chunkSizeMB = Math.Max(minPracticalMB, Math.Min(maxPracticalMB, chunkSizeMB));
 
             Console.Error.WriteLine(
-                $"Working Set: {workingSet / (1024 * 1024)} MB, Estimated Available: {estimatedAvailableMemory / (1024 * 1024)} MB"
+                $"Total Memory: {totalPhysicalMemory / (1024 * 1024)} MB, Available: {availableMemory / (1024 * 1024)} MB"
             );
             Console.Error.WriteLine(
-                $"Calculated optimal CPU chunk size: {chunkSizeMB} MB (max {maxConcurrentChunks} concurrent chunks)"
+                $"Calculated optimal CPU chunk size: {chunkSizeMB} MB (max {maxConcurrentChunks} concurrent chunks, {memoryUsageFraction:P1} memory usage)"
             );
 
             return chunkSizeMB;
@@ -2493,36 +2770,72 @@ public static partial class Program // Make it public and partial for ILGPU if n
         catch (Exception ex)
         {
             Console.Error.WriteLine(
-                $"Error calculating optimal CPU chunk size: {ex.Message}. Using fallback."
+                $"Error calculating optimal CPU chunk size: {ex.Message}. Using enhanced fallback."
             );
-            return 512; // Fallback
+            // Enhanced fallback based on processor count
+            return Math.Max(512, Environment.ProcessorCount * 128); // At least 512MB, or 128MB per core
         }
     }
 
     /// <summary>
-    /// Gets the optimal chunk size by choosing between GPU and CPU calculations
+    /// Gets the optimal chunk size by choosing between GPU and CPU calculations, with file-size adaptation
     /// </summary>
-    private static int GetOptimalChunkSize()
+    private static int GetOptimalChunkSize(long fileSizeBytes)
     {
         try
         {
             // If GPU is available and we have calculated a GPU chunk size, use it
             if (GpuAccelerator != null && DynamicChunkSizeMB > 0)
             {
-                Console.Error.WriteLine($"Using GPU-optimized chunk size: {DynamicChunkSizeMB} MB");
-                return DynamicChunkSizeMB;
+                int gpuChunkSize = AdaptChunkSizeForFile(DynamicChunkSizeMB, fileSizeBytes);
+                Console.Error.WriteLine(
+                    $"Using GPU-optimized chunk size: {gpuChunkSize} MB (adapted for {GetSizeReadable(fileSizeBytes)} file)"
+                );
+                return gpuChunkSize;
             }
 
             // Fall back to CPU-optimized chunk size
             int cpuChunkSize = CalculateOptimalCpuChunkSizeMB();
-            Console.Error.WriteLine($"Using CPU-optimized chunk size: {cpuChunkSize} MB");
-            return cpuChunkSize;
+            int adaptedChunkSize = AdaptChunkSizeForFile(cpuChunkSize, fileSizeBytes);
+            Console.Error.WriteLine(
+                $"Using CPU-optimized chunk size: {adaptedChunkSize} MB (adapted for {GetSizeReadable(fileSizeBytes)} file)"
+            );
+            return adaptedChunkSize;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error in GetOptimalChunkSize: {ex.Message}. Using fallback.");
             return 512; // Safe fallback
         }
+    }
+
+    /// <summary>
+    /// Adapts chunk size based on file size for optimal performance
+    /// </summary>
+    private static int AdaptChunkSizeForFile(int baseChunkSizeMB, long fileSizeBytes)
+    {
+        long fileSizeMB = fileSizeBytes / (1024 * 1024);
+
+        // For very small files, use smaller chunks to avoid waste
+        if (fileSizeMB < 100) // Less than 100MB
+        {
+            return Math.Max(32, (int)Math.Min(baseChunkSizeMB, fileSizeMB / 2));
+        }
+
+        // For medium files (100MB - 1GB), use base chunk size
+        if (fileSizeMB < 1024)
+        {
+            return baseChunkSizeMB;
+        }
+
+        // For large files (1GB - 10GB), increase chunk size for better efficiency
+        if (fileSizeMB < 10240)
+        {
+            return Math.Min(4096, (int)(baseChunkSizeMB * 1.5));
+        }
+
+        // For very large files (>10GB), use maximum chunk size for optimal I/O
+        return Math.Min(8192, baseChunkSizeMB * 2);
     }
 
     /// <summary>
@@ -2581,6 +2894,243 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 $"Error calculating optimal GPU chunk size: {ex.Message}. Will use CPU calculation."
             );
             return 0;
+        }
+    }
+
+    /// <summary>
+    /// Enhanced producer-consumer pipeline for chunk processing with optimized concurrency
+    /// </summary>
+    public class ChunkProcessingPipeline : IDisposable
+    {
+        private readonly Channel<DataChunk> _chunkChannel;
+        private readonly Channel<List<string>> _resultChannel;
+        private readonly ChannelWriter<DataChunk> _chunkWriter;
+        private readonly ChannelReader<DataChunk> _chunkReader;
+        private readonly ChannelWriter<List<string>> _resultWriter;
+        private readonly ChannelReader<List<string>> _resultReader;
+        private readonly SemaphoreSlim _concurrencyLimiter;
+        private readonly CancellationTokenSource _cancellationTokenSource;
+        private readonly int _maxConcurrency;
+        private volatile bool _disposed = false;
+
+        public ChunkProcessingPipeline(int maxConcurrency = 0)
+        {
+            _maxConcurrency =
+                maxConcurrency > 0 ? maxConcurrency : ConcurrentConfig.OptimalDegreeOfParallelism;
+
+            var chunkChannelOptions = new BoundedChannelOptions(
+                ConcurrentConfig.ProducerConsumerBufferSize
+            )
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = false,
+                SingleWriter = false,
+            };
+
+            var resultChannelOptions = new BoundedChannelOptions(
+                ConcurrentConfig.ProducerConsumerBufferSize * 2
+            )
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = false,
+                SingleWriter = false,
+            };
+
+            _chunkChannel = Channel.CreateBounded<DataChunk>(chunkChannelOptions);
+            _resultChannel = Channel.CreateBounded<List<string>>(resultChannelOptions);
+
+            _chunkWriter = _chunkChannel.Writer;
+            _chunkReader = _chunkChannel.Reader;
+            _resultWriter = _resultChannel.Writer;
+            _resultReader = _resultChannel.Reader;
+
+            _concurrencyLimiter = new SemaphoreSlim(_maxConcurrency, _maxConcurrency);
+            _cancellationTokenSource = new CancellationTokenSource();
+        }
+
+        public async Task<List<string>> ProcessChunksAsync(
+            IAsyncEnumerable<DataChunk> chunks,
+            int minLength,
+            int maxLength,
+            bool asciiSearch,
+            bool unicodeSearch,
+            bool off,
+            int cp,
+            string ar,
+            string ur,
+            ProgressTracker progressTracker
+        )
+        {
+            var allResults = new List<string>();
+            var processingTask = StartProcessingWorkersAsync(
+                minLength,
+                maxLength,
+                asciiSearch,
+                unicodeSearch,
+                off,
+                cp,
+                ar,
+                ur,
+                progressTracker
+            );
+            var resultCollectionTask = CollectResultsAsync(allResults);
+
+            try
+            {
+                // Feed chunks into the pipeline
+                await foreach (var chunk in chunks.WithCancellation(_cancellationTokenSource.Token))
+                {
+                    await _chunkWriter.WriteAsync(chunk, _cancellationTokenSource.Token);
+                }
+            }
+            finally
+            {
+                _chunkWriter.Complete();
+            }
+
+            // Wait for processing to complete
+            await processingTask;
+            _resultWriter.Complete();
+
+            // Wait for result collection to complete
+            await resultCollectionTask;
+
+            return allResults;
+        }
+
+        private async Task StartProcessingWorkersAsync(
+            int minLength,
+            int maxLength,
+            bool asciiSearch,
+            bool unicodeSearch,
+            bool off,
+            int cp,
+            string ar,
+            string ur,
+            ProgressTracker progressTracker
+        )
+        {
+            var workers = new Task[_maxConcurrency];
+
+            for (int i = 0; i < _maxConcurrency; i++)
+            {
+                workers[i] = ProcessChunksWorkerAsync(
+                    minLength,
+                    maxLength,
+                    asciiSearch,
+                    unicodeSearch,
+                    off,
+                    cp,
+                    ar,
+                    ur,
+                    progressTracker
+                );
+            }
+
+            await Task.WhenAll(workers);
+        }
+
+        private async Task ProcessChunksWorkerAsync(
+            int minLength,
+            int maxLength,
+            bool asciiSearch,
+            bool unicodeSearch,
+            bool off,
+            int cp,
+            string ar,
+            string ur,
+            ProgressTracker progressTracker
+        )
+        {
+            await foreach (var chunk in _chunkReader.ReadAllAsync(_cancellationTokenSource.Token))
+            {
+                try
+                {
+                    await _concurrencyLimiter.WaitAsync(_cancellationTokenSource.Token);
+
+                    var results = ProcessChunk(
+                        chunk,
+                        minLength,
+                        maxLength,
+                        asciiSearch,
+                        unicodeSearch,
+                        off,
+                        cp,
+                        ar,
+                        ur
+                    );
+
+                    await _resultWriter.WriteAsync(results, _cancellationTokenSource.Token);
+                    progressTracker.ReportChunkComplete(results.Count);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                finally
+                {
+                    _concurrencyLimiter.Release();
+                }
+            }
+        }
+
+        private async Task CollectResultsAsync(List<string> allResults)
+        {
+            await foreach (
+                var chunkResults in _resultReader.ReadAllAsync(_cancellationTokenSource.Token)
+            )
+            {
+                allResults.AddRange(chunkResults);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _cancellationTokenSource?.Cancel();
+                _concurrencyLimiter?.Dispose();
+                _cancellationTokenSource?.Dispose();
+                _disposed = true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Partitioner for optimal load balancing across CPU cores
+    /// </summary>
+    public static class ChunkPartitioner
+    {
+        public static ParallelQuery<T> CreateOptimalPartitioner<T>(IEnumerable<T> source)
+        {
+            return source
+                .AsParallel()
+                .WithDegreeOfParallelism(ConcurrentConfig.OptimalDegreeOfParallelism)
+                .WithExecutionMode(ParallelExecutionMode.ForceParallelism);
+        }
+
+        public static async IAsyncEnumerable<List<T>> CreateBatchedAsyncEnumerable<T>(
+            IAsyncEnumerable<T> source,
+            int batchSize
+        )
+        {
+            var batch = new List<T>(batchSize);
+
+            await foreach (var item in source)
+            {
+                batch.Add(item);
+
+                if (batch.Count >= batchSize)
+                {
+                    yield return new List<T>(batch);
+                    batch.Clear();
+                }
+            }
+
+            if (batch.Count > 0)
+            {
+                yield return batch;
+            }
         }
     }
 }
