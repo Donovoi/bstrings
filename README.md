@@ -1,6 +1,6 @@
-# This is a fork of bstrings - I'm using AI (I'm not writing or extensively manually checking the code) to make the following changes:
+# This is my fork of bstrings - I'm using AI (I'm not writing or extensively manually checking the code) to make the following changes:
 
-1. Faster - apparently this uses the gpu where possible and SIMD methodologies to speed it up (benchmark to follow)
+1. Faster - apparently this uses the gpu where possible and SIMD methodologies to speed it up (see benchmarks)
 2. User should be able to provide multiple --lr (--lr email, url, etc..) or an 'all' (--lr all)
 3. Change logging slightly to show a progress bar instead, this makes more sense as we now do chunks concurrently.
 4. Works in net9.0, have not tested any other.
