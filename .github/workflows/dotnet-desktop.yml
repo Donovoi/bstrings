@@ -48,7 +48,7 @@ jobs:
         }
 
     - name: Publish Windows x64
-      run: dotnet publish bstrings/bstrings.csproj --configuration Release --runtime win-x64 --self-contained true --output ./publish/win-x64 --verbosity minimal
+      run: dotnet publish bstrings/bstrings.csproj --configuration Release --runtime win-x64 --self-contained true --output ./publish/win-x64 --verbosity minimal --framework net9.0
 
     - name: Create release archive
       run: |
