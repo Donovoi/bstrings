@@ -5,9 +5,9 @@ name: Build and Release bstrings
 
 on:
   push:
-    branches: [ "master" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
@@ -18,114 +18,92 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 9.0.x
-        dotnet-quality: 'preview'
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+          dotnet-quality: "preview"
 
-    - name: Restore dependencies
-      run: dotnet restore bstrings.sln --verbosity minimal
+      - name: Restore dependencies
+        run: dotnet restore bstrings.sln --verbosity minimal
 
-    - name: Build Debug
-      run: dotnet build bstrings.sln --configuration Debug --no-restore --verbosity minimal --framework net9.0
+      - name: Build Debug
+        run: dotnet build bstrings.sln --configuration Debug --no-restore --verbosity minimal --framework net9.0
 
-    - name: Build Release
-      run: dotnet build bstrings.sln --configuration Release --no-restore --verbosity minimal --framework net9.0
+      - name: Build Release
+        run: dotnet build bstrings.sln --configuration Release --no-restore --verbosity minimal --framework net9.0
 
-    - name: Test (if tests exist)
-      run: |
-        $testProjects = Get-ChildItem -Recurse -Include "*.Tests.csproj", "*Test*.csproj"
-        if ($testProjects.Count -gt 0) {
-          dotnet test bstrings.sln --configuration Release --no-build --verbosity normal
-        } else {
-          Write-Host "No test projects found, skipping tests"
-        }
+      - name: Test (if tests exist)
+        run: |
+          $testProjects = Get-ChildItem -Recurse -Include "*.Tests.csproj", "*Test*.csproj"
+          if ($testProjects.Count -gt 0) {
+            dotnet test bstrings.sln --configuration Release --no-build --verbosity normal        } else {
+            Write-Host "No test projects found, skipping tests"
+          }
 
-    - name: Publish Windows x64
-      run: |
-        dotnet publish bstrings/bstrings.csproj `
-          --configuration Release `
-          --runtime win-x64 `
-          --self-contained true `
-          --output ./publish/win-x64 `
-          --verbosity minimal `
-          --framework net9.0
+      - name: Publish Windows x64 Single File
+        run: |
+          dotnet publish bstrings/bstrings.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --output ./publish/win-x64 `
+            --verbosity minimal `
+            --framework net9.0 `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=None `
+            -p:DebugSymbols=false
 
-    - name: Create release archive
-      run: |
-        cd ./publish/win-x64
-        # Create a clean directory structure for the release
-        $releaseDir = "bstrings-release"
-        New-Item -ItemType Directory -Path $releaseDir -Force
-        
-        # Copy main application files (required)
-        Copy-Item "bstrings.exe" "$releaseDir/"
-        Copy-Item "bstrings.dll" "$releaseDir/"
-        Copy-Item "bstrings.runtimeconfig.json" "$releaseDir/"
-        Copy-Item "bstrings.deps.json" "$releaseDir/"
-        Copy-Item "bstrings.dll.config" "$releaseDir/" -ErrorAction SilentlyContinue
-        
-        # Copy core .NET runtime (required for self-contained)
-        Copy-Item "coreclr.dll" "$releaseDir/"
-        Copy-Item "hostfxr.dll" "$releaseDir/"
-        Copy-Item "hostpolicy.dll" "$releaseDir/"
-        Copy-Item "clrjit.dll" "$releaseDir/"
-        Copy-Item "System.Private.CoreLib.dll" "$releaseDir/"
-        Copy-Item "mscorrc.dll" "$releaseDir/" -ErrorAction SilentlyContinue        # Copy essential System assemblies using wildcards (more reliable than individual files)
-        Copy-Item "System.Runtime*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Collections*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Console.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.IO*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Text*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Threading*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Memory.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Linq*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Reflection*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Diagnostics*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Globalization*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Resources*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Numerics*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Security*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.ComponentModel*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Private.*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "System.Net*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "netstandard.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        
-        # Skip application-specific dependencies (they're embedded by Costura.Fody)
-        # AlphaFS, ILGPU, Exceptionless, Serilog, etc. are embedded and don't need separate DLLs
-        
-        # Copy documentation
-        Copy-Item "../../README.md" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "../../LICENSE.md" "$releaseDir/" -ErrorAction SilentlyContinue
-        
-        # Display file count and size for optimization tracking
-        $fileCount = (Get-ChildItem $releaseDir).Count
-        $totalSize = (Get-ChildItem $releaseDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-        Write-Host "Release contains $fileCount files, total size: $([math]::Round($totalSize, 2)) MB"
-        Write-Host "Original publish had $((Get-ChildItem .).Count) files"
-        
-        # Create the zip
-        Compress-Archive -Path "$releaseDir/*" -DestinationPath "../../bstrings-win-x64.zip" -Force
+      - name: Create release archive
+        run: |
+          cd ./publish/win-x64
+          # Single-file publishing creates just the executable and minimal support files
+          $releaseDir = "bstrings-release"
+          New-Item -ItemType Directory -Path $releaseDir -Force
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: bstrings-win-x64-${{ github.sha }}
-        path: ./publish/win-x64/
-        retention-days: 30
+          # Copy the main single-file executable (contains everything)
+          Copy-Item "bstrings.exe" "$releaseDir/"
 
-    - name: Upload release archive
-      uses: actions/upload-artifact@v4
-      with:
-        name: bstrings-win-x64-zip-${{ github.sha }}
-        path: ./bstrings-win-x64.zip
-        retention-days: 90
+          # Copy any remaining support files (should be minimal with single-file)
+          $supportFiles = Get-ChildItem . -Exclude "bstrings.exe", "*.pdb" | Where-Object { $_.Extension -ne ".pdb" }
+          foreach ($file in $supportFiles) {
+            Copy-Item $file.FullName "$releaseDir/" -ErrorAction SilentlyContinue
+          }
+
+          # Copy documentation
+          Copy-Item "../../README.md" "$releaseDir/" -ErrorAction SilentlyContinue
+          Copy-Item "../../LICENSE.md" "$releaseDir/" -ErrorAction SilentlyContinue
+
+          # Display file count and size
+          $fileCount = (Get-ChildItem $releaseDir).Count
+          $totalSize = (Get-ChildItem $releaseDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+          $exeSize = (Get-Item "$releaseDir/bstrings.exe").Length / 1MB
+          Write-Host "Single-file release contains $fileCount files, total size: $([math]::Round($totalSize, 2)) MB"
+          Write-Host "Main executable size: $([math]::Round($exeSize, 2)) MB"
+          Write-Host "This is a MASSIVE improvement from the previous 139+ file approach!"
+
+          # Create the zip
+          Compress-Archive -Path "$releaseDir/*" -DestinationPath "../../bstrings-win-x64.zip" -Force
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bstrings-win-x64-${{ github.sha }}
+          path: ./publish/win-x64/
+          retention-days: 30
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: bstrings-win-x64-zip-${{ github.sha }}
+          path: ./bstrings-win-x64.zip
+          retention-days: 90
 
   release:
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
@@ -135,107 +113,121 @@ jobs:
       contents: write
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Download release archive
-      uses: actions/download-artifact@v4
-      with:
-        name: bstrings-win-x64-zip-${{ github.sha }}
+      - name: Download release archive
+        uses: actions/download-artifact@v4
+        with:
+          name: bstrings-win-x64-zip-${{ github.sha }}
 
-    - name: Get version and commit info
-      id: version
-      run: |
-        # Try to get version from AssemblyInfo.cs
-        $version = "1.0.0"
-        if (Test-Path "bstrings/Properties/AssemblyInfo.cs") {
-          $assemblyInfo = Get-Content "bstrings/Properties/AssemblyInfo.cs" -Raw
-          $versionMatch = [regex]::Match($assemblyInfo, 'AssemblyVersion\("([^"]+)"\)')
-          if ($versionMatch.Success) {
-            $version = $versionMatch.Groups[1].Value
+      - name: Get version and commit info
+        id: version
+        run: |
+          # Try to get version from AssemblyInfo.cs
+          $version = "1.0.0"
+          if (Test-Path "bstrings/Properties/AssemblyInfo.cs") {
+            $assemblyInfo = Get-Content "bstrings/Properties/AssemblyInfo.cs" -Raw
+            $versionMatch = [regex]::Match($assemblyInfo, 'AssemblyVersion\("([^"]+)"\)')
+            if ($versionMatch.Success) {
+              $version = $versionMatch.Groups[1].Value
+            }
           }
-        }
-        
-        # Get commit info
-        $commitSha = "${{ github.sha }}".Substring(0, 7)
-        $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $releaseTag = "v$version-$timestamp-$commitSha"
-        
-        echo "version=$version" >> $env:GITHUB_OUTPUT
-        echo "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
-        echo "commit_sha=$commitSha" >> $env:GITHUB_OUTPUT
-        echo "timestamp=$timestamp" >> $env:GITHUB_OUTPUT
-        
-        Write-Host "Version: $version"
-        Write-Host "Release tag: $releaseTag"
-        Write-Host "Commit SHA: $commitSha"
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        tag_name: ${{ steps.version.outputs.release_tag }}
-        name: "bstrings v${{ steps.version.outputs.version }} - Windows x64"
-        body: |
-          # 🚀 bstrings Enhanced Release - Windows x64
-          
-          **Version:** `${{ steps.version.outputs.version }}`  
-          **Build Date:** `${{ steps.version.outputs.timestamp }}`  
-          **Commit:** `${{ steps.version.outputs.commit_sha }}`
-          
-          This is an automated release of the **enhanced bstrings utility** with significant performance improvements:
+          # Get commit info
+          $commitSha = "${{ github.sha }}".Substring(0, 7)
+          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+          $releaseTag = "v$version-$timestamp-$commitSha"
+
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          echo "commit_sha=$commitSha" >> $env:GITHUB_OUTPUT
+          echo "timestamp=$timestamp" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Version: $version"
+          Write-Host "Release tag: $releaseTag"
+          Write-Host "Commit SHA: $commitSha"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.release_tag }}
+          name: "bstrings v${{ steps.version.outputs.version }} - Windows x64"
+          body: | # 🚀 bstrings Enhanced Release - Windows x64 SINGLE-FILE
+
+
+
+            **Version:** `${{ steps.version.outputs.version }}`  
+            **Build Date:** `${{ steps.version.outputs.timestamp }}`  
+            **Commit:** `${{ steps.version.outputs.commit_sha }}`
+
+            This is an automated release of the **enhanced bstrings utility** with significant performance improvements:
+
+            ## 🎯 **SINGLE-FILE DEPLOYMENT** 
+            - ✅ **Just ONE executable file** - No more DLL hell!
+            - ✅ **~70MB single bstrings.exe** - Everything bundled inside
+            - ✅ **Zero installation required** - Download, extract, run!
+            - ✅ **Ultra-portable** - Copy anywhere and it just works
+
             ## ✨ New Features
-          - ✅ **Concurrent regex pattern processing** 
-          - ✅ **Comma-separated patterns**: `--lr "guid,email,cc"`
-          - ✅ **All patterns support**: `--lr all`
-          - ✅ **Enhanced output control**: Auto-suppressed console when using `-q -o` for max performance
-          - ✅ **Significant performance improvements** (up to 8.4x faster for multiple patterns)
-          - ✅ **Self-contained executable** (no .NET runtime required)
-          
-          ## 📈 Performance Improvements
-          - **Single Pattern**: 23% faster than original
-          - **3 Patterns**: 280% faster (3.8x speedup)
-          - **All Patterns**: 740% faster (8.4x speedup)
-            ## 💡 Usage Examples
-          ```bash
-          # Single pattern (traditional)
-          bstrings.exe -f file.txt --lr guid
-          
-          # Multiple patterns concurrently (NEW!)
-          bstrings.exe -f file.txt --lr "guid,email,cc"
-          
-          # All 27 patterns at once (NEW!)
-          bstrings.exe -f file.txt --lr all
-          
-          # High-performance mode: quiet + output file (NEW!)
-          bstrings.exe -f large_file.bin --lr all -q -o results.txt
-          
-          # List all available patterns
-          bstrings.exe -p
-          
-          # Get help
-          bstrings.exe --help
-          ```
-          
-          ## 📋 Built-in Patterns
-          This release includes 27 built-in regex patterns for: GUIDs, emails, credit cards, IP addresses, MAC addresses, phone numbers, URLs, file paths, cryptocurrency addresses, and more.
-          
-          ## 🔧 Installation
-          1. Download and extract `bstrings-win-x64.zip`
-          2. Run `bstrings.exe --help` to see all options
-          3. No additional dependencies required!
-          
-          ## 🎯 Perfect For
-          - **Digital Forensics** - Extract multiple artifact types simultaneously
-          - **Malware Analysis** - Concurrent pattern detection
-          - **Data Mining** - High-performance string extraction
-          - **Security Research** - Efficient bulk analysis
-          
-          ---
-          *This fork enhances the original bstrings by Eric Zimmerman with concurrent processing capabilities.*
-        files: |
-          bstrings-win-x64.zip
-        draft: false
-        prerelease: false
-        make_latest: true
+            - ✅ **Concurrent regex pattern processing** 
+            - ✅ **Comma-separated patterns**: `--lr "guid,email,cc"`
+            - ✅ **All patterns support**: `--lr all`
+            - ✅ **Enhanced output control**: Auto-suppressed console when using `-q -o` for max performance
+            - ✅ **Significant performance improvements** (up to 8.4x faster for multiple patterns)
+            - ✅ **Self-contained executable** (no .NET runtime required)
+
+            ## 📈 Performance Improvements
+            - **Single Pattern**: 23% faster than original
+            - **3 Patterns**: 280% faster (3.8x speedup)
+            - **All Patterns**: 740% faster (8.4x speedup)
+              ## 💡 Usage Examples
+            ```bash
+            # Single pattern (traditional)
+            bstrings.exe -f file.txt --lr guid
+
+            # Multiple patterns concurrently (NEW!)
+            bstrings.exe -f file.txt --lr "guid,email,cc"
+
+            # All 27 patterns at once (NEW!)
+            bstrings.exe -f file.txt --lr all
+
+            # High-performance mode: quiet + output file (NEW!)
+            bstrings.exe -f large_file.bin --lr all -q -o results.txt
+
+            # List all available patterns
+            bstrings.exe -p
+
+            # Get help
+            bstrings.exe --help
+            ```
+
+            ## 📋 Built-in Patterns
+            This release includes 27 built-in regex patterns for: GUIDs, emails, credit cards, IP addresses, MAC addresses, phone numbers, URLs, file paths, cryptocurrency addresses, and more.
+              ## 🔧 Installation
+            1. Download and extract `bstrings-win-x64.zip`
+            2. Run `bstrings.exe --help` to see all options
+            3. **That's it!** Just one file to rule them all!
+
+            ## 🎯 Perfect For
+            - **Digital Forensics** - Extract multiple artifact types simultaneously
+            - **Malware Analysis** - Concurrent pattern detection  
+            - **Data Mining** - High-performance string extraction
+            - **Security Research** - Efficient bulk analysis
+            - **Portable Analysis** - Single-file means no installation headaches
+
+            ## 🔥 Why This Release Rocks
+            - **Previous releases:** 139+ separate files to manage
+            - **This release:** Just 1 executable (+ 1 tiny config) = 2 files total
+            - **Size:** ~70MB for everything vs scattered 50+ MB across many files
+            - **Deployment:** Copy one file and you're done!
+
+            ---
+            *This fork enhances the original bstrings by Eric Zimmerman with concurrent processing capabilities.*
+          files: |
+            bstrings-win-x64.zip
+          draft: false
+          prerelease: false
+          make_latest: true

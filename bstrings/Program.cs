@@ -88,9 +88,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
     private static IFileSystem _fileSystem;
 
-    private static readonly string BaseDirectory = Path.GetDirectoryName(
-        Assembly.GetExecutingAssembly().Location
-    );
+    private static readonly string BaseDirectory = GetBaseDirectory();
+
+    private static string GetBaseDirectory()
+    {
+        var assemblyLocation = Assembly.GetExecutingAssembly().Location;
+        return string.IsNullOrEmpty(assemblyLocation)
+            ? AppContext.BaseDirectory // Single-file deployment
+            : Path.GetDirectoryName(assemblyLocation);
+    }
 
     // ILGPU specific fields
     private static readonly Context GpuContext;
@@ -3513,7 +3519,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         lock (lockObject)
                         {
                             localMatches++;
-                            
+
                             // Suppress console output if quiet mode is enabled and output file is specified
                             var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
 
