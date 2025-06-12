@@ -4,6 +4,9 @@
 2. User should be able to provide multiple --lr (--lr email, url, etc..) or an 'all' (--lr all)
 3. Change logging slightly to show a progress bar instead, this makes more sense as we now do chunks concurrently.
 4. Works in net9.0, have not tested any other.
+5. **NEW**: Automated builds and releases via GitHub Actions - every commit to master creates a new release!
+
+> 📦 **Ready-to-use builds**: Check the [Releases page](../../releases/latest) for the latest Windows x64 executable!
 
 ## Performance Improvements 🚀
 
@@ -54,6 +57,54 @@ bstrings.exe -f file.txt --lr all -q              # 5.66s (all 27 patterns!)
 - **📈 Scales efficiently** - more patterns don't linearly increase time
 - **🛠️ Better workflow** - single command instead of multiple executions
 - **🎯 Perfect for forensics** - quickly scan for all artifact types at once
+
+## 🤖 Automated Builds & Releases
+
+This repository is configured with **GitHub Actions** for automated building and releasing:
+
+### 🔄 **Continuous Integration**
+
+- **Automatic builds** on every commit to `master` branch
+- **Cross-compilation** for Windows x64 (self-contained executable)
+- **Quality checks** with automated testing (if tests exist)
+- **Multi-configuration builds** (Debug + Release)
+
+### 📦 **Automated Releases**
+
+Every commit to `master` automatically creates a new GitHub release with:
+
+- ✅ **Self-contained Windows x64 executable** (no .NET runtime required)
+- ✅ **Clean ZIP package** with executable, documentation, and required files
+- ✅ **Professional release notes** with performance benchmarks
+- ✅ **Version tagging** with timestamp and commit SHA
+- ✅ **Usage examples** and installation instructions
+
+### 📥 **Download Latest Release**
+
+- **Latest Release**: Check the [Releases page](../../releases/latest) for the newest build
+- **All Releases**: Browse [all releases](../../releases) to find specific versions
+- **Artifacts**: Development builds available in [GitHub Actions](../../actions)
+
+### 🏷️ **Release Versioning**
+
+Releases are automatically tagged as: `v{version}-{timestamp}-{commit}`
+
+- Example: `v1.5.3-20251212-164503-a1b2c3d`
+- **Version**: From AssemblyInfo.cs
+- **Timestamp**: Build date/time
+- **Commit**: Short SHA for traceability
+
+### 🛠️ **For Developers**
+
+The automated workflow:
+
+1. **Builds** both Debug and Release configurations
+2. **Tests** automatically (when test projects exist)
+3. **Publishes** optimized Windows x64 binary
+4. **Packages** with documentation and creates release
+5. **Deploys** to GitHub Releases automatically
+
+No manual intervention required - just push to `master` and get a release!
 
 # bstrings
 
