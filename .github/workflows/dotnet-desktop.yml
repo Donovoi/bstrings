@@ -33,10 +33,10 @@ jobs:
       run: dotnet restore bstrings.sln --verbosity minimal
 
     - name: Build Debug
-      run: dotnet build bstrings.sln --configuration Debug --no-restore --verbosity minimal
+      run: dotnet build bstrings.sln --configuration Debug --no-restore --verbosity minimal --framework net9.0
 
     - name: Build Release
-      run: dotnet build bstrings.sln --configuration Release --no-restore --verbosity minimal
+      run: dotnet build bstrings.sln --configuration Release --no-restore --verbosity minimal --framework net9.0
 
     - name: Test (if tests exist)
       run: |
