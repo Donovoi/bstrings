@@ -923,6 +923,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
         StreamWriter sw = null;
 
+        bool isCsvOutput =
+            !string.IsNullOrEmpty(o) && o.EndsWith(".csv", StringComparison.OrdinalIgnoreCase);
+        bool csvHeaderWritten = false;
+
         var globalCounter = 0;
         var globalHits = 0;
         double globalTimespan = 0;
@@ -1317,65 +1321,91 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     continue;
                 }
 
-                if (fileStrings.Count > 0 || regexPatterns.Count > 0)
+                // Prepare CSV output if needed
+                if (isCsvOutput && sw != null && !csvHeaderWritten)
+                {
+                    // Write header
+                    sw.WriteLine(
+                        "Name of search pattern,Data found,Source file,Offset,Pattern type"
+                    );
+                    csvHeaderWritten = true;
+                }
+
+                string sourceFile = currentFile ?? string.Empty;
+                string offsetStr = string.Empty;
+                string patternType = string.Empty;
+                string patternName = string.Empty;
+                string dataFound = hit;
+
+                // Try to extract offset and pattern type if available (for future extensibility)
+                // If off flag is set, offset may be appended to the string, try to parse it
+                if (off)
+                {
+                    // Example: "string~12345 (A)" or "string~12345 (U)"
+                    int tildeIdx = hit.LastIndexOf('~');
+                    if (tildeIdx > 0)
+                    {
+                        int spaceIdx = hit.IndexOf(' ', tildeIdx);
+                        if (spaceIdx > tildeIdx)
+                        {
+                            offsetStr = hit.Substring(tildeIdx + 1, spaceIdx - tildeIdx - 1);
+                            dataFound = hit.Substring(0, tildeIdx);
+                            // Try to get encoding
+                            int encStart = hit.IndexOf('(', spaceIdx);
+                            int encEnd = hit.IndexOf(')', spaceIdx);
+                            if (encStart > 0 && encEnd > encStart)
+                                patternType = hit.Substring(encStart + 1, encEnd - encStart - 1);
+                        }
+                    }
+                }
+
+                // Determine pattern name (for regex/file string matches)
+                if (fileStrings.Count > 0)
                 {
                     foreach (var fileString in fileStrings)
                     {
                         if (fileString.Trim().Length == 0)
-                        {
                             continue;
-                        }
-
                         if (
-                            hit.IndexOf(fileString, StringComparison.InvariantCultureIgnoreCase) < 0
+                            hit.IndexOf(fileString, StringComparison.InvariantCultureIgnoreCase)
+                            >= 0
                         )
                         {
-                            continue;
+                            patternName = fileString;
+                            break;
                         }
-
-                        counter += 1;
-
-                        // Suppress console output if quiet mode is enabled and output file is specified
-                        var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
-                        if (s == false && !suppressConsoleOutput)
-                        {
-                            Log.Information("{Hit}", hit);
-                        }
-
-                        sw?.WriteLine(hit);
                     }
-
-                    // Process regex patterns concurrently for all hits
-                    if (regexPatterns.Count > 0)
+                }
+                else if (regexPatterns.Count > 0)
+                {
+                    foreach (var regex in regexPatterns)
                     {
-                        var regexMatches = await ProcessRegexPatternsConcurrentlyAsync(
-                            hits,
-                            regexPatterns,
-                            ro,
-                            off,
-                            s,
-                            sw,
-                            q,
-                            o
-                        );
-                        counter += regexMatches;
-
-                        // Since we processed all hits, we can break out of the loop
-                        break;
+                        if (System.Text.RegularExpressions.Regex.IsMatch(hit, regex))
+                        {
+                            patternName = regex;
+                            patternType = "Regex";
+                            break;
+                        }
                     }
+                }
+
+                // Suppress console output if quiet mode is enabled and output file is specified
+                var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
+                if (s == false && !suppressConsoleOutput)
+                {
+                    Log.Information("{Hit}", hit);
+                }
+
+                if (isCsvOutput && sw != null)
+                {
+                    // Escape CSV fields
+                    string CsvEscape(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
+                    sw.WriteLine(
+                        $"{CsvEscape(patternName)},{CsvEscape(dataFound)},{CsvEscape(sourceFile)},{CsvEscape(offsetStr)},{CsvEscape(patternType)}"
+                    );
                 }
                 else
                 {
-                    //dump all strings
-                    counter += 1;
-
-                    // Suppress console output if quiet mode is enabled and output file is specified
-                    var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
-                    if (s == false && !suppressConsoleOutput)
-                    {
-                        Log.Information("{Hit}", hit);
-                    }
-
                     sw?.WriteLine(hit);
                 }
             }
@@ -1778,16 +1808,16 @@ public static partial class Program // Make it public and partial for ILGPU if n
         RegExPatterns.Add(
             "url3986",
             @"^
-		[a-z][a-z0-9+\-.]*://                       # Scheme
-		([a-z0-9\-._~%!$&'()*+,;=]+@)?              # User
-		(?<host>[a-z0-9\-._~%]+                     # Named host
-		|\[[a-f0-9:.]+\]                            # IPv6 host
-		|\[v[a-f0-9][a-z0-9\-._~%!$&'()*+,;=:]+\])  # IPvFuture host
-		(:[0-9]+)?                                  # Port
-		(/[a-z0-9\-._~%!$&'()*+,;=:@]+)*/?          # Path
-		(\?[a-z0-9\-._~%!$&'()*+,;=:@/?]*)?         # Query
-		(\#[a-z0-9\-._~%!$&'()*+,;=:@/?]*)?         # Fragment
-		$"
+        [a-z][a-z0-9+\-.]*://                       # Scheme
+        ([a-z0-9\-._~%!$&'()*+,;=]+@)?              # User
+        (?<host>[a-z0-9\-._~%]+                     # Named host
+        |\[[a-f0-9:.]+\]                            # IPv6 host
+        |\[v[a-f0-9][a-z0-9\-._~%!$&'()*+,;=:]+\])  # IPvFuture host
+        (:[0-9]+)?                                  # Port
+        (/[a-z0-9\-._~%!$&'()*+,;=:@]+)*/?          # Path
+        (\?[a-z0-9\-._~%!$&'()*+,;=:@/?]*)?         # Query
+        (\#[a-z0-9\-._~%!$&'()*+,;=:@/?]*)?         # Fragment
+        $"
         );
     }
 
