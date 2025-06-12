@@ -563,6 +563,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 () => false,
                 "Quiet mode (Do not show header or total number of hits)"
             ),
+            new Option<bool>(
+                "-s",
+                () => false,
+                "Really Quiet mode (Do not display hits to console. Speeds up processing when using -o)"
+            ),
             new Option<int>("-x", () => -1, "Maximum string length. Default is unlimited"),
             new Option<bool>("-p", () => false, "Display list of built in regular expressions"),
             new Option<string>(
@@ -1324,7 +1329,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
                         counter += 1;
 
-                        if (s == false)
+                        // Suppress console output if quiet mode is enabled and output file is specified
+                        var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
+                        if (s == false && !suppressConsoleOutput)
                         {
                             Log.Information("{Hit}", hit);
                         }
@@ -1341,7 +1348,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             ro,
                             off,
                             s,
-                            sw
+                            sw,
+                            q,
+                            o
                         );
                         counter += regexMatches;
 
@@ -1354,7 +1363,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     //dump all strings
                     counter += 1;
 
-                    if (s == false)
+                    // Suppress console output if quiet mode is enabled and output file is specified
+                    var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
+                    if (s == false && !suppressConsoleOutput)
                     {
                         Log.Information("{Hit}", hit);
                     }
@@ -3449,6 +3460,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <param name="ro">Regex output mode</param>
     /// <param name="off">Show offset</param>    /// <param name="s">Silent mode</param>
     /// <param name="sw">StreamWriter for output</param>
+    /// <param name="q">Quiet mode</param>
+    /// <param name="o">Output file path</param>
     /// <returns>Number of matches found</returns>
     private static async Task<int> ProcessRegexPatternsConcurrentlyAsync(
         HashSet<string> hits,
@@ -3456,7 +3469,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool ro,
         bool off,
         bool s,
-        StreamWriter sw
+        StreamWriter sw,
+        bool q,
+        string o
     )
     {
         if (regexPatterns.Count == 0)
@@ -3498,12 +3513,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         lock (lockObject)
                         {
                             localMatches++;
+                            
+                            // Suppress console output if quiet mode is enabled and output file is specified
+                            var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
 
                             if (ro)
                             {
                                 foreach (Match match in regex.Matches(hit))
                                 {
-                                    if (!s)
+                                    if (!s && !suppressConsoleOutput)
                                     {
                                         Log.Information(
                                             "{Match}\t{HitOffset}",
@@ -3516,7 +3534,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             }
                             else
                             {
-                                if (!s)
+                                if (!s && !suppressConsoleOutput)
                                 {
                                     Log.Information("{Hit}", hit);
                                 }
