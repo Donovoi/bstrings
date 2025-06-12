@@ -5,6 +5,7 @@
 3. Change logging slightly to show a progress bar instead, this makes more sense as we now do chunks concurrently.
 4. Works in net9.0, have not tested any other.
 5. **NEW**: Automated builds and releases via GitHub Actions - every commit to master creates a new release!
+6. **NEW**: Enhanced output control - automatically suppresses console output when using `-q` with `-o` for maximum performance on large files!
 
 > 📦 **Ready-to-use builds**: Check the [Releases page](../../releases/latest) for the latest Windows x64 executable!
 
@@ -47,6 +48,19 @@ bstrings.exe -f file.txt --lr cc -q       # 1.76s
 ```bash
 # Single command with concurrent processing
 bstrings.exe -f file.txt --lr "guid,email,cc" -q  # 1.39s
+
+# OR search all patterns at once
+bstrings.exe -f file.txt --lr all -q              # 5.66s (all 27 patterns!)
+
+# FASTEST: Output to file with suppressed console (NEW!)
+bstrings.exe -f file.txt --lr all -q -o results.txt  # Maximum performance!
+```
+
+**After (This Fork)**:
+
+```bash
+# Single command with concurrent processing
+bstrings.exe -f file.txt --lr "guid,email,cc" -q  # 1.39s
 # OR search all patterns at once
 bstrings.exe -f file.txt --lr all -q              # 5.66s (all 27 patterns!)
 ```
@@ -57,6 +71,52 @@ bstrings.exe -f file.txt --lr all -q              # 5.66s (all 27 patterns!)
 - **📈 Scales efficiently** - more patterns don't linearly increase time
 - **🛠️ Better workflow** - single command instead of multiple executions
 - **🎯 Perfect for forensics** - quickly scan for all artifact types at once
+
+## 🎛️ Enhanced Output Control
+
+This fork includes **intelligent output control** for better performance with large files:
+
+### 🔇 **Smart Console Suppression**
+
+When both `--quiet` (`-q`) and an output file (`-o`) are specified together, console output of found strings is automatically suppressed for maximum performance:
+
+```bash
+# FAST: Results written to file, no console output of strings
+bstrings.exe -f large_file.bin --lr "email,guid,cc" -q -o results.txt
+
+# vs. SLOWER: Shows all strings in console + writes to file
+bstrings.exe -f large_file.bin --lr "email,guid,cc" -o results.txt
+```
+
+### 📊 **Output Behavior Matrix**
+
+| Command Flags    | Console String Output       | File Output     | Performance   |
+| ---------------- | --------------------------- | --------------- | ------------- |
+| _(none)_         | ✅ Full output              | ❌ None         | Standard      |
+| `-o file.txt`    | ✅ Full output              | ✅ File written | Standard      |
+| `-q`             | ✅ Strings only (no header) | ❌ None         | Standard      |
+| `-q -o file.txt` | ❌ **Suppressed**           | ✅ File written | **⚡ Faster** |
+| `-s -o file.txt` | ❌ **Suppressed**           | ✅ File written | **⚡ Faster** |
+
+### 🚀 **Performance Benefits**
+
+- **Eliminates console I/O bottleneck** for large result sets
+- **Particularly effective** with thousands of pattern matches
+- **Maintains full functionality** - only suppresses console display
+- **Works with all processing modes** (single patterns, multiple patterns, concurrent processing)
+
+### 💡 **Usage Examples**
+
+```bash
+# High-performance bulk analysis (recommended for large files)
+bstrings.exe -f evidence.img --lr all -q -o all_artifacts.txt
+
+# Multiple patterns with quiet output
+bstrings.exe -f malware.bin --lr "email,guid,bitcoin,url3986" -q -o findings.txt
+
+# Explicit silent mode (equivalent to -q -o combination)
+bstrings.exe -f large_data.bin --lr cc -s -o creditcards.txt
+```
 
 ## 🤖 Automated Builds & Releases
 
@@ -141,21 +201,45 @@ A better strings utility!
             mask            When using -d, file mask to search for. * and ? are supported. This option has no effect when using -f
             ms              When using -d, maximum file size to process. This option has no effect when using -f
             ro              When true, list the string matched by regex pattern vs string the pattern was found in (This may result in duplicate strings in output. ~ denotes approx. offset)
-            off             Show offset to hit after string, followed by the encoding (A=1252, U=Unicode)
+            off             Show offset to hit after string, followed by the encoding (A=1252, U=Unicode)    sa              Sort results alphabetically
+            sl              Sort results by length
 
-    sa              Sort results alphabetically
-            sl              Sort results by length    Examples: bstrings.exe -f "C:\Temp\UsrClass 1.dat" --ls URL
-              bstrings.exe -f "C:\Temp\someFile.txt" --lr guid
-              bstrings.exe -f "C:\Temp\someFile.txt" --lr "guid,email,cc"
-              bstrings.exe -f "C:\Temp\someFile.txt" --lr all
-              bstrings.exe -f "C:\Temp\aBigFile.bin" --fs c:\temp\searchStrings.txt --fr c:\temp\searchRegex.txt -s
-              bstrings.exe -d "C:\Temp" --mask "*.dll"
-              bstrings.exe -d "C:\Temp" --ar "[\x20-\x37]"
-              bstrings.exe -d "C:\Temp" --cp 10007
-              bstrings.exe -d "C:\Temp" --ls test
-              bstrings.exe -f "C:\Temp\someOtherFile.txt" --lr cc --sa
-              bstrings.exe -f "C:\Temp\someOtherFile.txt" --lr cc --sa -m 15 -x 22
-              bstrings.exe -f "C:\Temp\UsrClass 1.dat" --ls mui --sl
+## Examples
+
+### Basic Usage
+
+```bash
+bstrings.exe -f "C:\Temp\UsrClass 1.dat" --ls URL
+bstrings.exe -f "C:\Temp\someFile.txt" --lr guid
+bstrings.exe -f "C:\Temp\someFile.txt" --lr "guid,email,cc"
+bstrings.exe -f "C:\Temp\someFile.txt" --lr all
+```
+
+### High-Performance Output Control (NEW!)
+
+```bash
+# Fast: Quiet mode + output file = suppressed console output
+bstrings.exe -f "C:\Evidence\large.img" --lr all -q -o artifacts.txt
+
+# Fast: Explicit silent mode
+bstrings.exe -f "C:\Malware\sample.bin" --lr "email,bitcoin,url3986" -s -o findings.txt
+
+# Standard: Regular output (slower with large result sets)
+bstrings.exe -f "C:\Data\file.bin" --lr "guid,cc" -o results.txt
+```
+
+### Advanced Usage
+
+```bash
+bstrings.exe -f "C:\Temp\aBigFile.bin" --fs c:\temp\searchStrings.txt --fr c:\temp\searchRegex.txt -s
+bstrings.exe -d "C:\Temp" --mask "*.dll"
+bstrings.exe -d "C:\Temp" --ar "[\x20-\x37]"
+bstrings.exe -d "C:\Temp" --cp 10007
+bstrings.exe -d "C:\Temp" --ls test
+bstrings.exe -f "C:\Temp\someOtherFile.txt" --lr cc --sa
+bstrings.exe -f "C:\Temp\someOtherFile.txt" --lr cc --sa -m 15 -x 22
+bstrings.exe -f "C:\Temp\UsrClass 1.dat" --ls mui --sl
+```
 
 ## Built In Regular Expressions
 

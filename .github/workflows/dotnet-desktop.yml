@@ -141,11 +141,11 @@ jobs:
           **Commit:** `${{ steps.version.outputs.commit_sha }}`
           
           This is an automated release of the **enhanced bstrings utility** with significant performance improvements:
-          
-          ## ✨ New Features
+            ## ✨ New Features
           - ✅ **Concurrent regex pattern processing** 
           - ✅ **Comma-separated patterns**: `--lr "guid,email,cc"`
           - ✅ **All patterns support**: `--lr all`
+          - ✅ **Enhanced output control**: Auto-suppressed console when using `-q -o` for max performance
           - ✅ **Significant performance improvements** (up to 8.4x faster for multiple patterns)
           - ✅ **Self-contained executable** (no .NET runtime required)
           
@@ -153,8 +153,7 @@ jobs:
           - **Single Pattern**: 23% faster than original
           - **3 Patterns**: 280% faster (3.8x speedup)
           - **All Patterns**: 740% faster (8.4x speedup)
-          
-          ## 💡 Usage Examples
+            ## 💡 Usage Examples
           ```bash
           # Single pattern (traditional)
           bstrings.exe -f file.txt --lr guid
@@ -164,6 +163,9 @@ jobs:
           
           # All 27 patterns at once (NEW!)
           bstrings.exe -f file.txt --lr all
+          
+          # High-performance mode: quiet + output file (NEW!)
+          bstrings.exe -f large_file.bin --lr all -q -o results.txt
           
           # List all available patterns
           bstrings.exe -p
