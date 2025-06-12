@@ -1,3 +1,10 @@
+# This is a fork of bstrings - I'm using AI (I'm not writing or extensively manually checking the code) to make the following changes:
+
+1. Faster - apparently this uses the gpu where possible and SIMD methodologies to speed it up (benchmark to follow)
+2. User should be able to provide multiple --lr (--lr email, url, etc..) or an 'all' (--lr all)
+3. Change logging slightly to show a progress bar instead, this makes more sense as we now do chunks concurrently.
+4. Works in net9.0, have not tested any other.
+
 # bstrings
 
 A better strings utility!
@@ -5,11 +12,11 @@ A better strings utility!
 ## Command Line Interface
 
     bstrings version 1.5.1.0
-    
+
     Author: Eric Zimmerman (saericzimmerman@gmail.com)
     https://github.com/EricZimmerman/bstrings
-    
-            a               If set, look for ASCII strings. Default is true. Use -a false to disable
+
+    a               If set, look for ASCII strings. Default is true. Use -a false to disable
             b               Chunk size in MB. Valid range is 1 to 1024. Default is 512
             d               Directory to recursively process. Either this or -f is required
             f               File to search. Either this or -d is required
@@ -20,22 +27,22 @@ A better strings utility!
             s               Really Quiet mode (Do not display hits to console. Speeds up processing when using -o)
             u               If set, look for Unicode strings. Default is true. Use -u false to disable
             x               Maximum string length. Default is unlimited
-    
-            ls              String to look for. When set, only matching strings are returned
+
+    ls              String to look for. When set, only matching strings are returned
             lr              Regex to look for. When set, only strings matching the regex are returned
             fs              File containing strings to look for. When set, only matching strings are returned
             fr              File containing regex patterns to look for. When set, only strings matching regex patterns are returned
-    
-            ar              Range of characters to search for in 'Code page' strings. Specify as a range of characters in hex format and enclose in quotes. Default is [\x20 -\x7E]
+
+    ar              Range of characters to search for in 'Code page' strings. Specify as a range of characters in hex format and enclose in quotes. Default is [\x20 -\x7E]
             ur              Range of characters to search for in Unicode strings. Specify as a range of characters in hex format and enclose in quotes. Default is [\u0020-\u007E]
-    
-            cp              Code page to use. Default is 1252. Use the Identifier value for code pages at https://goo.gl/ig6DxW
+
+    cp              Code page to use. Default is 1252. Use the Identifier value for code pages at https://goo.gl/ig6DxW
             mask            When using -d, file mask to search for. * and ? are supported. This option has no effect when using -f
             ms              When using -d, maximum file size to process. This option has no effect when using -f
             ro              When true, list the string matched by regex pattern vs string the pattern was found in (This may result in duplicate strings in output. ~ denotes approx. offset)
             off             Show offset to hit after string, followed by the encoding (A=1252, U=Unicode)
 
-            sa              Sort results alphabetically
+    sa              Sort results alphabetically
             sl              Sort results by length
 
     Examples: bstrings.exe -f "C:\Temp\UsrClass 1.dat" --ls URL
@@ -53,7 +60,7 @@ A better strings utility!
 
 Run `bstrings.exe -p` to see the following list of built in Regular Expressions:
 
-              Name            Description
+    Name            Description
               aeon            Finds Aeon wallet addresses
               b64             Finds valid formatted base 64 strings
               bitcoin         Finds BitCoin wallet addresses
@@ -81,8 +88,8 @@ Run `bstrings.exe -p` to see the following list of built in Regular Expressions:
               win_path        Finds Windows style paths (C:\folder1\folder2\file.txt)
               xml             Finds XML/HTML tags
               zip             Finds zip codes
-              
-              To use a built in pattern, supply the Name to the --lr switch 
+
+    To use a built in pattern, supply the Name to the --lr switch
 
 ## Documentation
 
@@ -108,7 +115,8 @@ Run `bstrings.exe -p` to see the following list of built in Regular Expressions:
 
 # Download Eric Zimmerman's Tools
 
-All of Eric Zimmerman's tools can be downloaded [here](https://ericzimmerman.github.io/#!index.md). 
+All of Eric Zimmerman's tools can be downloaded [here](https://ericzimmerman.github.io/#!index.md).
+
 # Special Thanks
 
 Open Source Development funding and support provided by the following contributors: [SANS Institute](http://sans.org/) and [SANS DFIR](http://dfir.sans.org/).

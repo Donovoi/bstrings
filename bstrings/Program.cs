@@ -64,6 +64,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
         + "\r\n\t "
         + @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr guid"
         + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr ""guid,cc,ssn"""
+        + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr all"
+        + "\r\n\t "
         + @"   bstrings.exe -f ""C:\Temp\aBigFile.bin"" --fs c:\temp\searchStrings.txt --fr c:\temp\searchRegex.txt"
         + "\r\n\t "
         + @"   bstrings.exe -d ""C:\Temp"" --mask ""*.dll"""
@@ -567,7 +571,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             ),
             new Option<string>(
                 "--lr",
-                "Regex to look for. When set, only strings matching the regex are returned"
+                "Regex to look for. When set, only strings matching the regex are returned. Supports comma-separated values for multiple patterns or 'all' to use all built-in patterns"
             ),
             new Option<string>(
                 "--fs",
@@ -966,16 +970,26 @@ public static partial class Program // Make it public and partial for ILGPU if n
             var counter = 0;
             var hits = new HashSet<string>();
 
-            var regPattern = lr;
+            // Parse multiple patterns from lr parameter
+            var regexPatterns = ParseRegexPatterns(lr);
 
-            if (regPattern != null && RegExPatterns.ContainsKey(lr))
+            if (regexPatterns.Count > 0 && !q)
             {
-                regPattern = RegExPatterns[lr];
-            }
-
-            if (regPattern?.Length > 0 && !q)
-            {
-                Log.Information("Searching via RegEx pattern: {RegPattern}", regPattern);
+                if (regexPatterns.Count == 1)
+                {
+                    Log.Information("Searching via RegEx pattern: {RegPattern}", regexPatterns[0]);
+                }
+                else
+                {
+                    Log.Information(
+                        "Searching via {Count} RegEx patterns concurrently:",
+                        regexPatterns.Count
+                    );
+                    foreach (var pattern in regexPatterns)
+                    {
+                        Log.Information("  - {Pattern}", pattern);
+                    }
+                }
                 Console.WriteLine();
             }
 
@@ -1242,7 +1256,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             if (lr?.Length > 0)
             {
-                regexStrings.Add(regPattern);
+                regexStrings.UnionWith(regexPatterns);
             }
 
             if (string.IsNullOrEmpty(fs) == false || string.IsNullOrEmpty(fr) == false)
@@ -1292,7 +1306,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     continue;
                 }
 
-                if (fileStrings.Count > 0 || regexStrings.Count > 0)
+                if (fileStrings.Count > 0 || regexPatterns.Count > 0)
                 {
                     foreach (var fileString in fileStrings)
                     {
@@ -1318,64 +1332,21 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         sw?.WriteLine(hit);
                     }
 
-                    var hitOffset = "";
-                    if (off)
+                    // Process regex patterns concurrently for all hits
+                    if (regexPatterns.Count > 0)
                     {
-                        hitOffset = $"~{hit.Split('\t').Last()}";
-                    }
+                        var regexMatches = await ProcessRegexPatternsConcurrentlyAsync(
+                            hits,
+                            regexPatterns,
+                            ro,
+                            off,
+                            s,
+                            sw
+                        );
+                        counter += regexMatches;
 
-                    foreach (var regString in regexStrings)
-                    {
-                        if (regString.Trim().Length == 0)
-                        {
-                            continue;
-                        }
-
-                        try
-                        {
-                            var reg1 = new Regex(
-                                regString,
-                                RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace
-                            );
-
-                            if (reg1.IsMatch(hit) == false)
-                            {
-                                continue;
-                            }
-
-                            counter += 1;
-
-                            if (ro)
-                            {
-                                foreach (var match in reg1.Matches(hit))
-                                {
-                                    if (s == false)
-                                    {
-                                        Log.Information("{Match}\t{HitOffset}", match, hitOffset);
-                                    }
-
-                                    sw?.WriteLine($"{match}\t{hitOffset}");
-                                }
-                            }
-                            else
-                            {
-                                if (s == false)
-                                {
-                                    Log.Information("{Hit}", hit);
-                                }
-
-                                sw?.WriteLine(hit);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Error(
-                                ex,
-                                "Error setting up regular expression '{RegString}': {Message}",
-                                regString,
-                                ex.Message
-                            );
-                        }
+                        // Since we processed all hits, we can break out of the loop
+                        break;
                     }
                 }
                 else
@@ -3425,5 +3396,150 @@ public static partial class Program // Make it public and partial for ILGPU if n
         {
             Console.Error.WriteLine("[DEBUG] GPU acceleration not available, using CPU only");
         }
+    }
+
+    /// <summary>
+    /// Parses the lr parameter to handle comma-separated patterns and 'all' keyword
+    /// </summary>
+    /// <param name="lr">The lr parameter value</param>
+    /// <returns>List of resolved regex patterns</returns>
+    private static List<string> ParseRegexPatterns(string lr)
+    {
+        var patterns = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(lr))
+        {
+            return patterns;
+        }
+
+        // Handle 'all' keyword to include all built-in patterns
+        if (lr.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            patterns.AddRange(RegExPatterns.Values);
+            return patterns;
+        }
+
+        // Split by comma and process each pattern
+        var patternNames = lr.Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var patternName in patternNames)
+        {
+            var trimmedName = patternName.Trim();
+
+            // Check if it's a built-in pattern
+            if (RegExPatterns.ContainsKey(trimmedName))
+            {
+                patterns.Add(RegExPatterns[trimmedName]);
+            }
+            else
+            {
+                // Treat as literal regex pattern
+                patterns.Add(trimmedName);
+            }
+        }
+
+        return patterns;
+    }
+
+    /// <summary>
+    /// Processes hits concurrently against multiple regex patterns
+    /// </summary>
+    /// <param name="hits">The string hits to process</param>
+    /// <param name="regexPatterns">List of regex patterns to match against</param>
+    /// <param name="ro">Regex output mode</param>
+    /// <param name="off">Show offset</param>    /// <param name="s">Silent mode</param>
+    /// <param name="sw">StreamWriter for output</param>
+    /// <returns>Number of matches found</returns>
+    private static async Task<int> ProcessRegexPatternsConcurrentlyAsync(
+        HashSet<string> hits,
+        List<string> regexPatterns,
+        bool ro,
+        bool off,
+        bool s,
+        StreamWriter sw
+    )
+    {
+        if (regexPatterns.Count == 0)
+            return 0;
+
+        var lockObject = new object();
+
+        // Create tasks for each pattern to process concurrently
+        var tasks = regexPatterns.Select(async regString =>
+        {
+            if (string.IsNullOrWhiteSpace(regString))
+                return 0;
+
+            var localMatches = 0;
+
+            try
+            {
+                var regex = new Regex(
+                    regString,
+                    RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace
+                );
+
+                await Task.Run(() =>
+                {
+                    foreach (var hit in hits)
+                    {
+                        if (hit.Length == 0)
+                            continue;
+
+                        if (!regex.IsMatch(hit))
+                            continue;
+
+                        var hitOffset = "";
+                        if (off)
+                        {
+                            hitOffset = $"~{hit.Split('\t').LastOrDefault()}";
+                        }
+
+                        lock (lockObject)
+                        {
+                            localMatches++;
+
+                            if (ro)
+                            {
+                                foreach (Match match in regex.Matches(hit))
+                                {
+                                    if (!s)
+                                    {
+                                        Log.Information(
+                                            "{Match}\t{HitOffset}",
+                                            match.Value,
+                                            hitOffset
+                                        );
+                                    }
+                                    sw?.WriteLine($"{match.Value}\t{hitOffset}");
+                                }
+                            }
+                            else
+                            {
+                                if (!s)
+                                {
+                                    Log.Information("{Hit}", hit);
+                                }
+                                sw?.WriteLine(hit);
+                            }
+                        }
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(
+                    ex,
+                    "Error processing regular expression '{RegString}': {Message}",
+                    regString,
+                    ex.Message
+                );
+            }
+
+            return localMatches;
+        });
+
+        var results = await Task.WhenAll(tasks);
+        return results.Sum();
     }
 }
