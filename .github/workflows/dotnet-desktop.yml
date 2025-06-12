@@ -48,7 +48,14 @@ jobs:
         }
 
     - name: Publish Windows x64
-      run: dotnet publish bstrings/bstrings.csproj --configuration Release --runtime win-x64 --self-contained true --output ./publish/win-x64 --verbosity minimal --framework net9.0
+      run: |
+        dotnet publish bstrings/bstrings.csproj `
+          --configuration Release `
+          --runtime win-x64 `
+          --self-contained true `
+          --output ./publish/win-x64 `
+          --verbosity minimal `
+          --framework net9.0
 
     - name: Create release archive
       run: |
@@ -57,14 +64,51 @@ jobs:
         $releaseDir = "bstrings-release"
         New-Item -ItemType Directory -Path $releaseDir -Force
         
-        # Copy main executable and essential files
+        # Copy main application files (required)
         Copy-Item "bstrings.exe" "$releaseDir/"
-        Copy-Item "*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
-        Copy-Item "*.json" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "bstrings.dll" "$releaseDir/"
+        Copy-Item "bstrings.runtimeconfig.json" "$releaseDir/"
+        Copy-Item "bstrings.deps.json" "$releaseDir/"
+        Copy-Item "bstrings.dll.config" "$releaseDir/" -ErrorAction SilentlyContinue
         
-        # Copy README and LICENSE from root
+        # Copy core .NET runtime (required for self-contained)
+        Copy-Item "coreclr.dll" "$releaseDir/"
+        Copy-Item "hostfxr.dll" "$releaseDir/"
+        Copy-Item "hostpolicy.dll" "$releaseDir/"
+        Copy-Item "clrjit.dll" "$releaseDir/"
+        Copy-Item "System.Private.CoreLib.dll" "$releaseDir/"
+        Copy-Item "mscorrc.dll" "$releaseDir/" -ErrorAction SilentlyContinue        # Copy essential System assemblies using wildcards (more reliable than individual files)
+        Copy-Item "System.Runtime*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Collections*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Console.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.IO*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Text*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Threading*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Memory.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Linq*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Reflection*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Diagnostics*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Globalization*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Resources*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Numerics*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Security*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.ComponentModel*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Private.*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "System.Net*.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        Copy-Item "netstandard.dll" "$releaseDir/" -ErrorAction SilentlyContinue
+        
+        # Skip application-specific dependencies (they're embedded by Costura.Fody)
+        # AlphaFS, ILGPU, Exceptionless, Serilog, etc. are embedded and don't need separate DLLs
+        
+        # Copy documentation
         Copy-Item "../../README.md" "$releaseDir/" -ErrorAction SilentlyContinue
         Copy-Item "../../LICENSE.md" "$releaseDir/" -ErrorAction SilentlyContinue
+        
+        # Display file count and size for optimization tracking
+        $fileCount = (Get-ChildItem $releaseDir).Count
+        $totalSize = (Get-ChildItem $releaseDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
+        Write-Host "Release contains $fileCount files, total size: $([math]::Round($totalSize, 2)) MB"
+        Write-Host "Original publish had $((Get-ChildItem .).Count) files"
         
         # Create the zip
         Compress-Archive -Path "$releaseDir/*" -DestinationPath "../../bstrings-win-x64.zip" -Force
