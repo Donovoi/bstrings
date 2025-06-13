@@ -1357,9 +1357,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                 patternType = hit.Substring(encStart + 1, encEnd - encStart - 1);
                         }
                     }
-                }
-
-                // Determine pattern name (for regex/file string matches)
+                }                // Determine pattern name (for regex/file string matches)
                 if (fileStrings.Count > 0)
                 {
                     foreach (var fileString in fileStrings)
@@ -1372,6 +1370,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         )
                         {
                             patternName = fileString;
+                            patternType = "String";
                             break;
                         }
                     }
@@ -1380,11 +1379,20 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 {
                     foreach (var regex in regexPatterns)
                     {
-                        if (System.Text.RegularExpressions.Regex.IsMatch(hit, regex))
+                        try
                         {
-                            patternName = regex;
-                            patternType = "Regex";
-                            break;
+                            if (System.Text.RegularExpressions.Regex.IsMatch(hit, regex, RegexOptions.IgnoreCase))
+                            {
+                                // For CSV output, use the pattern name from RegExPatterns if available
+                                patternName = GetRegexPatternName(regex) ?? regex;
+                                patternType = "Regex";
+                                break;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // Skip invalid regex patterns
+                            Log.Warning("Invalid regex pattern '{Regex}': {Message}", regex, ex.Message);
                         }
                     }
                 }
@@ -1819,6 +1827,24 @@ public static partial class Program // Make it public and partial for ILGPU if n
         (\#[a-z0-9\-._~%!$&'()*+,;=:@/?]*)?         # Fragment
         $"
         );
+    }
+
+    /// <summary>
+    /// Gets the friendly name for a regex pattern from the built-in patterns dictionary
+    /// </summary>
+    /// <param name="regexPattern">The regex pattern string</param>
+    /// <returns>The friendly name if found, otherwise null</returns>
+    private static string GetRegexPatternName(string regexPattern)
+    {
+        // Find the key in RegExPatterns that matches this pattern
+        foreach (var kvp in RegExPatterns)
+        {
+            if (kvp.Value.Equals(regexPattern, StringComparison.OrdinalIgnoreCase))
+            {
+                return kvp.Key;
+            }
+        }
+        return null;
     }
 
     /// <summary>
@@ -3496,8 +3522,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <param name="ro">Regex output mode</param>
     /// <param name="off">Show offset</param>    /// <param name="s">Silent mode</param>
     /// <param name="sw">StreamWriter for output</param>
-    /// <param name="q">Quiet mode</param>
-    /// <param name="o">Output file path</param>
+    /// <param name="q">Quiet mode</param>    /// <param name="o">Output file path</param>
+    /// <param name="currentFile">Current file being processed</param>
+    /// <param name="isCsvOutput">Whether output is CSV format</param>
     /// <returns>Number of matches found</returns>
     private static async Task<int> ProcessRegexPatternsConcurrentlyAsync(
         HashSet<string> hits,
@@ -3507,7 +3534,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool s,
         StreamWriter sw,
         bool q,
-        string o
+        string o,
+        string currentFile = "",
+        bool isCsvOutput = false
     )
     {
         if (regexPatterns.Count == 0)
@@ -3552,7 +3581,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
                             // Suppress console output if quiet mode is enabled and output file is specified
                             var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
-
+                            
                             if (ro)
                             {
                                 foreach (Match match in regex.Matches(hit))
@@ -3564,8 +3593,20 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                             match.Value,
                                             hitOffset
                                         );
+                                    }                                    if (isCsvOutput && sw != null)
+                                    {
+                                        // CSV output for regex matches
+                                        string CsvEscape(string s) =>
+                                            "\"" + s.Replace("\"", "\"\"") + "\"";
+                                        string offsetStr = hitOffset.TrimStart('~');
+                                        sw.WriteLine(
+                                            $"{CsvEscape(regString)},{CsvEscape(match.Value)},{CsvEscape(currentFile)},{CsvEscape(offsetStr)},{CsvEscape("Regex")}"
+                                        );
                                     }
-                                    sw?.WriteLine($"{match.Value}\t{hitOffset}");
+                                    else
+                                    {
+                                        sw?.WriteLine($"{match.Value}\t{hitOffset}");
+                                    }
                                 }
                             }
                             else
@@ -3574,7 +3615,21 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                 {
                                     Log.Information("{Hit}", hit);
                                 }
-                                sw?.WriteLine(hit);
+
+                                if (isCsvOutput && sw != null)
+                                {
+                                    // CSV output for full hit
+                                    string CsvEscape(string s) =>
+                                        "\"" + s.Replace("\"", "\"\"") + "\"";
+                                    string offsetStr = hitOffset.TrimStart('~');
+                                    sw.WriteLine(
+                                        $"{CsvEscape(regString)},{CsvEscape(hit)},{CsvEscape(currentFile)},{CsvEscape(offsetStr)},{CsvEscape("Regex")}"
+                                    );
+                                }
+                                else
+                                {
+                                    sw?.WriteLine(hit);
+                                }
                             }
                         }
                     }

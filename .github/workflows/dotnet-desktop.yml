@@ -169,13 +169,12 @@ jobs:
             - ✅ **Just ONE executable file** - No more DLL hell!
             - ✅ **~70MB single bstrings.exe** - Everything bundled inside
             - ✅ **Zero installation required** - Download, extract, run!
-            - ✅ **Ultra-portable** - Copy anywhere and it just works
-
-            ## ✨ New Features
+            - ✅ **Ultra-portable** - Copy anywhere and it just works            ## ✨ New Features
             - ✅ **Concurrent regex pattern processing** 
             - ✅ **Comma-separated patterns**: `--lr "guid,email,cc"`
             - ✅ **All patterns support**: `--lr all`
             - ✅ **Enhanced output control**: Auto-suppressed console when using `-q -o` for max performance
+            - ✅ **Enhanced CSV output**: Professional CSV format with headers for spreadsheet analysis
             - ✅ **Significant performance improvements** (up to 8.4x faster for multiple patterns)
             - ✅ **Self-contained executable** (no .NET runtime required)
 
@@ -192,10 +191,12 @@ jobs:
             bstrings.exe -f file.txt --lr "guid,email,cc"
 
             # All 27 patterns at once (NEW!)
-            bstrings.exe -f file.txt --lr all
+            bstrings.exe -f file.txt --lr all            # High-performance mode: quiet + output file (NEW!)
+            bstrings.exe -f large_file.bin --lr all -q -o results.txt            # Enhanced CSV output for spreadsheet analysis (NEW!)
+            bstrings.exe -f evidence.img --lr all -o artifacts.csv
 
-            # High-performance mode: quiet + output file (NEW!)
-            bstrings.exe -f large_file.bin --lr all -q -o results.txt
+            # Multiple patterns with CSV output and offsets for forensic analysis
+            bstrings.exe -f malware.bin --lr "email,guid,cc,bitcoin" --off -o detailed_findings.csv
 
             # List all available patterns
             bstrings.exe -p
@@ -205,7 +206,14 @@ jobs:
             ```
 
             ## 📋 Built-in Patterns
-            This release includes 27 built-in regex patterns for: GUIDs, emails, credit cards, IP addresses, MAC addresses, phone numbers, URLs, file paths, cryptocurrency addresses, and more.
+            This release includes 27 built-in regex patterns for: GUIDs, emails, credit cards, IP addresses, MAC addresses, phone numbers, URLs, file paths, cryptocurrency addresses, and more.            ## 📊 Enhanced CSV Output
+            - **Professional CSV format** with proper headers and escaping
+            - **Structured columns**: Pattern name, data found, source file, offset, pattern type
+            - **Automatic CSV detection** when output file ends with `.csv`
+            - **Pattern identification** by friendly names (e.g., "email", "guid", "cc")
+            - **Spreadsheet ready** for Excel, Google Sheets, and other tools
+            - **Perfect for reporting** and data analysis workflows
+            - **Multi-pattern support** with proper categorization per row
               ## 🔧 Installation
             1. Download and extract `bstrings-win-x64.zip`
             2. Run `bstrings.exe --help` to see all options

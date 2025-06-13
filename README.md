@@ -7,6 +7,7 @@
 5. **🤖 Automated builds** - Every commit to master creates a new release via GitHub Actions
 6. **⚡ .NET 9.0** optimized for latest performance improvements
 7. **🎮 GPU-optimized processing** - Automatic GPU memory detection and chunk size optimization
+8. **📋 Enhanced CSV output** - Professional CSV format with headers for sorting and filtering in spreadsheet tools
 
 > 📦 **Ready-to-use single-file builds**: Check the [Releases page](../../releases/latest) for the latest **70MB standalone** Windows x64 executable - no installation required!
 
@@ -88,9 +89,45 @@ bstrings.exe -f file.txt --lr all -q -o results.txt  # Maximum performance!
 ```bash
 # Single command with concurrent processing
 bstrings.exe -f file.txt --lr "guid,email,cc" -q  # 1.39s
+
 # OR search all patterns at once
 bstrings.exe -f file.txt --lr all -q              # 5.66s (all 27 patterns!)
+
+# FASTEST: Output to file with suppressed console (NEW!)
+bstrings.exe -f file.txt --lr all -q -o results.txt  # Maximum performance!
+
+# NEW: Professional CSV output for data analysis
+bstrings.exe -f evidence.img --lr all -o artifacts.csv  # Spreadsheet-ready!
 ```
+
+### 📋 **CSV Output Showcase**
+
+The new CSV output feature transforms bstrings from a simple extraction tool into a professional forensic analysis platform:
+
+**Input file** (`evidence.txt`):
+
+```text
+Contact us at support@company.com or admin@site.org
+GUID: {12345678-1234-5678-9012-123456789ABC}
+Credit Card: 4532-1234-5678-9012
+```
+
+**Command**:
+
+```bash
+bstrings.exe -f evidence.txt --lr "email,guid,cc" --off -o findings.csv
+```
+
+**CSV Output** (`findings.csv`):
+
+```csv
+Name of search pattern,Data found,Source file,Offset,Pattern type
+"email","Contact us at support@company.com or admin@site.org","C:\evidence.txt","0x0","Regex"
+"guid","GUID: {12345678-1234-5678-9012-123456789ABC}","C:\evidence.txt","0x47","Regex"
+"cc","Credit Card: 4532-1234-5678-9012","C:\evidence.txt","0x80","Regex"
+```
+
+**Result**: Professional, sortable, filterable data ready for Excel, Google Sheets, or any CSV-compatible tool!
 
 ### Key Benefits
 
@@ -145,6 +182,53 @@ bstrings.exe -f malware.bin --lr "email,guid,bitcoin,url3986" -q -o findings.txt
 # Explicit silent mode (equivalent to -q -o combination)
 bstrings.exe -f large_data.bin --lr cc -s -o creditcards.txt
 ```
+
+## 📋 **Enhanced CSV Output**
+
+This fork provides **enhanced CSV output** with professional formatting for data analysis:
+
+### ✅ **CSV Format Features**
+
+- **Automatic detection**: Files ending in `.csv` get properly formatted CSV output
+- **Professional headers**: Includes column headers for easy sorting and filtering
+- **Proper CSV escaping**: All fields are properly quoted and escaped for spreadsheet compatibility
+- **Multiple columns**: Structured data with separate columns for different information types
+
+### 📊 **CSV Column Structure**
+
+When outputting to a `.csv` file, the following columns are included:
+
+| Column Name                | Description                                 | Example                             |
+| -------------------------- | ------------------------------------------- | ----------------------------------- |
+| **Name of search pattern** | The search pattern that matched this result | `email`, `guid`, `cc`               |
+| **Data found**             | The actual string data that was found       | `user@domain.com`, `{12345678-...}` |
+| **Source file**            | Full path to the file being searched        | `C:\Evidence\file.bin`              |
+| **Offset**                 | File offset where the string was found      | `1048576` (when using `--off`)      |
+| **Pattern type**           | Type of pattern (Regex, String, etc.)       | `Regex`, `A`, `U`                   |
+
+### 💡 **CSV Usage Examples**
+
+```bash
+# Generate CSV output for analysis in Excel/Google Sheets
+bstrings.exe -f evidence.img --lr all -q -o artifacts.csv
+
+# Search for multiple patterns and output to CSV
+bstrings.exe -f malware.bin --lr "email,guid,cc" -o findings.csv
+
+# Include offsets in CSV output for forensic analysis
+bstrings.exe -f file.bin --lr "email,bitcoin" --off -o results.csv
+
+# High-performance CSV generation (quiet mode)
+bstrings.exe -f large_file.bin --lr all -q -o output.csv
+```
+
+### 🔍 **CSV Benefits for Analysis**
+
+- **Easy sorting**: Sort by pattern type, file source, or data content
+- **Filtering**: Filter results by specific patterns or file sources
+- **Data validation**: Check for duplicate findings across multiple files
+- **Reporting**: Create professional reports with charts and pivot tables
+- **Export compatibility**: Works with Excel, Google Sheets, and other spreadsheet tools
 
 ## 🤖 Automated Builds & Releases
 
@@ -244,7 +328,23 @@ bstrings.exe -f "C:\Temp\UsrClass 1.dat" --ls URL
 bstrings.exe -f "C:\Temp\someFile.txt" --lr guid
 bstrings.exe -f "C:\Temp\someFile.txt" --lr "guid,email,cc"
 bstrings.exe -f "C:\Temp\someFile.txt" --lr all
-````
+```
+
+### Enhanced CSV Output (NEW!)
+
+```bash
+# Generate CSV output for spreadsheet analysis
+bstrings.exe -f "C:\Evidence\file.bin" --lr all -o artifacts.csv
+
+# Search specific patterns and output to CSV
+bstrings.exe -f "C:\Malware\sample.exe" --lr "email,bitcoin,guid" -o findings.csv
+
+# Include file offsets in CSV for forensic analysis
+bstrings.exe -f "C:\Data\evidence.img" --lr "cc,ssn" --off -o sensitive_data.csv
+
+# High-performance CSV generation with quiet mode
+bstrings.exe -f "C:\Large\file.bin" --lr all -q -o results.csv
+```
 
 ### High-Performance Output Control (NEW!)
 
@@ -338,3 +438,4 @@ All of Eric Zimmerman's tools can be downloaded [here](https://ericzimmerman.git
 # Special Thanks
 
 Open Source Development funding and support provided by the following contributors: [SANS Institute](http://sans.org/) and [SANS DFIR](http://dfir.sans.org/).
+````
