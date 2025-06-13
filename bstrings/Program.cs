@@ -100,10 +100,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
     // ILGPU specific fields
     private static readonly Context GpuContext;
-    private static readonly Accelerator GpuAccelerator;
-
-    // GPU concurrency control - limit simultaneous GPU operations
-    private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(2, 4); // Max 2 concurrent GPU operations
+    private static readonly Accelerator GpuAccelerator; // GPU concurrency control - increase limits for better GPU utilization
+    private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(4, 8); // Max 4 concurrent GPU operations, up to 8 total
 
     private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed
 
@@ -256,10 +254,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// </summary>
     public static class ConcurrentConfig
     {
-        public static int MaxConcurrentChunks => Math.Max(2, Environment.ProcessorCount / 4); // Reduced from /2 to /4
-        public static int ReadAheadChunks => Math.Min(4, MaxConcurrentChunks); // Reduced from 8
+        public static int MaxConcurrentChunks => Math.Max(4, Environment.ProcessorCount / 2); // Increased from /4 to /2 for better CPU utilization
+        public static int ReadAheadChunks => Math.Min(8, MaxConcurrentChunks); // Increased from 4 to 8
         public static int OptimalDegreeOfParallelism => Math.Max(2, Environment.ProcessorCount / 2); // Reduced from *3/4
-        public static int ProducerConsumerBufferSize => Math.Max(8, MaxConcurrentChunks * 2); // Reduced buffer
+        public static int ProducerConsumerBufferSize => Math.Max(16, MaxConcurrentChunks * 4); // Increased buffer for better throughput
     }
 
     /// <summary>
@@ -1383,151 +1381,210 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 int processedCount = 0;
                 DateTime lastProgressReport = DateTime.Now;
                 bool isLargeDataset = hits.Count > 100000;
-
                 if (isLargeDataset && !q)
                 {
                     Log.Information(
-                        "Processing {Count:N0} strings. This may take time for large datasets...",
+                        "Processing {Count:N0} strings with parallel optimization...",
                         hits.Count
                     );
                     Console.WriteLine();
                 }
 
-                foreach (var hit in hits)
+                // Pre-compile regex patterns for better performance
+                var compiledRegexes = new List<(Regex regex, string pattern)>();
+                if (regexPatterns.Count > 0)
                 {
-                    if (hit.Length == 0)
+                    foreach (var pattern in regexPatterns)
                     {
-                        continue;
-                    }
-
-                    // Prepare CSV output if needed
-                    if (isCsvOutput && sw != null && !csvHeaderWritten)
-                    {
-                        // Write header
-                        sw.WriteLine(
-                            "Name of search pattern,Data found,Source file,Offset,Pattern type"
-                        );
-                        csvHeaderWritten = true;
-                    }
-
-                    string sourceFile = currentFile ?? string.Empty;
-                    string offsetStr = string.Empty;
-                    string patternType = string.Empty;
-                    string patternName = string.Empty;
-                    string dataFound = hit;
-
-                    // Try to extract offset and pattern type if available (for future extensibility)
-                    // If off flag is set, offset may be appended to the string, try to parse it
-                    if (off)
-                    {
-                        // Example: "string~12345 (A)" or "string~12345 (U)"
-                        int tildeIdx = hit.LastIndexOf('~');
-                        if (tildeIdx > 0)
+                        try
                         {
-                            int spaceIdx = hit.IndexOf(' ', tildeIdx);
-                            if (spaceIdx > tildeIdx)
-                            {
-                                offsetStr = hit.Substring(tildeIdx + 1, spaceIdx - tildeIdx - 1);
-                                dataFound = hit.Substring(0, tildeIdx);
-                                // Try to get encoding
-                                int encStart = hit.IndexOf('(', spaceIdx);
-                                int encEnd = hit.IndexOf(')', spaceIdx);
-                                if (encStart > 0 && encEnd > encStart)
-                                    patternType = hit.Substring(
-                                        encStart + 1,
-                                        encEnd - encStart - 1
-                                    );
-                            }
+                            var regex = new System.Text.RegularExpressions.Regex(
+                                pattern,
+                                RegexOptions.IgnoreCase | RegexOptions.Compiled
+                            );
+                            compiledRegexes.Add((regex, pattern));
                         }
-                    } // Determine pattern name (for regex/file string matches)
-                    if (fileStrings.Count > 0)
-                    {
-                        foreach (var fileString in fileStrings)
+                        catch (Exception ex)
                         {
-                            if (fileString.Trim().Length == 0)
-                                continue;
-                            if (
-                                hit.IndexOf(fileString, StringComparison.InvariantCultureIgnoreCase)
-                                >= 0
-                            )
-                            {
-                                patternName = fileString;
-                                patternType = "String";
-                                break;
-                            }
-                        }
-                    }
-                    else if (regexPatterns.Count > 0)
-                    {
-                        foreach (var regex in regexPatterns)
-                        {
-                            try
-                            {
-                                if (
-                                    System.Text.RegularExpressions.Regex.IsMatch(
-                                        hit,
-                                        regex,
-                                        RegexOptions.IgnoreCase
-                                    )
-                                )
-                                {
-                                    // For CSV output, use the pattern name from RegExPatterns if available
-                                    patternName = GetRegexPatternName(regex) ?? regex;
-                                    patternType = "Regex";
-                                    break;
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                // Skip invalid regex patterns
-                                Log.Warning(
-                                    "Invalid regex pattern '{Regex}': {Message}",
-                                    regex,
-                                    ex.Message
-                                );
-                            }
-                        }
-                    }
-
-                    // Suppress console output if quiet mode is enabled and output file is specified
-                    var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
-                    if (s == false && !suppressConsoleOutput)
-                    {
-                        Log.Information("{Hit}", hit);
-                    }
-
-                    if (isCsvOutput && sw != null)
-                    {
-                        // Escape CSV fields
-                        string CsvEscape(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
-                        sw.WriteLine(
-                            $"{CsvEscape(patternName)},{CsvEscape(dataFound)},{CsvEscape(sourceFile)},{CsvEscape(offsetStr)},{CsvEscape(patternType)}"
-                        );
-                    }
-                    else
-                    {
-                        sw?.WriteLine(hit);
-                    }
-
-                    // Add progress reporting for large datasets
-                    if (isLargeDataset)
-                    {
-                        processedCount++;
-                        if (DateTime.Now.Subtract(lastProgressReport).TotalSeconds >= 10)
-                        {
-                            if (!q)
-                            {
-                                Log.Information(
-                                    "Post-processing progress: {Processed:N0} / {Total:N0} strings ({Percent:F1}%)",
-                                    processedCount,
-                                    hits.Count,
-                                    (double)processedCount / hits.Count * 100
-                                );
-                            }
-                            lastProgressReport = DateTime.Now;
+                            Log.Warning(
+                                "Invalid regex pattern '{Pattern}': {Message}",
+                                pattern,
+                                ex.Message
+                            );
                         }
                     }
                 }
+
+                // Use concurrent processing for large datasets
+                var hitsList = hits.ToList(); // Convert to list for parallel processing
+                var outputLock = new object(); // For thread-safe output
+                var progressLock = new object(); // For thread-safe progress tracking
+
+                // Configure parallelism based on dataset size
+                var parallelOptions = new ParallelOptions();
+                if (isLargeDataset)
+                {
+                    parallelOptions.MaxDegreeOfParallelism = Environment.ProcessorCount;
+                }
+                else
+                {
+                    parallelOptions.MaxDegreeOfParallelism = Math.Max(
+                        1,
+                        Environment.ProcessorCount / 2
+                    );
+                }
+                Parallel.ForEach(
+                    hitsList,
+                    parallelOptions,
+                    hit =>
+                    {
+                        if (hit.Length == 0)
+                        {
+                            return; // Use return instead of continue in parallel loop
+                        }
+
+                        // Prepare CSV output if needed
+                        if (isCsvOutput && sw != null && !csvHeaderWritten)
+                        {
+                            // Write header
+                            sw.WriteLine(
+                                "Name of search pattern,Data found,Source file,Offset,Pattern type"
+                            );
+                            csvHeaderWritten = true;
+                        }
+
+                        string sourceFile = currentFile ?? string.Empty;
+                        string offsetStr = string.Empty;
+                        string patternType = string.Empty;
+                        string patternName = string.Empty;
+                        string dataFound = hit;
+
+                        // Try to extract offset and pattern type if available (for future extensibility)
+                        // If off flag is set, offset may be appended to the string, try to parse it
+                        if (off)
+                        {
+                            // Example: "string~12345 (A)" or "string~12345 (U)"
+                            int tildeIdx = hit.LastIndexOf('~');
+                            if (tildeIdx > 0)
+                            {
+                                int spaceIdx = hit.IndexOf(' ', tildeIdx);
+                                if (spaceIdx > tildeIdx)
+                                {
+                                    offsetStr = hit.Substring(
+                                        tildeIdx + 1,
+                                        spaceIdx - tildeIdx - 1
+                                    );
+                                    dataFound = hit.Substring(0, tildeIdx);
+                                    // Try to get encoding
+                                    int encStart = hit.IndexOf('(', spaceIdx);
+                                    int encEnd = hit.IndexOf(')', spaceIdx);
+                                    if (encStart > 0 && encEnd > encStart)
+                                        patternType = hit.Substring(
+                                            encStart + 1,
+                                            encEnd - encStart - 1
+                                        );
+                                }
+                            }
+                        } // Determine pattern name (for regex/file string matches)
+                        if (fileStrings.Count > 0)
+                        {
+                            foreach (var fileString in fileStrings)
+                            {
+                                if (fileString.Trim().Length == 0)
+                                    continue;
+                                if (
+                                    hit.IndexOf(
+                                        fileString,
+                                        StringComparison.InvariantCultureIgnoreCase
+                                    ) >= 0
+                                )
+                                {
+                                    patternName = fileString;
+                                    patternType = "String";
+                                    break;
+                                }
+                            }
+                        }
+                        else if (compiledRegexes.Count > 0)
+                        {
+                            foreach (var (regex, pattern) in compiledRegexes)
+                            {
+                                try
+                                {
+                                    if (regex.IsMatch(hit))
+                                    {
+                                        // For CSV output, use the pattern name from RegExPatterns if available
+                                        patternName = GetRegexPatternName(pattern) ?? pattern;
+                                        patternType = "Regex";
+                                        break;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    // Skip invalid regex patterns
+                                    Log.Warning(
+                                        "Invalid regex pattern '{Pattern}': {Message}",
+                                        pattern,
+                                        ex.Message
+                                    );
+                                }
+                            }
+                        } // Thread-safe output handling
+                        lock (outputLock)
+                        {
+                            // Suppress console output if quiet mode is enabled and output file is specified
+                            var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
+                            if (s == false && !suppressConsoleOutput)
+                            {
+                                Log.Information("{Hit}", hit);
+                            }
+
+                            if (isCsvOutput && sw != null)
+                            {
+                                // Write CSV header if not done yet
+                                if (!csvHeaderWritten)
+                                {
+                                    sw.WriteLine(
+                                        "Name of search pattern,Data found,Source file,Offset,Pattern type"
+                                    );
+                                    csvHeaderWritten = true;
+                                }
+
+                                // Escape CSV fields
+                                string CsvEscape(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
+                                sw.WriteLine(
+                                    $"{CsvEscape(patternName)},{CsvEscape(dataFound)},{CsvEscape(sourceFile)},{CsvEscape(offsetStr)},{CsvEscape(patternType)}"
+                                );
+                            }
+                            else
+                            {
+                                sw?.WriteLine(hit);
+                            }
+                        }
+
+                        // Thread-safe progress reporting for large datasets
+                        if (isLargeDataset)
+                        {
+                            lock (progressLock)
+                            {
+                                processedCount++;
+                                if (DateTime.Now.Subtract(lastProgressReport).TotalSeconds >= 10)
+                                {
+                                    if (!q)
+                                    {
+                                        Log.Information(
+                                            "Post-processing progress: {Processed:N0} / {Total:N0} strings ({Percent:F1}%)",
+                                            processedCount,
+                                            hitsList.Count,
+                                            (double)processedCount / hitsList.Count * 100
+                                        );
+                                    }
+                                    lastProgressReport = DateTime.Now;
+                                }
+                            }
+                        }
+                    }
+                ); // End of Parallel.ForEach
             } // End of conditional post-processing
 
             if (q)
