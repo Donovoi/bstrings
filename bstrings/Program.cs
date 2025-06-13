@@ -1356,15 +1356,38 @@ public static partial class Program // Make it public and partial for ILGPU if n
             if (ro == false)
             {
                 //  AddHighlightingRules(regexStrings.ToList(), true);
-            }
-
-            if (!q)
+            }            if (!q)
             {
                 Log.Information("Processing strings...");
                 Console.WriteLine();
             }
 
-            foreach (var hit in hits)
+            // Skip expensive post-processing if results are already written to file and no console output needed
+            bool streamingComplete = !string.IsNullOrEmpty(o) && q;
+            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0;
+            
+            if (streamingComplete && !isCsvOutput && !hasPatternProcessing)
+            {
+                if (!q)
+                {
+                    Log.Information("Results already written to output file. Skipping redundant post-processing.");
+                    Console.WriteLine();
+                }
+            }
+            else
+            {
+                // Add progress reporting for large datasets
+                int processedCount = 0;
+                DateTime lastProgressReport = DateTime.Now;
+                bool isLargeDataset = hits.Count > 100000;
+                
+                if (isLargeDataset && !q)
+                {
+                    Log.Information("Processing {Count:N0} strings. This may take time for large datasets...", hits.Count);
+                    Console.WriteLine();
+                }
+
+                foreach (var hit in hits)
             {
                 if (hit.Length == 0)
                 {
@@ -1461,12 +1484,27 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     sw.WriteLine(
                         $"{CsvEscape(patternName)},{CsvEscape(dataFound)},{CsvEscape(sourceFile)},{CsvEscape(offsetStr)},{CsvEscape(patternType)}"
                     );
-                }
-                else
+                }                else
                 {
                     sw?.WriteLine(hit);
                 }
-            }
+                
+                // Add progress reporting for large datasets
+                if (isLargeDataset)
+                {
+                    processedCount++;
+                    if (DateTime.Now.Subtract(lastProgressReport).TotalSeconds >= 10)
+                    {
+                        if (!q)
+                        {
+                            Log.Information("Post-processing progress: {Processed:N0} / {Total:N0} strings ({Percent:F1}%)", 
+                                processedCount, hits.Count, (double)processedCount / hits.Count * 100);
+                        }
+                        lastProgressReport = DateTime.Now;
+                    }
+                }
+                }
+            } // End of conditional post-processing
 
             if (q)
             {
