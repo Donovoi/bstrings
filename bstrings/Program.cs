@@ -252,15 +252,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
-    /// Configuration for concurrent processing
+    /// Configuration for concurrent processing - optimized for memory efficiency
     /// </summary>
     public static class ConcurrentConfig
     {
-        public static int MaxConcurrentChunks => Math.Max(2, Environment.ProcessorCount / 2);
-        public static int ReadAheadChunks => Math.Min(8, MaxConcurrentChunks * 2);
-        public static int OptimalDegreeOfParallelism =>
-            Math.Max(2, Environment.ProcessorCount * 3 / 4);
-        public static int ProducerConsumerBufferSize => Math.Max(16, MaxConcurrentChunks * 4);
+        public static int MaxConcurrentChunks => Math.Max(2, Environment.ProcessorCount / 4); // Reduced from /2 to /4
+        public static int ReadAheadChunks => Math.Min(4, MaxConcurrentChunks); // Reduced from 8
+        public static int OptimalDegreeOfParallelism => Math.Max(2, Environment.ProcessorCount / 2); // Reduced from *3/4
+        public static int ProducerConsumerBufferSize => Math.Max(8, MaxConcurrentChunks * 2); // Reduced buffer
     }
 
     /// <summary>
@@ -1167,26 +1166,51 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 }
                 using (mappedStream)
                 {
-                    // Process main chunks concurrently
-                    await ProcessFileChunksConcurrentlyAsync(
-                        mappedStream,
-                        fileSizeBytes,
-                        chunkSizeBytes,
-                        hits,
-                        minLength,
-                        maxLength,
-                        a,
-                        u,
-                        off,
-                        cp,
-                        ar,
-                        ur,
-                        q,
-                        totalChunks,
-                        progressTracker
-                    );
-
-                    //do chunk boundary checks to make sure we get everything and not split things
+                    // Process main chunks concurrently with streaming output for memory efficiency
+                    long totalMainResults = 0;
+                    if (sw != null && o.Length > 0)
+                    {
+                        // Use streaming processing to write directly to file and minimize memory usage
+                        totalMainResults = await ProcessFileChunksConcurrentlyStreamingAsync(
+                            mappedStream,
+                            fileSizeBytes,
+                            chunkSizeBytes,
+                            minLength,
+                            maxLength,
+                            a,
+                            u,
+                            off,
+                            cp,
+                            ar,
+                            ur,
+                            q,
+                            totalChunks,
+                            progressTracker,
+                            sw, // Stream directly to output file
+                            hits // Also track unique hits
+                        );
+                    }
+                    else
+                    {
+                        // Fallback to in-memory collection when no output file specified
+                        await ProcessFileChunksConcurrentlyAsync(
+                            mappedStream,
+                            fileSizeBytes,
+                            chunkSizeBytes,
+                            hits,
+                            minLength,
+                            maxLength,
+                            a,
+                            u,
+                            off,
+                            cp,
+                            ar,
+                            ur,
+                            q,
+                            totalChunks,
+                            progressTracker
+                        );
+                    }                    //do chunk boundary checks to make sure we get everything and not split things
                     if (!q)
                     {
                         Log.Information(
@@ -1194,23 +1218,49 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         );
                     }
 
-                    // Process boundary chunks concurrently
-                    await ProcessBoundaryChunksConcurrentlyAsync(
-                        mappedStream,
-                        fileSizeBytes,
-                        chunkSizeMb * 1024 * 1024,
-                        m * 10 * 2 * 2, // boundaryChunkSize
-                        hits,
-                        minLength,
-                        maxLength,
-                        a,
-                        u,
-                        off,
-                        cp,
-                        ar,
-                        ur,
-                        q
-                    );
+                    // Process boundary chunks concurrently with streaming for memory efficiency
+                    if (sw != null && o.Length > 0)
+                    {
+                        // Use streaming for boundary processing too
+                        var boundaryResults = await ProcessBoundaryChunksConcurrentlyStreamingAsync(
+                            mappedStream,
+                            fileSizeBytes,
+                            chunkSizeMb * 1024 * 1024,
+                            m * 10 * 2 * 2, // boundaryChunkSize
+                            minLength,
+                            maxLength,
+                            a,
+                            u,
+                            off,
+                            cp,
+                            ar,
+                            ur,
+                            q,
+                            sw,
+                            hits
+                        );
+                        totalMainResults += boundaryResults;
+                    }
+                    else
+                    {
+                        // Fallback to in-memory boundary processing
+                        await ProcessBoundaryChunksConcurrentlyAsync(
+                            mappedStream,
+                            fileSizeBytes,
+                            chunkSizeMb * 1024 * 1024,
+                            m * 10 * 2 * 2, // boundaryChunkSize
+                            hits,
+                            minLength,
+                            maxLength,
+                            a,
+                            u,
+                            off,
+                            cp,
+                            ar,
+                            ur,
+                            q
+                        );
+                    }
                 }
 
                 // Mark progress as completed to stop the progress task
@@ -2557,7 +2607,59 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
-    /// Processes main file chunks concurrently using enhanced pipeline parallelism
+    /// Processes main file chunks concurrently using enhanced pipeline parallelism with streaming output
+    /// </summary>
+    private static async Task<long> ProcessFileChunksConcurrentlyStreamingAsync(
+        MappedStream mappedStream,
+        long fileSizeBytes,
+        int chunkSizeBytes,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        bool off,
+        int cp,
+        string ar,
+        string ur,
+        bool quiet,
+        long totalChunks,
+        ProgressTracker progressTracker,
+        StreamWriter outputWriter = null,
+        HashSet<string> resultsSet = null
+    )
+    {
+        using var pipeline = new ChunkProcessingPipeline();
+
+        // Create async enumerable of chunks
+        var chunks = ReadChunksAsyncEnumerable(
+            mappedStream,
+            fileSizeBytes,
+            chunkSizeBytes,
+            0,
+            false
+        );
+
+        // Process chunks through the streaming pipeline
+        var totalResults = await pipeline.ProcessChunksStreamingAsync(
+            chunks,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            off,
+            cp,
+            ar,
+            ur,
+            progressTracker,
+            outputWriter,
+            resultsSet
+        );
+
+        return totalResults;
+    }
+
+    /// <summary>
+    /// Processes main file chunks concurrently using enhanced pipeline parallelism (legacy - collects in memory)
     /// </summary>
     private static async Task ProcessFileChunksConcurrentlyAsync(
         MappedStream mappedStream,
@@ -2653,10 +2755,63 @@ public static partial class Program // Make it public and partial for ILGPU if n
             bytesRemaining = fileSizeBytes - offset;
             chunkIndex = lastChunk.ChunkIndex + 1;
         }
+    }    /// <summary>
+    /// Processes boundary chunks concurrently using enhanced pipeline parallelism with streaming output
+    /// </summary>
+    private static async Task<long> ProcessBoundaryChunksConcurrentlyStreamingAsync(
+        MappedStream mappedStream,
+        long fileSizeBytes,
+        int chunkSizeBytes,
+        int boundaryChunkSize,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        bool off,
+        int cp,
+        string ar,
+        string ur,
+        bool quiet,
+        StreamWriter outputWriter = null,
+        HashSet<string> resultsSet = null
+    )
+    {
+        using var pipeline = new ChunkProcessingPipeline();
+
+        var bytesRemaining = fileSizeBytes;
+        long offset = chunkSizeBytes - minLength * 10 * 2; // Move starting point backwards
+
+        // Create async enumerable of boundary chunks
+        var chunks = ReadChunksAsyncEnumerable(
+            mappedStream,
+            bytesRemaining,
+            chunkSizeBytes,
+            offset,
+            true, // boundary mode
+            boundaryChunkSize
+        );
+
+        // Process chunks through the streaming pipeline
+        var totalResults = await pipeline.ProcessChunksStreamingAsync(
+            chunks,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            off,
+            cp,
+            ar,
+            ur,
+            new ProgressTracker(1, quiet), // Simple tracker for boundary chunks
+            outputWriter,
+            resultsSet
+        );
+
+        return totalResults;
     }
 
     /// <summary>
-    /// Processes boundary chunks concurrently using enhanced pipeline parallelism
+    /// Processes boundary chunks concurrently using enhanced pipeline parallelism (legacy - collects in memory)
     /// </summary>
     private static async Task ProcessBoundaryChunksConcurrentlyAsync(
         MappedStream mappedStream,
@@ -2720,35 +2875,34 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
-    /// Calculates optimal CPU chunk size based on available memory and file characteristics
+    /// Calculates optimal CPU chunk size based on available memory and file characteristics - memory conservative
     /// </summary>
     private static int CalculateOptimalCpuChunkSizeMB()
     {
         try
         {
-            // Get system memory information more accurately
+            // Get system memory information more conservatively
             var gcMemoryInfo = GC.GetGCMemoryInfo();
             long totalPhysicalMemory = gcMemoryInfo.TotalAvailableMemoryBytes;
             long currentlyUsed = GC.GetTotalMemory(false);
 
-            // Calculate available memory more aggressively but safely
+            // Calculate available memory much more conservatively
             long availableMemory = totalPhysicalMemory - currentlyUsed;
 
-            // Use a higher percentage of available memory for better performance
-            // but ensure we don't exceed safe limits
-            double memoryUsageFraction = availableMemory > 8L * 1024 * 1024 * 1024 ? 0.25 : 0.15; // 25% if >8GB available, 15% otherwise
+            // Use a much lower percentage of available memory to prevent OOM
+            double memoryUsageFraction = 0.05; // Only use 5% of available memory for chunks
             long usableMemory = (long)(availableMemory * memoryUsageFraction);
 
-            // Account for concurrent processing
+            // Account for concurrent processing with much more conservative limits
             int maxConcurrentChunks = ConcurrentConfig.MaxConcurrentChunks;
             long memoryPerChunk = usableMemory / Math.Max(1, maxConcurrentChunks);
 
             // Convert to MB
             int chunkSizeMB = (int)(memoryPerChunk / (1024 * 1024));
 
-            // Apply more aggressive practical limits for better performance
-            const int minPracticalMB = 128; // Increased minimum for better I/O efficiency
-            const int maxPracticalMB = 4096; // Increased maximum to 4GB for large files
+            // Apply much more conservative practical limits for memory efficiency
+            const int minPracticalMB = 32; // Much smaller minimum
+            const int maxPracticalMB = 256; // Much smaller maximum - 256MB max instead of 4GB
 
             chunkSizeMB = Math.Max(minPracticalMB, Math.Min(maxPracticalMB, chunkSizeMB));
 
@@ -2756,7 +2910,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 $"Total Memory: {totalPhysicalMemory / (1024 * 1024)} MB, Available: {availableMemory / (1024 * 1024)} MB"
             );
             Console.Error.WriteLine(
-                $"Calculated optimal CPU chunk size: {chunkSizeMB} MB (max {maxConcurrentChunks} concurrent chunks, {memoryUsageFraction:P1} memory usage)"
+                $"Calculated conservative CPU chunk size: {chunkSizeMB} MB (max {maxConcurrentChunks} concurrent chunks, {memoryUsageFraction:P1} memory usage)"
             );
 
             return chunkSizeMB;
@@ -2764,10 +2918,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
         catch (Exception ex)
         {
             Console.Error.WriteLine(
-                $"Error calculating optimal CPU chunk size: {ex.Message}. Using enhanced fallback."
+                $"Error calculating optimal CPU chunk size: {ex.Message}. Using conservative fallback."
             );
-            // Enhanced fallback based on processor count
-            return Math.Max(512, Environment.ProcessorCount * 128); // At least 512MB, or 128MB per core
+            // Conservative fallback - much smaller
+            return Math.Min(64, Environment.ProcessorCount * 16); // At most 64MB, or 16MB per core
         }
     }
 
@@ -2942,6 +3096,59 @@ public static partial class Program // Make it public and partial for ILGPU if n
             _cancellationTokenSource = new CancellationTokenSource();
         }
 
+        public async Task<long> ProcessChunksStreamingAsync(
+            IAsyncEnumerable<DataChunk> chunks,
+            int minLength,
+            int maxLength,
+            bool asciiSearch,
+            bool unicodeSearch,
+            bool off,
+            int cp,
+            string ar,
+            string ur,
+            ProgressTracker progressTracker,
+            StreamWriter outputWriter = null,
+            HashSet<string> resultsSet = null
+        )
+        {
+            var totalResultCount = 0L;
+            var processingTask = StartProcessingWorkersAsync(
+                minLength,
+                maxLength,
+                asciiSearch,
+                unicodeSearch,
+                off,
+                cp,
+                ar,
+                ur,
+                progressTracker
+            );
+            var resultCollectionTask = CollectResultsStreamingAsync(outputWriter, resultsSet);
+
+            try
+            {
+                // Feed chunks into the pipeline
+                await foreach (var chunk in chunks.WithCancellation(_cancellationTokenSource.Token))
+                {
+                    await _chunkWriter.WriteAsync(chunk, _cancellationTokenSource.Token);
+                }
+            }
+            finally
+            {
+                _chunkWriter.Complete();
+            }
+
+            // Wait for processing to complete
+            await processingTask;
+            _resultWriter.Complete();
+
+            // Wait for result collection to complete
+            totalResultCount = await resultCollectionTask;
+
+            return totalResultCount;
+        }
+
+        // Legacy method for backward compatibility - now streams results
         public async Task<List<string>> ProcessChunksAsync(
             IAsyncEnumerable<DataChunk> chunks,
             int minLength,
@@ -2967,7 +3174,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 ur,
                 progressTracker
             );
-            var resultCollectionTask = CollectResultsAsync(allResults);
+            var resultCollectionTask = CollectResultsLimitedAsync(allResults);
 
             try
             {
@@ -3075,6 +3282,117 @@ public static partial class Program // Make it public and partial for ILGPU if n
             )
             {
                 allResults.AddRange(chunkResults);
+            }
+        }
+
+        /// <summary>
+        /// Streaming result collection that writes directly to output and flushes memory immediately
+        /// </summary>
+        private async Task<long> CollectResultsStreamingAsync(
+            StreamWriter outputWriter,
+            HashSet<string> resultsSet
+        )
+        {
+            const int FLUSH_BATCH_SIZE = 1000; // Flush every 1000 results to manage memory
+            int batchCount = 0;
+            long totalResultCount = 0;
+            
+            await foreach (
+                var chunkResults in _resultReader.ReadAllAsync(_cancellationTokenSource.Token)
+            )
+            {
+                foreach (var result in chunkResults)
+                {
+                    // Add to set if provided (for deduplication)
+                    if (resultsSet != null)
+                    {
+                        if (resultsSet.Add(result))
+                        {
+                            totalResultCount++;
+                            
+                            // Write immediately to output if provided
+                            if (outputWriter != null)
+                            {
+                                await outputWriter.WriteLineAsync(result);
+                                batchCount++;
+                                
+                                // Flush periodically to free up memory
+                                if (batchCount >= FLUSH_BATCH_SIZE)
+                                {
+                                    await outputWriter.FlushAsync();
+                                    batchCount = 0;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        totalResultCount++;
+                        // Write immediately to output if provided
+                        if (outputWriter != null)
+                        {
+                            await outputWriter.WriteLineAsync(result);
+                            batchCount++;
+                            
+                            // Flush periodically to free up memory
+                            if (batchCount >= FLUSH_BATCH_SIZE)
+                            {
+                                await outputWriter.FlushAsync();
+                                batchCount = 0;
+                            }
+                        }
+                    }
+                }
+                
+                // Important: Clear the chunk results immediately to free memory
+                chunkResults.Clear();
+            }
+            
+            // Final flush
+            if (outputWriter != null && batchCount > 0)
+            {
+                await outputWriter.FlushAsync();
+            }
+            
+            return totalResultCount;
+        }
+
+        /// <summary>
+        /// Limited result collection with memory management for smaller files
+        /// </summary>
+        private async Task CollectResultsLimitedAsync(List<string> allResults)
+        {
+            const int MAX_RESULTS_IN_MEMORY = 100000; // Limit to prevent excessive memory usage
+            
+            await foreach (
+                var chunkResults in _resultReader.ReadAllAsync(_cancellationTokenSource.Token)
+            )
+            {
+                // Add results but enforce memory limits
+                if (allResults.Count + chunkResults.Count <= MAX_RESULTS_IN_MEMORY)
+                {
+                    allResults.AddRange(chunkResults);
+                }
+                else
+                {
+                    // Add only what fits within the limit
+                    var availableSpace = MAX_RESULTS_IN_MEMORY - allResults.Count;
+                    if (availableSpace > 0)
+                    {
+                        allResults.AddRange(chunkResults.Take(availableSpace));
+                    }
+                    // Log warning about truncation
+                    if (_debug)
+                    {
+                        Console.Error.WriteLine(
+                            $"Result collection truncated at {MAX_RESULTS_IN_MEMORY} results to prevent excessive memory usage"
+                        );
+                    }
+                    break;
+                }
+                
+                // Clear chunk results to free memory
+                chunkResults.Clear();
             }
         }
 
@@ -3593,7 +3911,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                             match.Value,
                                             hitOffset
                                         );
-                                    }                                    if (isCsvOutput && sw != null)
+                                    }
+                                    if (isCsvOutput && sw != null)
                                     {
                                         // CSV output for regex matches
                                         string CsvEscape(string s) =>
