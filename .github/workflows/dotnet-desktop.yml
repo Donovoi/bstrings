@@ -30,6 +30,26 @@ jobs:
           dotnet-version: 9.0.x
           dotnet-quality: "preview"
 
+      - name: Auto-increment version (if commit message contains [version:patch/minor/major])
+        run: |
+          $commitMessage = "${{ github.event.head_commit.message }}"
+          Write-Host "Commit message: $commitMessage"
+          
+          if ($commitMessage -match '\[version:(patch|minor|major)\]') {
+            $versionType = $matches[1]
+            Write-Host "🔄 Auto-incrementing $versionType version..."
+            
+            if (Test-Path "Scripts/UpdateVersion.ps1") {
+              ./Scripts/UpdateVersion.ps1 $versionType
+              Write-Host "✅ Version updated successfully"
+            } else {
+              Write-Host "⚠️ Version update script not found, skipping auto-increment"
+            }
+          } else {
+            Write-Host "ℹ️ No version increment requested in commit message"
+            Write-Host "ℹ️ To auto-increment, include [version:patch], [version:minor], or [version:major] in commit message"
+          }
+
       - name: Restore dependencies
         run: dotnet restore bstrings.sln --verbosity minimal
 
@@ -126,14 +146,26 @@ jobs:
 
       - name: Get version and commit info
         id: version
-        run: |
-          # Try to get version from AssemblyInfo.cs
+        run: |          # Get version from .csproj file (modern SDK-style project)
           $version = "1.0.0"
-          if (Test-Path "bstrings/Properties/AssemblyInfo.cs") {
+          if (Test-Path "bstrings/bstrings.csproj") {
+            $csprojContent = Get-Content "bstrings/bstrings.csproj" -Raw
+            $versionMatch = [regex]::Match($csprojContent, '<Version>([^<]+)</Version>')
+            if ($versionMatch.Success) {
+              $version = $versionMatch.Groups[1].Value
+              Write-Host "Found version in .csproj: $version"
+            } else {
+              Write-Host "No version found in .csproj, using fallback"
+            }
+          }
+          
+          # Fallback: Try to get version from AssemblyInfo.cs if not found in .csproj
+          if ($version -eq "1.0.0" -and (Test-Path "bstrings/Properties/AssemblyInfo.cs")) {
             $assemblyInfo = Get-Content "bstrings/Properties/AssemblyInfo.cs" -Raw
             $versionMatch = [regex]::Match($assemblyInfo, 'AssemblyVersion\("([^"]+)"\)')
             if ($versionMatch.Success) {
               $version = $versionMatch.Groups[1].Value
+              Write-Host "Found version in AssemblyInfo.cs: $version"
             }
           }
 
