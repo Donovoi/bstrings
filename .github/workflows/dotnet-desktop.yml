@@ -32,9 +32,12 @@ jobs:
 
       - name: Auto-increment version (if commit message contains [version:patch/minor/major])
         run: |
-          $commitMessage = "${{ github.event.head_commit.message }}"
-          Write-Host "Commit message: $commitMessage"
-          
+          # Safely handle commit message with special characters
+          $commitMessage = @'
+          ${{ github.event.head_commit.message }}
+          '@
+          Write-Host "Commit message length: $($commitMessage.Length) characters"
+
           if ($commitMessage -match '\[version:(patch|minor|major)\]') {
             $versionType = $matches[1]
             Write-Host "🔄 Auto-incrementing $versionType version..."
@@ -146,7 +149,7 @@ jobs:
 
       - name: Get version and commit info
         id: version
-        run: |          # Get version from .csproj file (modern SDK-style project)
+        run: | # Get version from .csproj file (modern SDK-style project)
           $version = "1.0.0"
           if (Test-Path "bstrings/bstrings.csproj") {
             $csprojContent = Get-Content "bstrings/bstrings.csproj" -Raw
@@ -158,7 +161,7 @@ jobs:
               Write-Host "No version found in .csproj, using fallback"
             }
           }
-          
+
           # Fallback: Try to get version from AssemblyInfo.cs if not found in .csproj
           if ($version -eq "1.0.0" -and (Test-Path "bstrings/Properties/AssemblyInfo.cs")) {
             $assemblyInfo = Get-Content "bstrings/Properties/AssemblyInfo.cs" -Raw
@@ -189,6 +192,7 @@ jobs:
           tag_name: ${{ steps.version.outputs.release_tag }}
           name: "bstrings v${{ steps.version.outputs.version }} - Windows x64"
           body: | # 🚀 bstrings Enhanced Release - Windows x64 SINGLE-FILE
+
 
 
 
