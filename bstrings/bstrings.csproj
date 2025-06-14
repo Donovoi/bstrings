@@ -7,7 +7,7 @@
     <Product>bstrings</Product>
     <Description>A better strings utility - GPU + CPU accelerated with parallel processing and memory-optimized streaming for massive files</Description>
     <Copyright>Eric Zimmerman</Copyright>
-    <Version>1.8.0</Version>
+    <Version>1.8.1</Version>
     <IsPackable>false</IsPackable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnablePreviewFeatures>true</EnablePreviewFeatures>
@@ -46,5 +46,6 @@
     />
   </ItemGroup>
 </Project>
+
 
 
