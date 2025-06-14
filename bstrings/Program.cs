@@ -1413,12 +1413,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             );
                         }
                     }
-                }
-
-                // Use concurrent processing for large datasets
+                } // Use concurrent processing for large datasets
                 var hitsList = hits.ToList(); // Convert to list for parallel processing
                 var outputLock = new object(); // For thread-safe output
                 var progressLock = new object(); // For thread-safe progress tracking
+                var matchCount = 0; // Track number of actual matches
 
                 // Configure parallelism based on dataset size
                 var parallelOptions = new ParallelOptions();
@@ -1486,6 +1485,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                 }
                             }
                         } // Determine pattern name (for regex/file string matches)
+                        bool isMatch = false; // Track whether this hit matches any pattern
+
                         if (fileStrings.Count > 0)
                         {
                             foreach (var fileString in fileStrings)
@@ -1501,6 +1502,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                 {
                                     patternName = fileString;
                                     patternType = "String";
+                                    isMatch = true;
                                     break;
                                 }
                             }
@@ -1516,6 +1518,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                         // For CSV output, use the pattern name from RegExPatterns if available
                                         patternName = GetRegexPatternName(pattern) ?? pattern;
                                         patternType = "Regex";
+                                        isMatch = true;
                                         break;
                                     }
                                 }
@@ -1529,41 +1532,53 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                     );
                                 }
                             }
-                        } // Thread-safe output handling
-                        lock (outputLock)
+                        }
+                        else
                         {
-                            // Suppress console output if quiet mode is enabled and output file is specified
-                            var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
-                            if (s == false && !suppressConsoleOutput)
+                            // If no specific patterns are provided, include all hits
+                            isMatch = true;
+                        }
+                        // Only output hits that match patterns
+                        if (isMatch)
+                        {
+                            // Thread-safe output handling
+                            lock (outputLock)
                             {
-                                Log.Information("{Hit}", hit);
-                            }
+                                matchCount++; // Increment match counter
 
-                            if (isCsvOutput && sw != null)
-                            {
-                                // Write CSV header if not done yet
-                                if (!csvHeaderWritten)
+                                // Suppress console output if quiet mode is enabled and output file is specified
+                                var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
+                                if (s == false && !suppressConsoleOutput)
                                 {
-                                    sw.WriteLine(
-                                        "Name of search pattern,Data found,Source file,Offset,Pattern type"
-                                    );
-                                    csvHeaderWritten = true;
+                                    Log.Information("{Hit}", hit);
                                 }
 
-                                // Escape CSV fields
-                                string CsvEscape(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
-                                sw.WriteLine(
-                                    $"{CsvEscape(patternName)},{CsvEscape(dataFound)},{CsvEscape(sourceFile)},{CsvEscape(offsetStr)},{CsvEscape(patternType)}"
-                                );
-                            }
-                            else
-                            {
-                                sw?.WriteLine(hit);
+                                if (isCsvOutput && sw != null)
+                                {
+                                    // Write CSV header if not done yet
+                                    if (!csvHeaderWritten)
+                                    {
+                                        sw.WriteLine(
+                                            "Name of search pattern,Data found,Source file,Offset,Pattern type"
+                                        );
+                                        csvHeaderWritten = true;
+                                    }
+
+                                    // Escape CSV fields
+                                    string CsvEscape(string s) =>
+                                        "\"" + s.Replace("\"", "\"\"") + "\"";
+                                    sw.WriteLine(
+                                        $"{CsvEscape(patternName)},{CsvEscape(dataFound)},{CsvEscape(sourceFile)},{CsvEscape(offsetStr)},{CsvEscape(patternType)}"
+                                    );
+                                }
+                                else
+                                {
+                                    sw?.WriteLine(hit);
+                                }
                             }
                         }
 
-                        // Thread-safe progress reporting for large datasets
-                        if (isLargeDataset)
+                        // Thread-safe progress reporting for large datasets                        if (isLargeDataset)
                         {
                             lock (progressLock)
                             {
@@ -1585,6 +1600,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         }
                     }
                 ); // End of Parallel.ForEach
+
+                // Update counter with actual matches found
+                counter = matchCount;
             } // End of conditional post-processing
 
             if (q)
