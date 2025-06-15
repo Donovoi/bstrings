@@ -1365,7 +1365,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             // Skip expensive post-processing if results are already written to file and no console output needed
             bool streamingComplete = !string.IsNullOrEmpty(o) && q;
-            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0; // When regex patterns are specified, use dedicated regex processing ONLY
+            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0;
+            // When regex patterns are specified, use dedicated regex processing ONLY
             if (regexPatterns.Count > 0)
             {
                 counter = await ProcessRegexPatternsConcurrentlyAsync(
@@ -1378,14 +1379,24 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     q,
                     o,
                     currentFile,
-                    isCsvOutput
+                    isCsvOutput,
+                    csvHeaderWritten
                 );
+
+                // Mark CSV header as written since regex processing handles its own CSV output
+                if (isCsvOutput && sw != null)
+                {
+                    csvHeaderWritten = true;
+                }
 
                 if (!q)
                 {
                     Log.Information("Regex pattern processing complete.");
                     Console.WriteLine();
                 }
+
+                // Skip general string processing when regex patterns are used - regex processing handles output
+                goto skipGeneralProcessing;
             }
             else if (streamingComplete && !isCsvOutput && !hasPatternProcessing)
             {
@@ -1662,6 +1673,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 );
             }
 
+            skipGeneralProcessing:
             globalCounter += counter;
             globalHits += hits.Count;
             globalTimespan += _sw.Elapsed.TotalSeconds;
@@ -4047,10 +4059,13 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <param name="hits">The string hits to process</param>
     /// <param name="regexPatterns">List of regex patterns to match against</param>
     /// <param name="ro">Regex output mode</param>
-    /// <param name="off">Show offset</param>    /// <param name="s">Silent mode</param>
+    /// <param name="off">Show offset</param>
+    /// <param name="s">Silent mode</param>
     /// <param name="sw">StreamWriter for output</param>
-    /// <param name="q">Quiet mode</param>    /// <param name="o">Output file path</param>    /// <param name="currentFile">Current file being processed</param>
-    /// <param name="isCsvOutput">Whether output is CSV format</param>
+    /// <param name="q">Quiet mode</param>
+    /// <param name="o">Output file path</param>
+    /// <param name="currentFile">Current file being processed</param>    /// <param name="isCsvOutput">Whether output is CSV format</param>
+    /// <param name="csvHeaderAlreadyWritten">Whether CSV header has already been written</param>
     /// <returns>Number of matches found</returns>
     private static async Task<int> ProcessRegexPatternsConcurrentlyAsync(
         HashSet<string> hits,
@@ -4062,11 +4077,18 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool q,
         string o,
         string currentFile = "",
-        bool isCsvOutput = false
+        bool isCsvOutput = false,
+        bool csvHeaderAlreadyWritten = false
     )
     {
         if (regexPatternsWithNames.Count == 0)
             return 0;
+
+        // Write CSV header if this is CSV output, we have a StreamWriter, and header hasn't been written yet
+        if (isCsvOutput && sw != null && !csvHeaderAlreadyWritten)
+        {
+            sw.WriteLine("Name of search pattern,Data found,Source file,Offset,Pattern type");
+        }
 
         var lockObject = new object();
 

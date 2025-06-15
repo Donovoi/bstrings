@@ -231,13 +231,15 @@ bstrings.exe -f large_data.bin --lr cc -s -o creditcards.txt
 
 This fork includes professional CSV output with proper headers for easy sorting and filtering:
 
-> **🔧 v1.8.2 Fix**: Fixed issue where regex pattern searches (`--lr`) with CSV output files would produce mixed content (raw strings + CSV data). Now outputs only clean CSV-formatted results.
+> **🔧 v1.8.5 Fix**: Completely resolved CSV output issues - regex pattern searches (`--lr`) with CSV output files now produce 100% clean, properly formatted CSV with no duplicate headers or raw string contamination, even when processing multiple files in directory mode.
 
 ### 🎯 **CSV Features**
 
-- **📊 Professional headers**: `Hit,Offset,PatternName,PatternType` for easy Excel/spreadsheet import
-- **🔍 Pattern identification**: Each hit shows which pattern matched it
-- **📈 Sortable columns**: Sort by offset, pattern type, or hit content
+- **📊 Professional headers**: `Name of search pattern,Data found,Source file,Offset,Pattern type` for easy Excel/spreadsheet import
+- **🔍 Pattern identification**: Each hit shows which pattern matched it with friendly names (e.g., "email", "guid")
+- **📈 Sortable columns**: Sort by pattern name, source file, or hit content
+- **✅ Clean output**: 100% CSV-compliant format with no raw strings or duplicate headers
+- **🗂️ Multi-file support**: Single CSV output when processing directories
 - **🎮 Compatible with all modes**: Works with single patterns, multiple patterns, and "all" patterns
 
 ### 💡 **CSV Usage Examples**
@@ -691,4 +693,12 @@ All of Eric Zimmerman's tools can be downloaded [here](https://ericzimmerman.git
 # Special Thanks
 
 Open Source Development funding and support provided by the following contributors: [SANS Institute](http://sans.org/) and [SANS DFIR](http://dfir.sans.org/).
+
+## Version History
+
+### v1.8.5 (Latest)
+- **FIXED**: CSV output with regex patterns now produces clean, properly formatted CSV files without any non-CSV data
+- **FIXED**: Eliminated duplicate CSV headers when processing multiple files in directory mode with regex patterns
+- **IMPROVED**: CSV output now contains only pattern matches when using regex filters (`--lr`), no raw string dumps
+- **ENHANCED**: Better coordination between string extraction and regex processing phases to prevent mixed output formats
 ````
