@@ -1375,6 +1375,28 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     Console.WriteLine();
                 }
             }
+            else if (regexPatterns.Count > 0 && fileStrings.Count == 0)
+            {
+                // When regex patterns are specified, use dedicated regex processing
+                counter = await ProcessRegexPatternsConcurrentlyAsync(
+                    hits,
+                    regexPatterns,
+                    ro,
+                    off,
+                    s,
+                    sw,
+                    q,
+                    o,
+                    currentFile,
+                    isCsvOutput
+                );
+
+                if (!q)
+                {
+                    Log.Information("Regex pattern processing complete.");
+                    Console.WriteLine();
+                }
+            }
             else
             {
                 // Add progress reporting for large datasets
@@ -1571,9 +1593,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                         $"{CsvEscape(patternName)},{CsvEscape(dataFound)},{CsvEscape(sourceFile)},{CsvEscape(offsetStr)},{CsvEscape(patternType)}"
                                     );
                                 }
-                                else
+                                else if (sw != null)
                                 {
-                                    sw?.WriteLine(hit);
+                                    // For non-CSV output files, write raw hit
+                                    sw.WriteLine(hit);
                                 }
                             }
                         }
@@ -4061,9 +4084,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                             $"{CsvEscape(regString)},{CsvEscape(match.Value)},{CsvEscape(currentFile)},{CsvEscape(offsetStr)},{CsvEscape("Regex")}"
                                         );
                                     }
-                                    else
+                                    else if (sw != null)
                                     {
-                                        sw?.WriteLine($"{match.Value}\t{hitOffset}");
+                                        // For non-CSV output files, write formatted match
+                                        sw.WriteLine($"{match.Value}\t{hitOffset}");
                                     }
                                 }
                             }
