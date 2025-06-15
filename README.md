@@ -11,10 +11,38 @@
 9. **📋 Enhanced CSV output** - Professional CSV format with readable pattern names (`"email"` instead of regex) and headers for sorting
 10. **🧠 Memory-optimized streaming** - Process massive files (100GB+) with minimal RAM usage through streaming architecture
 11. **🔇 Clean console output** - Verbose technical messages only appear with `--debug` flag for professional user experience
+12. **🎯 NVIDIA RAPIDS Integration** - Optional GPU-accelerated regex processing using cuDF for massive performance gains
 
 > 📦 **Ready-to-use single-file builds**: Check the [Releases page](../../releases/latest) for the latest **70MB standalone** Windows x64 executable - no installation required!
 
-> 🆕 **Latest v1.8.4**: Now with readable CSV pattern names and cleaner output! Perfect for professional data analysis workflows.
+> 🆕 **Latest v1.8.6**: Now with NVIDIA RAPIDS (cuDF) GPU-accelerated regex processing support! Ultimate performance for large-scale text analysis.
+
+## 🚀 **NEW: NVIDIA RAPIDS GPU Acceleration**
+
+This version now includes **optional NVIDIA RAPIDS integration** for unprecedented regex processing performance:
+
+### ⚡ **RAPIDS Features**
+
+- **🎮 GPU-accelerated regex**: Uses NVIDIA RAPIDS cuDF for massive parallel regex processing
+- **🔄 Automatic fallback**: Seamlessly falls back to standard processing if RAPIDS isn't available
+- **🚀 Easy activation**: Simply add `--use-rapids` flag to any regex search
+- **📊 Performance tracking**: Debug output shows when RAPIDS is being used
+- **⚡ Scalable processing**: Particularly effective for large datasets and complex regex patterns
+
+### 🛠️ **RAPIDS Requirements (Optional)**
+
+RAPIDS functionality requires:
+- NVIDIA GPU with CUDA support
+- Python 3.8+ with cuDF installed (`conda install -c rapidsai cudf`)
+- RAPIDS is **optional** - bstrings works perfectly without it!
+
+```bash
+# Standard processing (always works)
+bstrings.exe -f bigfile.bin --lr all
+
+# GPU-accelerated processing (if RAPIDS available)
+bstrings.exe -f bigfile.bin --lr all --use-rapids
+```
 
 ## 🚀 **NEW: High-Performance Parallel Processing**
 
@@ -696,7 +724,14 @@ Open Source Development funding and support provided by the following contributo
 
 ## Version History
 
-### v1.8.5 (Latest)
+### v1.8.6 (Latest)
+- **NEW**: NVIDIA RAPIDS (cuDF) integration for GPU-accelerated regex processing via `--use-rapids` flag
+- **ENHANCED**: Automatic fallback to standard processing when RAPIDS is not available
+- **ADDED**: Debug output shows when RAPIDS processing is being used vs standard processing
+- **IMPROVED**: Bridge architecture allows seamless integration with existing CSV and output workflows
+- **PERFORMANCE**: Potential massive speedups for large-scale regex operations on systems with RAPIDS installed
+
+### v1.8.5
 - **FIXED**: CSV output with regex patterns now produces clean, properly formatted CSV files without any non-CSV data
 - **FIXED**: Eliminated duplicate CSV headers when processing multiple files in directory mode with regex patterns
 - **IMPROVED**: CSV output now contains only pattern matches when using regex filters (`--lr`), no raw string dumps

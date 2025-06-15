@@ -57,9 +57,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static readonly string Header =
         $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version}"
         + "\r\n\r\nAuthor: Eric Zimmerman (saericzimmerman@gmail.com)"
-        + "\r\nhttps://github.com/EricZimmerman/bstrings";
-
-    private static readonly string Footer =
+        + "\r\nhttps://github.com/EricZimmerman/bstrings";    private static readonly string Footer =
         @"Examples: bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls URL"
         + "\r\n\t "
         + @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr guid"
@@ -82,7 +80,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
         + "\r\n\t "
         + @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa -m 15 -x 22"
         + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls mui --sl";
+        + @"   bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls mui --sl"
+        + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\bigFile.bin"" --lr all --use-rapids  # GPU-accelerated regex processing"
+        + "\r\n"
+        + "\r\nNOTE: --use-rapids enables NVIDIA RAPIDS (cuDF) for GPU-accelerated regex processing when available.";
 
     private static RootCommand _rootCommand;
 
@@ -103,10 +105,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static readonly Accelerator GpuAccelerator; // GPU concurrency control - increase limits for better GPU utilization
     private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(4, 8); // Max 4 concurrent GPU operations, up to 8 total
 
-    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed
-
-    // Removed unused field _quiet
-    private static bool _debug = false;
+    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused field _quiet
+    public static bool _debug = false;
     private static bool _trace = false; // Explicitly initialize to fix compiler warning
 
     /// <summary>
@@ -627,6 +627,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
             new Option<bool>("--sl", () => false, "Sort results by length"),
             new Option<bool>("--debug", () => false, "Show debug information during processing"),
             new Option<bool>("--trace", () => false, "Show trace information during processing"),
+            new Option<bool>(
+                "--use-rapids",
+                () => false,
+                "Use NVIDIA RAPIDS (cuDF) for GPU-accelerated regex processing when available"
+            ),
         };
 
         _rootCommand.Description = Header + "\r\n\r\n" + Footer;
@@ -657,7 +662,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 bool sa,
                 bool sl,
                 bool debug,
-                bool trace
+                bool trace,
+                bool useRapids
             ) =>
             {
                 await DoWork(
@@ -686,7 +692,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     sa,
                     sl,
                     debug,
-                    trace
+                    trace,
+                    useRapids
                 );
             }
         );
@@ -722,7 +729,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool sa, // sort alphabetical
         bool sl, // sort by length
         bool debug,
-        bool trace
+        bool trace,
+        bool useRapids // use NVIDIA RAPIDS for GPU-accelerated regex processing
     )
     { // Set the global debug flag
         _debug = debug;
@@ -1365,23 +1373,56 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             // Skip expensive post-processing if results are already written to file and no console output needed
             bool streamingComplete = !string.IsNullOrEmpty(o) && q;
-            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0;
-            // When regex patterns are specified, use dedicated regex processing ONLY
+            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0;            // When regex patterns are specified, use dedicated regex processing ONLY
             if (regexPatterns.Count > 0)
             {
-                counter = await ProcessRegexPatternsConcurrentlyAsync(
-                    hits,
-                    regexPatternsWithNames,
-                    ro,
-                    off,
-                    s,
-                    sw,
-                    q,
-                    o,
-                    currentFile,
-                    isCsvOutput,
-                    csvHeaderWritten
-                );
+                // Try RAPIDS processing if enabled and available
+                if (useRapids && bstrings.Rapids.RapidsProcessor.IsAvailable)
+                {
+                    if (_debug)
+                    {
+                        Log.Information(
+                            "Using NVIDIA RAPIDS for GPU-accelerated regex processing..."
+                        );
+                    }
+
+                    counter = await bstrings.Rapids.RapidsProcessor.ProcessRegexPatternsBridgeAsync(
+                        hits,
+                        regexPatternsWithNames,
+                        ro,
+                        off,
+                        s,
+                        sw,
+                        q,
+                        o,
+                        currentFile,
+                        isCsvOutput,
+                        csvHeaderWritten
+                    );
+                }
+                else
+                {
+                    if (useRapids && _debug)
+                    {
+                        Log.Information(
+                            "RAPIDS not available, falling back to standard regex processing..."
+                        );
+                    }
+
+                    counter = await ProcessRegexPatternsConcurrentlyAsync(
+                        hits,
+                        regexPatternsWithNames,
+                        ro,
+                        off,
+                        s,
+                        sw,
+                        q,
+                        o,
+                        currentFile,
+                        isCsvOutput,
+                        csvHeaderWritten
+                    );
+                }
 
                 // Mark CSV header as written since regex processing handles its own CSV output
                 if (isCsvOutput && sw != null)
@@ -4067,7 +4108,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <param name="currentFile">Current file being processed</param>    /// <param name="isCsvOutput">Whether output is CSV format</param>
     /// <param name="csvHeaderAlreadyWritten">Whether CSV header has already been written</param>
     /// <returns>Number of matches found</returns>
-    private static async Task<int> ProcessRegexPatternsConcurrentlyAsync(
+    public static async Task<int> ProcessRegexPatternsConcurrentlyAsync(
         HashSet<string> hits,
         List<(string name, string pattern)> regexPatternsWithNames,
         bool ro,
