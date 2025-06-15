@@ -261,7 +261,57 @@ john@example.com,~0x1234,Email Addresses,Regex
 
 ## 📈 **Version History & Release Notes**
 
-### 🆕 **Version 1.8.2 - CSV Output Fix** (Current)
+### 🆕 **Version 1.8.4 - CSV Pattern Names** (Current)
+
+**✨ USER EXPERIENCE IMPROVEMENT: CSV output now shows readable pattern names instead of regex patterns**
+
+#### ✅ **Improvements**
+
+- **📋 Readable CSV pattern names**: CSV output now shows friendly pattern names (e.g., `"email"`, `"guid"`) instead of complex regex patterns
+- **📊 Better data analysis**: CSV files are now much more readable and suitable for spreadsheet analysis
+- **🎯 Consistent naming**: Both single and multiple pattern searches now use consistent naming
+
+#### 💡 **Before vs After**
+
+**Before (v1.8.3 and earlier):**
+
+```csv
+"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,6}\b","user@example.com","file.txt","","Regex"
+```
+
+**After (v1.8.4):**
+
+```csv
+"email","user@example.com","file.txt","","Regex"
+```
+
+#### 🧪 **Supported Pattern Names**
+
+- **Built-in patterns**: `email`, `guid`, `bitcoin`, `cc`, `ssn`, `ip`, `mac`, etc.
+- **Custom patterns**: When using custom regex, the pattern itself is used as the name
+- **Multiple patterns**: `--lr "email,guid,cc"` shows proper names for each match
+
+### **Version 1.8.3 - Verbose Output Cleanup** (Previous)
+
+**✨ USER EXPERIENCE IMPROVEMENT: Cleaned up verbose output for cleaner console experience**
+
+#### ✅ **Improvements**
+
+- **🔇 Suppressed verbose chunk size messages**: GPU/CPU chunk size optimization messages now only appear when `--debug` flag is used
+- **📺 Cleaner console output**: Reduced clutter in normal operation mode for better user experience
+- **🎯 Debug-only technical details**: Technical information about memory optimization now properly gated behind debug flag
+
+#### 💡 **Usage**
+
+```bash
+# Clean output (no chunk size messages)
+bstrings.exe -f large_file.bin --lr all -o results.csv
+
+# Verbose output with technical details (shows chunk size messages)
+bstrings.exe -f large_file.bin --lr all -o results.csv --debug
+```
+
+### **Version 1.8.2 - CSV Output Fix** (Previous)
 
 **🐛 CRITICAL BUG FIX: Fixed mixed output when using regex patterns with CSV files**
 

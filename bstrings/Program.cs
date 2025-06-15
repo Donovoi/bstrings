@@ -983,7 +983,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
             var hits = new HashSet<string>();
 
             // Parse multiple patterns from lr parameter
-            var regexPatterns = ParseRegexPatterns(lr);
+            var regexPatternsWithNames = ParseRegexPatternsWithNames(lr);
+            var regexPatterns = regexPatternsWithNames.Select(p => p.pattern).ToList();
 
             if (regexPatterns.Count > 0 && !q)
             {
@@ -1364,14 +1365,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             // Skip expensive post-processing if results are already written to file and no console output needed
             bool streamingComplete = !string.IsNullOrEmpty(o) && q;
-            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0;
-
-            // When regex patterns are specified, use dedicated regex processing ONLY
+            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0; // When regex patterns are specified, use dedicated regex processing ONLY
             if (regexPatterns.Count > 0)
             {
                 counter = await ProcessRegexPatternsConcurrentlyAsync(
                     hits,
-                    regexPatterns,
+                    regexPatternsWithNames,
                     ro,
                     off,
                     s,
@@ -1414,10 +1413,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 }
 
                 // Pre-compile regex patterns for better performance
-                var compiledRegexes = new List<(Regex regex, string pattern)>();
-                if (regexPatterns.Count > 0)
+                var compiledRegexes = new List<(Regex regex, string pattern, string name)>();
+                if (regexPatternsWithNames.Count > 0)
                 {
-                    foreach (var pattern in regexPatterns)
+                    foreach (var (name, pattern) in regexPatternsWithNames)
                     {
                         try
                         {
@@ -1425,7 +1424,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                 pattern,
                                 RegexOptions.IgnoreCase | RegexOptions.Compiled
                             );
-                            compiledRegexes.Add((regex, pattern));
+                            compiledRegexes.Add((regex, pattern, name));
                         }
                         catch (Exception ex)
                         {
@@ -1532,14 +1531,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         }
                         else if (compiledRegexes.Count > 0)
                         {
-                            foreach (var (regex, pattern) in compiledRegexes)
+                            foreach (var (regex, pattern, name) in compiledRegexes)
                             {
                                 try
                                 {
                                     if (regex.IsMatch(hit))
                                     {
-                                        // For CSV output, use the pattern name from RegExPatterns if available
-                                        patternName = GetRegexPatternName(pattern) ?? pattern;
+                                        // Use the stored pattern name for CSV output
+                                        patternName = name;
                                         patternType = "Regex";
                                         isMatch = true;
                                         break;
@@ -3099,18 +3098,24 @@ public static partial class Program // Make it public and partial for ILGPU if n
             if (GpuAccelerator != null && DynamicChunkSizeMB > 0)
             {
                 int gpuChunkSize = AdaptChunkSizeForFile(DynamicChunkSizeMB, fileSizeBytes);
-                Console.Error.WriteLine(
-                    $"Using GPU-optimized chunk size: {gpuChunkSize} MB (adapted for {GetSizeReadable(fileSizeBytes)} file)"
-                );
+                if (_debug)
+                {
+                    Console.Error.WriteLine(
+                        $"Using GPU-optimized chunk size: {gpuChunkSize} MB (adapted for {GetSizeReadable(fileSizeBytes)} file)"
+                    );
+                }
                 return gpuChunkSize;
             }
 
             // Fall back to CPU-optimized chunk size
             int cpuChunkSize = CalculateOptimalCpuChunkSizeMB();
             int adaptedChunkSize = AdaptChunkSizeForFile(cpuChunkSize, fileSizeBytes);
-            Console.Error.WriteLine(
-                $"Using CPU-optimized chunk size: {adaptedChunkSize} MB (adapted for {GetSizeReadable(fileSizeBytes)} file)"
-            );
+            if (_debug)
+            {
+                Console.Error.WriteLine(
+                    $"Using CPU-optimized chunk size: {adaptedChunkSize} MB (adapted for {GetSizeReadable(fileSizeBytes)} file)"
+                );
+            }
             return adaptedChunkSize;
         }
         catch (Exception ex)
@@ -3957,6 +3962,47 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// </summary>
     /// <param name="lr">The lr parameter value</param>
     /// <returns>List of resolved regex patterns</returns>
+    private static List<(string name, string pattern)> ParseRegexPatternsWithNames(string lr)
+    {
+        var patterns = new List<(string name, string pattern)>();
+
+        if (string.IsNullOrWhiteSpace(lr))
+        {
+            return patterns;
+        }
+
+        // Handle 'all' keyword to include all built-in patterns
+        if (lr.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var kvp in RegExPatterns)
+            {
+                patterns.Add((kvp.Key, kvp.Value));
+            }
+            return patterns;
+        }
+
+        // Split by comma and process each pattern
+        var patternNames = lr.Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var patternName in patternNames)
+        {
+            var trimmedName = patternName.Trim();
+
+            // Check if it's a built-in pattern
+            if (RegExPatterns.ContainsKey(trimmedName))
+            {
+                patterns.Add((trimmedName, RegExPatterns[trimmedName]));
+            }
+            else
+            {
+                // Treat as literal regex pattern
+                patterns.Add((trimmedName, trimmedName));
+            }
+        }
+
+        return patterns;
+    }
+
     private static List<string> ParseRegexPatterns(string lr)
     {
         var patterns = new List<string>();
@@ -4003,13 +4049,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <param name="ro">Regex output mode</param>
     /// <param name="off">Show offset</param>    /// <param name="s">Silent mode</param>
     /// <param name="sw">StreamWriter for output</param>
-    /// <param name="q">Quiet mode</param>    /// <param name="o">Output file path</param>
-    /// <param name="currentFile">Current file being processed</param>
+    /// <param name="q">Quiet mode</param>    /// <param name="o">Output file path</param>    /// <param name="currentFile">Current file being processed</param>
     /// <param name="isCsvOutput">Whether output is CSV format</param>
     /// <returns>Number of matches found</returns>
     private static async Task<int> ProcessRegexPatternsConcurrentlyAsync(
         HashSet<string> hits,
-        List<string> regexPatterns,
+        List<(string name, string pattern)> regexPatternsWithNames,
         bool ro,
         bool off,
         bool s,
@@ -4020,14 +4065,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool isCsvOutput = false
     )
     {
-        if (regexPatterns.Count == 0)
+        if (regexPatternsWithNames.Count == 0)
             return 0;
 
         var lockObject = new object();
 
         // Create tasks for each pattern to process concurrently
-        var tasks = regexPatterns.Select(async regString =>
+        var tasks = regexPatternsWithNames.Select(async patternInfo =>
         {
+            var (patternName, regString) = patternInfo;
             if (string.IsNullOrWhiteSpace(regString))
                 return 0;
 
@@ -4082,7 +4128,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                             "\"" + s.Replace("\"", "\"\"") + "\"";
                                         string offsetStr = hitOffset.TrimStart('~');
                                         sw.WriteLine(
-                                            $"{CsvEscape(regString)},{CsvEscape(match.Value)},{CsvEscape(currentFile)},{CsvEscape(offsetStr)},{CsvEscape("Regex")}"
+                                            $"{CsvEscape(patternName)},{CsvEscape(match.Value)},{CsvEscape(currentFile)},{CsvEscape(offsetStr)},{CsvEscape("Regex")}"
                                         );
                                     }
                                     else if (sw != null)
@@ -4106,7 +4152,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                         "\"" + s.Replace("\"", "\"\"") + "\"";
                                     string offsetStr = hitOffset.TrimStart('~');
                                     sw.WriteLine(
-                                        $"{CsvEscape(regString)},{CsvEscape(hit)},{CsvEscape(currentFile)},{CsvEscape(offsetStr)},{CsvEscape("Regex")}"
+                                        $"{CsvEscape(patternName)},{CsvEscape(hit)},{CsvEscape(currentFile)},{CsvEscape(offsetStr)},{CsvEscape("Regex")}"
                                     );
                                 }
                                 else
