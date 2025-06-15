@@ -228,6 +228,8 @@ bstrings.exe -f large_data.bin --lr cc -s -o creditcards.txt
 
 This fork includes professional CSV output with proper headers for easy sorting and filtering:
 
+> **🔧 v1.8.2 Fix**: Fixed issue where regex pattern searches (`--lr`) with CSV output files would produce mixed content (raw strings + CSV data). Now outputs only clean CSV-formatted results.
+
 ### 🎯 **CSV Features**
 
 - **📊 Professional headers**: `Hit,Offset,PatternName,PatternType` for easy Excel/spreadsheet import
@@ -259,7 +261,53 @@ john@example.com,~0x1234,Email Addresses,Regex
 
 ## 📈 **Version History & Release Notes**
 
-### 🆕 **Version 1.6.0 - Memory-Optimized Streaming** (Current)
+### 🆕 **Version 1.8.2 - CSV Output Fix** (Current)
+
+**🐛 CRITICAL BUG FIX: Fixed mixed output when using regex patterns with CSV files**
+
+#### ✅ **Bug Fixes**
+
+- **🔧 Fixed CSV output contamination**: When using regex patterns (`--lr`) with CSV output files (`.csv`), the output now contains ONLY properly formatted CSV data, not a mix of raw strings and CSV data
+- **📊 Clean CSV results**: Eliminated duplicate raw string dumps that were incorrectly written before CSV-formatted matches
+- **⚡ Optimized output pipeline**: Improved logic to prevent the string extraction phase from writing to output files when regex processing is active
+
+#### 🎯 **What Was Fixed**
+
+**Before (v1.8.1 and earlier):**
+
+```csv
+Test string one
+Another test string
+email@example.com
+guid-12345678-1234-1234-1234-123456789012
+Name of search pattern,Data found,Source file,Offset,Pattern type
+"test","Test string one","C:\file.txt","","Regex"
+"test","Another test string","C:\file.txt","","Regex"
+```
+
+**After (v1.8.2):**
+
+```csv
+"test","Test string one","C:\file.txt","","Regex"
+"test","Another test string","C:\file.txt","","Regex"
+```
+
+#### 💡 **Technical Details**
+
+- **Root cause**: Both string extraction and regex processing phases were writing to the output file simultaneously
+- **Solution**: Modified output logic to prevent streaming extraction when regex patterns are specified
+- **Impact**: Affects all regex pattern usage with CSV output (`--lr` + `-o file.csv`)
+
+#### 🧪 **Testing**
+
+- ✅ Single regex patterns (e.g., `--lr "test"`)
+- ✅ Built-in patterns (e.g., `--lr "email"`, `--lr "guid"`)
+- ✅ Multiple patterns (e.g., `--lr "email,guid,cc"`)
+- ✅ All patterns (e.g., `--lr "all"`)
+- ✅ Both Debug and Release builds
+- ✅ Various file sizes and content types
+
+### **Version 1.8.1 - Memory-Optimized Streaming** (Previous)
 
 **🔥 MAJOR UPDATE: Revolutionary memory management for massive files**
 

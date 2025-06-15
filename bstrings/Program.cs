@@ -1163,12 +1163,13 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     }
                 }
                 using (mappedStream)
-                {
-                    // Process main chunks concurrently with streaming output for memory efficiency
+                { // Process main chunks concurrently with streaming output for memory efficiency
                     long totalMainResults = 0;
                     if (sw != null && o.Length > 0)
                     {
                         // Use streaming processing to write directly to file and minimize memory usage
+                        // BUT: Don't stream to file if regex patterns are specified - let regex processing handle output
+                        StreamWriter outputWriter = regexPatterns.Count > 0 ? null : sw;
                         totalMainResults = await ProcessFileChunksConcurrentlyStreamingAsync(
                             mappedStream,
                             fileSizeBytes,
@@ -1184,8 +1185,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             q,
                             totalChunks,
                             progressTracker,
-                            sw, // Stream directly to output file
-                            hits // Also track unique hits
+                            outputWriter, // Only stream to file if no regex patterns
+                            hits // Always track unique hits for post-processing
                         );
                     }
                     else

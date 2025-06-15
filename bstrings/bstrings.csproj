@@ -4,10 +4,9 @@
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>    <AssemblyTitle>bstrings - Multi-Core Optimized</AssemblyTitle>
     <Company>Eric Zimmerman (Enhanced by AI)</Company>
     <LangVersion>12</LangVersion>
-    <Product>bstrings</Product>
-    <Description>A better strings utility - GPU + CPU accelerated with parallel processing and memory-optimized streaming for massive files</Description>
+    <Product>bstrings</Product>    <Description>A better strings utility - GPU + CPU accelerated with parallel processing and memory-optimized streaming for massive files</Description>
     <Copyright>Eric Zimmerman</Copyright>
-    <Version>1.8.1</Version>
+    <Version>1.8.2</Version>
     <IsPackable>false</IsPackable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <EnablePreviewFeatures>true</EnablePreviewFeatures>
@@ -46,6 +45,3 @@
     />
   </ItemGroup>
 </Project>
-
-
-
