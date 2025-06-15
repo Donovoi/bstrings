@@ -1365,19 +1365,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
             bool streamingComplete = !string.IsNullOrEmpty(o) && q;
             bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0;
 
-            if (streamingComplete && !isCsvOutput && !hasPatternProcessing)
+            // When regex patterns are specified, use dedicated regex processing ONLY
+            if (regexPatterns.Count > 0)
             {
-                if (!q)
-                {
-                    Log.Information(
-                        "Results already written to output file. Skipping redundant post-processing."
-                    );
-                    Console.WriteLine();
-                }
-            }
-            else if (regexPatterns.Count > 0 && fileStrings.Count == 0)
-            {
-                // When regex patterns are specified, use dedicated regex processing
                 counter = await ProcessRegexPatternsConcurrentlyAsync(
                     hits,
                     regexPatterns,
@@ -1394,6 +1384,16 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 if (!q)
                 {
                     Log.Information("Regex pattern processing complete.");
+                    Console.WriteLine();
+                }
+            }
+            else if (streamingComplete && !isCsvOutput && !hasPatternProcessing)
+            {
+                if (!q)
+                {
+                    Log.Information(
+                        "Results already written to output file. Skipping redundant post-processing."
+                    );
                     Console.WriteLine();
                 }
             }
