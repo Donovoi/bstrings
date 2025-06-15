@@ -8,10 +8,13 @@
 6. **🤖 Automated builds** - Every commit to master creates a new release via GitHub Actions
 7. **⚡ .NET 9.0** optimized for latest performance improvements
 8. **🎮 Enhanced GPU utilization** - Increased GPU concurrency limits (4x concurrent operations) and optimized chunk processing
-9. **📋 Enhanced CSV output** - Professional CSV format with headers for sorting and filtering in spreadsheet tools
+9. **📋 Enhanced CSV output** - Professional CSV format with readable pattern names (`"email"` instead of regex) and headers for sorting
 10. **🧠 Memory-optimized streaming** - Process massive files (100GB+) with minimal RAM usage through streaming architecture
+11. **🔇 Clean console output** - Verbose technical messages only appear with `--debug` flag for professional user experience
 
 > 📦 **Ready-to-use single-file builds**: Check the [Releases page](../../releases/latest) for the latest **70MB standalone** Windows x64 executable - no installation required!
+
+> 🆕 **Latest v1.8.4**: Now with readable CSV pattern names and cleaner output! Perfect for professional data analysis workflows.
 
 ## 🚀 **NEW: High-Performance Parallel Processing**
 
