@@ -92,18 +92,21 @@ All changes maintain backward compatibility while adding new GPU acceleration ca
 After analyzing ripgrep's high-performance source code, we identified key optimization patterns:
 
 1. **Memory Management**:
+
    - Uses 64KB default buffer capacity for optimal cache efficiency
    - Implements eager allocation with safety limits
    - Employs binary detection for early data skipping
    - Uses memory-mapped files for large file efficiency
 
 2. **Parallel Processing**:
+
    - Work-stealing algorithm with stack-based distribution
    - Per-thread workers to minimize synchronization
    - Conservative thread counts (1x cores, not 4x)
    - Atomic operations for shared state
 
 3. **Fast Path Optimizations**:
+
    - Fast line-by-line matching when conditions allow
    - Graceful fallback to slow path when needed
    - Inline functions for hot code paths
@@ -276,6 +279,7 @@ if (fileSizeMB > 10240) {
 ### 🔧 Code Changes
 
 1. **CSV Output Bug Fix (CRITICAL RESOLVED)**
+
    - **Issue**: Raw data was appearing before CSV headers when using directory mode (`-d`) with regex patterns (`--lr`)
    - **Root Cause**: Boundary chunk processing didn't check for regex patterns before streaming output to file
    - **Solution**: Added regex pattern check to boundary processing logic to prevent raw output when CSV formatting is expected
@@ -283,6 +287,7 @@ if (fileSizeMB > 10240) {
    - **Result**: Clean CSV output with only proper headers and formatted data rows
 
 2. **Memory Optimization & Safety (CRITICAL NEW)**
+
    - **Inspiration**: Analyzed ripgrep source code for high-performance patterns
    - **Problem**: Previous settings could cause out-of-memory issues on high-core systems
    - **Solution**: Implemented conservative, memory-safe concurrent processing limits
