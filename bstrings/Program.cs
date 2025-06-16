@@ -254,14 +254,53 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
-    /// Configuration for concurrent processing - optimized for memory efficiency
+    /// Configuration for concurrent processing - optimized for memory efficiency and safety
+    /// Based on ripgrep analysis but with conservative memory limits to prevent OOM
     /// </summary>
     public static class ConcurrentConfig
     {
-        public static int MaxConcurrentChunks => Math.Max(16, Environment.ProcessorCount * 2); // Massively increased for high-performance: 2x CPU cores minimum 16
-        public static int ReadAheadChunks => Math.Min(32, MaxConcurrentChunks); // Increased for better pipeline
-        public static int OptimalDegreeOfParallelism => Environment.ProcessorCount * 2; // Use 2x ALL CPU cores for maximum parallelism
-        public static int ProducerConsumerBufferSize => Math.Max(64, MaxConcurrentChunks * 8); // Massive buffer for maximum throughput
+        // Conservative chunk sizes to prevent memory exhaustion
+        public static int RipgrepStyleChunkSizeKB => 64; // 64KB like ripgrep for maximum parallelism
+        public static int SmallFileChunkSizeKB => 256; // 256KB for small files
+        public static int DefaultChunkSizeKB => 1024; // 1MB for medium files
+
+        // CONSERVATIVE parallelism settings to prevent OOM - much reduced from ripgrep-style
+        public static int MaxConcurrentChunks => Math.Max(4, Environment.ProcessorCount); // 1x cores minimum 4 (SAFE)
+        public static int ReadAheadChunks => Math.Min(8, MaxConcurrentChunks); // Conservative read-ahead to prevent memory buildup
+        public static int OptimalDegreeOfParallelism => Environment.ProcessorCount; // Use ALL CPU cores but don't over-subscribe
+        public static int ProducerConsumerBufferSize => Math.Max(16, MaxConcurrentChunks * 2); // Small buffer to prevent memory pressure
+
+        // Conservative thread pool optimization
+        public static int WorkStealingThreads => Environment.ProcessorCount; // 1x threading - no over-subscription to prevent memory pressure
+
+        // Get optimal chunk size based on file size (conservative heuristics)
+        public static int GetOptimalChunkSizeKB(long fileSizeBytes)
+        {
+            // For small files (< 1MB), use ripgrep's 64KB chunks for maximum parallelism
+            if (fileSizeBytes < 1024 * 1024)
+                return RipgrepStyleChunkSizeKB;
+
+            // For medium files (1MB - 100MB), use 256KB chunks
+            if (fileSizeBytes < 100 * 1024 * 1024)
+                return SmallFileChunkSizeKB;
+
+            // For large files (100MB - 1GB), use 1MB chunks
+            if (fileSizeBytes < 1024 * 1024 * 1024)
+                return DefaultChunkSizeKB;
+
+            // For very large files (> 1GB), still use 1MB for good balance
+            return DefaultChunkSizeKB;
+        }
+
+        // Memory safety checks
+        public static bool IsMemorySafe(long fileSizeBytes, int chunkSizeKB)
+        {
+            // Estimate total memory usage: chunks * concurrent processing * safety factor
+            long estimatedMemoryMB = (MaxConcurrentChunks * chunkSizeKB) / 1024 * 3; // 3x safety factor
+
+            // Don't use more than 1GB of memory for chunk processing
+            return estimatedMemoryMB < 1024;
+        }
     }
 
     /// <summary>
