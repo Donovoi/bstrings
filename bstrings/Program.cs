@@ -1257,6 +1257,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     if (sw != null && o.Length > 0)
                     {
                         // Use streaming for boundary processing too
+                        // BUT: Don't stream to file if regex patterns are specified - let regex processing handle output
+                        StreamWriter boundaryOutputWriter = regexPatterns.Count > 0 ? null : sw;
                         var boundaryResults = await ProcessBoundaryChunksConcurrentlyStreamingAsync(
                             mappedStream,
                             fileSizeBytes,
@@ -1271,7 +1273,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             ar,
                             ur,
                             q,
-                            sw,
+                            boundaryOutputWriter, // Only stream to file if no regex patterns
                             hits
                         );
                         totalMainResults += boundaryResults;

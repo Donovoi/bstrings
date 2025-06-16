@@ -15,7 +15,7 @@
    - Updated v1.8.6 section to document:
      - `--force-rapids` flag for automatic RAPIDS installation
      - Enhanced user feedback for RAPIDS status
-     - Fixed CSV output bug (no raw data before headers)
+     - **✅ FIXED: CSV output bug (no raw data before headers) - RESOLVED**
      - Improved UX with clear status messages
 
 3. **Command Line Interface Documentation**
