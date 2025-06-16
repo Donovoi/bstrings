@@ -107,7 +107,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     // ILGPU specific fields
     private static readonly Context GpuContext;
     private static readonly Accelerator GpuAccelerator; // GPU concurrency control - increase limits for better GPU utilization
-    private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(4, 8); // Max 4 concurrent GPU operations, up to 8 total
+    private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(16, 32); // Massively increased for RTX 4000 Ada - 16 concurrent, up to 32 total
 
     private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused field _quiet
     public static bool _debug = false;
@@ -258,10 +258,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// </summary>
     public static class ConcurrentConfig
     {
-        public static int MaxConcurrentChunks => Math.Max(4, Environment.ProcessorCount / 2); // Increased from /4 to /2 for better CPU utilization
-        public static int ReadAheadChunks => Math.Min(8, MaxConcurrentChunks); // Increased from 4 to 8
-        public static int OptimalDegreeOfParallelism => Math.Max(2, Environment.ProcessorCount / 2); // Reduced from *3/4
-        public static int ProducerConsumerBufferSize => Math.Max(16, MaxConcurrentChunks * 4); // Increased buffer for better throughput
+        public static int MaxConcurrentChunks => Math.Max(16, Environment.ProcessorCount * 2); // Massively increased for high-performance: 2x CPU cores minimum 16
+        public static int ReadAheadChunks => Math.Min(32, MaxConcurrentChunks); // Increased for better pipeline
+        public static int OptimalDegreeOfParallelism => Environment.ProcessorCount * 2; // Use 2x ALL CPU cores for maximum parallelism
+        public static int ProducerConsumerBufferSize => Math.Max(64, MaxConcurrentChunks * 8); // Massive buffer for maximum throughput
     }
 
     /// <summary>
@@ -474,12 +474,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             1.0 + ((double)sizeOfGpuHit / defaultMinStringLengthForCalc);
 
                         long calculatedChunkSizeBytes = (long)(usableGpuMemoryBytes / memoryFactor);
-
                         int calculatedMB = (int)(calculatedChunkSizeBytes / (1024 * 1024));
 
                         // Clamp the dynamic chunk size to practical limits
-                        const int minPracticalMB = 64;
-                        const int maxPracticalMB = 512; // 512MB max for GPU - much more reasonable
+                        const int minPracticalMB = 32; // Reduced from 64 for better parallelism
+                        const int maxPracticalMB = 256; // Reduced from 512 for much better parallelism - more chunks = more parallel processing
 
                         DynamicChunkSizeMB = Math.Max(
                             minPracticalMB,
@@ -1540,20 +1539,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 var hitsList = hits.ToList(); // Convert to list for parallel processing
                 var outputLock = new object(); // For thread-safe output
                 var progressLock = new object(); // For thread-safe progress tracking
-                var matchCount = 0; // Track number of actual matches
-
-                // Configure parallelism based on dataset size
+                var matchCount = 0; // Track number of actual matches                // Configure maximum parallelism for all datasets - use all available power!
                 var parallelOptions = new ParallelOptions();
                 if (isLargeDataset)
                 {
-                    parallelOptions.MaxDegreeOfParallelism = Environment.ProcessorCount;
+                    parallelOptions.MaxDegreeOfParallelism = Environment.ProcessorCount * 2; // 2x cores for large datasets
                 }
                 else
                 {
-                    parallelOptions.MaxDegreeOfParallelism = Math.Max(
-                        1,
-                        Environment.ProcessorCount / 2
-                    );
+                    parallelOptions.MaxDegreeOfParallelism = Environment.ProcessorCount; // All cores for smaller datasets
                 }
                 Parallel.ForEach(
                     hitsList,
@@ -3228,7 +3222,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
-    /// Adapts chunk size based on file size for optimal performance
+    /// Adapts chunk size based on file size for optimal PARALLELISM (smaller chunks = more parallel processing)
     /// </summary>
     private static int AdaptChunkSizeForFile(int baseChunkSizeMB, long fileSizeBytes)
     {
@@ -3237,23 +3231,23 @@ public static partial class Program // Make it public and partial for ILGPU if n
         // For very small files, use smaller chunks to avoid waste
         if (fileSizeMB < 100) // Less than 100MB
         {
-            return Math.Max(32, (int)Math.Min(baseChunkSizeMB, fileSizeMB / 2));
+            return Math.Max(16, (int)Math.Min(baseChunkSizeMB, fileSizeMB / 2));
         }
 
         // For medium files (100MB - 1GB), use base chunk size
         if (fileSizeMB < 1024)
         {
-            return baseChunkSizeMB;
+            return Math.Max(32, baseChunkSizeMB);
         }
 
-        // For large files (1GB - 10GB), increase chunk size for better efficiency
+        // For large files (1GB - 10GB), REDUCE chunk size for better parallelism
         if (fileSizeMB < 10240)
         {
-            return Math.Min(4096, (int)(baseChunkSizeMB * 1.5));
+            return Math.Max(64, Math.Min(baseChunkSizeMB, 128)); // Cap at 128MB for better parallelism
         }
 
-        // For very large files (>10GB), use maximum chunk size for optimal I/O
-        return Math.Min(8192, baseChunkSizeMB * 2);
+        // For very large files (>10GB), use SMALL chunks for MAXIMUM parallelism - this is key for performance!
+        return Math.Max(64, Math.Min(baseChunkSizeMB, 128)); // Force small chunks for massive files
     }
 
     /// <summary>
