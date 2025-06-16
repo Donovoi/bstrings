@@ -83,3 +83,53 @@ The README now comprehensively covers:
 - Enhanced usage examples
 
 All changes maintain backward compatibility while adding new GPU acceleration capabilities with robust fallback and clear user guidance.
+
+## 🚀 **Recent Improvements - GPU Processing Hierarchy**
+
+### ⚡ **Enhanced GPU Processing Logic**
+
+**Problem Solved**: Previously, when RAPIDS was not available, the system fell back directly to CPU-only processing, completely bypassing the existing GPU acceleration capabilities.
+
+**Solution Implemented**:
+
+- **Intelligent Processing Hierarchy**: RAPIDS → Standard GPU (ILGPU) → CPU fallback
+- **Improved Fallback Logic**: When RAPIDS unavailable, uses standard GPU acceleration for string extraction + CPU regex processing
+- **Better User Feedback**: Clear messaging showing which processing method is being used
+
+### 🔧 **Technical Changes Made**
+
+1. **Modified Program.cs Logic**:
+
+   - Updated fallback logic around line 1407-1450
+   - Added intelligent GPU processing hierarchy
+   - Improved user feedback messages for different processing modes
+
+2. **Enhanced RapidsProcessor.cs**:
+
+   - Removed duplicate warning messages
+   - Cleaner integration with main processing pipeline
+   - Debug-only messaging for technical details
+
+3. **Updated README.md**:
+   - Added processing hierarchy documentation
+   - Clarified fallback behavior
+   - Enhanced usage examples
+
+### 📊 **Processing Hierarchy Results**
+
+| Scenario                               | Processing Method        | User Message                                                                      |
+| -------------------------------------- | ------------------------ | --------------------------------------------------------------------------------- |
+| **RAPIDS Available**                   | RAPIDS GPU acceleration  | `🚀 Using NVIDIA RAPIDS GPU acceleration`                                         |
+| **RAPIDS Unavailable + GPU Available** | Standard GPU + CPU regex | `🎮 Using standard GPU acceleration for string extraction + CPU regex processing` |
+| **RAPIDS Requested but Unavailable**   | Standard GPU + CPU regex | `⚠️ RAPIDS not available - falling back to standard GPU processing`               |
+| **No GPU Available**                   | Pure CPU processing      | `💻 Using CPU processing (GPU not available)`                                     |
+
+### ✅ **Validation Completed**
+
+- ✅ RAPIDS fallback shows single clear warning message
+- ✅ Standard mode shows appropriate GPU processing message
+- ✅ CSV output remains clean and properly formatted
+- ✅ Performance benefits maintained when RAPIDS unavailable
+- ✅ User feedback is clear and informative
+
+**Result**: Users now get optimal performance regardless of their system configuration, with clear feedback about which processing method is being used.

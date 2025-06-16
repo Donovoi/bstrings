@@ -24,9 +24,9 @@ This version now includes **optional NVIDIA RAPIDS integration** for unprecedent
 ### ⚡ **RAPIDS Features**
 
 - **🎮 GPU-accelerated regex**: Uses NVIDIA RAPIDS cuDF for massive parallel regex processing
-- **🔄 Automatic fallback**: Seamlessly falls back to standard processing if RAPIDS isn't available
+- **🔄 Intelligent fallback**: Falls back to standard GPU processing (ILGPU string extraction + CPU regex) if RAPIDS isn't available
 - **🚀 Easy activation**: Simply add `--use-rapids` flag to any regex search
-- **📊 Performance tracking**: Debug output shows when RAPIDS is being used
+- **📊 Performance tracking**: Debug output shows which processing method is being used
 - **⚡ Scalable processing**: Particularly effective for large datasets and complex regex patterns
 - **🛠️ Auto-installation**: Use `--force-rapids` to automatically install RAPIDS if not available
 
@@ -47,15 +47,25 @@ RAPIDS functionality has flexible installation options:
 - Installation runs in background with progress feedback
 
 ```bash
-# Standard processing (always works)
+# Standard processing (GPU-accelerated string extraction + CPU regex)
 bstrings.exe -f bigfile.bin --lr all
 
-# GPU-accelerated processing (if RAPIDS available)
+# RAPIDS GPU-accelerated processing (if RAPIDS available)
 bstrings.exe -f bigfile.bin --lr all --use-rapids
 
 # Auto-install RAPIDS and use GPU acceleration
 bstrings.exe -f bigfile.bin --lr all --force-rapids
 ```
+
+### 🎯 **Processing Hierarchy**
+
+bstrings automatically uses the best available processing method:
+
+1. **🚀 RAPIDS GPU**: Full GPU regex processing (when `--use-rapids`/`--force-rapids` + RAPIDS available)
+2. **🎮 Standard GPU**: GPU string extraction + CPU regex (when RAPIDS not available but GPU present)
+3. **💻 CPU**: Pure CPU processing (when no GPU available)
+
+This ensures optimal performance regardless of your system configuration!
 
 ## 🚀 **NEW: High-Performance Parallel Processing**
 
@@ -901,12 +911,12 @@ Open Source Development funding and support provided by the following contributo
 
 - **NEW**: NVIDIA RAPIDS (cuDF) integration for GPU-accelerated regex processing via `--use-rapids` flag
 - **NEW**: `--force-rapids` flag for automatic RAPIDS installation (Miniconda, CUDA toolkit, cuDF environment)
-- **ENHANCED**: Automatic fallback to standard processing when RAPIDS is not available with clear user feedback
-- **ADDED**: Debug and normal output shows when RAPIDS processing is being used vs standard processing
-- **IMPROVED**: Bridge architecture allows seamless integration with existing CSV and output workflows
+- **ENHANCED**: Intelligent GPU processing hierarchy - RAPIDS → Standard GPU (ILGPU) → CPU fallback
+- **IMPROVED**: When RAPIDS unavailable, uses standard GPU acceleration for string extraction + CPU regex processing
+- **ADDED**: Clear user feedback showing which processing method is being used (RAPIDS/Standard GPU/CPU)
 - **FIXED**: CSV output completely cleaned up - no raw data appears before CSV headers in directory/regex mode
-- **PERFORMANCE**: Potential massive speedups for large-scale regex operations on systems with RAPIDS installed
-- **UX**: Enhanced user feedback clearly indicates when RAPIDS is active, installing, or falling back to CPU processing
+- **PERFORMANCE**: Maintains GPU acceleration benefits even when RAPIDS is not available
+- **UX**: Single clear warning message when RAPIDS unavailable, informing user of actual fallback method
 
 ### v1.8.5
 

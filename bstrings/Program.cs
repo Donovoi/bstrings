@@ -1431,10 +1431,33 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 {
                     if (useRapids || forceRapids)
                     {
-                        // User requested RAPIDS but it's not available - always show this
-                        Log.Warning("🔄 Using standard CPU processing (RAPIDS not available)");
+                        // User requested RAPIDS but it's not available - show fallback message
+                        Log.Warning(
+                            "⚠️  RAPIDS GPU acceleration not available - falling back to standard GPU processing"
+                        );
+                        if (!q)
+                        {
+                            Log.Information(
+                                "🎮 Using standard GPU acceleration for string extraction + CPU regex processing"
+                            );
+                        }
+                    }
+                    else if (!q && GpuAccelerator != null)
+                    {
+                        // Standard mode with GPU available
+                        Log.Information(
+                            "🎮 Using standard GPU acceleration for string extraction + CPU regex processing"
+                        );
+                    }
+                    else if (!q)
+                    {
+                        // Pure CPU fallback
+                        Log.Information("💻 Using CPU processing (GPU not available)");
                     }
 
+                    // The hits HashSet already contains all strings extracted using GPU acceleration (if available)
+                    // from the ProcessFileChunksConcurrentlyAsync/StreamingAsync calls above.
+                    // Now we just need to apply regex filtering to those GPU-extracted strings.
                     counter = await ProcessRegexPatternsConcurrentlyAsync(
                         hits,
                         regexPatternsWithNames,

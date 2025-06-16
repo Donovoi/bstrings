@@ -96,10 +96,7 @@ namespace bstrings.Rapids
                     }
                     else
                     {
-                        // Always inform user when RAPIDS is not available
-                        Console.WriteLine(
-                            "⚠️  RAPIDS GPU acceleration not available - falling back to CPU processing"
-                        );
+                        // Don't show fallback message here - Program.cs handles more accurate fallback messaging
                         if (Program._debug)
                         {
                             Console.WriteLine($"[RAPIDS] Unavailable - {error.Trim()}");
