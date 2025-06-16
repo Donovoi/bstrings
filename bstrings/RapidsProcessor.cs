@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Text.Json;
-using System.Threading.Tasks;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace bstrings.Rapids
 {
@@ -17,7 +17,10 @@ namespace bstrings.Rapids
         private static bool _rapidsAvailable = false;
         private static bool _checkedAvailability = false;
         private static readonly object _initLock = new object();
-        private static readonly string TempDirectory = Path.Combine(Path.GetTempPath(), "bstrings_rapids");
+        private static readonly string TempDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "bstrings_rapids"
+        );
 
         /// <summary>
         /// Initialize RAPIDS integration by checking Python and cuDF availability
@@ -26,7 +29,8 @@ namespace bstrings.Rapids
         {
             lock (_initLock)
             {
-                if (_checkedAvailability) return;
+                if (_checkedAvailability)
+                    return;
 
                 try
                 {
@@ -43,8 +47,8 @@ namespace bstrings.Rapids
                             RedirectStandardOutput = true,
                             RedirectStandardError = true,
                             UseShellExecute = false,
-                            CreateNoWindow = true
-                        }
+                            CreateNoWindow = true,
+                        },
                     };
 
                     process.Start();
@@ -53,12 +57,12 @@ namespace bstrings.Rapids
                     process.WaitForExit();
 
                     _rapidsAvailable = output.Contains("RAPIDS_OK") && process.ExitCode == 0;
-                    
+
                     if (_rapidsAvailable)
                     {
                         // Create the Python script for RAPIDS processing
                         CreateRapidsPythonScript();
-                        
+
                         if (Program._debug)
                         {
                             Console.WriteLine("[RAPIDS] Enhanced GPU processing available");
@@ -96,20 +100,24 @@ namespace bstrings.Rapids
         /// Process strings using RAPIDS cuDF for massive performance gains
         /// </summary>
         public static async Task<List<RapidsResult>> ProcessStringsWithRapidsAsync(
-            IEnumerable<string> strings, 
+            IEnumerable<string> strings,
             List<(string name, string pattern)> regexPatternsWithNames,
             string sourceFile = "",
-            bool showOffset = false)
+            bool showOffset = false
+        )
         {
             if (!_rapidsAvailable)
             {
-                throw new InvalidOperationException("RAPIDS is not available. Use IsAvailable to check before calling.");
+                throw new InvalidOperationException(
+                    "RAPIDS is not available. Use IsAvailable to check before calling."
+                );
             }
 
             var results = new List<RapidsResult>();
             var stringList = strings.ToList();
-            
-            if (!stringList.Any()) return results;
+
+            if (!stringList.Any())
+                return results;
 
             try
             {
@@ -124,7 +132,7 @@ namespace bstrings.Rapids
                     strings = stringList,
                     patterns = regexPatternsWithNames.ToDictionary(p => p.name, p => p.pattern),
                     source_file = sourceFile,
-                    show_offset = showOffset
+                    show_offset = showOffset,
                 };
 
                 await File.WriteAllTextAsync(inputFile, JsonSerializer.Serialize(inputData));
@@ -140,13 +148,13 @@ namespace bstrings.Rapids
                         RedirectStandardError = true,
                         UseShellExecute = false,
                         CreateNoWindow = true,
-                        WorkingDirectory = TempDirectory
-                    }
+                        WorkingDirectory = TempDirectory,
+                    },
                 };
 
                 var stopwatch = Stopwatch.StartNew();
                 process.Start();
-                
+
                 var output = await process.StandardOutput.ReadToEndAsync();
                 var error = await process.StandardError.ReadToEndAsync();
                 await process.WaitForExitAsync();
@@ -155,24 +163,30 @@ namespace bstrings.Rapids
                 if (process.ExitCode == 0 && File.Exists(outputFile))
                 {
                     var resultJson = await File.ReadAllTextAsync(outputFile);
-                    var rapidsResults = JsonSerializer.Deserialize<List<Dictionary<string, object>>>(resultJson);
+                    var rapidsResults = JsonSerializer.Deserialize<
+                        List<Dictionary<string, object>>
+                    >(resultJson);
 
                     foreach (var result in rapidsResults)
                     {
-                        results.Add(new RapidsResult
-                        {
-                            PatternName = result["pattern_name"].ToString(),
-                            DataFound = result["data_found"].ToString(),
-                            SourceFile = result["source_file"].ToString(),
-                            Offset = result["offset"].ToString(),
-                            PatternType = "RAPIDS-GPU",
-                            ProcessingTimeMs = stopwatch.ElapsedMilliseconds
-                        });
+                        results.Add(
+                            new RapidsResult
+                            {
+                                PatternName = result["pattern_name"].ToString(),
+                                DataFound = result["data_found"].ToString(),
+                                SourceFile = result["source_file"].ToString(),
+                                Offset = result["offset"].ToString(),
+                                PatternType = "RAPIDS-GPU",
+                                ProcessingTimeMs = stopwatch.ElapsedMilliseconds,
+                            }
+                        );
                     }
 
                     if (Program._debug)
                     {
-                        Console.WriteLine($"[RAPIDS] Processed {stringList.Count} strings in {stopwatch.ElapsedMilliseconds}ms, found {results.Count} matches");
+                        Console.WriteLine(
+                            $"[RAPIDS] Processed {stringList.Count} strings in {stopwatch.ElapsedMilliseconds}ms, found {results.Count} matches"
+                        );
                     }
                 }
                 else
@@ -190,7 +204,9 @@ namespace bstrings.Rapids
                     File.Delete(inputFile);
                     File.Delete(outputFile);
                 }
-                catch { /* Ignore cleanup errors */ }
+                catch
+                { /* Ignore cleanup errors */
+                }
 
                 return results;
             }
@@ -209,20 +225,34 @@ namespace bstrings.Rapids
         /// </summary>
         public static async Task<ProcessingBenchmark> BenchmarkPerformanceAsync(
             IEnumerable<string> strings,
-            List<(string name, string pattern)> patterns)
+            List<(string name, string pattern)> patterns
+        )
         {
             var benchmark = new ProcessingBenchmark();
             var stringList = strings.ToList();
 
             if (Program._debug)
             {
-                Console.WriteLine($"[RAPIDS] Starting benchmark with {stringList.Count} strings and {patterns.Count} patterns");
+                Console.WriteLine(
+                    $"[RAPIDS] Starting benchmark with {stringList.Count} strings and {patterns.Count} patterns"
+                );
             }
 
             // Benchmark standard processing
             var standardStopwatch = Stopwatch.StartNew();
             var standardResults = await Program.ProcessRegexPatternsConcurrentlyAsync(
-                new HashSet<string>(stringList), patterns, false, false, true, null, true, "", "", false, false);
+                new HashSet<string>(stringList),
+                patterns,
+                false,
+                false,
+                true,
+                null,
+                true,
+                "",
+                "",
+                false,
+                false
+            );
             standardStopwatch.Stop();
 
             benchmark.StandardProcessingTimeMs = standardStopwatch.ElapsedMilliseconds;
@@ -240,9 +270,11 @@ namespace bstrings.Rapids
                     benchmark.RapidsProcessingTimeMs = rapidsStopwatch.ElapsedMilliseconds;
                     benchmark.RapidsResultCount = rapidsResults.Count;
                     benchmark.RapidsAvailable = true;
-                    benchmark.SpeedupFactor = benchmark.RapidsProcessingTimeMs > 0 
-                        ? (double)standardStopwatch.ElapsedMilliseconds / rapidsStopwatch.ElapsedMilliseconds 
-                        : 1.0;
+                    benchmark.SpeedupFactor =
+                        benchmark.RapidsProcessingTimeMs > 0
+                            ? (double)standardStopwatch.ElapsedMilliseconds
+                                / rapidsStopwatch.ElapsedMilliseconds
+                            : 1.0;
                 }
                 catch (Exception ex)
                 {
@@ -263,7 +295,8 @@ namespace bstrings.Rapids
         private static void CreateRapidsPythonScript()
         {
             var scriptPath = Path.Combine(TempDirectory, "rapids_processor.py");
-            var script = @"#!/usr/bin/env python3
+            var script =
+                @"#!/usr/bin/env python3
 import sys
 import json
 import cudf
@@ -378,13 +411,24 @@ if __name__ == '__main__':
             string o,
             string currentFile = "",
             bool isCsvOutput = false,
-            bool csvHeaderAlreadyWritten = false)
+            bool csvHeaderAlreadyWritten = false
+        )
         {
             if (!_rapidsAvailable)
             {
                 // Fallback to standard processing
                 var standardResults = await Program.ProcessRegexPatternsConcurrentlyAsync(
-                    hits, regexPatternsWithNames, ro, off, s, sw, q, o, currentFile, isCsvOutput, csvHeaderAlreadyWritten
+                    hits,
+                    regexPatternsWithNames,
+                    ro,
+                    off,
+                    s,
+                    sw,
+                    q,
+                    o,
+                    currentFile,
+                    isCsvOutput,
+                    csvHeaderAlreadyWritten
                 );
                 return standardResults;
             }
@@ -393,12 +437,12 @@ if __name__ == '__main__':
             {
                 // Convert hits to list for RAPIDS processing
                 var stringList = hits.ToList();
-                
+
                 // Process with RAPIDS
                 var rapidsResults = await ProcessStringsWithRapidsAsync(
-                    stringList, 
-                    regexPatternsWithNames, 
-                    currentFile, 
+                    stringList,
+                    regexPatternsWithNames,
+                    currentFile,
                     off
                 );
 
@@ -410,24 +454,28 @@ if __name__ == '__main__':
                     if (!csvHeaderAlreadyWritten && sw != null)
                     {
                         await sw.WriteLineAsync("File,Pattern,Match,Offset");
-                    }                    foreach (var result in rapidsResults)
+                    }
+                    foreach (var result in rapidsResults)
                     {
                         totalMatches++;
                         if (sw != null)
                         {
-                            var offsetStr = !string.IsNullOrEmpty(result.Offset) ? result.Offset : "";
-                            var csvLine = $"\"{currentFile}\",\"{result.PatternName}\",\"{result.DataFound.Replace("\"", "\"\"")}\",\"{offsetStr}\"";
+                            var offsetStr = !string.IsNullOrEmpty(result.Offset)
+                                ? result.Offset
+                                : "";
+                            var csvLine =
+                                $"\"{currentFile}\",\"{result.PatternName}\",\"{result.DataFound.Replace("\"", "\"\"")}\",\"{offsetStr}\"";
                             await sw.WriteLineAsync(csvLine);
                         }
-                        
-                        if (!s && !q)  // if not silent and not quiet
+
+                        if (!s && !q) // if not silent and not quiet
                         {
                             Console.WriteLine($"{result.DataFound}");
                         }
                     }
                 }
                 else
-                {                    // Regular output
+                { // Regular output
                     foreach (var result in rapidsResults)
                     {
                         totalMatches++;
@@ -435,8 +483,8 @@ if __name__ == '__main__':
                         {
                             await sw.WriteLineAsync(result.DataFound);
                         }
-                        
-                        if (!s && !q)  // if not silent and not quiet
+
+                        if (!s && !q) // if not silent and not quiet
                         {
                             Console.WriteLine($"{result.DataFound}");
                         }
@@ -445,7 +493,9 @@ if __name__ == '__main__':
 
                 if (Program._debug)
                 {
-                    Console.WriteLine($"RAPIDS processed {totalMatches} matches from {hits.Count} strings using {regexPatternsWithNames.Count} patterns");
+                    Console.WriteLine(
+                        $"RAPIDS processed {totalMatches} matches from {hits.Count} strings using {regexPatternsWithNames.Count} patterns"
+                    );
                 }
 
                 return totalMatches;
@@ -454,12 +504,24 @@ if __name__ == '__main__':
             {
                 if (Program._debug)
                 {
-                    Console.WriteLine($"RAPIDS processing failed: {ex.Message}. Falling back to standard processing.");
+                    Console.WriteLine(
+                        $"RAPIDS processing failed: {ex.Message}. Falling back to standard processing."
+                    );
                 }
-                
+
                 // Fallback to standard processing
                 return await Program.ProcessRegexPatternsConcurrentlyAsync(
-                    hits, regexPatternsWithNames, ro, off, s, sw, q, o, currentFile, isCsvOutput, csvHeaderAlreadyWritten
+                    hits,
+                    regexPatternsWithNames,
+                    ro,
+                    off,
+                    s,
+                    sw,
+                    q,
+                    o,
+                    currentFile,
+                    isCsvOutput,
+                    csvHeaderAlreadyWritten
                 );
             }
         }
@@ -495,8 +557,8 @@ if __name__ == '__main__':
             if (!RapidsAvailable)
                 return "RAPIDS not available for comparison";
 
-            return $"Performance: Standard={StandardProcessingTimeMs}ms, RAPIDS={RapidsProcessingTimeMs}ms, " +
-                   $"Speedup={SpeedupFactor:F2}x, Results=Standard:{StandardResultCount}/RAPIDS:{RapidsResultCount}";
+            return $"Performance: Standard={StandardProcessingTimeMs}ms, RAPIDS={RapidsProcessingTimeMs}ms, "
+                + $"Speedup={SpeedupFactor:F2}x, Results=Standard:{StandardResultCount}/RAPIDS:{RapidsResultCount}";
         }
     }
 }
