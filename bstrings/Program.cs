@@ -1671,7 +1671,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                         $"{CsvEscape(patternName)},{CsvEscape(dataFound)},{CsvEscape(sourceFile)},{CsvEscape(offsetStr)},{CsvEscape(patternType)}"
                                     );
                                 }
-                                else if (sw != null)
+                                else if (sw != null && !isCsvOutput)
                                 {
                                     // For non-CSV output files, write raw hit
                                     sw.WriteLine(hit);

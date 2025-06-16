@@ -28,14 +28,23 @@ This version now includes **optional NVIDIA RAPIDS integration** for unprecedent
 - **🚀 Easy activation**: Simply add `--use-rapids` flag to any regex search
 - **📊 Performance tracking**: Debug output shows when RAPIDS is being used
 - **⚡ Scalable processing**: Particularly effective for large datasets and complex regex patterns
+- **🛠️ Auto-installation**: Use `--force-rapids` to automatically install RAPIDS if not available
 
-### 🛠️ **RAPIDS Requirements (Optional)**
+### 🛠️ **RAPIDS Installation & Usage**
 
-RAPIDS functionality requires:
+RAPIDS functionality has flexible installation options:
+
+#### **Option 1: Manual Installation (Recommended)**
 
 - NVIDIA GPU with CUDA support
 - Python 3.8+ with cuDF installed (`conda install -c rapidsai cudf`)
 - RAPIDS is **optional** - bstrings works perfectly without it!
+
+#### **Option 2: Automatic Installation**
+
+- Use `--force-rapids` flag to automatically install RAPIDS infrastructure
+- Installs Miniconda, CUDA toolkit, and creates conda environment with cuDF
+- Installation runs in background with progress feedback
 
 ```bash
 # Standard processing (always works)
@@ -43,6 +52,9 @@ bstrings.exe -f bigfile.bin --lr all
 
 # GPU-accelerated processing (if RAPIDS available)
 bstrings.exe -f bigfile.bin --lr all --use-rapids
+
+# Auto-install RAPIDS and use GPU acceleration
+bstrings.exe -f bigfile.bin --lr all --force-rapids
 ```
 
 ## 🚀 **NEW: High-Performance Parallel Processing**
@@ -562,13 +574,147 @@ The automated workflow:
 
 No manual intervention required - just push to `master` and get a release!
 
+## 🛠️ **Build Notes & Development Setup**
+
+This section documents the build requirements and development setup for contributing to bstrings.
+
+### 🔧 **Development Requirements**
+
+- **.NET 9.0 SDK**: Required for building the application
+- **Visual Studio 2022** or **VS Code**: Recommended IDEs
+- **Windows x64**: Primary development and testing platform
+- **PowerShell**: For running build scripts and version management
+- **Git**: For version control and contribution workflow
+
+### 📦 **Dependencies & Packages**
+
+The project uses several key NuGet packages:
+
+- **ILGPU** (1.5.2): GPU computing acceleration
+- **pythonnet** (3.0.3): Python interop for RAPIDS integration
+- **Costura.Fody** (6.0.0): Single-file executable embedding
+- **System.CommandLine** (2.0.0-beta4): Modern CLI framework
+- **AlphaFS.New** (2.3.0): Enhanced file system operations
+- **Serilog** (4.2.0): Structured logging
+- **DiscUtils.Ntfs** (0.16.13): NTFS file system support
+
+### 🚀 **Building the Project**
+
+#### **Command Line Build**
+
+```bash
+# Build Debug version
+dotnet build bstrings/bstrings.csproj -c Debug
+
+# Build Release version (optimized, single-file)
+dotnet build bstrings/bstrings.csproj -c Release
+
+# Build and run
+dotnet run --project bstrings/bstrings.csproj -- --help
+```
+
+#### **Visual Studio Code Task**
+
+Use the pre-configured VS Code task:
+
+```bash
+# Via VS Code Command Palette
+Ctrl+Shift+P → "Tasks: Run Task" → "Build bstrings (Release)"
+```
+
+### 🧪 **Testing & Validation**
+
+#### **Basic Functionality Tests**
+
+```bash
+# Test standard regex processing
+./bstrings.exe -f test_email.txt --lr email -q
+
+# Test RAPIDS integration (if available)
+./bstrings.exe -f test_email.txt --lr email --use-rapids -q
+
+# Test CSV output
+./bstrings.exe -f test_email.txt --lr "email,guid" -o test.csv -q
+
+# Test multiple patterns
+./bstrings.exe -f test_email.txt --lr all -q -o results.txt
+```
+
+#### **Performance Validation**
+
+```bash
+# Memory efficiency test (large files)
+./bstrings.exe -f large_file.bin --lr all -o results.txt -q
+
+# Parallel processing validation
+./bstrings.exe -f test_file.bin --lr "email,guid,cc" --debug
+```
+
+### 🔄 **Version Management**
+
+The project uses automated version management:
+
+```powershell
+# Manual version increment
+./Scripts/UpdateVersion.ps1 patch  # 1.8.6 → 1.8.7
+./Scripts/UpdateVersion.ps1 minor  # 1.8.6 → 1.9.0
+./Scripts/UpdateVersion.ps1 major  # 1.8.6 → 2.0.0
+
+# Automatic via commit messages
+git commit -m "Fix CSV output bug [version:patch]"
+git commit -m "Add new RAPIDS features [version:minor]"
+```
+
+### 📂 **Project Structure**
+
+```
+bstrings/
+├── bstrings.csproj          # Main project file with dependencies
+├── Program.cs               # Main application logic and CLI
+├── RapidsProcessor.cs       # RAPIDS/cuDF integration
+└── Properties/
+    └── AssemblyInfo.cs      # Assembly metadata
+
+Scripts/                     # Version management scripts
+README.md                   # Main documentation (this file)
+VERSIONING.md              # Version management guide
+```
+
+### 🎯 **Key Features & Architecture**
+
+- **Single-file deployment**: Uses Costura.Fody for embedding dependencies
+- **GPU acceleration**: ILGPU for compute kernels + RAPIDS for regex
+- **Memory-optimized streaming**: Processes massive files with minimal RAM
+- **Parallel processing**: Multi-core regex matching and post-processing
+- **Python interop**: Bridge to RAPIDS cuDF via pythonnet
+- **Professional CSV output**: Clean, structured data export
+
+### 💡 **Development Tips**
+
+1. **Debug mode**: Use `--debug` flag to see internal processing details
+2. **RAPIDS testing**: Use `--force-rapids` to test auto-installation workflow
+3. **Memory profiling**: Monitor RAM usage with large files using streaming mode
+4. **Performance testing**: Compare CPU vs GPU processing with `--use-rapids`
+5. **CSV validation**: Always test CSV output with various pattern combinations
+
+### 🤝 **Contributing**
+
+1. Fork the repository
+2. Create a feature branch
+3. Make changes with appropriate version increment in commit message
+4. Test thoroughly with various file sizes and patterns
+5. Submit pull request with detailed description
+
+The automated build system will handle compilation, testing, and release creation.
+
 # bstrings
 
 A better strings utility!
 
-## Command Line Interface```
+## Command Line Interface
 
-bstrings version 1.5.3.0
+```
+bstrings version 1.8.6.0
 
 Author: Eric Zimmerman (saericzimmerman@gmail.com)
 https://github.com/EricZimmerman/bstrings
@@ -601,7 +747,14 @@ off Show offset to hit after string, followed by the encoding (A=1252, U=Unicode
 sa Sort results alphabetically
 sl Sort results by length
 
-````
+## RAPIDS GPU Acceleration Flags (NEW!)
+
+use-rapids Use NVIDIA RAPIDS (cuDF) for GPU-accelerated regex processing when available
+force-rapids Install NVIDIA RAPIDS (conda, CUDA toolkit, cuDF) automatically if not available
+
+NOTE: --use-rapids enables NVIDIA RAPIDS (cuDF) for GPU-accelerated regex processing when available.
+NOTE: --force-rapids automatically installs NVIDIA RAPIDS (conda, CUDA, cuDF) if not available.
+```
 
 ## Examples
 
@@ -630,6 +783,25 @@ bstrings.exe -f "C:\Data\evidence.img" --lr "cc,ssn" --off -o sensitive_data.csv
 bstrings.exe -f "C:\Large\file.bin" --lr all -q -o results.csv
 ```
 
+### RAPIDS GPU Acceleration (NEW!)
+
+```bash
+# GPU-accelerated regex processing (if RAPIDS available)
+bstrings.exe -f "C:\Evidence\large.img" --lr all --use-rapids -o results.csv
+
+# Auto-install RAPIDS and use GPU acceleration
+bstrings.exe -f "C:\Data\huge_file.bin" --lr "email,bitcoin,guid" --force-rapids -o findings.csv
+
+# High-performance GPU processing with quiet mode
+bstrings.exe -f "C:\Forensics\evidence.bin" --lr all --use-rapids -q -o artifacts.csv
+```
+
+# High-performance CSV generation with quiet mode
+
+bstrings.exe -f "C:\Large\file.bin" --lr all -q -o results.csv
+
+````
+
 ### High-Performance Output Control (NEW!)
 
 ```bash
@@ -641,7 +813,7 @@ bstrings.exe -f "C:\Malware\sample.bin" --lr "email,bitcoin,url3986" -s -o findi
 
 # Standard: Regular output (slower with large result sets)
 bstrings.exe -f "C:\Data\file.bin" --lr "guid,cc" -o results.txt
-```
+````
 
 ### Advanced Usage
 
@@ -726,15 +898,23 @@ Open Source Development funding and support provided by the following contributo
 ## Version History
 
 ### v1.8.6 (Latest)
+
 - **NEW**: NVIDIA RAPIDS (cuDF) integration for GPU-accelerated regex processing via `--use-rapids` flag
-- **ENHANCED**: Automatic fallback to standard processing when RAPIDS is not available
-- **ADDED**: Debug output shows when RAPIDS processing is being used vs standard processing
+- **NEW**: `--force-rapids` flag for automatic RAPIDS installation (Miniconda, CUDA toolkit, cuDF environment)
+- **ENHANCED**: Automatic fallback to standard processing when RAPIDS is not available with clear user feedback
+- **ADDED**: Debug and normal output shows when RAPIDS processing is being used vs standard processing
 - **IMPROVED**: Bridge architecture allows seamless integration with existing CSV and output workflows
+- **FIXED**: CSV output completely cleaned up - no raw data appears before CSV headers in directory/regex mode
 - **PERFORMANCE**: Potential massive speedups for large-scale regex operations on systems with RAPIDS installed
+- **UX**: Enhanced user feedback clearly indicates when RAPIDS is active, installing, or falling back to CPU processing
 
 ### v1.8.5
+
 - **FIXED**: CSV output with regex patterns now produces clean, properly formatted CSV files without any non-CSV data
 - **FIXED**: Eliminated duplicate CSV headers when processing multiple files in directory mode with regex patterns
 - **IMPROVED**: CSV output now contains only pattern matches when using regex filters (`--lr`), no raw string dumps
 - **ENHANCED**: Better coordination between string extraction and regex processing phases to prevent mixed output formats
-````
+
+```
+
+```
