@@ -32,6 +32,7 @@ This version now includes **optional NVIDIA RAPIDS integration** for unprecedent
 ### 🛠️ **RAPIDS Requirements (Optional)**
 
 RAPIDS functionality requires:
+
 - NVIDIA GPU with CUDA support
 - Python 3.8+ with cuDF installed (`conda install -c rapidsai cudf`)
 - RAPIDS is **optional** - bstrings works perfectly without it!

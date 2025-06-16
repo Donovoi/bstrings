@@ -57,7 +57,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static readonly string Header =
         $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version}"
         + "\r\n\r\nAuthor: Eric Zimmerman (saericzimmerman@gmail.com)"
-        + "\r\nhttps://github.com/EricZimmerman/bstrings";    private static readonly string Footer =
+        + "\r\nhttps://github.com/EricZimmerman/bstrings";
+    private static readonly string Footer =
         @"Examples: bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls URL"
         + "\r\n\t "
         + @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr guid"
@@ -1373,7 +1374,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             // Skip expensive post-processing if results are already written to file and no console output needed
             bool streamingComplete = !string.IsNullOrEmpty(o) && q;
-            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0;            // When regex patterns are specified, use dedicated regex processing ONLY
+            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0; // When regex patterns are specified, use dedicated regex processing ONLY
             if (regexPatterns.Count > 0)
             {
                 // Try RAPIDS processing if enabled and available
