@@ -25,7 +25,8 @@ namespace bstrings.Rapids
         /// <summary>
         /// Initialize RAPIDS integration by checking Python and cuDF availability
         /// </summary>
-        public static void Initialize()
+        /// <param name="forceInstall">If true, automatically install RAPIDS if not available</param>
+        public static async Task InitializeAsync(bool forceInstall = false)
         {
             lock (_initLock)
             {
@@ -57,22 +58,57 @@ namespace bstrings.Rapids
                     process.WaitForExit();
 
                     _rapidsAvailable = output.Contains("RAPIDS_OK") && process.ExitCode == 0;
-
                     if (_rapidsAvailable)
                     {
                         // Create the Python script for RAPIDS processing
                         CreateRapidsPythonScript();
 
+                        // Always inform user of successful RAPIDS initialization
+                        Console.WriteLine("✅ RAPIDS GPU acceleration initialized successfully");
                         if (Program._debug)
                         {
-                            Console.WriteLine("[RAPIDS] Enhanced GPU processing available");
+                            Console.WriteLine(
+                                "[RAPIDS] Enhanced GPU processing available with cuDF and cuPy"
+                            );
+                        }
+                    }
+                    else if (forceInstall)
+                    {
+                        // Attempt automatic installation
+                        Console.WriteLine(
+                            "🔧 RAPIDS not found - attempting automatic installation..."
+                        );
+                        Console.WriteLine(
+                            "This requires administrator privileges and may take 10-30 minutes."
+                        );
+
+                        // Trigger installation in background - don't wait here to avoid lock issues
+                        Task.Run(() => InstallRapidsEnvironmentAsync());
+
+                        // Set as available optimistically - real check will happen during processing
+                        Console.WriteLine(
+                            "✅ RAPIDS installation initiated - restart application after installation completes"
+                        );
+                        if (Program._debug)
+                        {
+                            Console.WriteLine("[RAPIDS] Installation running in background");
                         }
                     }
                     else
                     {
+                        // Always inform user when RAPIDS is not available
+                        Console.WriteLine(
+                            "⚠️  RAPIDS GPU acceleration not available - falling back to CPU processing"
+                        );
                         if (Program._debug)
                         {
-                            Console.WriteLine($"[RAPIDS] Not available: {error}");
+                            Console.WriteLine($"[RAPIDS] Unavailable - {error.Trim()}");
+                            Console.WriteLine(
+                                "[RAPIDS] Install NVIDIA RAPIDS cuDF for GPU acceleration: pip install cudf-cu12"
+                            );
+                            Console.WriteLine(
+                                "[RAPIDS] Or use --force-rapids to automatically install RAPIDS environment"
+                            );
                         }
                     }
                 }
@@ -374,6 +410,134 @@ if __name__ == '__main__':
 ";
 
             File.WriteAllText(scriptPath, script);
+        }
+
+        /// <summary>
+        /// Install RAPIDS environment in the background
+        /// </summary>
+        private static async Task InstallRapidsEnvironmentAsync()
+        {
+            try
+            {
+                Console.WriteLine();
+                Console.WriteLine(
+                    "[RAPIDS Installation] 🔧 Starting automatic RAPIDS installation..."
+                );
+
+                // Install Miniconda
+                await InstallMiniconda();
+
+                // Create RAPIDS environment
+                await CreateRapidsEnvironment();
+
+                Console.WriteLine("[RAPIDS Installation] ✅ Installation completed!");
+                Console.WriteLine(
+                    "[RAPIDS Installation] Please restart the application to use RAPIDS GPU acceleration."
+                );
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[RAPIDS Installation] ❌ Installation failed: {ex.Message}");
+                if (Program._debug)
+                {
+                    Console.WriteLine($"[RAPIDS Installation] Exception details: {ex}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Install Miniconda
+        /// </summary>
+        private static async Task InstallMiniconda()
+        {
+            try
+            {
+                Console.WriteLine("[RAPIDS Installation] 📦 Installing Miniconda...");
+
+                var installerPath = Path.Combine(Path.GetTempPath(), "miniconda.exe");
+
+                // Download Miniconda
+                var downloadProcess = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "powershell",
+                        Arguments =
+                            $"-Command \"Invoke-WebRequest -Uri 'https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe' -OutFile '{installerPath}'\"",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    },
+                };
+
+                downloadProcess.Start();
+                await downloadProcess.WaitForExitAsync();
+
+                if (File.Exists(installerPath))
+                {
+                    // Install Miniconda
+                    var installProcess = new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = installerPath,
+                            Arguments = "/S",
+                            UseShellExecute = false,
+                            CreateNoWindow = true,
+                        },
+                    };
+
+                    installProcess.Start();
+                    await installProcess.WaitForExitAsync();
+
+                    try
+                    {
+                        File.Delete(installerPath);
+                    }
+                    catch { }
+
+                    Console.WriteLine("[RAPIDS Installation] ✅ Miniconda installed");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[RAPIDS Installation] ❌ Miniconda installation failed: {ex.Message}"
+                );
+            }
+        }
+
+        /// <summary>
+        /// Create RAPIDS conda environment
+        /// </summary>
+        private static async Task CreateRapidsEnvironment()
+        {
+            try
+            {
+                Console.WriteLine("[RAPIDS Installation] 🐍 Creating RAPIDS environment...");
+
+                var createEnvProcess = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "conda",
+                        Arguments =
+                            "create -n rapids-25.06 -c rapidsai -c conda-forge -c nvidia rapids=25.06 python=3.13 \"cuda-version>=12.0,<=12.8\" -y",
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    },
+                };
+
+                createEnvProcess.Start();
+                await createEnvProcess.WaitForExitAsync();
+
+                Console.WriteLine("[RAPIDS Installation] ✅ RAPIDS environment created");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[RAPIDS Installation] ❌ Environment creation failed: {ex.Message}"
+                );
+            }
         }
 
         /// <summary>

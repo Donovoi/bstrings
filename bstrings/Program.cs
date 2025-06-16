@@ -84,8 +84,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
         + @"   bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls mui --sl"
         + "\r\n\t "
         + @"   bstrings.exe -f ""C:\Temp\bigFile.bin"" --lr all --use-rapids  # GPU-accelerated regex processing"
+        + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\bigFile.bin"" --lr all --force-rapids  # Auto-install and use RAPIDS"
         + "\r\n"
-        + "\r\nNOTE: --use-rapids enables NVIDIA RAPIDS (cuDF) for GPU-accelerated regex processing when available.";
+        + "\r\nNOTE: --use-rapids enables NVIDIA RAPIDS (cuDF) for GPU-accelerated regex processing when available."
+        + "\r\nNOTE: --force-rapids automatically installs NVIDIA RAPIDS (conda, CUDA, cuDF) if not available.";
 
     private static RootCommand _rootCommand;
 
@@ -633,6 +636,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 () => false,
                 "Use NVIDIA RAPIDS (cuDF) for GPU-accelerated regex processing when available"
             ),
+            new Option<bool>(
+                "--force-rapids",
+                () => false,
+                "Install NVIDIA RAPIDS (conda, CUDA toolkit, cuDF) automatically if not available"
+            ),
         };
 
         _rootCommand.Description = Header + "\r\n\r\n" + Footer;
@@ -664,7 +672,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 bool sl,
                 bool debug,
                 bool trace,
-                bool useRapids
+                bool useRapids,
+                bool forceRapids
             ) =>
             {
                 await DoWork(
@@ -694,7 +703,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     sl,
                     debug,
                     trace,
-                    useRapids
+                    useRapids,
+                    forceRapids
                 );
             }
         );
@@ -731,10 +741,27 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool sl, // sort by length
         bool debug,
         bool trace,
-        bool useRapids // use NVIDIA RAPIDS for GPU-accelerated regex processing
+        bool useRapids, // use NVIDIA RAPIDS for GPU-accelerated regex processing
+        bool forceRapids // automatically install NVIDIA RAPIDS if not available
     )
     { // Set the global debug flag
         _debug = debug;
+
+        // Initialize RAPIDS integration if requested
+        if (useRapids || forceRapids)
+        {
+            if (!q) // Only show if not in quiet mode
+            {
+                Log.Information("Initializing NVIDIA RAPIDS GPU acceleration...");
+            }
+            await bstrings.Rapids.RapidsProcessor.InitializeAsync(forceRapids);
+
+            // Add extra line for readability after RAPIDS status
+            if (!q)
+            {
+                Console.WriteLine();
+            }
+        }
 
         // Log GPU initialization info if debug is enabled
         LogGpuInitializationInfo();
@@ -1376,14 +1403,13 @@ public static partial class Program // Make it public and partial for ILGPU if n
             bool streamingComplete = !string.IsNullOrEmpty(o) && q;
             bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0; // When regex patterns are specified, use dedicated regex processing ONLY
             if (regexPatterns.Count > 0)
-            {
-                // Try RAPIDS processing if enabled and available
-                if (useRapids && bstrings.Rapids.RapidsProcessor.IsAvailable)
+            { // Try RAPIDS processing if enabled and available
+                if ((useRapids || forceRapids) && bstrings.Rapids.RapidsProcessor.IsAvailable)
                 {
-                    if (_debug)
+                    if (!q) // Show success message unless in quiet mode
                     {
                         Log.Information(
-                            "Using NVIDIA RAPIDS for GPU-accelerated regex processing..."
+                            "🚀 Using NVIDIA RAPIDS GPU acceleration for regex processing"
                         );
                     }
 
@@ -1403,11 +1429,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 }
                 else
                 {
-                    if (useRapids && _debug)
+                    if (useRapids || forceRapids)
                     {
-                        Log.Information(
-                            "RAPIDS not available, falling back to standard regex processing..."
-                        );
+                        // User requested RAPIDS but it's not available - always show this
+                        Log.Warning("🔄 Using standard CPU processing (RAPIDS not available)");
                     }
 
                     counter = await ProcessRegexPatternsConcurrentlyAsync(
