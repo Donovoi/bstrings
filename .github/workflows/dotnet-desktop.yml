@@ -62,13 +62,9 @@ jobs:
       - name: Build Release
         run: dotnet build bstrings.sln --configuration Release --no-restore --verbosity minimal --framework net9.0
 
-      - name: Test (if tests exist)
+      - name: Test with coverage
         run: |
-          $testProjects = Get-ChildItem -Recurse -Include "*.Tests.csproj", "*Test*.csproj"
-          if ($testProjects.Count -gt 0) {
-            dotnet test bstrings.sln --configuration Release --no-build --verbosity normal        } else {
-            Write-Host "No test projects found, skipping tests"
-          }
+          dotnet test bstrings.sln --configuration Release --no-build --collect:"XPlat Code Coverage" --verbosity normal
 
       - name: Publish Windows x64 Single File
         run: |

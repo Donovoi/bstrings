@@ -606,48 +606,83 @@ if __name__ == '__main__':
                     currentFile,
                     off
                 );
+                var regexMap = RegexOutputCore.BuildRegexMap(regexPatternsWithNames);
 
                 int totalMatches = 0;
 
                 // Handle output similar to the original method
-                if (isCsvOutput)
+                if (isCsvOutput && !csvHeaderAlreadyWritten && sw != null)
                 {
-                    if (!csvHeaderAlreadyWritten && sw != null)
-                    {
-                        await sw.WriteLineAsync("File,Pattern,Match,Offset");
-                    }
-                    foreach (var result in rapidsResults)
-                    {
-                        totalMatches++;
-                        if (sw != null)
-                        {
-                            var offsetStr = !string.IsNullOrEmpty(result.Offset)
-                                ? result.Offset
-                                : "";
-                            var csvLine =
-                                $"\"{currentFile}\",\"{result.PatternName}\",\"{result.DataFound.Replace("\"", "\"\"")}\",\"{offsetStr}\"";
-                            await sw.WriteLineAsync(csvLine);
-                        }
-
-                        if (!s && !q) // if not silent and not quiet
-                        {
-                            Console.WriteLine($"{result.DataFound}");
-                        }
-                    }
+                    await sw.WriteLineAsync(RegexOutputCore.CsvHeader);
                 }
-                else
-                { // Regular output
-                    foreach (var result in rapidsResults)
+
+                foreach (var result in rapidsResults)
+                {
+                    totalMatches++;
+
+                    if (!regexMap.TryGetValue(result.PatternName, out var regex))
                     {
-                        totalMatches++;
-                        if (sw != null)
+                        continue;
+                    }
+
+                    var parsedHit = RegexOutputCore.ParseHit(result.DataFound, off);
+                    var effectiveOffset = !string.IsNullOrWhiteSpace(parsedHit.Offset)
+                        ? parsedHit.Offset
+                        : result.Offset;
+                    parsedHit = parsedHit with { Offset = effectiveOffset };
+
+                    if (ro)
+                    {
+                        foreach (
+                            var record in RegexOutputCore.CreateRecords(
+                                parsedHit,
+                                result.PatternName,
+                                regex,
+                                regexOutput: true,
+                                currentFile,
+                                result.PatternType
+                            )
+                        )
                         {
-                            await sw.WriteLineAsync(result.DataFound);
+                            if (isCsvOutput && sw != null)
+                            {
+                                await sw.WriteLineAsync(RegexOutputCore.BuildCsvLine(record));
+                            }
+                            else if (sw != null)
+                            {
+                                await sw.WriteLineAsync(RegexOutputCore.BuildRegexOnlyText(record));
+                            }
+
+                            if (!s && !q)
+                            {
+                                Console.WriteLine(RegexOutputCore.BuildRegexOnlyText(record));
+                            }
+                        }
+                    }
+                    else
+                    {
+                        var record = RegexOutputCore.CreateRecords(
+                            parsedHit,
+                            result.PatternName,
+                            regex,
+                            regexOutput: false,
+                            currentFile,
+                            result.PatternType
+                        ).Single();
+                        var fullHitText = RegexOutputCore.BuildFullHitText(parsedHit);
+
+                        if (isCsvOutput && sw != null)
+                        {
+                            await sw.WriteLineAsync(RegexOutputCore.BuildCsvLine(record));
+                        }
+                        else if (sw != null)
+                        {
+                            await sw.WriteLineAsync(fullHitText);
                         }
 
-                        if (!s && !q) // if not silent and not quiet
+                        if (!s && !q)
                         {
-                            Console.WriteLine($"{result.DataFound}");
+                            Console.WriteLine(fullHitText);
                         }
                     }
                 }

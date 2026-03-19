@@ -188,6 +188,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
         {
             if (_objects.TryDequeue(out T item))
             {
+                Interlocked.Decrement(ref _count);
                 return item;
             }
 
@@ -453,7 +454,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     tempContext = null;
                 }
             }
-            catch (Exception cudaEx)
+            catch
             {
                 // Failed to initialize ILGPU with Cuda (message suppressed unless debug mode)
                 if (tempContext != null)
@@ -532,7 +533,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         DynamicChunkSizeMB = 0; // Will use CPU calculation
                     }
                 }
-                catch (Exception ex)
+                catch
                 {
                     // Error calculating dynamic GPU chunk size (message suppressed unless debug mode)
                     DynamicChunkSizeMB = 0; // Will use CPU calculation
@@ -544,7 +545,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 DynamicChunkSizeMB = 0; // Will use CPU calculation at runtime
             }
         }
-        catch (Exception ex)
+        catch
         {
             // ILGPU General Initialization Error (message suppressed unless debug mode)
             if (tempContext != null)
@@ -854,117 +855,86 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
         // ########################### EDITED ###########################
         var files = new List<string>(); // This is the main list of files to process
+        var inputResolution = InputResolutionCore.ResolveExplicitInputs(
+            f,
+            d,
+            mask,
+            File.Exists,
+            Directory.Exists,
+            (directoryPath, searchMask) =>
+                Directory.EnumerateFiles(
+                    directoryPath,
+                    searchMask,
+                    SearchOption.AllDirectories
+                ),
+            Path.GetFullPath
+        );
 
-        if (!string.IsNullOrEmpty(f) && !string.IsNullOrEmpty(d))
+        if (inputResolution.Status == InputResolutionStatus.Success)
         {
-            Log.Error(
-                "Both -f (file) and -d (directory) options were specified. Please use only one. Exiting."
-            );
+            files.AddRange(inputResolution.Files);
+        }
+        else if (inputResolution.Status == InputResolutionStatus.NoFilesFound)
+        {
+            if (!q)
+            {
+                Log.Information("{Message}", inputResolution.Message);
+            }
+
             return;
         }
+        else if (inputResolution.Status == InputResolutionStatus.Error)
+        {
+            if (inputResolution.Exception is not null)
+            {
+                Log.Error(inputResolution.Exception, "{Message}", inputResolution.Message);
+            }
+            else
+            {
+                Log.Error("{Message}", inputResolution.Message);
+            }
 
-        if (!string.IsNullOrEmpty(f)) // -f (file) argument is present
-        {
-            if (!File.Exists(f))
-            {
-                Log.Error("File specified with -f not found: '{F}'. Exiting.", f);
-                return;
-            }
-            files.Add(Path.GetFullPath(f));
+            return;
         }
-        else if (!string.IsNullOrEmpty(d)) // -d (directory) argument is present
+        else if (Console.IsInputRedirected)
         {
-            if (!Directory.Exists(d))
+            Log.Information("No -f or -d specified; attempting to read from stdin...");
+
+            var redirectedInputResolution = InputResolutionCore.CaptureRedirectedInput(
+                Console.OpenStandardInput,
+                Path.GetTempFileName,
+                path => new FileStream(path, FileMode.Create, FileAccess.Write),
+                path => new FileInfo(path).Length,
+                File.Delete,
+                Path.GetFullPath
+            );
+
+            if (redirectedInputResolution.Status == InputResolutionStatus.Success)
             {
-                Log.Error("Directory specified with -d not found: '{D}'. Exiting.", d);
+                files.AddRange(redirectedInputResolution.Files);
+            }
+            else if (
+                redirectedInputResolution.Status == InputResolutionStatus.EmptyRedirectedInput
+            )
+            {
+                Log.Warning("{Message}", redirectedInputResolution.Message);
                 return;
             }
-            try
+            else
             {
-                string fullDirectoryPath = Path.GetFullPath(d);
-                if (!string.IsNullOrEmpty(mask))
+                if (redirectedInputResolution.Exception is not null)
                 {
-                    files.AddRange(
-                        Directory.EnumerateFiles(
-                            fullDirectoryPath,
-                            mask,
-                            SearchOption.AllDirectories
-                        )
+                    Log.Error(
+                        redirectedInputResolution.Exception,
+                        "{Message}",
+                        redirectedInputResolution.Message
                     );
                 }
                 else
                 {
-                    files.AddRange(
-                        Directory.EnumerateFiles(
-                            fullDirectoryPath,
-                            "*",
-                            SearchOption.AllDirectories
-                        )
-                    );
+                    Log.Error("{Message}", redirectedInputResolution.Message);
                 }
 
-                if (!files.Any() && !q)
-                {
-                    Log.Information(
-                        "No files found in directory '{D}' matching the specified criteria.",
-                        d
-                    );
-                    // Exiting if no files found in directory mode, as there's nothing to process.
-                    // If the intent is to proceed (e.g. to create an empty output file), this 'return' can be removed.
-                    return;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error(
-                    ex,
-                    "Error enumerating files in directory '{D}'. Message: {ExMessage}",
-                    d,
-                    ex.Message
-                );
-                return;
-            }
-        }
-        else if (Console.IsInputRedirected) // Neither -f nor -d, so check for piped input
-        {
-            Log.Information("No -f or -d specified; attempting to read from stdin...");
-            string tempFilePath = string.Empty;
-            try
-            {
-                tempFilePath = Path.GetTempFileName();
-                using (var stdinStream = Console.OpenStandardInput())
-                {
-                    using (
-                        var tempFileStream = new FileStream(
-                            tempFilePath,
-                            FileMode.Create,
-                            FileAccess.Write
-                        )
-                    )
-                    {
-                        stdinStream.CopyTo(tempFileStream);
-                    }
-                }
-
-                if (new FileInfo(tempFilePath).Length == 0)
-                {
-                    Log.Warning("Stdin was redirected, but no data was received. Exiting.");
-                    File.Delete(tempFilePath);
-                    return;
-                }
-                files.Add(Path.GetFullPath(tempFilePath));
-            }
-            catch (Exception ex)
-            {
-                Log.Error(
-                    ex,
-                    "Error reading from stdin or writing to temporary file. Message: {ExMessage}",
-                    ex.Message
-                );
-                if (!string.IsNullOrEmpty(tempFilePath) && File.Exists(tempFilePath))
-                {
-                    File.Delete(tempFilePath);
-                }
                 return;
             }
         }
@@ -973,7 +943,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             var helpBld = new HelpBuilder(LocalizationResources.Instance, Console.WindowWidth);
             var hc = new HelpContext(helpBld, _rootCommand, Console.Out);
             helpBld.Write(hc);
-            Log.Warning("A file (-f), directory (-d), or piped input is required. Exiting.");
+            Log.Warning("{Message}", inputResolution.Message);
             return;
         }
 
@@ -994,8 +964,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
         StreamWriter sw = null;
 
-        bool isCsvOutput =
-            !string.IsNullOrEmpty(o) && o.EndsWith(".csv", StringComparison.OrdinalIgnoreCase);
+        var outputConfiguration = OutputConfigurationCore.Prepare(
+            o,
+            Path.GetFullPath,
+            Path.GetDirectoryName,
+            Directory.Exists,
+            path => Directory.CreateDirectory(path)
+        );
+
+        bool isCsvOutput = outputConfiguration.IsCsvOutput;
         bool csvHeaderWritten = false;
 
         var globalCounter = 0;
@@ -1003,44 +980,23 @@ public static partial class Program // Make it public and partial for ILGPU if n
         double globalTimespan = 0;
         var withBoundaryHits = false;
 
-        if (string.IsNullOrEmpty(o) == false && o.Length > 0)
+        if (outputConfiguration.WarningMessage is not null)
         {
-            o = Path.GetFullPath(o).TrimEnd('\\');
+            Log.Warning("{Message}", outputConfiguration.WarningMessage);
+            Console.WriteLine();
+            o = string.Empty;
+        }
+        else if (outputConfiguration.IsEnabled)
+        {
+            o = outputConfiguration.OutputPath;
 
-            var dir = Path.GetDirectoryName(o);
-
-            if (dir != null && Directory.Exists(dir) == false)
-            {
-                try
-                {
-                    Directory.CreateDirectory(dir);
-                }
-                catch (Exception)
-                {
-                    Log.Warning("Invalid path: '{O}'. Results will not be saved to a file", o);
-                    Console.WriteLine();
-                    o = string.Empty;
-                }
-            }
-            else
-            {
-                if (dir == null)
-                {
-                    Log.Warning("Invalid path: '{O}", o);
-                    o = string.Empty;
-                }
-            }
-
-            if (o.Length > 0 && !q)
+            if (!q)
             {
                 Log.Information("Saving hits to '{O}'", o);
                 Console.WriteLine();
             }
 
-            if (o.Length > 0)
-            {
-                sw = new StreamWriter(o, true);
-            }
+            sw = new StreamWriter(o, true);
         }
 
         foreach (var currentFile in files) // Renamed 'file' to 'currentFile'
@@ -1183,60 +1139,16 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             try
             {
-                MappedStream mappedStream = null;
+                var mappedStreamSetup = FileSetupCore.SetupMappedStreamForFile(
+                    currentFile,
+                    _ => FileSetupCore.CreateReadableFileStream(currentFile),
+                    _ => OpenFile(currentFile),
+                    !q && _debug ? Console.Error.WriteLine : null,
+                    Console.Error.WriteLine,
+                    stream => MappedStream.FromStream(stream, Ownership.Dispose)
+                );
+                var mappedStream = mappedStreamSetup.Stream;
 
-                try
-                {
-                    FileStream fileStream;
-#if NET6_0_OR_GREATER
-                    fileStream = File.Open(
-                        currentFile,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.Read
-                    ); // Use currentFile
-#else
-                    fileStream = File.Open(
-                        File.GetFileSystemEntryInfo(currentFile).LongFullPath, // Use currentFile
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.Read
-                    );
-#endif
-                    if (!q && _debug)
-                    {
-                        Console.Error.WriteLine("Creating memory map for file...");
-                    }
-                    mappedStream = MappedStream.FromStream(fileStream, Ownership.None);
-                    if (!q && _debug)
-                    {
-                        Console.Error.WriteLine("Memory map created successfully.");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"Failed to create memory map: {ex.Message}");
-                    // ignored
-                }
-                if (mappedStream == null)
-                {
-                    if (!q && _debug)
-                    {
-                        Console.Error.WriteLine("Falling back to raw file access...");
-                    }
-                    //raw mode
-                    var ss = OpenFile(currentFile); // Use currentFile
-
-                    if (!q && _debug)
-                    {
-                        Console.Error.WriteLine("Creating memory map from raw stream...");
-                    }
-                    mappedStream = MappedStream.FromStream(ss, Ownership.None);
-                    if (!q && _debug)
-                    {
-                        Console.Error.WriteLine("Raw stream memory map created successfully.");
-                    }
-                }
                 using (mappedStream)
                 { // Process main chunks concurrently with streaming output for memory efficiency
                     long totalMainResults = 0;
@@ -1386,45 +1298,21 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 hits = new HashSet<string>(tempList);
             }
 
-            var fileStrings = new HashSet<string>();
-            var regexStrings = new HashSet<string>();
+            var searchTargets = SearchTargetConfigurationCore.Build(
+                ls,
+                lr,
+                fs,
+                fr,
+                regexPatterns,
+                File.Exists,
+                File.ReadAllLines
+            );
+            var fileStrings = new HashSet<string>(searchTargets.FileStrings);
+            var regexStrings = new HashSet<string>(searchTargets.RegexStrings);
 
-            //set up highlighting
-            if (ls?.Length > 0)
+            foreach (var missingFile in searchTargets.MissingFiles)
             {
-                fileStrings.Add(ls);
-            }
-
-            if (lr?.Length > 0)
-            {
-                regexStrings.UnionWith(regexPatterns);
-            }
-
-            if (string.IsNullOrEmpty(fs) == false || string.IsNullOrEmpty(fr) == false)
-            {
-                if (fs?.Length > 0)
-                {
-                    if (File.Exists(fs))
-                    {
-                        fileStrings.UnionWith(new HashSet<string>(File.ReadAllLines(fs)));
-                    }
-                    else
-                    {
-                        Log.Error("Strings file '{Fs}' not found", fs);
-                    }
-                }
-
-                if (fr?.Length > 0)
-                {
-                    if (File.Exists(fr))
-                    {
-                        regexStrings.UnionWith(new HashSet<string>(File.ReadAllLines(fr)));
-                    }
-                    else
-                    {
-                        Log.Error("Regex file '{Fr}' not found", fr);
-                    }
-                }
+                Log.Error("{Message}", missingFile);
             }
 
             //AddHighlightingRules(fileStrings.ToList());
@@ -1553,30 +1441,18 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     Console.WriteLine();
                 }
 
-                // Pre-compile regex patterns for better performance
-                var compiledRegexes = new List<(Regex regex, string pattern, string name)>();
-                if (regexPatternsWithNames.Count > 0)
-                {
-                    foreach (var (name, pattern) in regexPatternsWithNames)
-                    {
-                        try
-                        {
-                            var regex = new System.Text.RegularExpressions.Regex(
-                                pattern,
-                                RegexOptions.IgnoreCase | RegexOptions.Compiled
-                            );
-                            compiledRegexes.Add((regex, pattern, name));
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Warning(
-                                "Invalid regex pattern '{Pattern}': {Message}",
-                                pattern,
-                                ex.Message
-                            );
-                        }
-                    }
-                } // Use concurrent processing for large datasets
+                var compiledRegexes = StandardHitProcessingCore.CompileRegexTargets(
+                    regexStrings,
+                    pattern => GetRegexPatternName(pattern),
+                    (pattern, message) =>
+                        Log.Warning(
+                            "Invalid regex pattern '{Pattern}': {Message}",
+                            pattern,
+                            message
+                        )
+                );
+
+                // Use concurrent processing for large datasets
                 var hitsList = hits.ToList(); // Convert to list for parallel processing
                 var outputLock = new object(); // For thread-safe output
                 var progressLock = new object(); // For thread-safe progress tracking
@@ -1600,104 +1476,16 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             return; // Use return instead of continue in parallel loop
                         }
 
-                        // Prepare CSV output if needed
-                        if (isCsvOutput && sw != null && !csvHeaderWritten)
-                        {
-                            // Write header
-                            sw.WriteLine(
-                                "Name of search pattern,Data found,Source file,Offset,Pattern type"
-                            );
-                            csvHeaderWritten = true;
-                        }
+                        var matchedHit = StandardHitProcessingCore.TryMatchHit(
+                            hit,
+                            fileStrings,
+                            compiledRegexes,
+                            off,
+                            currentFile
+                        );
 
-                        string sourceFile = currentFile ?? string.Empty;
-                        string offsetStr = string.Empty;
-                        string patternType = string.Empty;
-                        string patternName = string.Empty;
-                        string dataFound = hit;
-
-                        // Try to extract offset and pattern type if available (for future extensibility)
-                        // If off flag is set, offset may be appended to the string, try to parse it
-                        if (off)
-                        {
-                            // Example: "string~12345 (A)" or "string~12345 (U)"
-                            int tildeIdx = hit.LastIndexOf('~');
-                            if (tildeIdx > 0)
-                            {
-                                int spaceIdx = hit.IndexOf(' ', tildeIdx);
-                                if (spaceIdx > tildeIdx)
-                                {
-                                    offsetStr = hit.Substring(
-                                        tildeIdx + 1,
-                                        spaceIdx - tildeIdx - 1
-                                    );
-                                    dataFound = hit.Substring(0, tildeIdx);
-                                    // Try to get encoding
-                                    int encStart = hit.IndexOf('(', spaceIdx);
-                                    int encEnd = hit.IndexOf(')', spaceIdx);
-                                    if (encStart > 0 && encEnd > encStart)
-                                        patternType = hit.Substring(
-                                            encStart + 1,
-                                            encEnd - encStart - 1
-                                        );
-                                }
-                            }
-                        } // Determine pattern name (for regex/file string matches)
-                        bool isMatch = false; // Track whether this hit matches any pattern
-
-                        if (fileStrings.Count > 0)
-                        {
-                            foreach (var fileString in fileStrings)
-                            {
-                                if (fileString.Trim().Length == 0)
-                                    continue;
-                                if (
-                                    hit.IndexOf(
-                                        fileString,
-                                        StringComparison.InvariantCultureIgnoreCase
-                                    ) >= 0
-                                )
-                                {
-                                    patternName = fileString;
-                                    patternType = "String";
-                                    isMatch = true;
-                                    break;
-                                }
-                            }
-                        }
-                        else if (compiledRegexes.Count > 0)
-                        {
-                            foreach (var (regex, pattern, name) in compiledRegexes)
-                            {
-                                try
-                                {
-                                    if (regex.IsMatch(hit))
-                                    {
-                                        // Use the stored pattern name for CSV output
-                                        patternName = name;
-                                        patternType = "Regex";
-                                        isMatch = true;
-                                        break;
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    // Skip invalid regex patterns
-                                    Log.Warning(
-                                        "Invalid regex pattern '{Pattern}': {Message}",
-                                        pattern,
-                                        ex.Message
-                                    );
-                                }
-                            }
-                        }
-                        else
-                        {
-                            // If no specific patterns are provided, include all hits
-                            isMatch = true;
-                        }
                         // Only output hits that match patterns
-                        if (isMatch)
+                        if (matchedHit is not null)
                         {
                             // Thread-safe output handling
                             lock (outputLock)
@@ -1708,32 +1496,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                 var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
                                 if (s == false && !suppressConsoleOutput)
                                 {
-                                    Log.Information("{Hit}", hit);
+                                    Log.Information("{Hit}", matchedHit.RawHit);
                                 }
 
-                                if (isCsvOutput && sw != null)
-                                {
-                                    // Write CSV header if not done yet
-                                    if (!csvHeaderWritten)
-                                    {
-                                        sw.WriteLine(
-                                            "Name of search pattern,Data found,Source file,Offset,Pattern type"
-                                        );
-                                        csvHeaderWritten = true;
-                                    }
-
-                                    // Escape CSV fields
-                                    string CsvEscape(string s) =>
-                                        "\"" + s.Replace("\"", "\"\"") + "\"";
-                                    sw.WriteLine(
-                                        $"{CsvEscape(patternName)},{CsvEscape(dataFound)},{CsvEscape(sourceFile)},{CsvEscape(offsetStr)},{CsvEscape(patternType)}"
-                                    );
-                                }
-                                else if (sw != null && !isCsvOutput)
-                                {
-                                    // For non-CSV output files, write raw hit
-                                    sw.WriteLine(hit);
-                                }
+                                csvHeaderWritten = StandardHitProcessingCore.WriteMatchedHit(
+                                    matchedHit,
+                                    isCsvOutput,
+                                    csvHeaderWritten,
+                                    sw
+                                );
                             }
                         }
 
@@ -1798,7 +1569,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 );
             }
 
-            skipGeneralProcessing:
+        skipGeneralProcessing:
             globalCounter += counter;
             globalHits += hits.Count;
             globalTimespan += _sw.Elapsed.TotalSeconds;
@@ -1869,51 +1640,26 @@ public static partial class Program // Make it public and partial for ILGPU if n
             );
         }
         var chunkStopwatch = Stopwatch.StartNew();
-
-        var results = StringListPool.Get();
         var validChunk = chunk.Data.AsSpan(0, chunk.ValidBytes);
-
-        if (unicodeSearch)
-        {
-            var uh = GetUnicodeHits(validChunk, minLength, maxLength, chunk.FileOffset, off, ur);
-            foreach (var h in uh)
-            {
-                results.Add(chunk.IsBoundaryChunk ? "  " + h : h);
-            }
-        }
-        if (asciiSearch)
-        {
-            List<string> ah;
-            // PERFORMANCE OPTIMIZATION: Use optimized CPU processing for all chunks for now
-            // Skip GPU processing to avoid overhead issues
-            var (minChar, maxChar) = ParseCharRange(ar);
-            // PERFORMANCE OPTIMIZATION: Use hit-based extraction for all chunks
-            var hits = FindAsciiStringHits(
-                validChunk,
-                minLength,
-                maxLength,
-                chunk.FileOffset,
-                minChar,
-                maxChar
-            );
-            ah = MaterializeStringHits(validChunk, hits, off);
-
-            foreach (var h in ah)
-            {
-                results.Add(chunk.IsBoundaryChunk ? "  " + h : h);
-            }
-        }
+        var finalResults = ChunkProcessingCore.ProcessChunk(
+            validChunk,
+            chunk.FileOffset,
+            chunk.IsBoundaryChunk,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            off,
+            ar,
+            ur
+        );
         chunkStopwatch.Stop();
         if (_debug)
         {
             Console.Error.WriteLine(
-                $"[Chunk {chunk.ChunkIndex}] Completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {results.Count} strings"
+                $"[Chunk {chunk.ChunkIndex}] Completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {finalResults.Count} strings"
             );
         }
-
-        // Return objects to pools and return the final result
-        var finalResults = new List<string>(results);
-        StringListPool.Return(results);
 
         // Return the byte array back to the pool since chunk processing is complete
         ByteArrayPool.Return(chunk.Data);
@@ -1934,79 +1680,16 @@ public static partial class Program // Make it public and partial for ILGPU if n
         int maxLength = 0
     )
     {
-        var chunks = new List<DataChunk>();
-        var bytesRemaining = totalBytes;
-        var offset = startOffset;
-        var chunkIndex = 0;
-
-        if (isBoundaryMode)
-        { // Boundary chunk reading logic
-            while (bytesRemaining > 0 && offset + boundaryChunkSize <= totalBytes)
-            {
-                var chunk = ByteArrayPool.Rent(boundaryChunkSize);
-                mappedStream.Position = offset;
-                var bytesRead = await Task.Run(() =>
-                    mappedStream.Read(chunk, 0, boundaryChunkSize)
-                );
-
-                if (bytesRead == 0)
-                    break;
-
-                chunks.Add(
-                    new DataChunk
-                    {
-                        Data = chunk,
-                        ValidBytes = bytesRead,
-                        FileOffset = offset,
-                        ChunkIndex = chunkIndex,
-                        IsBoundaryChunk = true,
-                    }
-                );
-
-                offset += chunkSizeBytes;
-                bytesRemaining -= chunkSizeBytes;
-                chunkIndex++;
-
-                // Limit boundary chunks to prevent excessive memory usage
-                if (chunks.Count >= ConcurrentConfig.ReadAheadChunks)
-                    break;
-            }
-        }
-        else
-        {
-            // Main chunk reading logic
-            mappedStream.Position = startOffset;
-            while (bytesRemaining > 0)
-            {
-                var currentChunkSize = (int)Math.Min(chunkSizeBytes, bytesRemaining);
-                var chunk = ByteArrayPool.Rent(currentChunkSize);
-
-                var bytesRead = await Task.Run(() => mappedStream.Read(chunk, 0, currentChunkSize));
-                if (bytesRead == 0)
-                    break;
-
-                chunks.Add(
-                    new DataChunk
-                    {
-                        Data = chunk,
-                        ValidBytes = bytesRead,
-                        FileOffset = offset,
-                        ChunkIndex = chunkIndex,
-                        IsBoundaryChunk = false,
-                    }
-                );
-
-                offset += bytesRead;
-                bytesRemaining -= bytesRead;
-                chunkIndex++;
-
-                // Limit read-ahead to prevent excessive memory usage
-                if (chunks.Count >= ConcurrentConfig.ReadAheadChunks)
-                    break;
-            }
-        }
-
-        return chunks;
+        return await ChunkReadingCore.ReadChunksAsync(
+            mappedStream,
+            totalBytes,
+            chunkSizeBytes,
+            startOffset,
+            isBoundaryMode,
+            boundaryChunkSize,
+            ConcurrentConfig.ReadAheadChunks,
+            ByteArrayPool.Rent
+        );
     }
 
     private static SparseStream OpenFile(string path)
@@ -2033,147 +1716,23 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
     private static string GetSizeReadable(long i)
     {
-        var sign = i < 0 ? "-" : "";
-        double readable;
-        string suffix;
-        if (i >= 0x1000000000000000) // Exabyte
-        {
-            suffix = "EB";
-            readable = i >> 50;
-        }
-        else if (i >= 0x4000000000000) // Petabyte
-        {
-            suffix = "PB";
-            readable = i >> 40;
-        }
-        else if (i >= 0x10000000000) // Terabyte
-        {
-            suffix = "TB";
-            readable = i >> 30;
-        }
-        else if (i >= 0x40000000) // Gigabyte
-        {
-            suffix = "GB";
-            readable = i >> 20;
-        }
-        else if (i >= 0x100000) // Megabyte
-        {
-            suffix = "MB";
-            readable = i >> 10;
-        }
-        else if (i >= 0x400) // Kilobyte
-        {
-            suffix = "KB";
-            readable = i;
-        }
-        else
-        {
-            return i.ToString(sign + "0 B"); // Byte
-        }
-
-        readable = readable / 1024;
-
-        return sign + readable.ToString("0.### ") + suffix;
+        return RuntimeUtilityCore.GetSizeReadable(i);
     }
 
     private static void SetupPatterns()
     {
-        RegExDesc.Add("guid", "\tFinds GUIDs");
-        RegExDesc.Add("usPhone", "\tFinds US phone numbers");
-        RegExDesc.Add("unc", "\tFinds UNC paths");
-        RegExDesc.Add("mac", "\tFinds MAC addresses");
-        RegExDesc.Add("ssn", "\tFinds US Social Security Numbers");
-        RegExDesc.Add("cc", "\tFinds credit card numbers");
+        RegExDesc.Clear();
+        RegExPatterns.Clear();
 
-        RegExDesc.Add("ipv4", "\tFinds IP version 4 addresses");
-        RegExDesc.Add("ipv6", "\tFinds IP version 6 addresses");
-        RegExDesc.Add("email", "\tFinds embedded email addresses");
-        RegExDesc.Add("zip", "\tFinds zip codes");
-        RegExDesc.Add("urlUser", "\tFinds usernames in URLs");
-        RegExDesc.Add("url3986", "\tFinds URLs according to RFC 3986");
-        RegExDesc.Add("xml", "\tFinds XML/HTML tags");
-        RegExDesc.Add("sid", "\tFinds Microsoft Security Identifiers (SID)");
-        RegExDesc.Add("win_path", @"Finds Windows style paths (C:\folder1\folder2\file.txt)");
-        RegExDesc.Add("var_set", "\tFinds environment variables being set (OS=Windows_NT)");
-        RegExDesc.Add("reg_path", "Finds paths related to Registry hives");
-        RegExDesc.Add("b64", "\tFinds valid formatted base 64 strings");
-        RegExDesc.Add("bitlocker", "Finds Bitlocker recovery keys");
-        RegExDesc.Add("bitcoin", "\tFinds BitCoin wallet addresses");
-        RegExDesc.Add("aeon", "\tFinds Aeon wallet addresses");
-        RegExDesc.Add("bytecoin", "Finds ByteCoin wallet addresses");
-        RegExDesc.Add("dashcoin", "Finds DashCoin wallet addresses (D*)");
-        RegExDesc.Add("dashcoin2", "Finds DashCoin wallet addresses (7|X)*");
-        RegExDesc.Add("fantomcoin", "Finds Fantomcoin wallet addresses");
-        RegExDesc.Add("monero", "\tFinds Monero wallet addresses");
-        RegExDesc.Add("sumokoin", "Finds SumoKoin wallet addresses");
+        foreach (var description in BuiltInPatternCatalog.Descriptions)
+        {
+            RegExDesc[description.Key] = description.Value;
+        }
 
-        RegExPatterns.Add("bitcoin", @"\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b");
-        RegExPatterns.Add("aeon", @"Wm[st]{1}[0-9a-zA-Z]{94}");
-        RegExPatterns.Add("bytecoin", @"2[0-9AB][0-9a-zA-Z]{93}");
-
-        RegExPatterns.Add("dashcoin", "D[0-9a-zA-Z]{94}");
-        RegExPatterns.Add("dashcoin2", "(7|X)[a-zA-Z0-9]{33}");
-        RegExPatterns.Add("fantomcoin", "6[0-9a-zA-Z]{94}");
-        RegExPatterns.Add("monero", "4[0-9AB][0-9a-zA-Z]{93}|4[0-9AB][0-9a-zA-Z]{104}");
-        RegExPatterns.Add("sumokoin", "Sumoo[0-9a-zA-Z]{94}");
-
-        RegExPatterns.Add(
-            "b64",
-            @"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$"
-        );
-
-        RegExPatterns.Add(
-            "bitlocker",
-            @"[0-9]{6}?-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}-[0-9]{6}"
-        );
-
-        RegExPatterns.Add(
-            "reg_path",
-            @"([a-z0-9]\\)*(software\\)|(sam\\)|(system\\)|(security\\)[a-z0-9\\]+"
-        );
-        RegExPatterns.Add("var_set", @"^[a-z_0-9]+=[\\/:\*\?<>|;\- _a-z0-9]+");
-        RegExPatterns.Add(
-            "win_path",
-            @"(?:""?[a-zA-Z]\:|\\\\[^\\\/\:\*\?\<\>\|]+\\[^\\\/\:\*\?\<\>\|]*)\\(?:[^\\\/\:\*\?\<\>\|]+\\)*\w([^\\\/\:\*\?\<\>\|])*"
-        );
-        RegExPatterns.Add("sid", @"^S-\d-\d+-(\d+-){1,14}\d+$");
-        RegExPatterns.Add("xml", @"\A<([A-Z][A-Z0-9]*)\b[^>]*>(.*?)</\1>\z");
-        RegExPatterns.Add("guid", @"\b[A-F0-9]{8}(?:-[A-F0-9]{4}){3}-[A-F0-9]{12}\b");
-        RegExPatterns.Add("usPhone", @"\(?\b[2-9][0-9]{2}\)?[-. ]?[2-9][0-9]{2}[-. ]?[0-9]{4}\b");
-        RegExPatterns.Add("unc", @"^\\\\(?<server>[a-z0-9 %._-]+)\\(?<share>[a-z0-9 $%._-]+)");
-        RegExPatterns.Add("mac", "\\b[0-9A-F]{2}([-:]?)(?:[0-9A-F]{2}\\1){4}[0-9A-F]{2}\\b");
-        RegExPatterns.Add(
-            "ssn",
-            "\\b(?!000)(?!666)[0-8][0-9]{2}[- ](?!00)[0-9]{2}[- ](?!0000)[0-9]{4}\\b"
-        );
-        // RegExPatterns.Add("cc","^(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|6(?:011|5[0-9][0-9])[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|(?:2131|1800|35\\d{3})\\d{11})$");
-        RegExPatterns.Add(
-            "cc",
-            @"^[ -]*(?:4[ -]*(?:\d[ -]*){11}(?:(?:\d[ -]*){3})?\d|5[ -]*[1-5](?:[ -]*[0-9]){14}|6[ -]*(?:0[ -]*1[ -]*1|5[ -]*\d[ -]*\d)(?:[ -]*[0-9]){12}|3[ -]*[47](?:[ -]*[0-9]){13}|3[ -]*(?:0[ -]*[0-5]|[68][ -]*[0-9])(?:[ -]*[0-9]){11}|(?:2[ -]*1[ -]*3[ -]*1|1[ -]*8[ -]*0[ -]*0|3[ -]*5(?:[ -]*[0-9]){3})(?:[ -]*[0-9]){11})[ -]*$"
-        );
-        RegExPatterns.Add(
-            "ipv4",
-            @"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b"
-        );
-        RegExPatterns.Add("ipv6", @"(?<![:.\w])(?:[A-F0-9]{1,4}:){7}[A-F0-9]{1,4}(?![:.\w])");
-        //         RegExPatterns.Add("email",@"[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?");
-        RegExPatterns.Add("email", @"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,6}\b");
-        RegExPatterns.Add("zip", @"\A\b[0-9]{5}(?:-[0-9]{4})?\b\z");
-        RegExPatterns.Add("urlUser", @"^[a-z0-9+\-.]+://(?<user>[a-z0-9\-._~%!$&'()*+,;=]+)@");
-        RegExPatterns.Add(
-            "url3986",
-            @"^
-        [a-z][a-z0-9+\-.]*://                       # Scheme
-        ([a-z0-9\-._~%!$&'()*+,;=]+@)?              # User
-        (?<host>[a-z0-9\-._~%]+                     # Named host
-        |\[[a-f0-9:.]+\]                            # IPv6 host
-        |\[v[a-f0-9][a-z0-9\-._~%!$&'()*+,;=:]+\])  # IPvFuture host
-        (:[0-9]+)?                                  # Port
-        (/[a-z0-9\-._~%!$&'()*+,;=:@]+)*/?          # Path
-        (\?[a-z0-9\-._~%!$&'()*+,;=:@/?]*)?         # Query
-        (\#[a-z0-9\-._~%!$&'()*+,;=:@/?]*)?         # Fragment
-        $"
-        );
+        foreach (var pattern in BuiltInPatternCatalog.Patterns)
+        {
+            RegExPatterns[pattern.Key] = pattern.Value;
+        }
     }
 
     /// <summary>
@@ -2199,39 +1758,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// </summary>
     private static (byte minChar, byte maxChar) ParseCharRange(string ar)
     {
-        // Default ASCII printable range
-        if (string.IsNullOrEmpty(ar) || ar == "[\\x20-\\x7E]")
-        {
-            return (32, 126); // Space to tilde
-        }
-
-        // Simple parser for hex ranges like [\x20-\x7E]
-        var match = Regex.Match(ar, @"\[\\x([0-9A-Fa-f]+)-\\x([0-9A-Fa-f]+)\]");
-        if (match.Success)
-        {
-            var minHex = match.Groups[1].Value;
-            var maxHex = match.Groups[2].Value;
-            if (
-                byte.TryParse(
-                    minHex,
-                    System.Globalization.NumberStyles.HexNumber,
-                    null,
-                    out byte min
-                )
-                && byte.TryParse(
-                    maxHex,
-                    System.Globalization.NumberStyles.HexNumber,
-                    null,
-                    out byte max
-                )
-            )
-            {
-                return (min, max);
-            }
-        }
-
-        // Fallback to default range
-        return (32, 126);
+        return SearchCore.ParseCharRange(ar);
     }
 
     // private static void AddHighlightingRules(List<string> words, bool isRegEx = false)
@@ -2282,61 +1809,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string ur
     )
     {
-        return GetStringHitsUnified(
+        return SearchCore.GetUnicodeHits(
             chunk,
             minLength,
             maxLength,
             currentOffset,
             originalOffBool,
-            true // isUnicode = true
+            ur
         );
-    }
-
-    /// <summary>
-    /// Optimized helper method to add Unicode string results with minimal allocations
-    /// </summary>
-    private static void AddOptimizedUnicodeStringResult(
-        List<string> results,
-        ReadOnlySpan<byte> chunk,
-        int stringStart,
-        int stringLength,
-        int maxLength,
-        long currentOffsetInFile,
-        bool originalOffBool
-    )
-    {
-        var actualLength = maxLength > 0 && stringLength > maxLength ? maxLength : stringLength;
-        var sb = StringBuilderPool.Get();
-
-        try
-        {
-            // Build the Unicode string efficiently
-            for (var i = 0; i < actualLength; i++)
-            {
-                var byteIndex = stringStart + i * 2;
-                if (byteIndex + 1 < chunk.Length)
-                {
-                    char c = (char)(chunk[byteIndex] | (chunk[byteIndex + 1] << 8));
-                    sb.Append(c);
-                }
-            }
-
-            var stringResult = sb.ToString();
-            if (originalOffBool)
-            {
-                var hitOffset = currentOffsetInFile + stringStart;
-                var offsetOut = $"0x{hitOffset:X}";
-                results.Add($"{offsetOut}\t{stringResult}");
-            }
-            else
-            {
-                results.Add(stringResult);
-            }
-        }
-        finally
-        {
-            StringBuilderPool.Return(sb);
-        }
     }
 
     private static void ProcessHits(
@@ -2420,21 +1900,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string ar
     )
     {
-        // Parse ASCII range if provided
-        var (minChar, maxChar) = ParseCharRange(ar);
-
-        // PERFORMANCE OPTIMIZATION: Use SIMD-optimized hit detection instead of StringBuilder
-        var hits = FindAsciiStringHits(
+        return SearchCore.GetAsciiHits(
             chunk,
             minLength,
             maxLength,
             currentOffsetInFile,
-            minChar,
-            maxChar
+            originalOffBool,
+            ar
         );
-
-        // Materialize strings only when needed
-        return MaterializeStringHits(chunk, hits, originalOffBool);
     }
 
     /// <summary>
@@ -2487,34 +1960,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
             maxChar
         );
         return MaterializeStringHits(chunk, hits, originalOffBool);
-    }
-
-    /// <summary>
-    /// Optimized helper method to add string results with minimal allocations
-    /// </summary>
-    private static void AddOptimizedStringResult(
-        List<string> results,
-        ReadOnlySpan<byte> chunk,
-        int stringStart,
-        int stringLength,
-        int maxLength,
-        long currentOffsetInFile,
-        bool originalOffBool
-    )
-    {
-        var actualLength = maxLength > 0 && stringLength > maxLength ? maxLength : stringLength;
-        var stringSpan = chunk.Slice(stringStart, actualLength);
-        var stringToAdd = Encoding.ASCII.GetString(stringSpan);
-
-        if (originalOffBool)
-        {
-            var hitOffset = currentOffsetInFile + stringStart;
-            results.Add($"0x{hitOffset:X}\t{stringToAdd}");
-        }
-        else
-        {
-            results.Add(stringToAdd);
-        }
     }
 
     private static List<string> GetAsciiHitsGpu(
@@ -3190,20 +2635,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             // Use a much lower percentage of available memory to prevent OOM
             double memoryUsageFraction = 0.05; // Only use 5% of available memory for chunks
-            long usableMemory = (long)(availableMemory * memoryUsageFraction);
-
-            // Account for concurrent processing with much more conservative limits
             int maxConcurrentChunks = ConcurrentConfig.MaxConcurrentChunks;
-            long memoryPerChunk = usableMemory / Math.Max(1, maxConcurrentChunks);
-
-            // Convert to MB
-            int chunkSizeMB = (int)(memoryPerChunk / (1024 * 1024));
-
-            // Apply much more conservative practical limits for memory efficiency
-            const int minPracticalMB = 32; // Much smaller minimum
-            const int maxPracticalMB = 256; // Much smaller maximum - 256MB max instead of 4GB
-
-            chunkSizeMB = Math.Max(minPracticalMB, Math.Min(maxPracticalMB, chunkSizeMB));
+            int chunkSizeMB = ChunkSizingCore.CalculateCpuChunkSizeMBFromMemory(
+                availableMemory,
+                maxConcurrentChunks,
+                memoryUsageFraction
+            );
 
             Console.Error.WriteLine(
                 $"Total Memory: {totalPhysicalMemory / (1024 * 1024)} MB, Available: {availableMemory / (1024 * 1024)} MB"
@@ -3234,7 +2671,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
             // If GPU is available and we have calculated a GPU chunk size, use it
             if (GpuAccelerator != null && DynamicChunkSizeMB > 0)
             {
-                int gpuChunkSize = AdaptChunkSizeForFile(DynamicChunkSizeMB, fileSizeBytes);
+                int gpuChunkSize = ChunkSizingCore.SelectOptimalChunkSize(
+                    gpuAvailable: true,
+                    gpuChunkSizeMB: DynamicChunkSizeMB,
+                    cpuChunkSizeMB: 0,
+                    fileSizeBytes: fileSizeBytes
+                );
                 if (_debug)
                 {
                     Console.Error.WriteLine(
@@ -3246,7 +2688,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             // Fall back to CPU-optimized chunk size
             int cpuChunkSize = CalculateOptimalCpuChunkSizeMB();
-            int adaptedChunkSize = AdaptChunkSizeForFile(cpuChunkSize, fileSizeBytes);
+            int adaptedChunkSize = ChunkSizingCore.SelectOptimalChunkSize(
+                gpuAvailable: false,
+                gpuChunkSizeMB: 0,
+                cpuChunkSizeMB: cpuChunkSize,
+                fileSizeBytes: fileSizeBytes
+            );
             if (_debug)
             {
                 Console.Error.WriteLine(
@@ -3267,28 +2714,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// </summary>
     private static int AdaptChunkSizeForFile(int baseChunkSizeMB, long fileSizeBytes)
     {
-        long fileSizeMB = fileSizeBytes / (1024 * 1024);
-
-        // For very small files, use smaller chunks to avoid waste
-        if (fileSizeMB < 100) // Less than 100MB
-        {
-            return Math.Max(16, (int)Math.Min(baseChunkSizeMB, fileSizeMB / 2));
-        }
-
-        // For medium files (100MB - 1GB), use base chunk size
-        if (fileSizeMB < 1024)
-        {
-            return Math.Max(32, baseChunkSizeMB);
-        }
-
-        // For large files (1GB - 10GB), REDUCE chunk size for better parallelism
-        if (fileSizeMB < 10240)
-        {
-            return Math.Max(64, Math.Min(baseChunkSizeMB, 128)); // Cap at 128MB for better parallelism
-        }
-
-        // For very large files (>10GB), use SMALL chunks for MAXIMUM parallelism - this is key for performance!
-        return Math.Max(64, Math.Min(baseChunkSizeMB, 128)); // Force small chunks for massive files
+        return RuntimeUtilityCore.AdaptChunkSizeForFile(baseChunkSizeMB, fileSizeBytes);
     }
 
     /// <summary>
@@ -3317,19 +2743,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             const int defaultMinStringLengthForCalc = 3; // Based on mOption default
             int sizeOfGpuHit = Marshal.SizeOf<GpuHit>(); // Should be 12 bytes
-            double memoryFactor = 1.0 + ((double)sizeOfGpuHit / defaultMinStringLengthForCalc);
-
-            long calculatedChunkSizeBytes = (long)(usableGpuMemoryBytes / memoryFactor);
-            int calculatedMB = (int)(calculatedChunkSizeBytes / (1024 * 1024));
-
-            // Clamp the dynamic chunk size to practical limits
-            const int minPracticalMB = 64;
-            const int maxPracticalMB = 2048; // 2GB max to avoid int overflow in byte calculations
-            const int maxSafeBytesForInt = int.MaxValue / (1024 * 1024); // ~2047 MB
-
-            int finalMB = Math.Max(
-                minPracticalMB,
-                Math.Min(Math.Min(maxPracticalMB, maxSafeBytesForInt), calculatedMB)
+            double memoryFactor =
+                1.0 + ((double)sizeOfGpuHit / defaultMinStringLengthForCalc);
+            int finalMB = ChunkSizingCore.CalculateGpuChunkSizeMBFromMemory(
+                usableGpuMemoryBytes,
+                sizeOfGpuHit,
+                defaultMinStringLengthForCalc
             );
 
             Console.Error.WriteLine(
@@ -3598,68 +3017,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
             HashSet<string> resultsSet
         )
         {
-            const int FLUSH_BATCH_SIZE = 1000; // Flush every 1000 results to manage memory
-            int batchCount = 0;
-            long totalResultCount = 0;
-
-            await foreach (
-                var chunkResults in _resultReader.ReadAllAsync(_cancellationTokenSource.Token)
-            )
-            {
-                foreach (var result in chunkResults)
-                {
-                    // Add to set if provided (for deduplication)
-                    if (resultsSet != null)
-                    {
-                        if (resultsSet.Add(result))
-                        {
-                            totalResultCount++;
-
-                            // Write immediately to output if provided
-                            if (outputWriter != null)
-                            {
-                                await outputWriter.WriteLineAsync(result);
-                                batchCount++;
-
-                                // Flush periodically to free up memory
-                                if (batchCount >= FLUSH_BATCH_SIZE)
-                                {
-                                    await outputWriter.FlushAsync();
-                                    batchCount = 0;
-                                }
-                            }
-                        }
-                    }
-                    else
-                    {
-                        totalResultCount++;
-                        // Write immediately to output if provided
-                        if (outputWriter != null)
-                        {
-                            await outputWriter.WriteLineAsync(result);
-                            batchCount++;
-
-                            // Flush periodically to free up memory
-                            if (batchCount >= FLUSH_BATCH_SIZE)
-                            {
-                                await outputWriter.FlushAsync();
-                                batchCount = 0;
-                            }
-                        }
-                    }
-                }
-
-                // Important: Clear the chunk results immediately to free memory
-                chunkResults.Clear();
-            }
-
-            // Final flush
-            if (outputWriter != null && batchCount > 0)
-            {
-                await outputWriter.FlushAsync();
-            }
-
-            return totalResultCount;
+            return await ResultCollectionCore.CollectStreamingAsync(
+                _resultReader.ReadAllAsync(_cancellationTokenSource.Token),
+                outputWriter,
+                resultsSet
+            );
         }
 
         /// <summary>
@@ -3667,38 +3029,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
         /// </summary>
         private async Task CollectResultsLimitedAsync(List<string> allResults)
         {
-            const int MAX_RESULTS_IN_MEMORY = 100000; // Limit to prevent excessive memory usage
-
-            await foreach (
-                var chunkResults in _resultReader.ReadAllAsync(_cancellationTokenSource.Token)
-            )
-            {
-                // Add results but enforce memory limits
-                if (allResults.Count + chunkResults.Count <= MAX_RESULTS_IN_MEMORY)
-                {
-                    allResults.AddRange(chunkResults);
-                }
-                else
-                {
-                    // Add only what fits within the limit
-                    var availableSpace = MAX_RESULTS_IN_MEMORY - allResults.Count;
-                    if (availableSpace > 0)
-                    {
-                        allResults.AddRange(chunkResults.Take(availableSpace));
-                    }
-                    // Log warning about truncation
-                    if (_debug)
-                    {
-                        Console.Error.WriteLine(
-                            $"Result collection truncated at {MAX_RESULTS_IN_MEMORY} results to prevent excessive memory usage"
-                        );
-                    }
-                    break;
-                }
-
-                // Clear chunk results to free memory
-                chunkResults.Clear();
-            }
+            await ResultCollectionCore.CollectLimitedAsync(
+                _resultReader.ReadAllAsync(_cancellationTokenSource.Token),
+                allResults,
+                _debug
+            );
         }
 
         public void Dispose()
@@ -3731,20 +3066,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             int batchSize
         )
         {
-            var batch = new List<T>(batchSize);
-
-            await foreach (var item in source)
-            {
-                batch.Add(item);
-
-                if (batch.Count >= batchSize)
-                {
-                    yield return new List<T>(batch);
-                    batch.Clear();
-                }
-            }
-
-            if (batch.Count > 0)
+            await foreach (var batch in RuntimeUtilityCore.CreateBatchedAsyncEnumerable(source, batchSize))
             {
                 yield return batch;
             }
@@ -3752,147 +3074,9 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
-    /// Unified optimized scanning function for both ASCII and Unicode with minimal allocations
-    /// </summary>
-    private static List<string> GetStringHitsUnified(
-        ReadOnlySpan<byte> chunk,
-        int minLength,
-        int maxLength,
-        long currentOffsetInFile,
-        bool originalOffBool,
-        bool isUnicode,
-        byte minChar = 32,
-        byte maxChar = 126
-    )
-    {
-        var results = StringListPool.Get();
-        var stringStart = -1;
-        var stringLength = 0;
-        var stepSize = isUnicode ? 2 : 1;
-
-        for (var i = 0; i < chunk.Length - (stepSize - 1); i += stepSize)
-        {
-            bool isValidChar;
-
-            if (isUnicode)
-            {
-                // Unicode processing (2 bytes per character)
-                if (i + 1 >= chunk.Length)
-                    break;
-
-                char c = (char)(chunk[i] | (chunk[i + 1] << 8));
-                isValidChar = c >= 32 && c <= 126;
-            }
-            else
-            {
-                // ASCII processing (1 byte per character)
-                var currentByte = chunk[i];
-                isValidChar = currentByte >= minChar && currentByte <= maxChar;
-            }
-
-            if (isValidChar)
-            {
-                if (stringStart == -1)
-                {
-                    stringStart = i;
-                    stringLength = 1;
-                }
-                else
-                {
-                    stringLength++;
-                }
-            }
-            else
-            {
-                // End of string - check if we have a valid string to add
-                if (stringStart != -1 && stringLength >= minLength)
-                {
-                    if (isUnicode)
-                    {
-                        AddOptimizedUnicodeStringResult(
-                            results,
-                            chunk,
-                            stringStart,
-                            stringLength,
-                            maxLength,
-                            currentOffsetInFile,
-                            originalOffBool
-                        );
-                    }
-                    else
-                    {
-                        AddOptimizedStringResult(
-                            results,
-                            chunk,
-                            stringStart,
-                            stringLength,
-                            maxLength,
-                            currentOffsetInFile,
-                            originalOffBool
-                        );
-                    }
-                }
-                stringStart = -1;
-                stringLength = 0;
-            }
-        }
-
-        // Handle string at end of buffer
-        if (stringStart != -1 && stringLength >= minLength)
-        {
-            if (isUnicode)
-            {
-                AddOptimizedUnicodeStringResult(
-                    results,
-                    chunk,
-                    stringStart,
-                    stringLength,
-                    maxLength,
-                    currentOffsetInFile,
-                    originalOffBool
-                );
-            }
-            else
-            {
-                AddOptimizedStringResult(
-                    results,
-                    chunk,
-                    stringStart,
-                    stringLength,
-                    maxLength,
-                    currentOffsetInFile,
-                    originalOffBool
-                );
-            }
-        }
-
-        // Return objects to pools and return the final result
-        var finalResults = new List<string>(results);
-        StringListPool.Return(results);
-        return finalResults;
-    }
-
-    /// <summary>
-    /// Represents a string hit position - much more memory efficient than storing actual strings
-    /// </summary>
-    public readonly struct StringHit
-    {
-        public readonly int Start;
-        public readonly int Length;
-        public readonly long FileOffset;
-
-        public StringHit(int start, int length, long fileOffset)
-        {
-            Start = start;
-            Length = length;
-            FileOffset = fileOffset;
-        }
-    }
-
-    /// <summary>
     /// SIMD-optimized ASCII string hit detection - 10-20x faster than original
     /// </summary>
-    private static unsafe List<StringHit> FindAsciiStringHits(
+    private static List<StringHitPosition> FindAsciiStringHits(
         ReadOnlySpan<byte> data,
         int minLength,
         int maxLength,
@@ -3901,143 +3085,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
         byte maxChar = 126
     )
     {
-        var hits = new List<StringHit>(data.Length / 20); // Pre-size based on typical density
-
-        if (data.Length == 0)
-            return hits;
-
-        fixed (byte* dataPtr = data)
-        {
-            int stringStart = -1;
-            int i = 0;
-
-            // SIMD processing for bulk of data
-            if (System.Runtime.Intrinsics.X86.Sse2.IsSupported && data.Length >= 16)
-            {
-                var minVec = System.Runtime.Intrinsics.Vector128.Create(minChar);
-                var maxVec = System.Runtime.Intrinsics.Vector128.Create(maxChar);
-
-                for (; i <= data.Length - 16; i += 16)
-                {
-                    var chunk = System.Runtime.Intrinsics.X86.Sse2.LoadVector128(dataPtr + i);
-                    // Check if bytes are in valid range [minChar, maxChar]
-                    // SSE2 doesn't have unsigned byte comparison, so we use a different approach
-                    var minVecSigned = System.Runtime.Intrinsics.Vector128.Create(
-                        (sbyte)(minChar - 128)
-                    );
-                    var maxVecSigned = System.Runtime.Intrinsics.Vector128.Create(
-                        (sbyte)(maxChar - 128)
-                    );
-                    var chunkSigned = System.Runtime.Intrinsics.X86.Sse2.Subtract(
-                        chunk.AsSByte(),
-                        System.Runtime.Intrinsics.Vector128.Create(unchecked((sbyte)128))
-                    );
-
-                    var geMin = System.Runtime.Intrinsics.X86.Sse2.CompareGreaterThan(
-                        chunkSigned,
-                        System.Runtime.Intrinsics.X86.Sse2.Subtract(
-                            minVecSigned,
-                            System.Runtime.Intrinsics.Vector128.Create((sbyte)1)
-                        )
-                    );
-                    var leMax = System.Runtime.Intrinsics.X86.Sse2.CompareGreaterThan(
-                        System.Runtime.Intrinsics.X86.Sse2.Add(
-                            maxVecSigned,
-                            System.Runtime.Intrinsics.Vector128.Create((sbyte)1)
-                        ),
-                        chunkSigned
-                    );
-                    var isValid = System.Runtime.Intrinsics.X86.Sse2.And(geMin, leMax);
-
-                    uint mask = (uint)System.Runtime.Intrinsics.X86.Sse2.MoveMask(isValid);
-
-                    // Process each bit in the mask
-                    for (int bit = 0; bit < 16; bit++)
-                    {
-                        bool charValid = (mask & (1u << bit)) != 0;
-                        ProcessCharForStringHit(
-                            charValid,
-                            i + bit,
-                            ref stringStart,
-                            minLength,
-                            maxLength,
-                            fileOffset,
-                            hits
-                        );
-                    }
-                }
-            }
-
-            // Handle remaining bytes with scalar processing
-            for (; i < data.Length; i++)
-            {
-                byte b = dataPtr[i];
-                bool charValid = b >= minChar && b <= maxChar;
-                ProcessCharForStringHit(
-                    charValid,
-                    i,
-                    ref stringStart,
-                    minLength,
-                    maxLength,
-                    fileOffset,
-                    hits
-                );
-            }
-
-            // Handle string at end of buffer
-            if (stringStart != -1)
-            {
-                int length = i - stringStart;
-                if (length >= minLength)
-                {
-                    int actualLength = maxLength > 0 && length > maxLength ? maxLength : length;
-                    hits.Add(new StringHit(stringStart, actualLength, fileOffset));
-                }
-            }
-        }
-
-        return hits;
-    }
-
-    [System.Runtime.CompilerServices.MethodImpl(
-        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining
-    )]
-    private static void ProcessCharForStringHit(
-        bool charValid,
-        int pos,
-        ref int stringStart,
-        int minLength,
-        int maxLength,
-        long fileOffset,
-        List<StringHit> hits
-    )
-    {
-        if (charValid)
-        {
-            if (stringStart == -1)
-            {
-                stringStart = pos;
-            }
-            else if (maxLength > 0 && (pos - stringStart + 1) > maxLength)
-            {
-                // Hit max length, emit truncated string
-                hits.Add(new StringHit(stringStart, maxLength, fileOffset));
-                stringStart = -1;
-            }
-        }
-        else
-        {
-            if (stringStart != -1)
-            {
-                int length = pos - stringStart;
-                if (length >= minLength)
-                {
-                    int actualLength = maxLength > 0 && length > maxLength ? maxLength : length;
-                    hits.Add(new StringHit(stringStart, actualLength, fileOffset));
-                }
-                stringStart = -1;
-            }
-        }
+        return SearchCore.FindAsciiStringHits(
+            data,
+            minLength,
+            maxLength,
+            fileOffset,
+            minChar,
+            maxChar
+        );
     }
 
     /// <summary>
@@ -4045,31 +3100,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// </summary>
     private static List<string> MaterializeStringHits(
         ReadOnlySpan<byte> data,
-        List<StringHit> hits,
+        List<StringHitPosition> hits,
         bool includeOffset
     )
     {
-        var results = new List<string>(hits.Count);
-
-        foreach (var hit in hits)
-        {
-            if (hit.Start + hit.Length <= data.Length)
-            {
-                var stringBytes = data.Slice(hit.Start, hit.Length);
-                var str = Encoding.ASCII.GetString(stringBytes);
-
-                if (includeOffset)
-                {
-                    results.Add($"0x{hit.FileOffset + hit.Start:X}\t{str}");
-                }
-                else
-                {
-                    results.Add(str);
-                }
-            }
-        }
-
-        return results;
+        return SearchCore.MaterializeStringHits(data, hits, includeOffset);
     }
 
     /// <summary>
@@ -4101,81 +3136,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <returns>List of resolved regex patterns</returns>
     private static List<(string name, string pattern)> ParseRegexPatternsWithNames(string lr)
     {
-        var patterns = new List<(string name, string pattern)>();
-
-        if (string.IsNullOrWhiteSpace(lr))
-        {
-            return patterns;
-        }
-
-        // Handle 'all' keyword to include all built-in patterns
-        if (lr.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
-        {
-            foreach (var kvp in RegExPatterns)
-            {
-                patterns.Add((kvp.Key, kvp.Value));
-            }
-            return patterns;
-        }
-
-        // Split by comma and process each pattern
-        var patternNames = lr.Split(',', StringSplitOptions.RemoveEmptyEntries);
-
-        foreach (var patternName in patternNames)
-        {
-            var trimmedName = patternName.Trim();
-
-            // Check if it's a built-in pattern
-            if (RegExPatterns.ContainsKey(trimmedName))
-            {
-                patterns.Add((trimmedName, RegExPatterns[trimmedName]));
-            }
-            else
-            {
-                // Treat as literal regex pattern
-                patterns.Add((trimmedName, trimmedName));
-            }
-        }
-
-        return patterns;
+        return SearchCore.ParseRegexPatternsWithNames(lr, RegExPatterns);
     }
 
     private static List<string> ParseRegexPatterns(string lr)
     {
-        var patterns = new List<string>();
-
-        if (string.IsNullOrWhiteSpace(lr))
-        {
-            return patterns;
-        }
-
-        // Handle 'all' keyword to include all built-in patterns
-        if (lr.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
-        {
-            patterns.AddRange(RegExPatterns.Values);
-            return patterns;
-        }
-
-        // Split by comma and process each pattern
-        var patternNames = lr.Split(',', StringSplitOptions.RemoveEmptyEntries);
-
-        foreach (var patternName in patternNames)
-        {
-            var trimmedName = patternName.Trim();
-
-            // Check if it's a built-in pattern
-            if (RegExPatterns.ContainsKey(trimmedName))
-            {
-                patterns.Add(RegExPatterns[trimmedName]);
-            }
-            else
-            {
-                // Treat as literal regex pattern
-                patterns.Add(trimmedName);
-            }
-        }
-
-        return patterns;
+        return SearchCore.ParseRegexPatterns(lr, RegExPatterns);
     }
 
     /// <summary>
@@ -4212,10 +3178,11 @@ public static partial class Program // Make it public and partial for ILGPU if n
         // Write CSV header if this is CSV output, we have a StreamWriter, and header hasn't been written yet
         if (isCsvOutput && sw != null && !csvHeaderAlreadyWritten)
         {
-            sw.WriteLine("Name of search pattern,Data found,Source file,Offset,Pattern type");
+            sw.WriteLine(RegexOutputCore.CsvHeader);
         }
 
         var lockObject = new object();
+        var regexMap = RegexOutputCore.BuildRegexMap(regexPatternsWithNames);
 
         // Create tasks for each pattern to process concurrently
         var tasks = regexPatternsWithNames.Select(async patternInfo =>
@@ -4228,10 +3195,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             try
             {
-                var regex = new Regex(
-                    regString,
-                    RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace
-                );
+                var regex = regexMap[patternName];
 
                 await Task.Run(() =>
                 {
@@ -4240,14 +3204,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         if (hit.Length == 0)
                             continue;
 
-                        if (!regex.IsMatch(hit))
-                            continue;
+                        var parsedHit = RegexOutputCore.ParseHit(hit, off);
 
-                        var hitOffset = "";
-                        if (off)
-                        {
-                            hitOffset = $"~{hit.Split('\t').LastOrDefault()}";
-                        }
+                        if (!regex.IsMatch(parsedHit.Data))
+                            continue;
 
                         lock (lockObject)
                         {
@@ -4258,53 +3218,59 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
                             if (ro)
                             {
-                                foreach (Match match in regex.Matches(hit))
+                                foreach (
+                                    var record in RegexOutputCore.CreateRecords(
+                                        parsedHit,
+                                        patternName,
+                                        regex,
+                                        regexOutput: true,
+                                        currentFile,
+                                        "Regex"
+                                    )
+                                )
                                 {
                                     if (!s && !suppressConsoleOutput)
                                     {
                                         Log.Information(
-                                            "{Match}\t{HitOffset}",
-                                            match.Value,
-                                            hitOffset
+                                            "{Output}",
+                                            RegexOutputCore.BuildRegexOnlyText(record)
                                         );
                                     }
+
                                     if (isCsvOutput && sw != null)
                                     {
-                                        // CSV output for regex matches
-                                        string CsvEscape(string s) =>
-                                            "\"" + s.Replace("\"", "\"\"") + "\"";
-                                        string offsetStr = hitOffset.TrimStart('~');
-                                        sw.WriteLine(
-                                            $"{CsvEscape(patternName)},{CsvEscape(match.Value)},{CsvEscape(currentFile)},{CsvEscape(offsetStr)},{CsvEscape("Regex")}"
-                                        );
+                                        sw.WriteLine(RegexOutputCore.BuildCsvLine(record));
                                     }
                                     else if (sw != null)
                                     {
-                                        // For non-CSV output files, write formatted match
-                                        sw.WriteLine($"{match.Value}\t{hitOffset}");
+                                        sw.WriteLine(RegexOutputCore.BuildRegexOnlyText(record));
                                     }
                                 }
                             }
                             else
                             {
+                                var record = RegexOutputCore.CreateRecords(
+                                    parsedHit,
+                                    patternName,
+                                    regex,
+                                    regexOutput: false,
+                                    currentFile,
+                                    "Regex"
+                                ).Single();
+                                var fullHitText = RegexOutputCore.BuildFullHitText(parsedHit);
+
                                 if (!s && !suppressConsoleOutput)
                                 {
-                                    Log.Information("{Hit}", hit);
+                                    Log.Information("{Hit}", fullHitText);
                                 }
 
                                 if (isCsvOutput && sw != null)
                                 {
-                                    // CSV output for full hit
-                                    string CsvEscape(string s) =>
-                                        "\"" + s.Replace("\"", "\"\"") + "\"";
-                                    string offsetStr = hitOffset.TrimStart('~');
-                                    sw.WriteLine(
-                                        $"{CsvEscape(patternName)},{CsvEscape(hit)},{CsvEscape(currentFile)},{CsvEscape(offsetStr)},{CsvEscape("Regex")}"
-                                    );
+                                    sw.WriteLine(RegexOutputCore.BuildCsvLine(record));
                                 }
                                 else
                                 {
-                                    sw?.WriteLine(hit);
+                                    sw?.WriteLine(fullHitText);
                                 }
                             }
                         }
