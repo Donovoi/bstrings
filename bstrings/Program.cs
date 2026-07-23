@@ -1,3 +1,14 @@
+#if !NET6_0_OR_GREATER
+using Directory = Alphaleonis.Win32.Filesystem.Directory;
+using File = Alphaleonis.Win32.Filesystem.File;
+using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
+using Path = Alphaleonis.Win32.Filesystem.Path;
+#else
+using Path = System.IO.Path;
+using Directory = System.IO.Directory;
+using File = System.IO.File;
+using FileInfo = System.IO.FileInfo;
+#endif
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
@@ -18,7 +29,6 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using Alphaleonis.Win32.Filesystem;
 using DiscUtils;
 using DiscUtils.Ntfs;
 using DiscUtils.Streams;
@@ -32,17 +42,6 @@ using Serilog;
 using Serilog.Core;
 using Serilog.Events;
 using static ILGPU.Atomic; // Corrected: using static for the Atomic class
-#if !NET6_0_OR_GREATER
-using Directory = Alphaleonis.Win32.Filesystem.Directory;
-using File = Alphaleonis.Win32.Filesystem.File;
-using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
-using Path = Alphaleonis.Win32.Filesystem.Path;
-#else
-using Path = System.IO.Path;
-using Directory = System.IO.Directory;
-using File = System.IO.File;
-using FileInfo = System.IO.FileInfo;
-#endif
 
 namespace bstrings;
 
@@ -55,7 +54,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     private static readonly Dictionary<string, string> RegExDesc = new Dictionary<string, string>();
 
     private static readonly string Header =
-        $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version}"
+        $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version.ToString(3)}"
         + "\r\n\r\nAuthor: Eric Zimmerman (saericzimmerman@gmail.com)"
         + "\r\nhttps://github.com/EricZimmerman/bstrings";
     private static readonly string Footer =
