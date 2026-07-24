@@ -15,13 +15,30 @@ internal static class ChunkReadingCore
         bool isBoundaryMode = false,
         int boundaryChunkSize = 0,
         int maxReadAheadChunks = 8,
-        Func<int, byte[]> rent = null
+        Func<int, byte[]> rent = null,
+        Action<byte[]> returnBuffer = null
     )
     {
         rent ??= Program.ByteArrayPool.Rent;
 
+        if (stream is null)
+        {
+            throw new ArgumentNullException(nameof(stream));
+        }
+
+        if (chunkSizeBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(chunkSizeBytes));
+        }
+
+        if (isBoundaryMode && boundaryChunkSize <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(boundaryChunkSize));
+        }
+
+        maxReadAheadChunks = Math.Max(1, maxReadAheadChunks);
         var chunks = new List<Program.DataChunk>();
-        var bytesRemaining = totalBytes;
+        var bytesRemaining = Math.Max(0, totalBytes - startOffset);
         var offset = startOffset;
         var chunkIndex = 0;
 
@@ -30,11 +47,21 @@ internal static class ChunkReadingCore
             while (bytesRemaining > 0 && offset + boundaryChunkSize <= totalBytes)
             {
                 var chunk = rent(boundaryChunkSize);
-                stream.Position = offset;
-                var bytesRead = await stream.ReadAsync(chunk.AsMemory(0, boundaryChunkSize));
+                int bytesRead;
+                try
+                {
+                    stream.Position = offset;
+                    bytesRead = await stream.ReadAsync(chunk.AsMemory(0, boundaryChunkSize));
+                }
+                catch
+                {
+                    returnBuffer?.Invoke(chunk);
+                    throw;
+                }
 
                 if (bytesRead == 0)
                 {
+                    returnBuffer?.Invoke(chunk);
                     break;
                 }
 
@@ -66,10 +93,20 @@ internal static class ChunkReadingCore
             {
                 var currentChunkSize = (int)Math.Min(chunkSizeBytes, bytesRemaining);
                 var chunk = rent(currentChunkSize);
-                var bytesRead = await stream.ReadAsync(chunk.AsMemory(0, currentChunkSize));
+                int bytesRead;
+                try
+                {
+                    bytesRead = await stream.ReadAsync(chunk.AsMemory(0, currentChunkSize));
+                }
+                catch
+                {
+                    returnBuffer?.Invoke(chunk);
+                    throw;
+                }
 
                 if (bytesRead == 0)
                 {
+                    returnBuffer?.Invoke(chunk);
                     break;
                 }
 

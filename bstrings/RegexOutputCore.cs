@@ -18,6 +18,7 @@ internal readonly record struct RegexOutputRecord(
 internal static class RegexOutputCore
 {
     internal const string CsvHeader = "Name of search pattern,Data found,Source file,Offset,Pattern type";
+    internal static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(10);
 
     internal static ParsedHit ParseHit(string hit, bool includeOffset)
     {
@@ -97,15 +98,28 @@ internal static class RegexOutputCore
         IEnumerable<(string name, string pattern)> regexPatternsWithNames
     )
     {
-        return regexPatternsWithNames.ToDictionary(
-            pattern => pattern.name,
-            pattern =>
+        var regexes = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, pattern) in regexPatternsWithNames)
+        {
+            if (string.IsNullOrWhiteSpace(name) || regexes.ContainsKey(name))
+            {
+                continue;
+            }
+
+            regexes.Add(
+                name,
                 new Regex(
-                    pattern.pattern,
-                    RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace
-                ),
-            StringComparer.OrdinalIgnoreCase
-        );
+                    pattern,
+                    RegexOptions.IgnoreCase
+                        | RegexOptions.IgnorePatternWhitespace
+                        | RegexOptions.CultureInvariant
+                        | RegexOptions.Compiled,
+                    MatchTimeout
+                )
+            );
+        }
+
+        return regexes;
     }
 
     private static string CsvEscape(string value)

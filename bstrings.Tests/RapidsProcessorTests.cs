@@ -48,15 +48,19 @@ public class RapidsProcessorTests
                     csvHeaderAlreadyWritten: false
                 );
 
-                await standardWriter.FlushAsync();
-                await bridgeWriter.FlushAsync();
+                await standardWriter.FlushAsync(TestContext.Current.CancellationToken);
+                await bridgeWriter.FlushAsync(TestContext.Current.CancellationToken);
                 standardStream.Position = 0;
                 bridgeStream.Position = 0;
 
                 using var standardReader = new StreamReader(standardStream);
                 using var bridgeReader = new StreamReader(bridgeStream);
-                var standardOutput = await standardReader.ReadToEndAsync();
-                var bridgeOutput = await bridgeReader.ReadToEndAsync();
+                var standardOutput = await standardReader.ReadToEndAsync(
+                    TestContext.Current.CancellationToken
+                );
+                var bridgeOutput = await bridgeReader.ReadToEndAsync(
+                    TestContext.Current.CancellationToken
+                );
 
                 Assert.Equal(standardCount, bridgeCount);
                 Assert.Equal(standardOutput, bridgeOutput);

@@ -1,278 +1,85 @@
-# This workflow builds and releases bstrings for Windows x64
-# It creates a release artifact when code is pushed to master
-# Features: GPU acceleration, concurrent processing, memory-optimized streaming
-
-name: Build and Release bstrings (Memory-Optimized)
+name: Build and test
 
 on:
   push:
-    branches: ["master"]
+    branches: [master]
+    tags: ["v*"]
   pull_request:
-    branches: ["master"]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
-  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
   DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Check out source
+        uses: actions/checkout@v7
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - name: Install .NET 9 SDK
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 9.0.x
-          dotnet-quality: "preview"
 
-      - name: Auto-increment version (if commit message contains [version:patch/minor/major])
-        run: |
-          # Safely handle commit message with special characters
-          $commitMessage = @'
-          ${{ github.event.head_commit.message }}
-          '@
-          Write-Host "Commit message length: $($commitMessage.Length) characters"
-
-          if ($commitMessage -match '\[version:(patch|minor|major)\]') {
-            $versionType = $matches[1]
-            Write-Host "🔄 Auto-incrementing $versionType version..."
-            
-            if (Test-Path "Scripts/UpdateVersion.ps1") {
-              ./Scripts/UpdateVersion.ps1 $versionType
-              Write-Host "✅ Version updated successfully"
-            } else {
-              Write-Host "⚠️ Version update script not found, skipping auto-increment"
-            }
-          } else {
-            Write-Host "ℹ️ No version increment requested in commit message"
-            Write-Host "ℹ️ To auto-increment, include [version:patch], [version:minor], or [version:major] in commit message"
-          }
-
-      - name: Restore dependencies
+      - name: Restore
         run: dotnet restore bstrings.sln --verbosity minimal
 
-      - name: Build Debug
-        run: dotnet build bstrings.sln --configuration Debug --no-restore --verbosity minimal --framework net9.0
+      - name: Build
+        run: dotnet build bstrings.sln --configuration Release --no-restore --verbosity minimal
 
-      - name: Build Release
-        run: dotnet build bstrings.sln --configuration Release --no-restore --verbosity minimal --framework net9.0
+      - name: Test
+        run: dotnet test bstrings.sln --configuration Release --no-build --collect:"XPlat Code Coverage" --verbosity normal
 
-      - name: Test with coverage
+      - name: Publish Windows x64 single-file build
+        run: >
+          dotnet publish bstrings/bstrings.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --output publish/win-x64
+          --framework net9.0
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+
+      - name: Package release
+        shell: pwsh
         run: |
-          dotnet test bstrings.sln --configuration Release --no-build --collect:"XPlat Code Coverage" --verbosity normal
+          $packagePath = Join-Path $PWD "bstrings-win-x64.zip"
+          Compress-Archive -Path "publish/win-x64/*" -DestinationPath $packagePath -Force
+          Get-FileHash -Algorithm SHA256 $packagePath
 
-      - name: Publish Windows x64 Single File
-        run: |
-          dotnet publish bstrings/bstrings.csproj `
-            --configuration Release `
-            --runtime win-x64 `
-            --self-contained true `
-            --output ./publish/win-x64 `
-            --verbosity minimal `
-            --framework net9.0 `
-            -p:PublishSingleFile=true `
-            -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:DebugType=None `
-            -p:DebugSymbols=false
-
-      - name: Create release archive
-        run: |
-          cd ./publish/win-x64
-          # Single-file publishing creates just the executable and minimal support files
-          $releaseDir = "bstrings-release"
-          New-Item -ItemType Directory -Path $releaseDir -Force
-
-          # Copy the main single-file executable (contains everything)
-          Copy-Item "bstrings.exe" "$releaseDir/"
-
-          # Copy any remaining support files (should be minimal with single-file)
-          $supportFiles = Get-ChildItem . -Exclude "bstrings.exe", "*.pdb" | Where-Object { $_.Extension -ne ".pdb" }
-          foreach ($file in $supportFiles) {
-            Copy-Item $file.FullName "$releaseDir/" -ErrorAction SilentlyContinue
-          }
-
-          # Copy documentation
-          Copy-Item "../../README.md" "$releaseDir/" -ErrorAction SilentlyContinue
-          Copy-Item "../../LICENSE.md" "$releaseDir/" -ErrorAction SilentlyContinue          # Display file count and size
-          $fileCount = (Get-ChildItem $releaseDir).Count
-          $totalSize = (Get-ChildItem $releaseDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-          $exeSize = (Get-Item "$releaseDir/bstrings.exe").Length / 1MB
-          Write-Host "Memory-optimized single-file release contains $fileCount files, total size: $([math]::Round($totalSize, 2)) MB"
-          Write-Host "Main executable size: $([math]::Round($exeSize, 2)) MB"
-          Write-Host "Features: GPU acceleration, concurrent processing, streaming architecture for massive files"
-          Write-Host "Memory usage: 90%+ reduction - process 100GB+ files with <20GB RAM!"
-          Write-Host "This is a MASSIVE improvement from the previous 139+ file approach!"
-
-          # Create the zip
-          Compress-Archive -Path "$releaseDir/*" -DestinationPath "../../bstrings-win-x64.zip" -Force
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload release package
+        uses: actions/upload-artifact@v7
         with:
-          name: bstrings-win-x64-${{ github.sha }}
-          path: ./publish/win-x64/
+          name: bstrings-win-x64
+          path: bstrings-win-x64.zip
+          if-no-files-found: error
           retention-days: 30
 
-      - name: Upload release archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: bstrings-win-x64-zip-${{ github.sha }}
-          path: ./bstrings-win-x64.zip
-          retention-days: 90
-
   release:
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Download release package
+        uses: actions/download-artifact@v8
         with:
-          fetch-depth: 0
+          name: bstrings-win-x64
 
-      - name: Download release archive
-        uses: actions/download-artifact@v4
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
         with:
-          name: bstrings-win-x64-zip-${{ github.sha }}
-
-      - name: Get version and commit info
-        id: version
-        run: | # Get version from .csproj file (modern SDK-style project)
-          $version = "1.0.0"
-          if (Test-Path "bstrings/bstrings.csproj") {
-            $csprojContent = Get-Content "bstrings/bstrings.csproj" -Raw
-            $versionMatch = [regex]::Match($csprojContent, '<Version>([^<]+)</Version>')
-            if ($versionMatch.Success) {
-              $version = $versionMatch.Groups[1].Value
-              Write-Host "Found version in .csproj: $version"
-            } else {
-              Write-Host "No version found in .csproj, using fallback"
-            }
-          }
-
-          # Fallback: Try to get version from AssemblyInfo.cs if not found in .csproj
-          if ($version -eq "1.0.0" -and (Test-Path "bstrings/Properties/AssemblyInfo.cs")) {
-            $assemblyInfo = Get-Content "bstrings/Properties/AssemblyInfo.cs" -Raw
-            $versionMatch = [regex]::Match($assemblyInfo, 'AssemblyVersion\("([^"]+)"\)')
-            if ($versionMatch.Success) {
-              $version = $versionMatch.Groups[1].Value
-              Write-Host "Found version in AssemblyInfo.cs: $version"
-            }
-          }
-
-          # Get commit info
-          $commitSha = "${{ github.sha }}".Substring(0, 7)
-          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-          $releaseTag = "v$version-$timestamp-$commitSha"
-
-          echo "version=$version" >> $env:GITHUB_OUTPUT
-          echo "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
-          echo "commit_sha=$commitSha" >> $env:GITHUB_OUTPUT
-          echo "timestamp=$timestamp" >> $env:GITHUB_OUTPUT
-
-          Write-Host "Version: $version"
-          Write-Host "Release tag: $releaseTag"
-          Write-Host "Commit SHA: $commitSha"
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.release_tag }}
-          name: "bstrings v${{ steps.version.outputs.version }} - Windows x64"
-          body: | # 🚀 bstrings Enhanced Release - Windows x64 SINGLE-FILE
-
-
-
-
-            **Version:** `${{ steps.version.outputs.version }}`  
-            **Build Date:** `${{ steps.version.outputs.timestamp }}`  
-            **Commit:** `${{ steps.version.outputs.commit_sha }}`
-
-            This is an automated release of the **enhanced bstrings utility** with significant performance improvements:
-
-            ## 🎯 **SINGLE-FILE DEPLOYMENT** 
-            - ✅ **Just ONE executable file** - No more DLL hell!
-            - ✅ **~70MB single bstrings.exe** - Everything bundled inside
-            - ✅ **Zero installation required** - Download, extract, run!
-            - ✅ **Ultra-portable** - Copy anywhere and it just works            ## ✨ New Features
-            - ✅ **Concurrent regex pattern processing** 
-            - ✅ **Comma-separated patterns**: `--lr "guid,email,cc"`
-            - ✅ **All patterns support**: `--lr all`
-            - ✅ **Enhanced output control**: Auto-suppressed console when using `-q -o` for max performance
-            - ✅ **Enhanced CSV output**: Professional CSV format with headers for spreadsheet analysis
-            - ✅ **Significant performance improvements** (up to 8.4x faster for multiple patterns)
-            - ✅ **Self-contained executable** (no .NET runtime required)
-
-            ## 📈 Performance Improvements
-            - **Single Pattern**: 23% faster than original
-            - **3 Patterns**: 280% faster (3.8x speedup)
-            - **All Patterns**: 740% faster (8.4x speedup)
-              ## 💡 Usage Examples
-            ```bash
-            # Single pattern (traditional)
-            bstrings.exe -f file.txt --lr guid
-
-            # Multiple patterns concurrently (NEW!)
-            bstrings.exe -f file.txt --lr "guid,email,cc"
-
-            # All 27 patterns at once (NEW!)
-            bstrings.exe -f file.txt --lr all            # High-performance mode: quiet + output file (NEW!)
-            bstrings.exe -f large_file.bin --lr all -q -o results.txt
-
-            # Enhanced CSV output for spreadsheet analysis (NEW!)
-            bstrings.exe -f evidence.img --lr all -o artifacts.csv
-
-            # List all available patterns
-            bstrings.exe -p
-
-            # Get help
-            bstrings.exe --help
-            ```            ## 📊 Memory-Optimized Features
-            - **🌊 Streaming architecture**: Process massive files (100GB+) with minimal RAM usage
-            - **📉 90%+ memory reduction**: 19GB files now use ~5-10GB RAM instead of 120GB+
-            - **⚡ Smart chunking**: Conservative 256MB max chunks vs. previous 4096MB
-            - **🎯 Progressive flushing**: Results written to disk every 1000 entries
-            - **💾 Use `-o output.txt`** to enable streaming mode for maximum memory efficiency
-
-            ## 📋 Built-in Patterns
-            This release includes 27 built-in regex patterns for: GUIDs, emails, credit cards, IP addresses, MAC addresses, phone numbers, URLs, file paths, cryptocurrency addresses, and more.
-
-            ## 📊 Enhanced CSV Output
-            - **Professional CSV format** with proper headers and escaping
-            - **Structured columns**: Pattern name, data found, source file, offset, pattern type
-            - **Spreadsheet ready** for Excel, Google Sheets, and other tools
-            - **Perfect for reporting** and data analysis workflows
-
-            ## 🔧 Installation
-            1. Download and extract `bstrings-win-x64.zip`
-            2. Run `bstrings.exe --help` to see all options
-            3. **That's it!** Just one file to rule them all!            ## 🎯 Perfect For
-            - **Large File Analysis** - Process 100GB+ files with minimal RAM (<20GB)
-            - **Digital Forensics** - Extract multiple artifact types simultaneously with memory efficiency
-            - **Malware Analysis** - Concurrent pattern detection with streaming output
-            - **Data Mining** - High-performance string extraction for massive datasets
-            - **Security Research** - Efficient bulk analysis without memory constraints
-            - **Portable Analysis** - Single-file deployment with revolutionary memory management
-
-            ## 🔥 Why This Release Rocks
-            - **Memory usage:** 90%+ reduction - process any file size with <20GB RAM
-            - **Performance:** GPU acceleration + concurrent processing + streaming architecture
-            - **Deployment:** Just 1 executable file, no DLL dependencies
-            - **Size:** ~70MB for everything vs scattered 50+ MB across many files
-            - **Use case:** Perfect for massive file analysis that previously required 100GB+ RAM
-
-            ---
-            *This fork enhances the original bstrings by Eric Zimmerman with memory-optimized streaming and concurrent processing capabilities.*
-          files: |
-            bstrings-win-x64.zip
-          draft: false
-          prerelease: false
-          make_latest: true
+          files: bstrings-win-x64.zip
+          generate_release_notes: true

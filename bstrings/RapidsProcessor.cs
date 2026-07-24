@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace bstrings.Rapids
@@ -14,9 +15,9 @@ namespace bstrings.Rapids
     /// </summary>
     public static class RapidsProcessor
     {
-        private static bool _rapidsAvailable = false;
-        private static bool _checkedAvailability = false;
-        private static readonly object _initLock = new object();
+        private static bool _rapidsAvailable;
+        private static bool _checkedAvailability;
+        private static readonly SemaphoreSlim AvailabilityLock = new(1, 1);
         private static readonly string TempDirectory = Path.Combine(
             Path.GetTempPath(),
             "bstrings_rapids"
@@ -25,21 +26,19 @@ namespace bstrings.Rapids
         /// <summary>
         /// Initialize RAPIDS integration by checking Python and cuDF availability
         /// </summary>
-        /// <param name="forceInstall">If true, automatically install RAPIDS if not available</param>
-        public static async Task InitializeAsync(bool forceInstall = false)
+        public static async Task InitializeAsync()
         {
-            lock (_initLock)
+            await AvailabilityLock.WaitAsync();
+            try
             {
                 if (_checkedAvailability)
                     return;
 
                 try
                 {
-                    // Create temp directory for communication
                     Directory.CreateDirectory(TempDirectory);
 
-                    // Check if Python and RAPIDS are available
-                    var process = new Process
+                    using var process = new Process
                     {
                         StartInfo = new ProcessStartInfo
                         {
@@ -53,18 +52,20 @@ namespace bstrings.Rapids
                     };
 
                     process.Start();
-                    var output = process.StandardOutput.ReadToEnd();
-                    var error = process.StandardError.ReadToEnd();
-                    process.WaitForExit();
+                    var outputTask = process.StandardOutput.ReadToEndAsync();
+                    var errorTask = process.StandardError.ReadToEndAsync();
+                    await process.WaitForExitAsync();
+                    var output = await outputTask;
+                    var error = await errorTask;
 
-                    _rapidsAvailable = output.Contains("RAPIDS_OK") && process.ExitCode == 0;
+                    _rapidsAvailable =
+                        output.Contains("RAPIDS_OK", StringComparison.Ordinal)
+                        && process.ExitCode == 0;
                     if (_rapidsAvailable)
                     {
-                        // Create the Python script for RAPIDS processing
                         CreateRapidsPythonScript();
 
-                        // Always inform user of successful RAPIDS initialization
-                        Console.WriteLine("✅ RAPIDS GPU acceleration initialized successfully");
+                        Console.WriteLine("RAPIDS regex acceleration initialized successfully.");
                         if (Program._debug)
                         {
                             Console.WriteLine(
@@ -72,31 +73,8 @@ namespace bstrings.Rapids
                             );
                         }
                     }
-                    else if (forceInstall)
-                    {
-                        // Attempt automatic installation
-                        Console.WriteLine(
-                            "🔧 RAPIDS not found - attempting automatic installation..."
-                        );
-                        Console.WriteLine(
-                            "This requires administrator privileges and may take 10-30 minutes."
-                        );
-
-                        // Trigger installation in background - don't wait here to avoid lock issues
-                        Task.Run(() => InstallRapidsEnvironmentAsync());
-
-                        // Set as available optimistically - real check will happen during processing
-                        Console.WriteLine(
-                            "✅ RAPIDS installation initiated - restart application after installation completes"
-                        );
-                        if (Program._debug)
-                        {
-                            Console.WriteLine("[RAPIDS] Installation running in background");
-                        }
-                    }
                     else
                     {
-                        // Don't show fallback message here - Program.cs handles more accurate fallback messaging
                         if (Program._debug)
                         {
                             Console.WriteLine($"[RAPIDS] Unavailable - {error.Trim()}");
@@ -104,7 +82,7 @@ namespace bstrings.Rapids
                                 "[RAPIDS] Install NVIDIA RAPIDS cuDF for GPU acceleration: pip install cudf-cu12"
                             );
                             Console.WriteLine(
-                                "[RAPIDS] Or use --force-rapids to automatically install RAPIDS environment"
+                                "[RAPIDS] Install and validate RAPIDS separately before using --use-rapids"
                             );
                         }
                     }
@@ -122,6 +100,10 @@ namespace bstrings.Rapids
                     _checkedAvailability = true;
                 }
             }
+            finally
+            {
+                AvailabilityLock.Release();
+            }
         }
 
         /// <summary>
@@ -130,7 +112,7 @@ namespace bstrings.Rapids
         public static bool IsAvailable => _rapidsAvailable;
 
         /// <summary>
-        /// Process strings using RAPIDS cuDF for massive performance gains
+        /// Process strings using an existing RAPIDS cuDF installation
         /// </summary>
         public static async Task<List<RapidsResult>> ProcessStringsWithRapidsAsync(
             IEnumerable<string> strings,
@@ -152,18 +134,28 @@ namespace bstrings.Rapids
             if (!stringList.Any())
                 return results;
 
+            string inputFile = null;
+            string outputFile = null;
             try
             {
                 // Create temporary files for communication
-                var inputFile = Path.Combine(TempDirectory, $"input_{Guid.NewGuid()}.json");
-                var outputFile = Path.Combine(TempDirectory, $"output_{Guid.NewGuid()}.json");
+                inputFile = Path.Combine(TempDirectory, $"input_{Guid.NewGuid()}.json");
+                outputFile = Path.Combine(TempDirectory, $"output_{Guid.NewGuid()}.json");
                 var scriptFile = Path.Combine(TempDirectory, "rapids_processor.py");
+                var patterns = regexPatternsWithNames
+                    .Where(pattern => !string.IsNullOrWhiteSpace(pattern.name))
+                    .GroupBy(pattern => pattern.name, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group.First().pattern,
+                        StringComparer.OrdinalIgnoreCase
+                    );
 
                 // Prepare input data
                 var inputData = new
                 {
                     strings = stringList,
-                    patterns = regexPatternsWithNames.ToDictionary(p => p.name, p => p.pattern),
+                    patterns,
                     source_file = sourceFile,
                     show_offset = showOffset,
                 };
@@ -171,7 +163,7 @@ namespace bstrings.Rapids
                 await File.WriteAllTextAsync(inputFile, JsonSerializer.Serialize(inputData));
 
                 // Execute RAPIDS processing
-                var process = new Process
+                using var process = new Process
                 {
                     StartInfo = new ProcessStartInfo
                     {
@@ -188,9 +180,11 @@ namespace bstrings.Rapids
                 var stopwatch = Stopwatch.StartNew();
                 process.Start();
 
-                var output = await process.StandardOutput.ReadToEndAsync();
-                var error = await process.StandardError.ReadToEndAsync();
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
                 await process.WaitForExitAsync();
+                var output = await outputTask;
+                var error = await errorTask;
                 stopwatch.Stop();
 
                 if (process.ExitCode == 0 && File.Exists(outputFile))
@@ -198,7 +192,7 @@ namespace bstrings.Rapids
                     var resultJson = await File.ReadAllTextAsync(outputFile);
                     var rapidsResults = JsonSerializer.Deserialize<
                         List<Dictionary<string, object>>
-                    >(resultJson);
+                    >(resultJson) ?? [];
 
                     foreach (var result in rapidsResults)
                     {
@@ -231,16 +225,6 @@ namespace bstrings.Rapids
                     throw new Exception($"RAPIDS processing failed: {error}");
                 }
 
-                // Cleanup
-                try
-                {
-                    File.Delete(inputFile);
-                    File.Delete(outputFile);
-                }
-                catch
-                { /* Ignore cleanup errors */
-                }
-
                 return results;
             }
             catch (Exception ex)
@@ -251,6 +235,26 @@ namespace bstrings.Rapids
                 }
                 throw;
             }
+            finally
+            {
+                TryDeleteTemporaryFile(inputFile);
+                TryDeleteTemporaryFile(outputFile);
+            }
+        }
+
+        private static void TryDeleteTemporaryFile(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            try
+            {
+                File.Delete(path);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
 
         /// <summary>
@@ -412,6 +416,7 @@ if __name__ == '__main__':
         /// <summary>
         /// Install RAPIDS environment in the background
         /// </summary>
+#if LEGACY_UNSAFE_RAPIDS_INSTALLER
         private static async Task InstallRapidsEnvironmentAsync()
         {
             try
@@ -502,7 +507,6 @@ if __name__ == '__main__':
                 );
             }
         }
-
         /// <summary>
         /// Create RAPIDS conda environment
         /// </summary>
@@ -536,6 +540,7 @@ if __name__ == '__main__':
                 );
             }
         }
+#endif
 
         /// <summary>
         /// Cleanup RAPIDS resources

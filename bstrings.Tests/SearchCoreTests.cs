@@ -1,4 +1,5 @@
 using System.Text;
+using DiscUtils.Streams;
 using Xunit;
 using bstrings.Rapids;
 
@@ -74,6 +75,29 @@ public class SearchCoreTests
     }
 
     [Fact]
+    public void ParseRegexPatternsWithNames_PreservesCommasInsideRegexConstructsAndDeduplicates()
+    {
+        var patterns = SearchCore.ParseRegexPatternsWithNames(
+            @"email,\d{1,3}(?:,\d{3})*,EMAIL",
+            BuiltInPatterns
+        );
+
+        Assert.Collection(
+            patterns,
+            pattern =>
+            {
+                Assert.Equal("email", pattern.name);
+                Assert.Equal(BuiltInPatterns["email"], pattern.pattern);
+            },
+            pattern =>
+            {
+                Assert.Equal(@"\d{1,3}(?:,\d{3})*", pattern.name);
+                Assert.Equal(@"\d{1,3}(?:,\d{3})*", pattern.pattern);
+            }
+        );
+    }
+
+    [Fact]
     public void FindAsciiStringHits_IdentifiesAndMaterializesOffsets()
     {
         var bytes = Encoding.ASCII.GetBytes("\u0001Alpha123\u0002Beta!\u001f");
@@ -130,7 +154,7 @@ public class SearchCoreTests
     [Fact]
     public void FindAsciiStringHits_TruncatesLongRunsAtConfiguredMaximum()
     {
-        var bytes = new byte[] { (byte)'A', (byte)'B', (byte)'C', (byte)'D', (byte)'E', 0x01 };
+        var bytes = Encoding.ASCII.GetBytes("ABCDEFGHIJ\u0001");
 
         var hits = SearchCore.FindAsciiStringHits(bytes, 2, 3, 4096);
         var materialized = SearchCore.MaterializeStringHits(bytes, hits, includeOffset: false);
@@ -139,6 +163,64 @@ public class SearchCoreTests
         Assert.Equal(0, hit.Start);
         Assert.Equal(3, hit.Length);
         Assert.Equal(["ABC"], materialized);
+    }
+
+    [Fact]
+    public void GetAsciiHits_UsesRequestedCodePage()
+    {
+        var hits = SearchCore.GetAsciiHits(
+            [0x01, 0x80, 0x80, 0x02],
+            minLength: 2,
+            maxLength: -1,
+            currentOffset: 0,
+            includeOffset: false,
+            asciiRange: "[\\x80-\\x80]",
+            codePage: 1252
+        );
+
+        Assert.Equal(["€€"], hits);
+    }
+
+    [Fact]
+    public void GetUnicodeHits_UsesRequestedCharacterRange()
+    {
+        var hits = SearchCore.GetUnicodeHits(
+            Encoding.Unicode.GetBytes("\u0001ĀĆ\u0002"),
+            minLength: 2,
+            maxLength: -1,
+            currentOffset: 0,
+            includeOffset: false,
+            unicodeRange: "[\\u0100-\\u017F]"
+        );
+
+        Assert.Equal(["ĀĆ"], hits);
+    }
+
+    [Fact]
+    public void OrderHits_SortsExtractedDataRatherThanOffsetPrefixes()
+    {
+        var hits = new[]
+        {
+            "0x10\tZulu",
+            "0x30\talpha",
+            "0x20\tBeta",
+        };
+
+        var alphabetic = Program.OrderHits(
+            hits,
+            alphabetically: true,
+            byLength: false,
+            includeOffset: true
+        );
+        var byLength = Program.OrderHits(
+            hits,
+            alphabetically: false,
+            byLength: true,
+            includeOffset: true
+        );
+
+        Assert.Equal(["0x30\talpha", "0x20\tBeta", "0x10\tZulu"], alphabetic);
+        Assert.Equal(["0x20\tBeta", "0x10\tZulu", "0x30\talpha"], byLength);
     }
 
     [Fact]
@@ -202,10 +284,10 @@ public class SearchCoreTests
             csvHeaderAlreadyWritten: false
         );
 
-        await writer.FlushAsync();
+        await writer.FlushAsync(TestContext.Current.CancellationToken);
         stream.Position = 0;
         using var reader = new StreamReader(stream);
-        var output = await reader.ReadToEndAsync();
+        var output = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
         var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
         Assert.Equal(1, count);
@@ -240,10 +322,12 @@ public class SearchCoreTests
             csvHeaderAlreadyWritten: false
         );
 
-        await writer.FlushAsync();
+        await writer.FlushAsync(TestContext.Current.CancellationToken);
         stream.Position = 0;
         using var reader = new StreamReader(stream);
-        var output = (await reader.ReadToEndAsync()).Trim();
+        var output = (
+            await reader.ReadToEndAsync(TestContext.Current.CancellationToken)
+        ).Trim();
 
         Assert.Equal(1, count);
         Assert.Equal("Alpha\t~0x201", output);
@@ -269,10 +353,10 @@ public class SearchCoreTests
             csvHeaderAlreadyWritten: false
         );
 
-        await writer.FlushAsync();
+        await writer.FlushAsync(TestContext.Current.CancellationToken);
         stream.Position = 0;
         using var reader = new StreamReader(stream);
-        var output = await reader.ReadToEndAsync();
+        var output = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
         var lines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
         Assert.Equal(1, count);
@@ -473,10 +557,12 @@ public class SearchCoreTests
             resultsSet: resultsSet
         );
 
-        await writer.FlushAsync();
+        await writer.FlushAsync(TestContext.Current.CancellationToken);
         stream.Position = 0;
         using var reader = new StreamReader(stream);
-        var output = (await reader.ReadToEndAsync())
+        var output = (
+            await reader.ReadToEndAsync(TestContext.Current.CancellationToken)
+        )
             .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
         Assert.Equal(1, totalCount);
@@ -528,10 +614,12 @@ public class SearchCoreTests
             flushBatchSize: 2
         );
 
-        await writer.FlushAsync();
+        await writer.FlushAsync(TestContext.Current.CancellationToken);
         stream.Position = 0;
         using var reader = new StreamReader(stream);
-        var output = (await reader.ReadToEndAsync())
+        var output = (
+            await reader.ReadToEndAsync(TestContext.Current.CancellationToken)
+        )
             .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
 
         Assert.Equal(3, total);
@@ -558,7 +646,7 @@ public class SearchCoreTests
 
         Assert.Equal(["Alpha", "Beta", "Gamma"], results);
         Assert.Empty(firstChunk);
-        Assert.Equal(["Gamma", "Delta"], secondChunk);
+        Assert.Empty(secondChunk);
         Assert.Contains("truncated at 3 results", debugMessage, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -607,6 +695,42 @@ public class SearchCoreTests
         Assert.Equal(2, chunks[0].FileOffset);
         Assert.Equal(6, chunks[1].FileOffset);
         Assert.All(chunks, chunk => Assert.True(chunk.IsBoundaryChunk));
+    }
+
+    [Fact]
+    public async Task ReadChunksAsyncEnumerable_ContinuesBoundaryStridePastReadAheadBatch()
+    {
+        var bytes = Enumerable.Range(0, 50).Select(value => (byte)value).ToArray();
+        using var source = new MemoryStream(bytes);
+        using var mapped = MappedStream.FromStream(source, Ownership.None);
+        var chunks = new List<Program.DataChunk>();
+
+        await foreach (
+            var chunk in Program.ReadChunksAsyncEnumerable(
+                mapped,
+                fileSizeBytes: bytes.Length,
+                chunkSizeBytes: 4,
+                startOffset: 2,
+                isBoundaryMode: true,
+                boundaryChunkSize: 3
+            )
+        )
+        {
+            chunks.Add(chunk);
+        }
+
+        try
+        {
+            Assert.Equal(Enumerable.Range(0, 12).Select(index => 2L + index * 4), chunks.Select(chunk => chunk.FileOffset));
+            Assert.Equal(Enumerable.Range(0, 12), chunks.Select(chunk => chunk.ChunkIndex));
+        }
+        finally
+        {
+            foreach (var chunk in chunks)
+            {
+                Program.ByteArrayPool.Return(chunk.Data);
+            }
+        }
     }
 
     private static async IAsyncEnumerable<int> GetNumbers()

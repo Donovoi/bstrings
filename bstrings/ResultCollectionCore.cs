@@ -60,17 +60,23 @@ internal static class ResultCollectionCore
         IAsyncEnumerable<List<string>> chunkResults,
         List<string> allResults,
         bool debug,
-        int maxResultsInMemory = 100000,
+        int maxResultsInMemory = int.MaxValue,
         Action<string> debugLogger = null
     )
     {
+        var truncated = false;
+
         await foreach (var results in chunkResults)
         {
-            if (allResults.Count + results.Count <= maxResultsInMemory)
+            if (
+                !truncated
+                && allResults.Count <= maxResultsInMemory
+                && results.Count <= maxResultsInMemory - allResults.Count
+            )
             {
                 allResults.AddRange(results);
             }
-            else
+            else if (!truncated)
             {
                 var availableSpace = maxResultsInMemory - allResults.Count;
                 if (availableSpace > 0)
@@ -84,8 +90,7 @@ internal static class ResultCollectionCore
                         $"Result collection truncated at {maxResultsInMemory} results to prevent excessive memory usage"
                     );
                 }
-
-                break;
+                truncated = true;
             }
 
             results.Clear();
