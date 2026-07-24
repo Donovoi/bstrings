@@ -38,38 +38,23 @@ public static partial class Program
 
     private static readonly string Header =
         $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version.ToString(3)}"
-        + "\r\n\r\nAuthor: Eric Zimmerman (saericzimmerman@gmail.com)"
-        + "\r\nhttps://github.com/EricZimmerman/bstrings";
+        + "\r\n\r\nOriginal author: Eric Zimmerman (saericzimmerman@gmail.com)"
+        + "\r\nUpstream: https://github.com/EricZimmerman/bstrings"
+        + "\r\nFork: https://github.com/Donovoi/bstrings";
     private static readonly string Footer =
-        @"Examples: bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls URL"
+        @"Examples:"
         + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr guid"
+        + @"bstrings.exe -f ""C:\evidence\image.bin"""
         + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr ""guid,cc,ssn"""
+        + @"bstrings.exe -d ""C:\evidence"" --mask ""*.bin"" -s -o ""C:\results\all.txt"""
         + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\someFile.txt"" --lr all"
+        + @"bstrings.exe -f ""C:\evidence\image.bin"" --lr ""email,url3986,ipv4"" --ro"
         + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\aBigFile.bin"" --fs c:\temp\searchStrings.txt --fr c:\temp\searchRegex.txt"
+        + @"bstrings.exe -f ""C:\evidence\memory.raw"" --processor hybrid -s"
         + "\r\n\t "
-        + @"   bstrings.exe -d ""C:\Temp"" --mask ""*.dll"""
-        + "\r\n\t "
-        + @"   bstrings.exe -d ""C:\Temp"" --ar ""[\x20-\x37]"""
-        + "\r\n\t "
-        + @"   bstrings.exe -d ""C:\Temp"" --cp 10007"
-        + "\r\n\t "
-        + @"   bstrings.exe -d ""C:\Temp"" --ls test"
-        + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa"
-        + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\someOtherFile.txt"" --lr cc --sa -m 15 -x 22"
-        + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls mui --sl"
-        + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\bigFile.bin"" --lr all --use-rapids  # GPU-accelerated regex processing"
-        + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\memory.raw"" --processor hybrid -s"
+        + @"bstrings.exe -f ""C:\evidence\image.bin"" --lr all --use-rapids"
         + "\r\n"
-        + "\r\nNOTE: --processor controls extraction. --use-rapids is a separate, experimental cuDF regex post-processing option.";
+        + "\r\n--processor controls string extraction. --use-rapids is a separate, optional regex prefilter.";
 
     private static RootCommand _rootCommand;
 
@@ -695,7 +680,7 @@ public static partial class Program
         {
             if (!q) // Only show if not in quiet mode
             {
-                Log.Information("Initializing NVIDIA RAPIDS GPU acceleration...");
+                Log.Information("Checking the configured NVIDIA RAPIDS environment...");
             }
             await bstrings.Rapids.RapidsProcessor.InitializeAsync();
 
@@ -738,7 +723,7 @@ public static partial class Program
             }
 
             Console.WriteLine();
-            Log.Information("To use a built in pattern, supply the Name to the --lr switch\r\n");
+            Log.Information("Pass a name from this list to --lr, for example: --lr email\r\n");
 
             return;
         }
@@ -1310,7 +1295,7 @@ public static partial class Program
                     if (!q) // Show success message unless in quiet mode
                     {
                         Log.Information(
-                            "🚀 Using NVIDIA RAPIDS GPU acceleration for regex processing"
+                            "Using NVIDIA RAPIDS to prefilter compatible regex patterns."
                         );
                     }
 
@@ -1341,7 +1326,7 @@ public static partial class Program
 
                     if (!q)
                     {
-                        Log.Information("Using parallel CPU string extraction and regex processing.");
+                        Log.Information("Using parallel CPU regex processing.");
                     }
 
                     counter = await ProcessRegexPatternsConcurrentlyAsync(
