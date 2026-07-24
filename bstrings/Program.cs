@@ -65,8 +65,10 @@ public static partial class Program
         + @"   bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls mui --sl"
         + "\r\n\t "
         + @"   bstrings.exe -f ""C:\Temp\bigFile.bin"" --lr all --use-rapids  # GPU-accelerated regex processing"
+        + "\r\n\t "
+        + @"   bstrings.exe -f ""C:\Temp\memory.raw"" --processor hybrid -s"
         + "\r\n"
-        + "\r\nNOTE: --use-rapids enables NVIDIA RAPIDS (cuDF) regex processing when it is already installed.";
+        + "\r\nNOTE: --processor controls extraction. --use-rapids is a separate, experimental cuDF regex post-processing option.";
 
     private static RootCommand _rootCommand;
 
@@ -488,6 +490,12 @@ public static partial class Program
             Description = "Show trace-level logging",
             DefaultValueFactory = _ => false,
         };
+        var processorOpt = new Option<string>("--processor")
+        {
+            Description =
+                "Extraction processor: auto, cpu, gpu, or hybrid. Default is auto",
+            DefaultValueFactory = _ => "auto",
+        };
         var useRapidsOpt = new Option<bool>("--use-rapids")
         {
             Description = "Use an existing NVIDIA RAPIDS installation for regex processing",
@@ -528,6 +536,7 @@ public static partial class Program
             slOpt,
             debugOpt,
             traceOpt,
+            processorOpt,
             useRapidsOpt,
             forceRapidsOpt,
         };
@@ -562,14 +571,21 @@ public static partial class Program
                     result.GetValue(slOpt),
                     result.GetValue(debugOpt),
                     result.GetValue(traceOpt),
+                    result.GetValue(processorOpt),
                     result.GetValue(useRapidsOpt),
                     result.GetValue(forceRapidsOpt)
                 )
         );
 
-        await _rootCommand.Parse(args).InvokeAsync();
-
-        Log.CloseAndFlush();
+        try
+        {
+            await _rootCommand.Parse(args).InvokeAsync();
+        }
+        finally
+        {
+            bstrings.Rapids.RapidsProcessor.Shutdown();
+            Log.CloseAndFlush();
+        }
     }
 
     private static async Task DoWork(
@@ -599,11 +615,18 @@ public static partial class Program
         bool sl, // sort by length
         bool debug,
         bool trace,
+        string processor,
         bool useRapids, // use NVIDIA RAPIDS for GPU-accelerated regex processing
         bool forceRapids // deprecated compatibility flag
     )
     { // Set the global debug flag
         _debug = debug;
+
+        if (!ProcessingBackendCore.TryParseMode(processor, out var requestedMode, out var modeError))
+        {
+            Console.Error.WriteLine(modeError);
+            return;
+        }
 
         // Initialize RAPIDS integration if requested
         if (forceRapids)
@@ -819,6 +842,34 @@ public static partial class Program
             sw = new StreamWriter(o, true);
         }
 
+        var largestInputBytes = files
+            .Where(File.Exists)
+            .Select(path => new FileInfo(path).Length)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        ProcessingBackendSession processingBackend;
+        try
+        {
+            processingBackend = ProcessingBackendSession.Create(
+                requestedMode,
+                largestInputBytes,
+                m > 0 ? m : 3
+            );
+        }
+        catch (Exception ex)
+        {
+            Log.Error("{Message}", ex.Message);
+            return;
+        }
+
+        using var processingBackendScope = processingBackend;
+        if (!q)
+        {
+            Log.Information("Extraction processors: {Status}", processingBackend.StatusMessage);
+            Console.WriteLine();
+        }
+
         foreach (var currentFile in files) // Renamed 'file' to 'currentFile'
         {
             if (File.Exists(currentFile) == false) // Use currentFile
@@ -882,6 +933,14 @@ public static partial class Program
             }
 
             var fileSizeBytes = new FileInfo(currentFile).Length; // Use currentFile
+            var processingMode = processingBackend.ResolveForFile(fileSizeBytes, minLength);
+
+            if (!q && _debug)
+            {
+                Console.Error.WriteLine(
+                    $"Selected {processingMode.ToString().ToLowerInvariant()} extraction for '{currentFile}'."
+                );
+            }
 
             if (b < 0 || b > 1024)
             {
@@ -889,7 +948,8 @@ public static partial class Program
                 return;
             }
 
-            var chunkSizeMb = b == 0 ? GetOptimalChunkSize(fileSizeBytes) : b;
+            var chunkSizeMb =
+                b == 0 ? GetOptimalChunkSize(fileSizeBytes, processingMode) : b;
             var chunkSizeBytes = checked(chunkSizeMb * 1024 * 1024);
 
             if (ms > 0)
@@ -1010,7 +1070,9 @@ public static partial class Program
                             totalChunks,
                             progressTracker,
                             outputWriter,
-                            hits
+                            hits,
+                            processingBackend,
+                            processingMode
                         );
                         rawResultsStreamed = canStreamRawResults;
                     }
@@ -1032,7 +1094,9 @@ public static partial class Program
                             ur,
                             q,
                             totalChunks,
-                            progressTracker
+                            progressTracker,
+                            processingBackend,
+                            processingMode
                         );
                     } //do chunk boundary checks to make sure we get everything and not split things
                     if (!q)
@@ -1041,6 +1105,11 @@ public static partial class Program
                             "Primary search complete. Looking for strings across chunk boundaries..."
                         );
                     }
+
+                    var boundaryProcessingMode =
+                        processingMode == ProcessingMode.Hybrid
+                            ? ProcessingMode.Cpu
+                            : processingMode;
 
                     // Process boundary chunks concurrently with streaming for memory efficiency
                     if (sw != null && o.Length > 0)
@@ -1061,7 +1130,9 @@ public static partial class Program
                             ur,
                             q,
                             boundaryOutputWriter,
-                            hits
+                            hits,
+                            processingBackend,
+                            boundaryProcessingMode
                         );
                         withBoundaryHits |= boundaryResults > 0;
                     }
@@ -1082,7 +1153,9 @@ public static partial class Program
                             cp,
                             ar,
                             ur,
-                            q
+                            q,
+                            processingBackend,
+                            boundaryProcessingMode
                         );
                     }
                 }
@@ -1412,6 +1485,13 @@ public static partial class Program
             }
         }
 
+        if (_debug)
+        {
+            Console.Error.WriteLine(
+                $"Extraction work split: CPU {processingBackend.CpuChunks:N0} chunk(s), CUDA {processingBackend.GpuChunks:N0} chunk(s)."
+            );
+        }
+
         if (sw != null)
         {
             sw.Flush();
@@ -1470,36 +1550,29 @@ public static partial class Program
             );
         }
         var chunkStopwatch = Stopwatch.StartNew();
-        try
+        var validChunk = chunk.Data.AsSpan(0, chunk.ValidBytes);
+        var finalResults = ChunkProcessingCore.ProcessChunk(
+            validChunk,
+            chunk.FileOffset,
+            chunk.IsBoundaryChunk,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            off,
+            ar,
+            ur,
+            cp
+        );
+        chunkStopwatch.Stop();
+        if (_debug)
         {
-            var validChunk = chunk.Data.AsSpan(0, chunk.ValidBytes);
-            var finalResults = ChunkProcessingCore.ProcessChunk(
-                validChunk,
-                chunk.FileOffset,
-                chunk.IsBoundaryChunk,
-                minLength,
-                maxLength,
-                asciiSearch,
-                unicodeSearch,
-                off,
-                ar,
-                ur,
-                cp
+            Console.Error.WriteLine(
+                $"[Chunk {chunk.ChunkIndex}] CPU completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {finalResults.Count} strings"
             );
-            chunkStopwatch.Stop();
-            if (_debug)
-            {
-                Console.Error.WriteLine(
-                    $"[Chunk {chunk.ChunkIndex}] Completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {finalResults.Count} strings"
-                );
-            }
+        }
 
-            return finalResults;
-        }
-        finally
-        {
-            ByteArrayPool.Return(chunk.Data);
-        }
+        return finalResults;
     }
 
     /// <summary>
@@ -2237,10 +2310,15 @@ public static partial class Program
         long totalChunks,
         ProgressTracker progressTracker,
         StreamWriter outputWriter = null,
-        HashSet<string> resultsSet = null
+        HashSet<string> resultsSet = null,
+        ProcessingBackendSession processingBackend = null,
+        ProcessingMode processingMode = ProcessingMode.Cpu
     )
     {
-        using var pipeline = new ChunkProcessingPipeline();
+        using var pipeline = new ChunkProcessingPipeline(
+            processingBackend,
+            processingMode
+        );
 
         // Create async enumerable of chunks
         var chunks = ReadChunksAsyncEnumerable(
@@ -2288,10 +2366,15 @@ public static partial class Program
         string ur,
         bool quiet,
         long totalChunks,
-        ProgressTracker progressTracker
+        ProgressTracker progressTracker,
+        ProcessingBackendSession processingBackend = null,
+        ProcessingMode processingMode = ProcessingMode.Cpu
     )
     {
-        using var pipeline = new ChunkProcessingPipeline();
+        using var pipeline = new ChunkProcessingPipeline(
+            processingBackend,
+            processingMode
+        );
 
         // Create async enumerable of chunks
         var chunks = ReadChunksAsyncEnumerable(
@@ -2387,10 +2470,15 @@ public static partial class Program
         string ur,
         bool quiet,
         StreamWriter outputWriter = null,
-        HashSet<string> resultsSet = null
+        HashSet<string> resultsSet = null,
+        ProcessingBackendSession processingBackend = null,
+        ProcessingMode processingMode = ProcessingMode.Cpu
     )
     {
-        using var pipeline = new ChunkProcessingPipeline();
+        using var pipeline = new ChunkProcessingPipeline(
+            processingBackend,
+            processingMode
+        );
 
         long offset = Math.Max(0, chunkSizeBytes - minLength * 20L);
         var boundaryChunkCount =
@@ -2444,10 +2532,15 @@ public static partial class Program
         int cp,
         string ar,
         string ur,
-        bool quiet
+        bool quiet,
+        ProcessingBackendSession processingBackend = null,
+        ProcessingMode processingMode = ProcessingMode.Cpu
     )
     {
-        using var pipeline = new ChunkProcessingPipeline();
+        using var pipeline = new ChunkProcessingPipeline(
+            processingBackend,
+            processingMode
+        );
 
         long offset = Math.Max(0, chunkSizeBytes - minLength * 20L);
         var boundaryChunkCount =
@@ -2540,21 +2633,32 @@ public static partial class Program
     /// <summary>
     /// Gets the optimal chunk size by choosing between GPU and CPU calculations, with file-size adaptation
     /// </summary>
-    private static int GetOptimalChunkSize(long fileSizeBytes)
+    private static int GetOptimalChunkSize(
+        long fileSizeBytes,
+        ProcessingMode processingMode = ProcessingMode.Cpu
+    )
     {
         try
         {
             int cpuChunkSize = CalculateOptimalCpuChunkSizeMB();
-            int adaptedChunkSize = ChunkSizingCore.SelectOptimalChunkSize(
-                gpuAvailable: false,
-                gpuChunkSizeMB: 0,
-                cpuChunkSizeMB: cpuChunkSize,
-                fileSizeBytes: fileSizeBytes
-            );
+            var isGpuOnly = processingMode == ProcessingMode.Gpu;
+            int adaptedChunkSize = isGpuOnly
+                ? ChunkSizingCore.SelectParallelChunkSizeMB(
+                    Math.Min(128, cpuChunkSize),
+                    fileSizeBytes,
+                    targetConcurrency: 2,
+                    chunksPerWorker: 4
+                )
+                : ChunkSizingCore.SelectOptimalChunkSize(
+                    gpuAvailable: false,
+                    gpuChunkSizeMB: 0,
+                    cpuChunkSizeMB: cpuChunkSize,
+                    fileSizeBytes: fileSizeBytes
+                );
             if (_debug)
             {
                 Console.Error.WriteLine(
-                    $"Using CPU-optimized chunk size: {adaptedChunkSize} MB (adapted for {GetSizeReadable(fileSizeBytes)} file)"
+                    $"Using {processingMode.ToString().ToLowerInvariant()} chunk size: {adaptedChunkSize} MB (adapted for {GetSizeReadable(fileSizeBytes)} file)"
                 );
             }
             return adaptedChunkSize;
@@ -2641,10 +2745,23 @@ public static partial class Program
         private readonly ChannelReader<List<string>> _resultReader;
         private readonly CancellationTokenSource _cancellationTokenSource;
         private readonly int _maxConcurrency;
+        private readonly ProcessingBackendSession _processingBackend;
+        private readonly ProcessingMode _processingMode;
         private volatile bool _disposed = false;
 
         public ChunkProcessingPipeline(int maxConcurrency = 0)
+            : this(null, ProcessingMode.Cpu, maxConcurrency)
         {
+        }
+
+        internal ChunkProcessingPipeline(
+            ProcessingBackendSession processingBackend,
+            ProcessingMode processingMode,
+            int maxConcurrency = 0
+        )
+        {
+            _processingBackend = processingBackend;
+            _processingMode = processingMode;
             _maxConcurrency =
                 maxConcurrency > 0 ? maxConcurrency : ConcurrentConfig.OptimalDegreeOfParallelism;
 
@@ -2792,20 +2909,53 @@ public static partial class Program
             ProgressTracker progressTracker
         )
         {
-            var workers = new Task[_maxConcurrency];
-
-            for (int i = 0; i < _maxConcurrency; i++)
+            var gpuWorkers =
+                _processingMode is ProcessingMode.Gpu or ProcessingMode.Hybrid
+                    ? Math.Min(2, _maxConcurrency)
+                    : 0;
+            var cpuWorkers = _processingMode switch
             {
-                workers[i] = ProcessChunksWorkerAsync(
-                    minLength,
-                    maxLength,
-                    asciiSearch,
-                    unicodeSearch,
-                    off,
-                    cp,
-                    ar,
-                    ur,
-                    progressTracker
+                ProcessingMode.Gpu => 0,
+                ProcessingMode.Hybrid => Math.Max(1, _maxConcurrency - gpuWorkers),
+                _ => _maxConcurrency,
+            };
+            var workers = new List<Task>(cpuWorkers + gpuWorkers);
+
+            // Register the CUDA reader first so a short hybrid run cannot be consumed
+            // entirely by already-scheduled CPU workers before the GPU gets a chunk.
+            for (int i = 0; i < gpuWorkers; i++)
+            {
+                workers.Add(
+                    ProcessChunksWorkerAsync(
+                        true,
+                        minLength,
+                        maxLength,
+                        asciiSearch,
+                        unicodeSearch,
+                        off,
+                        cp,
+                        ar,
+                        ur,
+                        progressTracker
+                    )
+                );
+            }
+
+            for (int i = 0; i < cpuWorkers; i++)
+            {
+                workers.Add(
+                    ProcessChunksWorkerAsync(
+                        false,
+                        minLength,
+                        maxLength,
+                        asciiSearch,
+                        unicodeSearch,
+                        off,
+                        cp,
+                        ar,
+                        ur,
+                        progressTracker
+                    )
                 );
             }
 
@@ -2813,6 +2963,7 @@ public static partial class Program
         }
 
         private async Task ProcessChunksWorkerAsync(
+            bool useGpu,
             int minLength,
             int maxLength,
             bool asciiSearch,
@@ -2828,17 +2979,65 @@ public static partial class Program
             {
                 try
                 {
-                    var results = ProcessChunk(
-                        chunk,
-                        minLength,
-                        maxLength,
-                        asciiSearch,
-                        unicodeSearch,
-                        off,
-                        cp,
-                        ar,
-                        ur
-                    );
+                    List<string> results;
+                    if (useGpu && _processingBackend?.IsGpuEnabled == true)
+                    {
+                        try
+                        {
+                            results = _processingBackend.ProcessGpuChunk(
+                                chunk,
+                                minLength,
+                                maxLength,
+                                asciiSearch,
+                                unicodeSearch,
+                                off,
+                                cp,
+                                ar,
+                                ur
+                            );
+
+                            if (_debug)
+                            {
+                                Console.Error.WriteLine(
+                                    $"[Chunk {chunk.ChunkIndex}] CUDA completed, found {results.Count} strings"
+                                );
+                            }
+                        }
+                        catch (Exception ex) when (_processingMode == ProcessingMode.Hybrid)
+                        {
+                            _processingBackend.DisableGpuAfterFailure(
+                                ex,
+                                Console.Error.WriteLine
+                            );
+                            results = ProcessChunk(
+                                chunk,
+                                minLength,
+                                maxLength,
+                                asciiSearch,
+                                unicodeSearch,
+                                off,
+                                cp,
+                                ar,
+                                ur
+                            );
+                            _processingBackend.RecordCpuChunk();
+                        }
+                    }
+                    else
+                    {
+                        results = ProcessChunk(
+                            chunk,
+                            minLength,
+                            maxLength,
+                            asciiSearch,
+                            unicodeSearch,
+                            off,
+                            cp,
+                            ar,
+                            ur
+                        );
+                        _processingBackend?.RecordCpuChunk();
+                    }
 
                     await _resultWriter.WriteAsync(results, _cancellationTokenSource.Token);
                     progressTracker.ReportChunkComplete(results.Count);
@@ -2851,6 +3050,10 @@ public static partial class Program
                 {
                     await _cancellationTokenSource.CancelAsync();
                     throw;
+                }
+                finally
+                {
+                    ByteArrayPool.Return(chunk.Data);
                 }
             }
         }
@@ -2897,6 +3100,10 @@ public static partial class Program
             if (!_disposed)
             {
                 _cancellationTokenSource?.Cancel();
+                while (_chunkReader.TryRead(out var unprocessedChunk))
+                {
+                    ByteArrayPool.Return(unprocessedChunk.Data);
+                }
                 _cancellationTokenSource?.Dispose();
                 _disposed = true;
             }

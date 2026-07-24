@@ -47,10 +47,42 @@ internal static class ChunkSizingCore
         bool gpuAvailable,
         int gpuChunkSizeMB,
         int cpuChunkSizeMB,
-        long fileSizeBytes
+        long fileSizeBytes,
+        int targetConcurrency = 0
     )
     {
         var baseChunkSize = gpuAvailable && gpuChunkSizeMB > 0 ? gpuChunkSizeMB : cpuChunkSizeMB;
-        return RuntimeUtilityCore.AdaptChunkSizeForFile(baseChunkSize, fileSizeBytes);
+        return SelectParallelChunkSizeMB(
+            baseChunkSize,
+            fileSizeBytes,
+            targetConcurrency > 0 ? targetConcurrency : Environment.ProcessorCount
+        );
+    }
+
+    internal static int SelectParallelChunkSizeMB(
+        int maximumChunkSizeMB,
+        long fileSizeBytes,
+        int targetConcurrency,
+        int chunksPerWorker = 2,
+        int minimumChunkSizeMB = 16
+    )
+    {
+        var safeMaximum = Math.Max(minimumChunkSizeMB, Math.Min(128, maximumChunkSizeMB));
+        if (fileSizeBytes <= 0)
+        {
+            return minimumChunkSizeMB;
+        }
+
+        var targetChunks = Math.Max(
+            1,
+            Math.Max(1, targetConcurrency) * Math.Max(1, chunksPerWorker)
+        );
+        var mebibytes = Math.Max(1L, (fileSizeBytes + (1024 * 1024 - 1L)) / (1024 * 1024));
+        var desired = (int)Math.Min(
+            int.MaxValue,
+            (mebibytes + targetChunks - 1L) / targetChunks
+        );
+
+        return Math.Clamp(desired, minimumChunkSizeMB, safeMaximum);
     }
 }

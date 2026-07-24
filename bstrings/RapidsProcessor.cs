@@ -38,18 +38,22 @@ namespace bstrings.Rapids
                 {
                     Directory.CreateDirectory(TempDirectory);
 
-                    using var process = new Process
+                    var startInfo = new ProcessStartInfo
                     {
-                        StartInfo = new ProcessStartInfo
-                        {
-                            FileName = "python",
-                            Arguments = "-c \"import cudf, cupy; print('RAPIDS_OK')\"",
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true,
-                            UseShellExecute = false,
-                            CreateNoWindow = true,
-                        },
+                        FileName = "python",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
                     };
+                    startInfo.ArgumentList.Add("-c");
+                    startInfo.ArgumentList.Add(
+                        "import cudf, cupy, re; "
+                            + "s = cudf.Series(['Alpha']); "
+                            + "assert bool(s.str.contains('alpha', flags=re.IGNORECASE, regex=True).iloc[0]); "
+                            + "print('RAPIDS_OK')"
+                    );
+                    using var process = new Process { StartInfo = startInfo };
 
                     process.Start();
                     var outputTask = process.StandardOutput.ReadToEndAsync();
@@ -352,7 +356,6 @@ def process_strings_with_rapids(input_file: str, output_file: str):
         strings = data['strings']
         patterns = data['patterns']
         source_file = data.get('source_file', '')
-        show_offset = data.get('show_offset', False)
         
         if not strings:
             with open(output_file, 'w') as f:
@@ -361,8 +364,7 @@ def process_strings_with_rapids(input_file: str, output_file: str):
         
         # Create cuDF DataFrame with strings
         df = cudf.DataFrame({
-            'strings': strings,
-            'index': range(len(strings))
+            'strings': strings
         })
         
         results = []
@@ -370,27 +372,35 @@ def process_strings_with_rapids(input_file: str, output_file: str):
         # Process each pattern using GPU acceleration
         for pattern_name, pattern in patterns.items():
             try:
-                # GPU-accelerated regex matching
-                matches = df['strings'].str.contains(pattern, case=False, regex=True)
+                # cuDF does not support case=False. Current releases support
+                # re.IGNORECASE through flags, which is the closest available
+                # match for bstrings' case-insensitive CPU regex behavior.
+                matches = df['strings'].str.contains(
+                    pattern,
+                    flags=re.IGNORECASE,
+                    regex=True
+                )
                 matched_df = df[matches]
                 
                 if len(matched_df) > 0:
                     # Convert GPU results back to CPU for JSON serialization
                     matched_strings = matched_df['strings'].to_pandas().tolist()
-                    indices = matched_df['index'].to_pandas().tolist()
                     
-                    for i, string_match in enumerate(matched_strings):
+                    for string_match in matched_strings:
                         results.append({
                             'pattern_name': pattern_name,
                             'data_found': string_match,
                             'source_file': source_file,
-                            'offset': str(indices[i]) if show_offset else '',
+                            'offset': '',
                             'pattern_type': 'RAPIDS-GPU'
                         })
                         
             except Exception as e:
-                print(f'Pattern {pattern_name} failed: {str(e)}', file=sys.stderr)
-                continue
+                # Never return a partial result set. The .NET bridge treats a
+                # non-zero exit as a signal to rerun every pattern on CPU.
+                raise RuntimeError(
+                    f'Pattern {pattern_name} is not compatible with cuDF: {str(e)}'
+                ) from e
         
         # Save results
         with open(output_file, 'w', encoding='utf-8') as f:
@@ -623,18 +633,20 @@ if __name__ == '__main__':
 
                 foreach (var result in rapidsResults)
                 {
-                    totalMatches++;
-
                     if (!regexMap.TryGetValue(result.PatternName, out var regex))
                     {
                         continue;
                     }
 
                     var parsedHit = RegexOutputCore.ParseHit(result.DataFound, off);
-                    var effectiveOffset = !string.IsNullOrWhiteSpace(parsedHit.Offset)
-                        ? parsedHit.Offset
-                        : result.Offset;
-                    parsedHit = parsedHit with { Offset = effectiveOffset };
+                    if (!regex.IsMatch(parsedHit.Data))
+                    {
+                        continue;
+                    }
+
+                    // The Python row number is not a byte offset. Only an
+                    // offset embedded by the extractor is authoritative.
+                    totalMatches++;
 
                     if (ro)
                     {
