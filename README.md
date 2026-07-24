@@ -28,9 +28,14 @@ while `auto` avoids CUDA startup unless the measured size/minimum-length
 crossover is reached.
 
 `--use-rapids` is separate and affects regex post-processing only. RAPIDS has a
-different regex feature set from .NET, remains experimental and opt-in, and
-falls back to the authoritative CPU regex engine when initialization or a
-pattern fails. `bstrings` does not install Python, CUDA, or RAPIDS.
+different regex feature set from .NET, remains experimental and opt-in.
+Catalog patterns use separately reviewed ASCII-only cuDF superset prefilters;
+every GPU candidate is verified by the authoritative .NET regex. Patterns
+without a safe prefilter—including all custom regexes—stay on CPU. A GPU
+execution failure falls back to CPU only before output begins; later output or
+verification failures are fatal so rows cannot be duplicated. RAPIDS probes
+and child processes have deadlines. `bstrings` does not install Python, CUDA,
+or RAPIDS.
 
 ## Quick start
 
@@ -50,6 +55,9 @@ pattern fails. `bstrings` does not install Python, CUDA, or RAPIDS.
 # Preserve a comma inside a custom regex quantifier
 .\bstrings.exe -f C:\evidence\image.bin --lr "\d{1,3}(?:,\d{3})*"
 
+# Custom regexes use normal .NET case-sensitive syntax; opt in to ignore case
+.\bstrings.exe -f C:\evidence\image.bin --lr "(?i)secret|password"
+
 # Scan a directory recursively
 .\bstrings.exe -d C:\evidence --mask "*.bin" -s -o C:\results\all.txt
 
@@ -68,6 +76,13 @@ pattern fails. `bstrings` does not install Python, CUDA, or RAPIDS.
 
 Run `bstrings.exe --help` for the complete command reference and
 `bstrings.exe -p` for the built-in regex catalog.
+
+The catalog includes network, Windows, identity, payment-card, encoding, and
+wallet candidates. The reviewed additions are `cve`, `pem_private_key`,
+`named_pipe`, `onion_v3`, `ethereum`, and `sha256`. A regex result is a
+candidate unless the format can be fully established from syntax alone:
+checksums, cryptographic signatures, account existence, and token validity are
+not inferred.
 
 ## Important options
 
@@ -110,6 +125,11 @@ No hidden result-count limit is applied. If a run cannot fit in available
 memory, narrow the search, increase the minimum string length, or use
 unfiltered text output.
 
+When `-o` is used, a sibling `<output>.incomplete` marker exists for the
+duration of the run. It is removed only after successful completion. A
+nonzero exit or a remaining marker means the output must not be treated as a
+complete result set.
+
 ## Build and test
 
 Requirements:
@@ -137,6 +157,25 @@ The benchmark corpus generator accepts a size in MiB and an output path:
 ```powershell
 dotnet run --project dev-tools\benchmark-generator -- 256 .\benchmark-256mb.dmp
 ```
+
+The deterministic regex microbenchmark compares the adaptive production
+topology with forced hit-major and pattern-major processing through the same
+matching/output code. It accepts hit count, repetitions, and one to five
+representative built-ins:
+
+```powershell
+dotnet run --project dev-tools\regex-benchmark -c Release -- 2000000 7 1
+```
+
+CPU regex scheduling is hardware-aware. At 10,000 or more hits, requests with
+fewer patterns than logical processors partition hits so small pattern sets do
+not leave most cores idle. Smaller requests, and requests with enough patterns
+to fill the machine, partition patterns. Both paths cap concurrency at
+`Environment.ProcessorCount`.
+
+The standards evidence, rejected candidates, engine restrictions, and remaining
+limits are recorded in
+[docs/regex-pattern-research-2026-07.md](docs/regex-pattern-research-2026-07.md).
 
 ## Releases
 

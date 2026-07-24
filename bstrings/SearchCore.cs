@@ -161,21 +161,28 @@ internal static class SearchCore
         }
 
         var patternNames = SplitPatternList(input);
-        var addedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var addedBuiltIns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var addedCustomPatterns = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var patternName in patternNames)
         {
             var trimmedName = patternName.Trim();
-            if (trimmedName.Length == 0 || !addedNames.Add(trimmedName))
+            if (trimmedName.Length == 0)
             {
                 continue;
             }
 
-            if (builtInPatterns.TryGetValue(trimmedName, out var resolvedPattern))
+            var builtInName = builtInPatterns.Keys.FirstOrDefault(name =>
+                string.Equals(name, trimmedName, StringComparison.OrdinalIgnoreCase)
+            );
+            if (builtInName is not null)
             {
-                patterns.Add((trimmedName, resolvedPattern));
+                if (addedBuiltIns.Add(builtInName))
+                {
+                    patterns.Add((builtInName, builtInPatterns[builtInName]));
+                }
             }
-            else
+            else if (addedCustomPatterns.Add(trimmedName))
             {
                 patterns.Add((trimmedName, trimmedName));
             }

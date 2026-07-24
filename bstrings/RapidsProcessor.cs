@@ -18,6 +18,8 @@ namespace bstrings.Rapids
         private static bool _rapidsAvailable;
         private static bool _checkedAvailability;
         private static readonly SemaphoreSlim AvailabilityLock = new(1, 1);
+        private static readonly TimeSpan RapidsProbeTimeout = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan DefaultRapidsProcessTimeout = TimeSpan.FromMinutes(10);
         private static readonly string TempDirectory = Path.Combine(
             Path.GetTempPath(),
             "bstrings_rapids"
@@ -48,9 +50,9 @@ namespace bstrings.Rapids
                     };
                     startInfo.ArgumentList.Add("-c");
                     startInfo.ArgumentList.Add(
-                        "import cudf, cupy, re; "
+                        "import cudf, cupy; "
                             + "s = cudf.Series(['Alpha']); "
-                            + "assert bool(s.str.contains('alpha', flags=re.IGNORECASE, regex=True).iloc[0]); "
+                            + "assert bool(s.str.contains('[Aa]lpha', flags=0, regex=True).iloc[0]); "
                             + "print('RAPIDS_OK')"
                     );
                     using var process = new Process { StartInfo = startInfo };
@@ -58,7 +60,7 @@ namespace bstrings.Rapids
                     process.Start();
                     var outputTask = process.StandardOutput.ReadToEndAsync();
                     var errorTask = process.StandardError.ReadToEndAsync();
-                    await process.WaitForExitAsync();
+                    await WaitForExitWithDeadlineAsync(process, RapidsProbeTimeout);
                     var output = await outputTask;
                     var error = await errorTask;
 
@@ -122,7 +124,9 @@ namespace bstrings.Rapids
             IEnumerable<string> strings,
             List<(string name, string pattern)> regexPatternsWithNames,
             string sourceFile = "",
-            bool showOffset = false
+            bool showOffset = false,
+            TimeSpan? processTimeout = null,
+            CancellationToken cancellationToken = default
         )
         {
             if (!_rapidsAvailable)
@@ -167,26 +171,30 @@ namespace bstrings.Rapids
                 await File.WriteAllTextAsync(inputFile, JsonSerializer.Serialize(inputData));
 
                 // Execute RAPIDS processing
-                using var process = new Process
+                var startInfo = new ProcessStartInfo
                 {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "python",
-                        Arguments = $"\"{scriptFile}\" \"{inputFile}\" \"{outputFile}\"",
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        WorkingDirectory = TempDirectory,
-                    },
+                    FileName = "python",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WorkingDirectory = TempDirectory,
                 };
+                startInfo.ArgumentList.Add(scriptFile);
+                startInfo.ArgumentList.Add(inputFile);
+                startInfo.ArgumentList.Add(outputFile);
+                using var process = new Process { StartInfo = startInfo };
 
                 var stopwatch = Stopwatch.StartNew();
                 process.Start();
 
                 var outputTask = process.StandardOutput.ReadToEndAsync();
                 var errorTask = process.StandardError.ReadToEndAsync();
-                await process.WaitForExitAsync();
+                await WaitForExitWithDeadlineAsync(
+                    process,
+                    processTimeout ?? DefaultRapidsProcessTimeout,
+                    cancellationToken
+                );
                 var output = await outputTask;
                 var error = await errorTask;
                 stopwatch.Stop();
@@ -261,6 +269,58 @@ namespace bstrings.Rapids
             catch (UnauthorizedAccessException) { }
         }
 
+        internal static async Task WaitForExitWithDeadlineAsync(
+            Process process,
+            TimeSpan timeout,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (timeout <= TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(timeout),
+                    "The RAPIDS process timeout must be greater than zero."
+                );
+            }
+
+            using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken
+            );
+            timeoutSource.CancelAfter(timeout);
+
+            try
+            {
+                await process.WaitForExitAsync(timeoutSource.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                TryKillProcessTree(process);
+                throw new TimeoutException(
+                    $"RAPIDS processing exceeded its {timeout.TotalSeconds:N0}-second deadline."
+                );
+            }
+            catch (OperationCanceledException)
+            {
+                TryKillProcessTree(process);
+                throw;
+            }
+        }
+
+        private static void TryKillProcessTree(Process process)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(milliseconds: 5_000);
+                }
+            }
+            catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception) { }
+            catch (NotSupportedException) { }
+        }
+
         /// <summary>
         /// Analyze performance comparison between RAPIDS and standard processing
         /// </summary>
@@ -270,7 +330,8 @@ namespace bstrings.Rapids
         )
         {
             var benchmark = new ProcessingBenchmark();
-            var stringList = strings.ToList();
+            var stringList = strings.Distinct(StringComparer.Ordinal).ToList();
+            var hitSet = new HashSet<string>(stringList, StringComparer.Ordinal);
 
             if (Program._debug)
             {
@@ -282,7 +343,7 @@ namespace bstrings.Rapids
             // Benchmark standard processing
             var standardStopwatch = Stopwatch.StartNew();
             var standardResults = await Program.ProcessRegexPatternsConcurrentlyAsync(
-                new HashSet<string>(stringList),
+                hitSet,
                 patterns,
                 false,
                 false,
@@ -300,17 +361,30 @@ namespace bstrings.Rapids
             benchmark.StandardResultCount = standardResults;
 
             // Benchmark RAPIDS processing if available
-            if (_rapidsAvailable)
+            var (gpuPatterns, _) = RapidsRegexPolicy.PartitionPatterns(patterns);
+            if (_rapidsAvailable && gpuPatterns.Count > 0)
             {
                 try
                 {
                     var rapidsStopwatch = Stopwatch.StartNew();
-                    var rapidsResults = await ProcessStringsWithRapidsAsync(stringList, patterns);
+                    var rapidsResultCount = await ProcessRegexPatternsBridgeAsync(
+                        hitSet,
+                        patterns,
+                        ro: false,
+                        off: false,
+                        s: true,
+                        sw: null,
+                        q: true,
+                        o: string.Empty,
+                        allowCpuFallback: false
+                    );
                     rapidsStopwatch.Stop();
 
                     benchmark.RapidsProcessingTimeMs = rapidsStopwatch.ElapsedMilliseconds;
-                    benchmark.RapidsResultCount = rapidsResults.Count;
+                    benchmark.RapidsResultCount = rapidsResultCount;
                     benchmark.RapidsAvailable = true;
+                    benchmark.CountParity =
+                        benchmark.StandardResultCount == benchmark.RapidsResultCount;
                     benchmark.SpeedupFactor =
                         benchmark.RapidsProcessingTimeMs > 0
                             ? (double)standardStopwatch.ElapsedMilliseconds
@@ -342,7 +416,6 @@ import sys
 import json
 import cudf
 import cupy as cp
-import re
 from typing import List, Dict, Any
 
 def process_strings_with_rapids(input_file: str, output_file: str):
@@ -372,12 +445,12 @@ def process_strings_with_rapids(input_file: str, output_file: str):
         # Process each pattern using GPU acceleration
         for pattern_name, pattern in patterns.items():
             try:
-                # cuDF does not support case=False. Current releases support
-                # re.IGNORECASE through flags, which is the closest available
-                # match for bstrings' case-insensitive CPU regex behavior.
+                # Patterns reaching this worker are catalog-owned, explicit-
+                # case ASCII supersets. Current cuDF Python releases do not
+                # support re.IGNORECASE in str.contains().
                 matches = df['strings'].str.contains(
                     pattern,
-                    flags=re.IGNORECASE,
+                    flags=0,
                     regex=True
                 )
                 matched_df = df[matches]
@@ -587,11 +660,19 @@ if __name__ == '__main__':
             string o,
             string currentFile = "",
             bool isCsvOutput = false,
-            bool csvHeaderAlreadyWritten = false
+            bool csvHeaderAlreadyWritten = false,
+            bool allowCpuFallback = true
         )
         {
             if (!_rapidsAvailable)
             {
+                if (!allowCpuFallback)
+                {
+                    throw new InvalidOperationException(
+                        "RAPIDS is unavailable and CPU fallback is disabled."
+                    );
+                }
+
                 // Fallback to standard processing
                 var standardResults = await Program.ProcessRegexPatternsConcurrentlyAsync(
                     hits,
@@ -609,112 +690,62 @@ if __name__ == '__main__':
                 return standardResults;
             }
 
-            try
+            var (gpuPatterns, cpuPatterns) = RapidsRegexPolicy.PartitionPatterns(
+                regexPatternsWithNames
+            );
+
+            if (gpuPatterns.Count == 0)
             {
-                // Convert hits to list for RAPIDS processing
-                var stringList = hits.ToList();
-
-                // Process with RAPIDS
-                var rapidsResults = await ProcessStringsWithRapidsAsync(
-                    stringList,
-                    regexPatternsWithNames,
-                    currentFile,
-                    off
-                );
-                var regexMap = RegexOutputCore.BuildRegexMap(regexPatternsWithNames);
-
-                int totalMatches = 0;
-
-                // Handle output similar to the original method
-                if (isCsvOutput && !csvHeaderAlreadyWritten && sw != null)
+                if (!allowCpuFallback)
                 {
-                    await sw.WriteLineAsync(RegexOutputCore.CsvHeader);
-                }
-
-                foreach (var result in rapidsResults)
-                {
-                    if (!regexMap.TryGetValue(result.PatternName, out var regex))
-                    {
-                        continue;
-                    }
-
-                    var parsedHit = RegexOutputCore.ParseHit(result.DataFound, off);
-                    if (!regex.IsMatch(parsedHit.Data))
-                    {
-                        continue;
-                    }
-
-                    // The Python row number is not a byte offset. Only an
-                    // offset embedded by the extractor is authoritative.
-                    totalMatches++;
-
-                    if (ro)
-                    {
-                        foreach (
-                            var record in RegexOutputCore.CreateRecords(
-                                parsedHit,
-                                result.PatternName,
-                                regex,
-                                regexOutput: true,
-                                currentFile,
-                                result.PatternType
-                            )
-                        )
-                        {
-                            if (isCsvOutput && sw != null)
-                            {
-                                await sw.WriteLineAsync(RegexOutputCore.BuildCsvLine(record));
-                            }
-                            else if (sw != null)
-                            {
-                                await sw.WriteLineAsync(RegexOutputCore.BuildRegexOnlyText(record));
-                            }
-
-                            if (!s && !q)
-                            {
-                                Console.WriteLine(RegexOutputCore.BuildRegexOnlyText(record));
-                            }
-                        }
-                    }
-                    else
-                    {
-                        var record = RegexOutputCore.CreateRecords(
-                            parsedHit,
-                            result.PatternName,
-                            regex,
-                            regexOutput: false,
-                            currentFile,
-                            result.PatternType
-                        ).Single();
-                        var fullHitText = RegexOutputCore.BuildFullHitText(parsedHit);
-
-                        if (isCsvOutput && sw != null)
-                        {
-                            await sw.WriteLineAsync(RegexOutputCore.BuildCsvLine(record));
-                        }
-                        else if (sw != null)
-                        {
-                            await sw.WriteLineAsync(fullHitText);
-                        }
-
-                        if (!s && !q)
-                        {
-                            Console.WriteLine(fullHitText);
-                        }
-                    }
-                }
-
-                if (Program._debug)
-                {
-                    Console.WriteLine(
-                        $"RAPIDS processed {totalMatches} matches from {hits.Count} strings using {regexPatternsWithNames.Count} patterns"
+                    throw new InvalidOperationException(
+                        "No requested regex pattern has a reviewed RAPIDS prefilter."
                     );
                 }
 
-                return totalMatches;
+                return await Program.ProcessRegexPatternsConcurrentlyAsync(
+                    hits,
+                    regexPatternsWithNames,
+                    ro,
+                    off,
+                    s,
+                    sw,
+                    q,
+                    o,
+                    currentFile,
+                    isCsvOutput,
+                    csvHeaderAlreadyWritten
+                );
+            }
+
+            // A fallback is safe only before any GPU-derived output has been
+            // emitted. Once acquisition succeeds, verification, output, and
+            // CPU-partition failures must propagate so rows cannot be duplicated.
+            List<RapidsResult> rapidsResults;
+            try
+            {
+                // Convert hits to list for RAPIDS processing.
+                var stringList = hits.ToList();
+
+                // Process only catalog patterns with reviewed libcudf superset
+                // prefilters. Custom or incompatible expressions stay on CPU.
+                rapidsResults = await ProcessStringsWithRapidsAsync(
+                    stringList,
+                    gpuPatterns,
+                    currentFile,
+                    off
+                );
             }
             catch (Exception ex)
             {
+                if (!allowCpuFallback)
+                {
+                    throw new InvalidOperationException(
+                        "RAPIDS execution failed while CPU fallback was disabled.",
+                        ex
+                    );
+                }
+
                 if (Program._debug)
                 {
                     Console.WriteLine(
@@ -737,6 +768,115 @@ if __name__ == '__main__':
                     csvHeaderAlreadyWritten
                 );
             }
+
+            var regexMap = RegexOutputCore.BuildRegexMap(regexPatternsWithNames);
+            int totalMatches = 0;
+
+            // Handle output similar to the original method
+            if (isCsvOutput && !csvHeaderAlreadyWritten && sw != null)
+            {
+                await sw.WriteLineAsync(RegexOutputCore.CsvHeader);
+            }
+
+            foreach (var result in rapidsResults)
+            {
+                if (!regexMap.TryGetValue(result.PatternName, out var regex))
+                {
+                    continue;
+                }
+
+                var parsedHit = RegexOutputCore.ParseHit(result.DataFound, off);
+                if (!regex.IsMatch(parsedHit.Data))
+                {
+                    continue;
+                }
+
+                // The Python row number is not a byte offset. Only an
+                // offset embedded by the extractor is authoritative.
+                totalMatches++;
+
+                if (ro)
+                {
+                    foreach (
+                        var record in RegexOutputCore.CreateRecords(
+                            parsedHit,
+                            result.PatternName,
+                            regex,
+                            regexOutput: true,
+                            currentFile,
+                            "RAPIDS-prefilter/.NET-verified"
+                        )
+                    )
+                    {
+                        if (isCsvOutput && sw != null)
+                        {
+                            await sw.WriteLineAsync(RegexOutputCore.BuildCsvLine(record));
+                        }
+                        else if (sw != null)
+                        {
+                            await sw.WriteLineAsync(RegexOutputCore.BuildRegexOnlyText(record));
+                        }
+
+                        if (!s && !q)
+                        {
+                            Console.WriteLine(RegexOutputCore.BuildRegexOnlyText(record));
+                        }
+                    }
+                }
+                else
+                {
+                    var record = RegexOutputCore.CreateRecords(
+                        parsedHit,
+                        result.PatternName,
+                        regex,
+                        regexOutput: false,
+                        currentFile,
+                        "RAPIDS-prefilter/.NET-verified"
+                    ).Single();
+                    var fullHitText = RegexOutputCore.BuildFullHitText(parsedHit);
+
+                    if (isCsvOutput && sw != null)
+                    {
+                        await sw.WriteLineAsync(RegexOutputCore.BuildCsvLine(record));
+                    }
+                    else if (sw != null)
+                    {
+                        await sw.WriteLineAsync(fullHitText);
+                    }
+
+                    if (!s && !q)
+                    {
+                        Console.WriteLine(fullHitText);
+                    }
+                }
+            }
+
+            if (cpuPatterns.Count > 0)
+            {
+                totalMatches += await Program.ProcessRegexPatternsConcurrentlyAsync(
+                    hits,
+                    cpuPatterns,
+                    ro,
+                    off,
+                    s,
+                    sw,
+                    q,
+                    o,
+                    currentFile,
+                    isCsvOutput,
+                    csvHeaderAlreadyWritten || (isCsvOutput && sw != null)
+                );
+            }
+
+            if (Program._debug)
+            {
+                Console.WriteLine(
+                    $"RAPIDS prefiltered {gpuPatterns.Count} patterns and CPU processed {cpuPatterns.Count}; "
+                        + $"{totalMatches} authoritative matches from {hits.Count} strings"
+                );
+            }
+
+            return totalMatches;
         }
     }
 
@@ -763,6 +903,7 @@ if __name__ == '__main__':
         public int StandardResultCount { get; set; }
         public int RapidsResultCount { get; set; }
         public bool RapidsAvailable { get; set; }
+        public bool CountParity { get; set; }
         public double SpeedupFactor { get; set; }
 
         public override string ToString()
