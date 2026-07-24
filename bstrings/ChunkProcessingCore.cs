@@ -15,7 +15,8 @@ internal static class ChunkProcessingCore
         bool unicodeSearch,
         bool includeOffset,
         string asciiRange,
-        string unicodeRange
+        string unicodeRange,
+        int codePage = 1252
     )
     {
         var results = new List<string>();
@@ -46,7 +47,8 @@ internal static class ChunkProcessingCore
                     maxLength,
                     fileOffset,
                     includeOffset,
-                    asciiRange
+                    asciiRange,
+                    codePage
                 )
             )
             {

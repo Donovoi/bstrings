@@ -41,7 +41,14 @@ internal static class StandardHitProcessingCore
                     new CompiledSearchPattern(
                         resolvePatternName(pattern) ?? pattern,
                         pattern,
-                        new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.Compiled)
+                        new Regex(
+                            pattern,
+                            RegexOptions.IgnoreCase
+                                | RegexOptions.IgnorePatternWhitespace
+                                | RegexOptions.CultureInvariant
+                                | RegexOptions.Compiled,
+                            RegexOutputCore.MatchTimeout
+                        )
                     )
                 );
             }
@@ -82,7 +89,7 @@ internal static class StandardHitProcessingCore
                 if (
                     parsedHit.Data.IndexOf(
                         fileString,
-                        StringComparison.InvariantCultureIgnoreCase
+                        StringComparison.OrdinalIgnoreCase
                     ) >= 0
                 )
                 {
@@ -104,16 +111,23 @@ internal static class StandardHitProcessingCore
         {
             foreach (var regexTarget in compiledRegexes)
             {
-                if (regexTarget.Regex.IsMatch(parsedHit.Data))
+                try
                 {
-                    return new MatchedHit(
-                        hit,
-                        parsedHit.Data,
-                        parsedHit.Offset,
-                        regexTarget.Name,
-                        "Regex",
-                        sourceFile
-                    );
+                    if (regexTarget.Regex.IsMatch(parsedHit.Data))
+                    {
+                        return new MatchedHit(
+                            hit,
+                            parsedHit.Data,
+                            parsedHit.Offset,
+                            regexTarget.Name,
+                            "Regex",
+                            sourceFile
+                        );
+                    }
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    continue;
                 }
             }
 

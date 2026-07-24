@@ -1,94 +1,46 @@
-# Version Management for bstrings
+# Versioning and releases
 
-This document explains how version numbering works in the bstrings project and how to increment versions.
+The application version is the semantic version in
+`bstrings/bstrings.csproj`:
 
-## Automatic Version Management
+```xml
+<Version>1.8.6</Version>
+```
 
-The project includes an automated version management system that can increment version numbers based on commit messages or manual script execution.
+Use `MAJOR.MINOR.PATCH`:
 
-### Version Format
+- increment `PATCH` for compatible fixes;
+- increment `MINOR` for compatible features;
+- increment `MAJOR` for breaking changes.
 
-The project uses semantic versioning: `MAJOR.MINOR.PATCH`
+## Update a version
 
-- **MAJOR**: Breaking changes or major feature releases
-- **MINOR**: New features that are backward compatible
-- **PATCH**: Bug fixes and small improvements
-
-### Current Version
-
-The current version is stored in `bstrings/bstrings.csproj` in the `<Version>` tag.
-
-### Manual Version Updates
-
-Use the PowerShell script to manually increment versions:
+The helper changes the project file locally:
 
 ```powershell
-# Increment patch version (1.7.1 → 1.7.2)
-./Scripts/UpdateVersion.ps1 patch
-
-# Increment minor version (1.7.1 → 1.8.0)
-./Scripts/UpdateVersion.ps1 minor
-
-# Increment major version (1.7.1 → 2.0.0)
-./Scripts/UpdateVersion.ps1 major
+.\Scripts\UpdateVersion.ps1 patch
+.\Scripts\UpdateVersion.ps1 minor
+.\Scripts\UpdateVersion.ps1 major
 ```
 
-### Automatic Version Updates via Commit Messages
+Review and commit that change normally. Commit-message tokens do not modify
+versions, and CI does not commit changes back to the repository.
 
-The GitHub Actions workflow can automatically increment versions based on commit message patterns:
+## Validate and release
 
-```bash
-# Auto-increment patch version
-git commit -m "Fix memory leak in GPU processing [version:patch]"
+```powershell
+dotnet restore bstrings.sln
+dotnet build bstrings.sln -c Release --no-restore
+dotnet test bstrings.sln -c Release --no-build
 
-# Auto-increment minor version
-git commit -m "Add new parallel regex engine [version:minor]"
-
-# Auto-increment major version
-git commit -m "Redesign streaming architecture [version:major]"
+git tag v1.8.7
+git push origin v1.8.7
 ```
 
-When you include `[version:patch]`, `[version:minor]`, or `[version:major]` in your commit message, the build system will automatically:
+Pushes and pull requests validate the project and produce a temporary Windows
+x64 artifact. Only a pushed tag whose name starts with `v` creates a GitHub
+release. The release workflow publishes a self-contained, single-file Windows
+x64 zip.
 
-1. Detect the version increment request
-2. Update the version in `bstrings.csproj`
-3. Build with the new version number
-4. Create releases with the correct version tags
-
-### Version Detection in Build
-
-The GitHub Actions workflow reads the version from:
-
-1. **Primary**: `<Version>` tag in `bstrings/bstrings.csproj`
-2. **Fallback**: `AssemblyVersion` in `Properties/AssemblyInfo.cs` (if present)
-
-### Release Naming
-
-Releases are automatically tagged with the format:
-
-```
-v{VERSION}-{TIMESTAMP}-{COMMIT_SHA}
-```
-
-Example: `v1.7.1-20250613-142530-a1b2c3d`
-
-### Best Practices
-
-1. **Use patch increments** for bug fixes and performance improvements
-2. **Use minor increments** for new features that don't break compatibility
-3. **Use major increments** for breaking changes or major architectural updates
-4. **Always test** after version updates to ensure builds work correctly
-5. **Update documentation** when making minor or major version changes
-
-### Troubleshooting
-
-If version detection fails:
-
-1. Check that `<Version>X.Y.Z</Version>` exists in `bstrings/bstrings.csproj`
-2. Ensure the version format is `major.minor.patch` (three numbers)
-3. Verify the PowerShell script has execution permissions
-4. Check GitHub Actions logs for version detection messages
-
-### Version History
-
-The version history and release notes are maintained in the main `README.md` file under the release notes section.
+Create a version tag only from a commit that has passed the full validation
+workflow.

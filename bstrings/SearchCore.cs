@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -25,6 +26,8 @@ internal readonly struct StringHitPosition
 
 internal static class SearchCore
 {
+    private static readonly ConcurrentDictionary<int, Encoding> Encodings = new();
+
     internal static List<string> GetUnicodeHits(
         ReadOnlySpan<byte> chunk,
         int minLength,
@@ -34,13 +37,16 @@ internal static class SearchCore
         string unicodeRange
     )
     {
+        var (minChar, maxChar) = ParseUnicodeRange(unicodeRange);
         return GetStringHitsUnified(
             chunk,
             minLength,
             maxLength,
             currentOffset,
             includeOffset,
-            isUnicode: true
+            isUnicode: true,
+            minChar,
+            maxChar
         );
     }
 
@@ -50,7 +56,8 @@ internal static class SearchCore
         int maxLength,
         long currentOffset,
         bool includeOffset,
-        string asciiRange
+        string asciiRange,
+        int codePage = 1252
     )
     {
         var (minChar, maxChar) = ParseCharRange(asciiRange);
@@ -62,7 +69,7 @@ internal static class SearchCore
             minChar,
             maxChar
         );
-        return MaterializeStringHits(chunk, hits, includeOffset);
+        return MaterializeStringHits(chunk, hits, includeOffset, codePage);
     }
 
     internal static (byte minChar, byte maxChar) ParseCharRange(string range)
@@ -100,6 +107,37 @@ internal static class SearchCore
         return (32, 126);
     }
 
+    internal static (char minChar, char maxChar) ParseUnicodeRange(string range)
+    {
+        if (string.IsNullOrEmpty(range) || range == "[\\u0020-\\u007E]")
+        {
+            return (' ', '~');
+        }
+
+        var match = Regex.Match(range, @"\[\\u([0-9A-Fa-f]{4})-\\u([0-9A-Fa-f]{4})\]");
+        if (
+            match.Success
+            && ushort.TryParse(
+                match.Groups[1].Value,
+                System.Globalization.NumberStyles.HexNumber,
+                null,
+                out var min
+            )
+            && ushort.TryParse(
+                match.Groups[2].Value,
+                System.Globalization.NumberStyles.HexNumber,
+                null,
+                out var max
+            )
+            && min <= max
+        )
+        {
+            return ((char)min, (char)max);
+        }
+
+        return (' ', '~');
+    }
+
     internal static List<(string name, string pattern)> ParseRegexPatternsWithNames(
         string input,
         IReadOnlyDictionary<string, string> builtInPatterns
@@ -122,11 +160,16 @@ internal static class SearchCore
             return patterns;
         }
 
-        var patternNames = input.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        var patternNames = SplitPatternList(input);
+        var addedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var patternName in patternNames)
         {
             var trimmedName = patternName.Trim();
+            if (trimmedName.Length == 0 || !addedNames.Add(trimmedName))
+            {
+                continue;
+            }
 
             if (builtInPatterns.TryGetValue(trimmedName, out var resolvedPattern))
             {
@@ -139,6 +182,59 @@ internal static class SearchCore
         }
 
         return patterns;
+    }
+
+    private static IEnumerable<string> SplitPatternList(string input)
+    {
+        var start = 0;
+        var escaped = false;
+        var squareDepth = 0;
+        var roundDepth = 0;
+        var braceDepth = 0;
+
+        for (var index = 0; index < input.Length; index++)
+        {
+            var current = input[index];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (current == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            switch (current)
+            {
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    squareDepth = Math.Max(0, squareDepth - 1);
+                    break;
+                case '(' when squareDepth == 0:
+                    roundDepth++;
+                    break;
+                case ')' when squareDepth == 0:
+                    roundDepth = Math.Max(0, roundDepth - 1);
+                    break;
+                case '{' when squareDepth == 0:
+                    braceDepth++;
+                    break;
+                case '}' when squareDepth == 0:
+                    braceDepth = Math.Max(0, braceDepth - 1);
+                    break;
+                case ',' when squareDepth == 0 && roundDepth == 0 && braceDepth == 0:
+                    yield return input[start..index];
+                    start = index + 1;
+                    break;
+            }
+        }
+
+        yield return input[start..];
     }
 
     internal static List<string> ParseRegexPatterns(
@@ -160,7 +256,7 @@ internal static class SearchCore
         byte maxChar = 126
     )
     {
-        var hits = new List<StringHitPosition>(data.Length / 20);
+        var hits = new List<StringHitPosition>(Math.Min(data.Length / 64, 4096));
 
         if (data.Length == 0)
         {
@@ -245,17 +341,24 @@ internal static class SearchCore
     internal static List<string> MaterializeStringHits(
         ReadOnlySpan<byte> data,
         List<StringHitPosition> hits,
-        bool includeOffset
+        bool includeOffset,
+        int codePage = 1252
     )
     {
         var results = new List<string>(hits.Count);
+        var encoding = Encodings.GetOrAdd(
+            codePage,
+            static value =>
+                CodePagesEncodingProvider.Instance.GetEncoding(value)
+                ?? Encoding.GetEncoding(value)
+        );
 
         foreach (var hit in hits)
         {
             if (hit.Start + hit.Length <= data.Length)
             {
                 var stringBytes = data.Slice(hit.Start, hit.Length);
-                var str = Encoding.ASCII.GetString(stringBytes);
+                var str = encoding.GetString(stringBytes);
 
                 if (includeOffset)
                 {
@@ -278,8 +381,8 @@ internal static class SearchCore
         long currentOffsetInFile,
         bool includeOffset,
         bool isUnicode,
-        byte minChar = 32,
-        byte maxChar = 126
+        char minChar = ' ',
+        char maxChar = '~'
     )
     {
         var results = new List<string>();
@@ -299,7 +402,7 @@ internal static class SearchCore
                 }
 
                 char c = (char)(chunk[i] | (chunk[i + 1] << 8));
-                isValidChar = c >= 32 && c <= 126;
+                isValidChar = c >= minChar && c <= maxChar;
             }
             else
             {
@@ -452,11 +555,6 @@ internal static class SearchCore
             if (stringStart == -1)
             {
                 stringStart = position;
-            }
-            else if (maxLength > 0 && (position - stringStart + 1) > maxLength)
-            {
-                hits.Add(new StringHitPosition(stringStart, maxLength, fileOffset));
-                stringStart = -1;
             }
         }
         else if (stringStart != -1)

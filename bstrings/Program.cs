@@ -1,28 +1,17 @@
-#if !NET6_0_OR_GREATER
-using Directory = Alphaleonis.Win32.Filesystem.Directory;
-using File = Alphaleonis.Win32.Filesystem.File;
-using FileInfo = Alphaleonis.Win32.Filesystem.FileInfo;
-using Path = Alphaleonis.Win32.Filesystem.Path;
-#else
 using Path = System.IO.Path;
 using Directory = System.IO.Directory;
 using File = System.IO.File;
 using FileInfo = System.IO.FileInfo;
-#endif
 using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.CommandLine;
-using System.CommandLine.Help;
-using System.CommandLine.NamingConventionBinder;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices; // Keep one instance
-using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
 using System.Security.AccessControl;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -32,21 +21,14 @@ using System.Threading.Tasks;
 using DiscUtils;
 using DiscUtils.Ntfs;
 using DiscUtils.Streams;
-using Exceptionless;
-using ILGPU;
-using ILGPU.Runtime;
-using ILGPU.Runtime.Cuda; // Required for Cuda specific operations
-using ILGPU.Runtime.OpenCL; // Required for OpenCL specific operations
 using RawDiskLib;
 using Serilog;
 using Serilog.Core;
 using Serilog.Events;
-using static ILGPU.Atomic; // Corrected: using static for the Atomic class
 
 namespace bstrings;
 
-// internal class Program // This was the old class declaration
-public static partial class Program // Make it public and partial for ILGPU if needed, or ensure Program is public
+public static partial class Program
 {
     private static Stopwatch _sw;
     private static readonly Dictionary<string, string> RegExPatterns =
@@ -83,70 +65,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
         + @"   bstrings.exe -f ""C:\Temp\UsrClass 1.dat"" --ls mui --sl"
         + "\r\n\t "
         + @"   bstrings.exe -f ""C:\Temp\bigFile.bin"" --lr all --use-rapids  # GPU-accelerated regex processing"
-        + "\r\n\t "
-        + @"   bstrings.exe -f ""C:\Temp\bigFile.bin"" --lr all --force-rapids  # Auto-install and use RAPIDS"
         + "\r\n"
-        + "\r\nNOTE: --use-rapids enables NVIDIA RAPIDS (cuDF) for GPU-accelerated regex processing when available."
-        + "\r\nNOTE: --force-rapids automatically installs NVIDIA RAPIDS (conda, CUDA, cuDF) if not available.";
+        + "\r\nNOTE: --use-rapids enables NVIDIA RAPIDS (cuDF) regex processing when it is already installed.";
 
     private static RootCommand _rootCommand;
 
     private static IFileSystem _fileSystem;
 
-    private static readonly string BaseDirectory = GetBaseDirectory();
-
-    private static string GetBaseDirectory()
-    {
-        var assemblyLocation = Assembly.GetExecutingAssembly().Location;
-        return string.IsNullOrEmpty(assemblyLocation)
-            ? AppContext.BaseDirectory // Single-file deployment
-            : Path.GetDirectoryName(assemblyLocation);
-    }
-
-    // ILGPU specific fields
-    private static readonly Context GpuContext;
-    private static readonly Accelerator GpuAccelerator; // GPU concurrency control - increase limits for better GPU utilization
-    private static readonly SemaphoreSlim GpuSemaphore = new SemaphoreSlim(16, 32); // Massively increased for RTX 4000 Ada - 16 concurrent, up to 32 total
-
-    private static int DynamicChunkSizeMB = 0; // Will be calculated, 0 means not yet or failed    // Removed unused field _quiet
     public static bool _debug = false;
-    private static bool _trace = false; // Explicitly initialize to fix compiler warning
-
-    /// <summary>
-    /// Represents a hit found by the GPU.
-    /// </summary>
-    public struct GpuHit
-    {
-        public long Offset; // Absolute offset in the original file
-        public int Length;
-
-        // ILGPU kernels require parameterless constructors for structs passed by value.
-        // If you add methods or properties, ensure it remains a simple struct.
-    }
-
-    // Definition for Hit struct (assuming it was similar to this)
-    // If it was defined elsewhere or differently, this might need adjustment.
-    public struct Hit
-    {
-        public long Offset;
-        public int Length; // Byte length
-        public HitEncoding Encoding;
-        public string Value; // The string value itself, can be empty if not stored
-
-        public enum HitEncoding
-        {
-            Ascii,
-            Unicode,
-        }
-
-        public Hit(long offset, int length, HitEncoding encoding, string value = null)
-        {
-            Offset = offset;
-            Length = length;
-            Encoding = encoding;
-            Value = value;
-        }
-    }
 
     /// <summary>
     /// Represents a chunk of data to be processed
@@ -424,140 +350,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
         }
     }
 
-    static Program()
-    {
-        Context tempContext = null;
-        Accelerator tempAccelerator = null;
-
-        try
-        {
-            // Initialize ILGPU with Cuda backend (output suppressed)
-            try
-            {
-                // Attempt to create a context with only the Cuda backend enabled
-                tempContext = Context.Create(builder => builder.Cuda());
-
-                // Get the first available Cuda device.
-                // This will throw an exception if no Cuda device is found or Cuda support isn't properly loaded.
-                var cudaDevice = tempContext.GetCudaDevice(0);
-                if (cudaDevice != null)
-                {
-                    tempAccelerator = cudaDevice.CreateAccelerator(tempContext);
-                    // GPU initialization successful (messages suppressed unless debug mode)
-                }
-                else
-                {
-                    // This case might not be reached if GetCudaDevice(0) throws when no device is found.
-                    // Cuda backend initialized, but no Cuda device found by GetCudaDevice(0) (message suppressed unless debug mode)
-                    tempContext.Dispose();
-                    tempContext = null;
-                }
-            }
-            catch
-            {
-                // Failed to initialize ILGPU with Cuda (message suppressed unless debug mode)
-                if (tempContext != null)
-                {
-                    tempContext.Dispose();
-                    tempContext = null;
-                }
-                // tempAccelerator remains null, so we will fall through to the default initialization
-            }
-            if (tempAccelerator == null)
-            {
-                // Falling back to default ILGPU initialization (message suppressed unless debug mode)
-                // Ensure any previous context (e.g., from a failed Cuda attempt) is disposed
-                if (tempContext != null)
-                {
-                    tempContext.Dispose();
-                    tempContext = null;
-                }
-
-                // Fallback to default initialization (might pick OpenCL, CPU, or another available backend)
-                tempContext = Context.Create(builder => builder.Default());
-                var preferredDevice = tempContext.GetPreferredDevice(preferCPU: false);
-                if (preferredDevice != null)
-                {
-                    tempAccelerator = preferredDevice.CreateAccelerator(tempContext);
-                    // ILGPU initialized with default backend (message suppressed unless debug mode)
-                }
-                else
-                {
-                    // No suitable GPU device found (message suppressed unless debug mode)
-                    if (tempContext != null)
-                    {
-                        tempContext.Dispose();
-                        tempContext = null;
-                    }
-                    // tempAccelerator remains null
-                }
-            }
-
-            // Assign to readonly fields
-            GpuContext = tempContext;
-            GpuAccelerator = tempAccelerator;
-
-            if (GpuAccelerator != null)
-            {
-                try
-                {
-                    long totalGpuMemoryBytes = GpuAccelerator.MemorySize;
-                    long reserveMemoryBytes = 2L * 1024 * 1024 * 1024; // 2GB
-                    long usableGpuMemoryBytes = totalGpuMemoryBytes - reserveMemoryBytes;
-
-                    if (usableGpuMemoryBytes > 0)
-                    {
-                        const int defaultMinStringLengthForCalc = 3; // Based on mOption default
-                        int sizeOfGpuHit = Marshal.SizeOf<GpuHit>(); // Should be 12 bytes
-                        double memoryFactor =
-                            1.0 + ((double)sizeOfGpuHit / defaultMinStringLengthForCalc);
-
-                        long calculatedChunkSizeBytes = (long)(usableGpuMemoryBytes / memoryFactor);
-                        int calculatedMB = (int)(calculatedChunkSizeBytes / (1024 * 1024));
-
-                        // Clamp the dynamic chunk size to practical limits
-                        const int minPracticalMB = 32; // Reduced from 64 for better parallelism
-                        const int maxPracticalMB = 256; // Reduced from 512 for much better parallelism - more chunks = more parallel processing
-
-                        DynamicChunkSizeMB = Math.Max(
-                            minPracticalMB,
-                            Math.Min(maxPracticalMB, calculatedMB)
-                        );
-
-                        // GPU VRAM information (messages suppressed unless debug mode)
-                    }
-                    else
-                    {
-                        // Not enough GPU VRAM (message suppressed unless debug mode)
-                        DynamicChunkSizeMB = 0; // Will use CPU calculation
-                    }
-                }
-                catch
-                {
-                    // Error calculating dynamic GPU chunk size (message suppressed unless debug mode)
-                    DynamicChunkSizeMB = 0; // Will use CPU calculation
-                }
-            }
-            else
-            {
-                // GPU not available. Dynamic chunk size will be calculated based on CPU/RAM (message suppressed unless debug mode)
-                DynamicChunkSizeMB = 0; // Will use CPU calculation at runtime
-            }
-        }
-        catch
-        {
-            // ILGPU General Initialization Error (message suppressed unless debug mode)
-            if (tempContext != null)
-                tempContext.Dispose();
-            GpuContext = null;
-            GpuAccelerator = null;
-        }
-
-        LogGpuInitializationInfo();
-    }
-
     private static async Task Main(string[] args)
     {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
         // Set console encoding to support Unicode characters (including emojis)
         try
         {
@@ -569,185 +365,209 @@ public static partial class Program // Make it public and partial for ILGPU if n
             // Ignore encoding setup errors on systems that don't support it
         }
 
-        ExceptionlessClient.Default.Startup("Kruacm8p1B6RFAw2WMnKcEqkQcnWRkF3RmPSOzlW");
-        // Ensure ILGPU context is initialized before any command parsing if GPU is to be used early
-        // or ensure commands that need GPU are aware if it's not ready.
-        // For now, static constructor handles initialization.
-
         SetupPatterns();
+
+        var fOpt = new Option<string>("-f")
+        {
+            Description = "File to search. Either this or -d is required",
+        };
+        var dOpt = new Option<string>("-d")
+        {
+            Description = "Directory to recursively process. Either this or -f is required",
+        };
+        var oOpt = new Option<string>("-o") { Description = "File to save results to" };
+        var aOpt = new Option<bool>("-a")
+        {
+            Description = "If set, look for code-page strings. Use -a false to disable",
+            DefaultValueFactory = _ => true,
+        };
+        var uOpt = new Option<bool>("-u")
+        {
+            Description = "If set, look for UTF-16LE strings. Use -u false to disable",
+            DefaultValueFactory = _ => true,
+        };
+        var mOpt = new Option<int>("-m")
+        {
+            Description = "Minimum string length",
+            DefaultValueFactory = _ => 3,
+        };
+        var bOpt = new Option<int>("-b")
+        {
+            Description =
+                "Chunk size in MB. Use 0 for automatic sizing; explicit values must be 1 to 1024",
+            DefaultValueFactory = _ => 0,
+        };
+        var qOpt = new Option<bool>("-q")
+        {
+            Description = "Do not show the header or final summary",
+            DefaultValueFactory = _ => false,
+        };
+        var sOpt = new Option<bool>("-s")
+        {
+            Description = "Do not write hits to the console",
+            DefaultValueFactory = _ => false,
+        };
+        var xOpt = new Option<int>("-x")
+        {
+            Description = "Maximum string length. Default is unlimited",
+            DefaultValueFactory = _ => -1,
+        };
+        var pOpt = new Option<bool>("-p")
+        {
+            Description = "Display the built-in regular expressions",
+            DefaultValueFactory = _ => false,
+        };
+        var lsOpt = new Option<string>("--ls")
+        {
+            Description = "Only return strings containing this text",
+        };
+        var lrOpt = new Option<string>("--lr")
+        {
+            Description =
+                "Only return regex matches. Accepts built-in names separated by commas, a custom regex, or 'all'",
+        };
+        var fsOpt = new Option<string>("--fs")
+        {
+            Description = "File containing literal strings to find",
+        };
+        var frOpt = new Option<string>("--fr")
+        {
+            Description = "File containing regex patterns to find",
+        };
+        var arOpt = new Option<string>("--ar")
+        {
+            Description = @"Code-page byte range. Default is [\x20-\x7E]",
+            DefaultValueFactory = _ => "[\\x20-\\x7E]",
+        };
+        var urOpt = new Option<string>("--ur")
+        {
+            Description = @"UTF-16LE character range. Default is [\u0020-\u007E]",
+            DefaultValueFactory = _ => "[\\u0020-\\u007E]",
+        };
+        var cpOpt = new Option<int>("--cp")
+        {
+            Description = "Code page used to decode byte strings. Default is 1252",
+            DefaultValueFactory = _ => 1252,
+        };
+        var maskOpt = new Option<string>("--mask")
+        {
+            Description = "File mask used with -d. Supports * and ?",
+        };
+        var msOpt = new Option<int>("--ms")
+        {
+            Description = "Maximum file size in bytes when using -d",
+            DefaultValueFactory = _ => -1,
+        };
+        var roOpt = new Option<bool>("--ro")
+        {
+            Description = "Output only the regex match rather than the full extracted string",
+            DefaultValueFactory = _ => false,
+        };
+        var offOpt = new Option<bool>("--off")
+        {
+            Description = "Include the source byte offset",
+            DefaultValueFactory = _ => false,
+        };
+        var saOpt = new Option<bool>("--sa")
+        {
+            Description = "Sort results alphabetically",
+            DefaultValueFactory = _ => false,
+        };
+        var slOpt = new Option<bool>("--sl")
+        {
+            Description = "Sort results by length",
+            DefaultValueFactory = _ => false,
+        };
+        var debugOpt = new Option<bool>("--debug")
+        {
+            Description = "Show debug information",
+            DefaultValueFactory = _ => false,
+        };
+        var traceOpt = new Option<bool>("--trace")
+        {
+            Description = "Show trace-level logging",
+            DefaultValueFactory = _ => false,
+        };
+        var useRapidsOpt = new Option<bool>("--use-rapids")
+        {
+            Description = "Use an existing NVIDIA RAPIDS installation for regex processing",
+            DefaultValueFactory = _ => false,
+        };
+        var forceRapidsOpt = new Option<bool>("--force-rapids")
+        {
+            Description =
+                "Deprecated compatibility flag. Third-party software is not installed automatically",
+            DefaultValueFactory = _ => false,
+        };
 
         _rootCommand = new RootCommand
         {
-            new Option<string>("-f", "File to search. Either this or -d is required"),
-            new Option<string>(
-                "-d",
-                "Directory to recursively process. Either this or -f is required"
-            ),
-            new Option<string>("-o", "File to save results to"),
-            new Option<bool>(
-                "-a",
-                () => true,
-                "If set, look for ASCII strings. Use -a false to disable"
-            ),
-            new Option<bool>(
-                "-u",
-                () => true,
-                "If set, look for Unicode strings. Use -u false to disable"
-            ),
-            new Option<int>("-m", () => 3, "Minimum string length"),
-            new Option<int>(
-                "-b",
-                () => 0,
-                "Chunk size in MB. Valid range is 1 to 8192. Default is 0 (auto-calculated based on available GPU memory or system RAM)."
-            )
-            {
-                ArgumentHelpName = "sizeMB",
-            },
-            new Option<bool>(
-                "-q",
-                () => false,
-                "Quiet mode (Do not show header or total number of hits)"
-            ),
-            new Option<bool>(
-                "-s",
-                () => false,
-                "Really Quiet mode (Do not display hits to console. Speeds up processing when using -o)"
-            ),
-            new Option<int>("-x", () => -1, "Maximum string length. Default is unlimited"),
-            new Option<bool>("-p", () => false, "Display list of built in regular expressions"),
-            new Option<string>(
-                "--ls",
-                "String to look for. When set, only matching strings are returned"
-            ),
-            new Option<string>(
-                "--lr",
-                "Regex to look for. When set, only strings matching the regex are returned. Supports comma-separated values for multiple patterns or 'all' to use all built-in patterns"
-            ),
-            new Option<string>(
-                "--fs",
-                "File containing strings to look for. When set, only matching strings are returned"
-            ),
-            new Option<string>(
-                "--fr",
-                "File containing regex patterns to look for. When set, only strings matching regex patterns are returned"
-            ),
-            new Option<string>(
-                "--ar",
-                () => "[\x20-\x7E]",
-                @"Range of characters to search for in 'Code page' strings. Specify as a range of characters in hex format and enclose in quotes. Default is [\x20 -\x7E]"
-            ),
-            new Option<string>(
-                "--ur",
-                () => "[\u0020-\u007E]",
-                @"Range of characters to search for in Unicode strings. Specify as a range of characters in hex format and enclose in quotes. Default is [\\u0020-\\u007E]"
-            ),
-            new Option<int>(
-                "--cp",
-                () => 1252,
-                "Code page to use. Default is 1252. Use the Identifier value for code pages at https://goo.gl/ig6DxW"
-            ),
-            new Option<string>(
-                "--mask",
-                "When using -d, file mask to search for. * and ? are supported. This option has no effect when using -f"
-            ),
-            new Option<int>(
-                "--ms",
-                () => -1,
-                "When using -d, maximum file size in bytes to process. This option has no effect when using -f"
-            ),
-            new Option<bool>(
-                "--ro",
-                () => false,
-                "When true, list the string matched by regex pattern vs string the pattern was found in (This may result in duplicate strings in output. ~ denotes approx. offset)"
-            ),
-            new Option<bool>(
-                "--off",
-                () => false,
-                "Show offset to hit after string, followed by the encoding (A=1252, U=Unicode)"
-            ),
-            new Option<bool>("--sa", () => false, "Sort results alphabetically"),
-            new Option<bool>("--sl", () => false, "Sort results by length"),
-            new Option<bool>("--debug", () => false, "Show debug information during processing"),
-            new Option<bool>("--trace", () => false, "Show trace information during processing"),
-            new Option<bool>(
-                "--use-rapids",
-                () => false,
-                "Use NVIDIA RAPIDS (cuDF) for GPU-accelerated regex processing when available"
-            ),
-            new Option<bool>(
-                "--force-rapids",
-                () => false,
-                "Install NVIDIA RAPIDS (conda, CUDA toolkit, cuDF) automatically if not available"
-            ),
+            fOpt,
+            dOpt,
+            oOpt,
+            aOpt,
+            uOpt,
+            mOpt,
+            bOpt,
+            qOpt,
+            sOpt,
+            xOpt,
+            pOpt,
+            lsOpt,
+            lrOpt,
+            fsOpt,
+            frOpt,
+            arOpt,
+            urOpt,
+            cpOpt,
+            maskOpt,
+            msOpt,
+            roOpt,
+            offOpt,
+            saOpt,
+            slOpt,
+            debugOpt,
+            traceOpt,
+            useRapidsOpt,
+            forceRapidsOpt,
         };
 
         _rootCommand.Description = Header + "\r\n\r\n" + Footer;
-        _rootCommand.Handler = CommandHandler.Create(
-            async (
-                string f,
-                string d,
-                string o,
-                bool a,
-                bool u,
-                int m,
-                int b,
-                bool q,
-                bool s,
-                int x,
-                bool p,
-                string ls,
-                string lr,
-                string fs,
-                string fr,
-                string ar,
-                string ur,
-                int cp,
-                string mask,
-                int ms,
-                bool ro,
-                bool off,
-                bool sa,
-                bool sl,
-                bool debug,
-                bool trace,
-                bool useRapids,
-                bool forceRapids
-            ) =>
-            {
+        _rootCommand.SetAction(
+            async result =>
                 await DoWork(
-                    f,
-                    d,
-                    o,
-                    a,
-                    u,
-                    m,
-                    b,
-                    q,
-                    s,
-                    x,
-                    p,
-                    ls,
-                    lr,
-                    fs,
-                    fr,
-                    ar,
-                    ur,
-                    cp,
-                    mask,
-                    ms,
-                    ro,
-                    off,
-                    sa,
-                    sl,
-                    debug,
-                    trace,
-                    useRapids,
-                    forceRapids
-                );
-            }
+                    result.GetValue(fOpt),
+                    result.GetValue(dOpt),
+                    result.GetValue(oOpt),
+                    result.GetValue(aOpt),
+                    result.GetValue(uOpt),
+                    result.GetValue(mOpt),
+                    result.GetValue(bOpt),
+                    result.GetValue(qOpt),
+                    result.GetValue(sOpt),
+                    result.GetValue(xOpt),
+                    result.GetValue(pOpt),
+                    result.GetValue(lsOpt),
+                    result.GetValue(lrOpt),
+                    result.GetValue(fsOpt),
+                    result.GetValue(frOpt),
+                    result.GetValue(arOpt),
+                    result.GetValue(urOpt),
+                    result.GetValue(cpOpt),
+                    result.GetValue(maskOpt),
+                    result.GetValue(msOpt),
+                    result.GetValue(roOpt),
+                    result.GetValue(offOpt),
+                    result.GetValue(saOpt),
+                    result.GetValue(slOpt),
+                    result.GetValue(debugOpt),
+                    result.GetValue(traceOpt),
+                    result.GetValue(useRapidsOpt),
+                    result.GetValue(forceRapidsOpt)
+                )
         );
 
-        await _rootCommand.InvokeAsync(args);
+        await _rootCommand.Parse(args).InvokeAsync();
 
         Log.CloseAndFlush();
     }
@@ -780,19 +600,27 @@ public static partial class Program // Make it public and partial for ILGPU if n
         bool debug,
         bool trace,
         bool useRapids, // use NVIDIA RAPIDS for GPU-accelerated regex processing
-        bool forceRapids // automatically install NVIDIA RAPIDS if not available
+        bool forceRapids // deprecated compatibility flag
     )
     { // Set the global debug flag
         _debug = debug;
 
         // Initialize RAPIDS integration if requested
-        if (useRapids || forceRapids)
+        if (forceRapids)
+        {
+            Console.Error.WriteLine(
+                "Warning: --force-rapids is deprecated and will not install software. RAPIDS must be installed and validated separately."
+            );
+            useRapids = true;
+        }
+
+        if (useRapids)
         {
             if (!q) // Only show if not in quiet mode
             {
                 Log.Information("Initializing NVIDIA RAPIDS GPU acceleration...");
             }
-            await bstrings.Rapids.RapidsProcessor.InitializeAsync(forceRapids);
+            await bstrings.Rapids.RapidsProcessor.InitializeAsync();
 
             // Add extra line for readability after RAPIDS status
             if (!q)
@@ -800,9 +628,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 Console.WriteLine();
             }
         }
-
-        // Log GPU initialization info if debug is enabled
-        LogGpuInitializationInfo();
 
         var levelSwitch = new LoggingLevelSwitch();
 
@@ -841,7 +666,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             return;
         }
 
-        var cpTest = CodePagesEncodingProvider.Instance.GetEncoding(1252);
+        var cpTest = CodePagesEncodingProvider.Instance.GetEncoding(cp);
 
         if (cpTest == null)
         {
@@ -939,9 +764,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
         }
         else // No -f, no -d, and no piped input
         {
-            var helpBld = new HelpBuilder(LocalizationResources.Instance, Console.WindowWidth);
-            var hc = new HelpContext(helpBld, _rootCommand, Console.Out);
-            helpBld.Write(hc);
+            await _rootCommand.Parse(["--help"]).InvokeAsync();
             Log.Warning("{Message}", inputResolution.Message);
             return;
         }
@@ -977,8 +800,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
         var globalCounter = 0;
         var globalHits = 0;
         double globalTimespan = 0;
-        var withBoundaryHits = false;
-
         if (outputConfiguration.WarningMessage is not null)
         {
             Log.Warning("{Message}", outputConfiguration.WarningMessage);
@@ -1010,10 +831,22 @@ public static partial class Program // Make it public and partial for ILGPU if n
             _sw.Start();
             var counter = 0;
             var hits = new HashSet<string>();
+            var rawResultsStreamed = false;
+            var withBoundaryHits = false;
 
             // Parse multiple patterns from lr parameter
             var regexPatternsWithNames = ParseRegexPatternsWithNames(lr);
             var regexPatterns = regexPatternsWithNames.Select(p => p.pattern).ToList();
+            var requiresPostProcessing =
+                isCsvOutput
+                || sa
+                || sl
+                || !string.IsNullOrWhiteSpace(ls)
+                || !string.IsNullOrWhiteSpace(fs)
+                || !string.IsNullOrWhiteSpace(fr)
+                || regexPatterns.Count > 0;
+            var canStreamRawResults =
+                sw is not null && o.Length > 0 && !requiresPostProcessing;
 
             if (regexPatterns.Count > 0 && !q)
             {
@@ -1050,9 +883,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             var fileSizeBytes = new FileInfo(currentFile).Length; // Use currentFile
 
-            // Use dynamic chunk size if no chunk size specified by user (b=0) or invalid range
-            var chunkSizeMb = (b <= 0 || b > 8192) ? GetOptimalChunkSize(fileSizeBytes) : b; // Use dynamic if not specified
-            var chunkSizeBytes = chunkSizeMb * 1024 * 1024;
+            if (b < 0 || b > 1024)
+            {
+                Log.Error("Chunk size must be 0 (automatic) or between 1 and 1024 MB.");
+                return;
+            }
+
+            var chunkSizeMb = b == 0 ? GetOptimalChunkSize(fileSizeBytes) : b;
+            var chunkSizeBytes = checked(chunkSizeMb * 1024 * 1024);
 
             if (ms > 0)
             {
@@ -1066,7 +904,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     continue;
                 }
             } // Variables for progress reporting
-            var totalChunks = fileSizeBytes / chunkSizeBytes + 1;
+            var totalChunks = Math.Max(
+                1,
+                (fileSizeBytes + chunkSizeBytes - 1L) / chunkSizeBytes
+            );
 
             ProgressTracker progressTracker = new ProgressTracker(totalChunks, q);
 
@@ -1150,13 +991,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
                 using (mappedStream)
                 { // Process main chunks concurrently with streaming output for memory efficiency
-                    long totalMainResults = 0;
                     if (sw != null && o.Length > 0)
                     {
-                        // Use streaming processing to write directly to file and minimize memory usage
-                        // BUT: Don't stream to file if regex patterns are specified - let regex processing handle output
-                        StreamWriter outputWriter = regexPatterns.Count > 0 ? null : sw;
-                        totalMainResults = await ProcessFileChunksConcurrentlyStreamingAsync(
+                        StreamWriter outputWriter = canStreamRawResults ? sw : null;
+                        await ProcessFileChunksConcurrentlyStreamingAsync(
                             mappedStream,
                             fileSizeBytes,
                             chunkSizeBytes,
@@ -1171,9 +1009,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             q,
                             totalChunks,
                             progressTracker,
-                            outputWriter, // Only stream to file if no regex patterns
-                            hits // Always track unique hits for post-processing
+                            outputWriter,
+                            hits
                         );
+                        rawResultsStreamed = canStreamRawResults;
                     }
                     else
                     {
@@ -1206,14 +1045,12 @@ public static partial class Program // Make it public and partial for ILGPU if n
                     // Process boundary chunks concurrently with streaming for memory efficiency
                     if (sw != null && o.Length > 0)
                     {
-                        // Use streaming for boundary processing too
-                        // BUT: Don't stream to file if regex patterns are specified - let regex processing handle output
-                        StreamWriter boundaryOutputWriter = regexPatterns.Count > 0 ? null : sw;
+                        StreamWriter boundaryOutputWriter = canStreamRawResults ? sw : null;
                         var boundaryResults = await ProcessBoundaryChunksConcurrentlyStreamingAsync(
                             mappedStream,
                             fileSizeBytes,
-                            chunkSizeMb * 1024 * 1024,
-                            m * 10 * 2 * 2, // boundaryChunkSize
+                            chunkSizeBytes,
+                            checked(minLength * 40), // boundaryChunkSize
                             minLength,
                             maxLength,
                             a,
@@ -1223,19 +1060,19 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             ar,
                             ur,
                             q,
-                            boundaryOutputWriter, // Only stream to file if no regex patterns
+                            boundaryOutputWriter,
                             hits
                         );
-                        totalMainResults += boundaryResults;
+                        withBoundaryHits |= boundaryResults > 0;
                     }
                     else
                     {
                         // Fallback to in-memory boundary processing
-                        await ProcessBoundaryChunksConcurrentlyAsync(
+                        withBoundaryHits |= await ProcessBoundaryChunksConcurrentlyAsync(
                             mappedStream,
                             fileSizeBytes,
-                            chunkSizeMb * 1024 * 1024,
-                            m * 10 * 2 * 2, // boundaryChunkSize
+                            chunkSizeBytes,
+                            checked(minLength * 40), // boundaryChunkSize
                             hits,
                             minLength,
                             maxLength,
@@ -1281,20 +1118,18 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 Console.WriteLine();
             }
 
+            IReadOnlyList<string> orderedHits = null;
             if (sa)
             {
                 Log.Information("Sorting alphabetically...");
                 Console.WriteLine();
-                var tempList = hits.ToList();
-                tempList.Sort();
-                hits = new HashSet<string>(tempList);
+                orderedHits = OrderHits(hits, alphabetically: true, byLength: false, off);
             }
             else if (sl)
             {
                 Log.Information("Sorting by length...");
                 Console.WriteLine();
-                var tempList = SortByLength(hits.ToList()).ToList();
-                hits = new HashSet<string>(tempList);
+                orderedHits = OrderHits(hits, alphabetically: false, byLength: true, off);
             }
 
             var searchTargets = SearchTargetConfigurationCore.Build(
@@ -1327,11 +1162,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
             }
 
             // Skip expensive post-processing if results are already written to file and no console output needed
-            bool streamingComplete = !string.IsNullOrEmpty(o) && q;
-            bool hasPatternProcessing = fileStrings.Count > 0 || regexPatterns.Count > 0; // When regex patterns are specified, use dedicated regex processing ONLY
+            bool hasPatternProcessing = fileStrings.Count > 0 || regexStrings.Count > 0;
             if (regexPatterns.Count > 0)
             { // Try RAPIDS processing if enabled and available
-                if ((useRapids || forceRapids) && bstrings.Rapids.RapidsProcessor.IsAvailable)
+                var rapidsRequested = useRapids || forceRapids;
+                var canUseRapidsForRun =
+                    rapidsRequested
+                    && bstrings.Rapids.RapidsProcessor.IsAvailable
+                    && orderedHits is null;
+                if (canUseRapidsForRun)
                 {
                     if (!q) // Show success message unless in quiet mode
                     {
@@ -1356,35 +1195,20 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 }
                 else
                 {
-                    if (useRapids || forceRapids)
+                    if (rapidsRequested)
                     {
-                        // User requested RAPIDS but it's not available - show fallback message
                         Log.Warning(
-                            "⚠️  RAPIDS GPU acceleration not available - falling back to standard GPU processing"
+                            orderedHits is null
+                                ? "RAPIDS GPU acceleration is unavailable; using the optimized CPU regex engine."
+                                : "RAPIDS processing is disabled when sorting is requested so output order remains deterministic."
                         );
-                        if (!q)
-                        {
-                            Log.Information(
-                                "🎮 Using standard GPU acceleration for string extraction + CPU regex processing"
-                            );
-                        }
-                    }
-                    else if (!q && GpuAccelerator != null)
-                    {
-                        // Standard mode with GPU available
-                        Log.Information(
-                            "🎮 Using standard GPU acceleration for string extraction + CPU regex processing"
-                        );
-                    }
-                    else if (!q)
-                    {
-                        // Pure CPU fallback
-                        Log.Information("💻 Using CPU processing (GPU not available)");
                     }
 
-                    // The hits HashSet already contains all strings extracted using GPU acceleration (if available)
-                    // from the ProcessFileChunksConcurrentlyAsync/StreamingAsync calls above.
-                    // Now we just need to apply regex filtering to those GPU-extracted strings.
+                    if (!q)
+                    {
+                        Log.Information("Using parallel CPU string extraction and regex processing.");
+                    }
+
                     counter = await ProcessRegexPatternsConcurrentlyAsync(
                         hits,
                         regexPatternsWithNames,
@@ -1396,7 +1220,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
                         o,
                         currentFile,
                         isCsvOutput,
-                        csvHeaderWritten
+                        csvHeaderWritten,
+                        orderedHits
                     );
                 }
 
@@ -1415,12 +1240,13 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 // Skip general string processing when regex patterns are used - regex processing handles output
                 goto skipGeneralProcessing;
             }
-            else if (streamingComplete && !isCsvOutput && !hasPatternProcessing)
+            else if (rawResultsStreamed && !hasPatternProcessing)
             {
+                counter = hits.Count;
                 if (!q)
                 {
                     Log.Information(
-                        "Results already written to output file. Skipping redundant post-processing."
+                        "Results were written while scanning. Skipping redundant post-processing."
                     );
                     Console.WriteLine();
                 }
@@ -1452,7 +1278,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 );
 
                 // Use concurrent processing for large datasets
-                var hitsList = hits.ToList(); // Convert to list for parallel processing
+                var hitsList = orderedHits ?? hits.ToList();
                 var outputLock = new object(); // For thread-safe output
                 var progressLock = new object(); // For thread-safe progress tracking
                 var matchCount = 0; // Track number of actual matches                // Configure maximum parallelism for all datasets - use all available power!
@@ -1465,70 +1291,75 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 {
                     parallelOptions.MaxDegreeOfParallelism = Environment.ProcessorCount; // All cores for smaller datasets
                 }
-                Parallel.ForEach(
-                    hitsList,
-                    parallelOptions,
-                    hit =>
+                void ProcessHit(string hit)
+                {
+                    if (hit.Length == 0)
                     {
-                        if (hit.Length == 0)
-                        {
-                            return; // Use return instead of continue in parallel loop
-                        }
+                        return;
+                    }
 
-                        var matchedHit = StandardHitProcessingCore.TryMatchHit(
-                            hit,
-                            fileStrings,
-                            compiledRegexes,
-                            off,
-                            currentFile
-                        );
+                    var matchedHit = StandardHitProcessingCore.TryMatchHit(
+                        hit,
+                        fileStrings,
+                        compiledRegexes,
+                        off,
+                        currentFile
+                    );
 
-                        // Only output hits that match patterns
-                        if (matchedHit is not null)
+                    if (matchedHit is not null)
+                    {
+                        lock (outputLock)
                         {
-                            // Thread-safe output handling
-                            lock (outputLock)
+                            matchCount++;
+
+                            var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
+                            if (s == false && !suppressConsoleOutput)
                             {
-                                matchCount++; // Increment match counter
-
-                                // Suppress console output if quiet mode is enabled and output file is specified
-                                var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
-                                if (s == false && !suppressConsoleOutput)
-                                {
-                                    Log.Information("{Hit}", matchedHit.RawHit);
-                                }
-
-                                csvHeaderWritten = StandardHitProcessingCore.WriteMatchedHit(
-                                    matchedHit,
-                                    isCsvOutput,
-                                    csvHeaderWritten,
-                                    sw
-                                );
+                                Log.Information("{Hit}", matchedHit.RawHit);
                             }
-                        }
 
-                        // Thread-safe progress reporting for large datasets                        if (isLargeDataset)
+                            csvHeaderWritten = StandardHitProcessingCore.WriteMatchedHit(
+                                matchedHit,
+                                isCsvOutput,
+                                csvHeaderWritten,
+                                sw
+                            );
+                        }
+                    }
+
+                    if (isLargeDataset)
+                    {
+                        lock (progressLock)
                         {
-                            lock (progressLock)
+                            processedCount++;
+                            if (DateTime.Now.Subtract(lastProgressReport).TotalSeconds >= 10)
                             {
-                                processedCount++;
-                                if (DateTime.Now.Subtract(lastProgressReport).TotalSeconds >= 10)
+                                if (!q)
                                 {
-                                    if (!q)
-                                    {
-                                        Log.Information(
-                                            "Post-processing progress: {Processed:N0} / {Total:N0} strings ({Percent:F1}%)",
-                                            processedCount,
-                                            hitsList.Count,
-                                            (double)processedCount / hitsList.Count * 100
-                                        );
-                                    }
-                                    lastProgressReport = DateTime.Now;
+                                    Log.Information(
+                                        "Post-processing progress: {Processed:N0} / {Total:N0} strings ({Percent:F1}%)",
+                                        processedCount,
+                                        hitsList.Count,
+                                        (double)processedCount / hitsList.Count * 100
+                                    );
                                 }
+                                lastProgressReport = DateTime.Now;
                             }
                         }
                     }
-                ); // End of Parallel.ForEach
+                }
+
+                if (orderedHits is null)
+                {
+                    Parallel.ForEach(hitsList, parallelOptions, ProcessHit);
+                }
+                else
+                {
+                    foreach (var hit in hitsList)
+                    {
+                        ProcessHit(hit);
+                    }
+                }
 
                 // Update counter with actual matches found
                 counter = matchCount;
@@ -1639,31 +1470,36 @@ public static partial class Program // Make it public and partial for ILGPU if n
             );
         }
         var chunkStopwatch = Stopwatch.StartNew();
-        var validChunk = chunk.Data.AsSpan(0, chunk.ValidBytes);
-        var finalResults = ChunkProcessingCore.ProcessChunk(
-            validChunk,
-            chunk.FileOffset,
-            chunk.IsBoundaryChunk,
-            minLength,
-            maxLength,
-            asciiSearch,
-            unicodeSearch,
-            off,
-            ar,
-            ur
-        );
-        chunkStopwatch.Stop();
-        if (_debug)
+        try
         {
-            Console.Error.WriteLine(
-                $"[Chunk {chunk.ChunkIndex}] Completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {finalResults.Count} strings"
+            var validChunk = chunk.Data.AsSpan(0, chunk.ValidBytes);
+            var finalResults = ChunkProcessingCore.ProcessChunk(
+                validChunk,
+                chunk.FileOffset,
+                chunk.IsBoundaryChunk,
+                minLength,
+                maxLength,
+                asciiSearch,
+                unicodeSearch,
+                off,
+                ar,
+                ur,
+                cp
             );
+            chunkStopwatch.Stop();
+            if (_debug)
+            {
+                Console.Error.WriteLine(
+                    $"[Chunk {chunk.ChunkIndex}] Completed in {chunkStopwatch.ElapsedMilliseconds}ms, found {finalResults.Count} strings"
+                );
+            }
+
+            return finalResults;
         }
-
-        // Return the byte array back to the pool since chunk processing is complete
-        ByteArrayPool.Return(chunk.Data);
-
-        return finalResults;
+        finally
+        {
+            ByteArrayPool.Return(chunk.Data);
+        }
     }
 
     /// <summary>
@@ -1687,7 +1523,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
             isBoundaryMode,
             boundaryChunkSize,
             ConcurrentConfig.ReadAheadChunks,
-            ByteArrayPool.Rent
+            ByteArrayPool.Rent,
+            array => ByteArrayPool.Return(array)
         );
     }
 
@@ -1793,12 +1630,45 @@ public static partial class Program // Make it public and partial for ILGPU if n
     //     }
     // }
 
-    private static IEnumerable<string> SortByLength(IEnumerable<string> e)
+    internal static IReadOnlyList<string> OrderHits(
+        IEnumerable<string> hits,
+        bool alphabetically,
+        bool byLength,
+        bool includeOffset
+    )
     {
-        var sorted = from s in e orderby s.Length ascending select s;
-        return sorted;
+        var ordered = hits.ToList();
+        if (!alphabetically && !byLength)
+        {
+            return ordered;
+        }
+
+        static string DataForSort(string hit, bool includeOffset)
+        {
+            return RegexOutputCore.ParseHit(hit, includeOffset).Data;
+        }
+
+        ordered.Sort(
+            (left, right) =>
+            {
+                var leftData = DataForSort(left, includeOffset);
+                var rightData = DataForSort(right, includeOffset);
+                if (byLength)
+                {
+                    var lengthComparison = leftData.Length.CompareTo(rightData.Length);
+                    if (lengthComparison != 0)
+                    {
+                        return lengthComparison;
+                    }
+                }
+
+                return StringComparer.OrdinalIgnoreCase.Compare(leftData, rightData);
+            }
+        );
+        return ordered;
     }
 
+#if LEGACY_ILGPU_EXPERIMENT
     private static List<string> GetUnicodeHits(
         ReadOnlySpan<byte> chunk,
         int minLength,
@@ -2346,6 +2216,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             }
         }
     }
+#endif
 
     /// <summary>
     /// Processes main file chunks concurrently using enhanced pipeline parallelism with streaming output
@@ -2458,7 +2329,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <summary>
     /// Creates an async enumerable of DataChunks for processing
     /// </summary>
-    private static async IAsyncEnumerable<DataChunk> ReadChunksAsyncEnumerable(
+    internal static async IAsyncEnumerable<DataChunk> ReadChunksAsyncEnumerable(
         MappedStream mappedStream,
         long fileSizeBytes,
         int chunkSizeBytes,
@@ -2467,15 +2338,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
         int boundaryChunkSize = 0
     )
     {
-        var bytesRemaining = fileSizeBytes;
         long offset = startOffset;
         int chunkIndex = 0;
 
-        while (bytesRemaining > 0)
+        while (offset < fileSizeBytes)
         {
             var chunks = await ReadChunksAsync(
                 mappedStream,
-                bytesRemaining,
+                fileSizeBytes,
                 chunkSizeBytes,
                 offset,
                 isBoundaryMode,
@@ -2487,14 +2357,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
 
             foreach (var chunk in chunks)
             {
-                yield return chunk;
+                var indexedChunk = chunk;
+                indexedChunk.ChunkIndex = chunkIndex++;
+                yield return indexedChunk;
             }
 
-            // Update for next batch
             var lastChunk = chunks.Last();
-            offset = lastChunk.FileOffset + lastChunk.ValidBytes;
-            bytesRemaining = fileSizeBytes - offset;
-            chunkIndex = lastChunk.ChunkIndex + 1;
+            offset = isBoundaryMode
+                ? lastChunk.FileOffset + chunkSizeBytes
+                : lastChunk.FileOffset + lastChunk.ValidBytes;
         }
     }
 
@@ -2521,13 +2392,16 @@ public static partial class Program // Make it public and partial for ILGPU if n
     {
         using var pipeline = new ChunkProcessingPipeline();
 
-        var bytesRemaining = fileSizeBytes;
-        long offset = chunkSizeBytes - minLength * 10 * 2; // Move starting point backwards
+        long offset = Math.Max(0, chunkSizeBytes - minLength * 20L);
+        var boundaryChunkCount =
+            offset + boundaryChunkSize > fileSizeBytes
+                ? 1
+                : ((fileSizeBytes - boundaryChunkSize - offset) / chunkSizeBytes) + 1;
 
         // Create async enumerable of boundary chunks
         var chunks = ReadChunksAsyncEnumerable(
             mappedStream,
-            bytesRemaining,
+            fileSizeBytes,
             chunkSizeBytes,
             offset,
             true, // boundary mode
@@ -2545,7 +2419,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             cp,
             ar,
             ur,
-            new ProgressTracker(1, quiet), // Simple tracker for boundary chunks
+            new ProgressTracker(Math.Max(1, boundaryChunkCount), quiet),
             outputWriter,
             resultsSet
         );
@@ -2556,7 +2430,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <summary>
     /// Processes boundary chunks concurrently using enhanced pipeline parallelism (legacy - collects in memory)
     /// </summary>
-    private static async Task ProcessBoundaryChunksConcurrentlyAsync(
+    private static async Task<bool> ProcessBoundaryChunksConcurrentlyAsync(
         MappedStream mappedStream,
         long fileSizeBytes,
         int chunkSizeBytes,
@@ -2575,14 +2449,16 @@ public static partial class Program // Make it public and partial for ILGPU if n
     {
         using var pipeline = new ChunkProcessingPipeline();
 
-        var bytesRemaining = fileSizeBytes;
-        long offset = chunkSizeBytes - minLength * 10 * 2; // Move starting point backwards
-        bool withBoundaryHits = false;
+        long offset = Math.Max(0, chunkSizeBytes - minLength * 20L);
+        var boundaryChunkCount =
+            offset + boundaryChunkSize > fileSizeBytes
+                ? 1
+                : ((fileSizeBytes - boundaryChunkSize - offset) / chunkSizeBytes) + 1;
 
         // Create async enumerable of boundary chunks
         var chunks = ReadChunksAsyncEnumerable(
             mappedStream,
-            bytesRemaining,
+            fileSizeBytes,
             chunkSizeBytes,
             offset,
             true, // boundary mode
@@ -2600,7 +2476,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             cp,
             ar,
             ur,
-            new ProgressTracker(1, quiet) // Simple tracker for boundary chunks
+            new ProgressTracker(Math.Max(1, boundaryChunkCount), quiet)
         );
 
         // Add results to the main collection
@@ -2609,12 +2485,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
             foreach (var result in results)
             {
                 hits.Add(result);
-                if (!withBoundaryHits)
-                {
-                    withBoundaryHits = true;
-                }
             }
         }
+
+        return results.Count > 0;
     }
 
     /// <summary>
@@ -2641,12 +2515,15 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 memoryUsageFraction
             );
 
-            Console.Error.WriteLine(
-                $"Total Memory: {totalPhysicalMemory / (1024 * 1024)} MB, Available: {availableMemory / (1024 * 1024)} MB"
-            );
-            Console.Error.WriteLine(
-                $"Calculated conservative CPU chunk size: {chunkSizeMB} MB (max {maxConcurrentChunks} concurrent chunks, {memoryUsageFraction:P1} memory usage)"
-            );
+            if (_debug)
+            {
+                Console.Error.WriteLine(
+                    $"Total Memory: {totalPhysicalMemory / (1024 * 1024)} MB, Available: {availableMemory / (1024 * 1024)} MB"
+                );
+                Console.Error.WriteLine(
+                    $"Calculated conservative CPU chunk size: {chunkSizeMB} MB (max {maxConcurrentChunks} concurrent chunks, {memoryUsageFraction:P1} memory usage)"
+                );
+            }
 
             return chunkSizeMB;
         }
@@ -2667,25 +2544,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
     {
         try
         {
-            // If GPU is available and we have calculated a GPU chunk size, use it
-            if (GpuAccelerator != null && DynamicChunkSizeMB > 0)
-            {
-                int gpuChunkSize = ChunkSizingCore.SelectOptimalChunkSize(
-                    gpuAvailable: true,
-                    gpuChunkSizeMB: DynamicChunkSizeMB,
-                    cpuChunkSizeMB: 0,
-                    fileSizeBytes: fileSizeBytes
-                );
-                if (_debug)
-                {
-                    Console.Error.WriteLine(
-                        $"Using GPU-optimized chunk size: {gpuChunkSize} MB (adapted for {GetSizeReadable(fileSizeBytes)} file)"
-                    );
-                }
-                return gpuChunkSize;
-            }
-
-            // Fall back to CPU-optimized chunk size
             int cpuChunkSize = CalculateOptimalCpuChunkSizeMB();
             int adaptedChunkSize = ChunkSizingCore.SelectOptimalChunkSize(
                 gpuAvailable: false,
@@ -2719,6 +2577,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <summary>
     /// Calculates optimal GPU chunk size based on available VRAM
     /// </summary>
+#if LEGACY_ILGPU_EXPERIMENT
     private static int CalculateOptimalGpuChunkSizeMB()
     {
         try
@@ -2767,6 +2626,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             return 0;
         }
     }
+#endif
 
     /// <summary>
     /// Enhanced producer-consumer pipeline for chunk processing with optimized concurrency
@@ -2779,7 +2639,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
         private readonly ChannelReader<DataChunk> _chunkReader;
         private readonly ChannelWriter<List<string>> _resultWriter;
         private readonly ChannelReader<List<string>> _resultReader;
-        private readonly SemaphoreSlim _concurrencyLimiter;
         private readonly CancellationTokenSource _cancellationTokenSource;
         private readonly int _maxConcurrency;
         private volatile bool _disposed = false;
@@ -2815,7 +2674,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
             _resultWriter = _resultChannel.Writer;
             _resultReader = _resultChannel.Reader;
 
-            _concurrencyLimiter = new SemaphoreSlim(_maxConcurrency, _maxConcurrency);
             _cancellationTokenSource = new CancellationTokenSource();
         }
 
@@ -2970,8 +2828,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
             {
                 try
                 {
-                    await _concurrencyLimiter.WaitAsync(_cancellationTokenSource.Token);
-
                     var results = ProcessChunk(
                         chunk,
                         minLength,
@@ -2991,9 +2847,10 @@ public static partial class Program // Make it public and partial for ILGPU if n
                 {
                     break;
                 }
-                finally
+                catch
                 {
-                    _concurrencyLimiter.Release();
+                    await _cancellationTokenSource.CancelAsync();
+                    throw;
                 }
             }
         }
@@ -3040,7 +2897,6 @@ public static partial class Program // Make it public and partial for ILGPU if n
             if (!_disposed)
             {
                 _cancellationTokenSource?.Cancel();
-                _concurrencyLimiter?.Dispose();
                 _cancellationTokenSource?.Dispose();
                 _disposed = true;
             }
@@ -3073,7 +2929,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     }
 
     /// <summary>
-    /// SIMD-optimized ASCII string hit detection - 10-20x faster than original
+    /// Finds ASCII string hit positions using the active CPU scanner.
     /// </summary>
     private static List<StringHitPosition> FindAsciiStringHits(
         ReadOnlySpan<byte> data,
@@ -3109,6 +2965,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
     /// <summary>
     /// Logs GPU initialization information if debug mode is enabled
     /// </summary>
+#if LEGACY_ILGPU_EXPERIMENT
     private static void LogGpuInitializationInfo()
     {
         if (!_debug)
@@ -3127,6 +2984,7 @@ public static partial class Program // Make it public and partial for ILGPU if n
             Console.Error.WriteLine("[DEBUG] GPU acceleration not available, using CPU only");
         }
     }
+#endif
 
     /// <summary>
     /// Parses the lr parameter to handle comma-separated patterns and 'all' keyword
@@ -3168,7 +3026,8 @@ public static partial class Program // Make it public and partial for ILGPU if n
         string o,
         string currentFile = "",
         bool isCsvOutput = false,
-        bool csvHeaderAlreadyWritten = false
+        bool csvHeaderAlreadyWritten = false,
+        IReadOnlyList<string> orderedHits = null
     )
     {
         if (regexPatternsWithNames.Count == 0)
@@ -3177,14 +3036,14 @@ public static partial class Program // Make it public and partial for ILGPU if n
         // Write CSV header if this is CSV output, we have a StreamWriter, and header hasn't been written yet
         if (isCsvOutput && sw != null && !csvHeaderAlreadyWritten)
         {
-            sw.WriteLine(RegexOutputCore.CsvHeader);
+            await sw.WriteLineAsync(RegexOutputCore.CsvHeader);
         }
 
         var lockObject = new object();
         var regexMap = RegexOutputCore.BuildRegexMap(regexPatternsWithNames);
+        var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
 
-        // Create tasks for each pattern to process concurrently
-        var tasks = regexPatternsWithNames.Select(async patternInfo =>
+        int ProcessPattern((string name, string pattern) patternInfo)
         {
             var (patternName, regString) = patternInfo;
             if (string.IsNullOrWhiteSpace(regString))
@@ -3195,38 +3054,37 @@ public static partial class Program // Make it public and partial for ILGPU if n
             try
             {
                 var regex = regexMap[patternName];
+                IEnumerable<string> sourceHits = orderedHits is not null ? orderedHits : hits;
 
-                await Task.Run(() =>
+                foreach (var hit in sourceHits)
                 {
-                    foreach (var hit in hits)
+                    if (hit.Length == 0)
+                        continue;
+
+                    try
                     {
-                        if (hit.Length == 0)
-                            continue;
-
                         var parsedHit = RegexOutputCore.ParseHit(hit, off);
-
-                        if (!regex.IsMatch(parsedHit.Data))
-                            continue;
-
-                        lock (lockObject)
+                        if (ro)
                         {
-                            localMatches++;
-
-                            // Suppress console output if quiet mode is enabled and output file is specified
-                            var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
-
-                            if (ro)
-                            {
-                                foreach (
-                                    var record in RegexOutputCore.CreateRecords(
-                                        parsedHit,
-                                        patternName,
-                                        regex,
-                                        regexOutput: true,
-                                        currentFile,
-                                        "Regex"
-                                    )
+                            var records = RegexOutputCore
+                                .CreateRecords(
+                                    parsedHit,
+                                    patternName,
+                                    regex,
+                                    regexOutput: true,
+                                    currentFile,
+                                    "Regex"
                                 )
+                                .ToList();
+                            if (records.Count == 0)
+                            {
+                                continue;
+                            }
+
+                            localMatches++;
+                            lock (lockObject)
+                            {
+                                foreach (var record in records)
                                 {
                                     if (!s && !suppressConsoleOutput)
                                     {
@@ -3246,18 +3104,22 @@ public static partial class Program // Make it public and partial for ILGPU if n
                                     }
                                 }
                             }
-                            else
-                            {
-                                var record = RegexOutputCore.CreateRecords(
-                                    parsedHit,
-                                    patternName,
-                                    regex,
-                                    regexOutput: false,
-                                    currentFile,
-                                    "Regex"
-                                ).Single();
-                                var fullHitText = RegexOutputCore.BuildFullHitText(parsedHit);
+                        }
+                        else if (regex.IsMatch(parsedHit.Data))
+                        {
+                            localMatches++;
+                            var record = RegexOutputCore.CreateRecords(
+                                parsedHit,
+                                patternName,
+                                regex,
+                                regexOutput: false,
+                                currentFile,
+                                "Regex"
+                            ).Single();
+                            var fullHitText = RegexOutputCore.BuildFullHitText(parsedHit);
 
+                            lock (lockObject)
+                            {
                                 if (!s && !suppressConsoleOutput)
                                 {
                                     Log.Information("{Hit}", fullHitText);
@@ -3274,7 +3136,17 @@ public static partial class Program // Make it public and partial for ILGPU if n
                             }
                         }
                     }
-                });
+                    catch (RegexMatchTimeoutException)
+                    {
+                        if (_debug)
+                        {
+                            Log.Warning(
+                                "Regex '{PatternName}' timed out for one extracted string; continuing.",
+                                patternName
+                            );
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -3287,8 +3159,16 @@ public static partial class Program // Make it public and partial for ILGPU if n
             }
 
             return localMatches;
-        });
+        }
 
+        if (orderedHits is not null)
+        {
+            return regexPatternsWithNames.Sum(ProcessPattern);
+        }
+
+        var tasks = regexPatternsWithNames.Select(patternInfo =>
+            Task.Run(() => ProcessPattern(patternInfo))
+        );
         var results = await Task.WhenAll(tasks);
         return results.Sum();
     }
