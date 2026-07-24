@@ -1,4 +1,5 @@
 using System.Text;
+using System.Diagnostics;
 using DiscUtils.Streams;
 using Xunit;
 using bstrings.Rapids;
@@ -95,6 +96,29 @@ public class SearchCoreTests
                 Assert.Equal(@"\d{1,3}(?:,\d{3})*", pattern.pattern);
             }
         );
+    }
+
+    [Fact]
+    public async Task ParseAndExecuteCustomRegexes_PreservesCaseDistinctPatterns()
+    {
+        var patterns = SearchCore.ParseRegexPatternsWithNames(
+            "secret,SECRET,secret",
+            BuiltInPatterns
+        );
+
+        Assert.Equal(["secret", "SECRET"], patterns.Select(pattern => pattern.name));
+        var count = await Program.ProcessRegexPatternsConcurrentlyAsync(
+            new HashSet<string> { "secret", "SECRET" },
+            patterns,
+            ro: false,
+            off: false,
+            s: true,
+            sw: null!,
+            q: true,
+            o: string.Empty
+        );
+
+        Assert.Equal(2, count);
     }
 
     [Fact]
@@ -334,6 +358,154 @@ public class SearchCoreTests
     }
 
     [Fact]
+    public async Task UrlUserRegexOnlyOutput_EmitsUsernameRatherThanPasswordOrUrlPrefix()
+    {
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream, leaveOpen: true);
+
+        var count = await Program.ProcessRegexPatternsConcurrentlyAsync(
+            new HashSet<string> { "https://analyst:secret@example.com/path" },
+            [("urlUser", BuiltInPatternCatalog.Patterns["urlUser"])],
+            ro: true,
+            off: false,
+            s: true,
+            sw: writer,
+            q: true,
+            o: "results.txt"
+        );
+
+        await writer.FlushAsync(TestContext.Current.CancellationToken);
+        stream.Position = 0;
+        using var reader = new StreamReader(stream);
+        var output = (
+            await reader.ReadToEndAsync(TestContext.Current.CancellationToken)
+        ).Trim();
+
+        Assert.Equal(1, count);
+        Assert.Equal("analyst", output);
+    }
+
+    [Fact]
+    public async Task ProcessRegexPatternsConcurrentlyAsync_PropagatesOutputFailures()
+    {
+        using var stream = new MemoryStream();
+        var writer = new StreamWriter(stream);
+        await writer.DisposeAsync();
+
+        var exception = await Assert.ThrowsAnyAsync<Exception>(() =>
+            Program.ProcessRegexPatternsConcurrentlyAsync(
+                new HashSet<string> { "Alpha123" },
+                [("letters", "Alpha")],
+                ro: false,
+                off: false,
+                s: true,
+                sw: writer,
+                q: true,
+                o: "results.txt"
+            )
+        );
+
+        var propagatedDisposedFailure =
+            exception is ObjectDisposedException
+            || (
+                exception is AggregateException aggregate
+                && aggregate
+                    .Flatten()
+                    .InnerExceptions.Any(inner => inner is ObjectDisposedException)
+            );
+        Assert.True(propagatedDisposedFailure, exception.ToString());
+    }
+
+    [Fact]
+    public async Task ProcessRegexPatternsConcurrentlyAsync_StopsAfterFirstRegexTimeout()
+    {
+        var pathological = new string('a', 100_000) + "!";
+        var laterMatch = "a";
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream, leaveOpen: true);
+        var stopwatch = Stopwatch.StartNew();
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            Program.ProcessRegexPatternsConcurrentlyAsync(
+                new HashSet<string> { pathological, laterMatch },
+                [("pathological", "^(a+)+$")],
+                ro: false,
+                off: false,
+                s: true,
+                sw: writer,
+                q: true,
+                o: "results.txt",
+                orderedHits: [pathological, laterMatch]
+            )
+        );
+        stopwatch.Stop();
+
+        await writer.FlushAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("incomplete", exception.Message);
+        Assert.Empty(stream.ToArray());
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(6),
+            $"Timeout abort took {stopwatch.Elapsed}."
+        );
+    }
+
+    [Fact]
+    public async Task Cli_UsesNonzeroExitAndKeepsIncompleteMarkerOnProcessingFailure()
+    {
+        var tempDirectory = Directory.CreateTempSubdirectory("bstrings-cli-failure-");
+        try
+        {
+            var inputPath = Path.Combine(tempDirectory.FullName, "input.txt");
+            var outputPath = Path.Combine(tempDirectory.FullName, "output.txt");
+            await File.WriteAllTextAsync(
+                inputPath,
+                "Alpha123",
+                TestContext.Current.CancellationToken
+            );
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            startInfo.ArgumentList.Add(typeof(Program).Assembly.Location);
+            startInfo.ArgumentList.Add("-f");
+            startInfo.ArgumentList.Add(inputPath);
+            startInfo.ArgumentList.Add("--lr");
+            startInfo.ArgumentList.Add("(");
+            startInfo.ArgumentList.Add("-o");
+            startInfo.ArgumentList.Add(outputPath);
+            startInfo.ArgumentList.Add("-q");
+            startInfo.ArgumentList.Add("-s");
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(
+                TestContext.Current.CancellationToken
+            );
+            var stderrTask = process.StandardError.ReadToEndAsync(
+                TestContext.Current.CancellationToken
+            );
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+
+            Assert.NotEqual(0, process.ExitCode);
+            Assert.True(
+                File.Exists(outputPath + ".incomplete"),
+                $"No incomplete marker. stdout={stdout}; stderr={stderr}"
+            );
+        }
+        finally
+        {
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RapidsBridge_FallsBackToStandardCsvSchemaWhenUnavailable()
     {
         using var stream = new MemoryStream();
@@ -437,8 +609,8 @@ public class SearchCoreTests
     [Fact]
     public void BuiltInPatternCatalog_ContainsExpectedInventory()
     {
-        Assert.Equal(27, BuiltInPatternCatalog.Descriptions.Count);
-        Assert.Equal(27, BuiltInPatternCatalog.Patterns.Count);
+        Assert.Equal(33, BuiltInPatternCatalog.Descriptions.Count);
+        Assert.Equal(33, BuiltInPatternCatalog.Patterns.Count);
         Assert.Equal(
             BuiltInPatternCatalog.Descriptions.Keys.OrderBy(key => key),
             BuiltInPatternCatalog.Patterns.Keys.OrderBy(key => key)
@@ -448,12 +620,10 @@ public class SearchCoreTests
     [Fact]
     public void BuiltInPatternCatalog_ContainsRepresentativeEntries()
     {
-        Assert.Equal("\tFinds GUIDs", BuiltInPatternCatalog.Descriptions["guid"]);
-        Assert.Equal(
-            @"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,6}\b",
-            BuiltInPatternCatalog.Patterns["email"]
-        );
-        Assert.Contains("IPv6 host", BuiltInPatternCatalog.Patterns["url3986"]);
+        Assert.Equal("Finds GUIDs", BuiltInPatternCatalog.Descriptions["guid"]);
+        Assert.Contains("long TLDs", BuiltInPatternCatalog.Descriptions["email"]);
+        Assert.Contains("{0,61}", BuiltInPatternCatalog.Patterns["email"]);
+        Assert.Contains("IPv6 candidate", BuiltInPatternCatalog.Patterns["url3986"]);
     }
 
     [Fact]

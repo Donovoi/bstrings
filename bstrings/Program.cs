@@ -32,8 +32,9 @@ public static partial class Program
 {
     private static Stopwatch _sw;
     private static readonly Dictionary<string, string> RegExPatterns =
-        new Dictionary<string, string>();
-    private static readonly Dictionary<string, string> RegExDesc = new Dictionary<string, string>();
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Dictionary<string, string> RegExDesc =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly string Header =
         $"bstrings version {Assembly.GetExecutingAssembly().GetName().Version.ToString(3)}"
@@ -75,6 +76,59 @@ public static partial class Program
     private static IFileSystem _fileSystem;
 
     public static bool _debug = false;
+
+    private sealed class OutputCompletionScope : IAsyncDisposable
+    {
+        private readonly StreamWriter _writer;
+        private readonly string _incompleteMarker;
+        private bool _completed;
+
+        internal OutputCompletionScope(StreamWriter writer, string incompleteMarker)
+        {
+            _writer = writer;
+            _incompleteMarker = incompleteMarker;
+        }
+
+        internal void MarkCompleted()
+        {
+            _completed = true;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (_writer is not null)
+            {
+                await _writer.FlushAsync();
+                await _writer.DisposeAsync();
+            }
+
+            if (!_completed || _incompleteMarker is null)
+            {
+                return;
+            }
+
+            try
+            {
+                File.Delete(_incompleteMarker);
+            }
+            catch (IOException ex)
+            {
+                Log.Warning(
+                    ex,
+                    "Could not remove completed-output marker '{Marker}'",
+                    _incompleteMarker
+                );
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Log.Warning(
+                    ex,
+                    "Could not remove completed-output marker '{Marker}'",
+                    _incompleteMarker
+                );
+            }
+        }
+    }
 
     /// <summary>
     /// Represents a chunk of data to be processed
@@ -352,7 +406,7 @@ public static partial class Program
         }
     }
 
-    private static async Task Main(string[] args)
+    private static async Task<int> Main(string[] args)
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
@@ -579,7 +633,7 @@ public static partial class Program
 
         try
         {
-            await _rootCommand.Parse(args).InvokeAsync();
+            return await _rootCommand.Parse(args).InvokeAsync();
         }
         finally
         {
@@ -819,6 +873,7 @@ public static partial class Program
 
         bool isCsvOutput = outputConfiguration.IsCsvOutput;
         bool csvHeaderWritten = false;
+        string outputIncompleteMarker = null;
 
         var globalCounter = 0;
         var globalHits = 0;
@@ -839,9 +894,15 @@ public static partial class Program
                 Console.WriteLine();
             }
 
+            outputIncompleteMarker = o + ".incomplete";
+            File.WriteAllText(
+                outputIncompleteMarker,
+                $"bstrings output is incomplete; processing started {DateTimeOffset.UtcNow:O}.{Environment.NewLine}"
+            );
             sw = new StreamWriter(o, true);
         }
 
+        await using var outputCompletion = new OutputCompletionScope(sw, outputIncompleteMarker);
         var largestInputBytes = files
             .Where(File.Exists)
             .Select(path => new FileInfo(path).Length)
@@ -860,7 +921,7 @@ public static partial class Program
         catch (Exception ex)
         {
             Log.Error("{Message}", ex.Message);
-            return;
+            throw;
         }
 
         using var processingBackendScope = processingBackend;
@@ -1167,6 +1228,7 @@ public static partial class Program
             {
                 Console.WriteLine();
                 Log.Error(ex, "Error: {Message}", ex.Message);
+                throw;
             }
             finally
             {
@@ -1356,14 +1418,10 @@ public static partial class Program
                 var progressLock = new object(); // For thread-safe progress tracking
                 var matchCount = 0; // Track number of actual matches                // Configure maximum parallelism for all datasets - use all available power!
                 var parallelOptions = new ParallelOptions();
-                if (isLargeDataset)
-                {
-                    parallelOptions.MaxDegreeOfParallelism = Environment.ProcessorCount * 2; // 2x cores for large datasets
-                }
-                else
-                {
-                    parallelOptions.MaxDegreeOfParallelism = Environment.ProcessorCount; // All cores for smaller datasets
-                }
+                parallelOptions.MaxDegreeOfParallelism = Math.Max(
+                    1,
+                    Environment.ProcessorCount
+                );
                 void ProcessHit(string hit)
                 {
                     if (hit.Length == 0)
@@ -1492,14 +1550,9 @@ public static partial class Program
             );
         }
 
-        if (sw != null)
-        {
-            sw.Flush();
-            sw.Close();
-        }
-
         if (q || files.Count <= 1)
         {
+            outputCompletion.MarkCompleted();
             Console.WriteLine();
             return;
         }
@@ -1525,6 +1578,7 @@ public static partial class Program
             );
         }
 
+        outputCompletion.MarkCompleted();
         Console.WriteLine();
     }
 
@@ -3234,7 +3288,8 @@ public static partial class Program
         string currentFile = "",
         bool isCsvOutput = false,
         bool csvHeaderAlreadyWritten = false,
-        IReadOnlyList<string> orderedHits = null
+        IReadOnlyList<string> orderedHits = null,
+        RegexWorkPartition? forcedPartition = null
     )
     {
         if (regexPatternsWithNames.Count == 0)
@@ -3249,134 +3304,208 @@ public static partial class Program
         var lockObject = new object();
         var regexMap = RegexOutputCore.BuildRegexMap(regexPatternsWithNames);
         var suppressConsoleOutput = q && !string.IsNullOrEmpty(o);
+        var regexTimeouts = 0;
 
-        int ProcessPattern((string name, string pattern) patternInfo)
+        int ProcessHitForPattern(
+            (string name, string pattern) patternInfo,
+            string hit
+        )
         {
             var (patternName, regString) = patternInfo;
-            if (string.IsNullOrWhiteSpace(regString))
+            if (
+                Volatile.Read(ref regexTimeouts) > 0
+                || string.IsNullOrWhiteSpace(regString)
+                || hit.Length == 0
+            )
                 return 0;
-
-            var localMatches = 0;
 
             try
             {
                 var regex = regexMap[patternName];
-                IEnumerable<string> sourceHits = orderedHits is not null ? orderedHits : hits;
-
-                foreach (var hit in sourceHits)
+                var parsedHit = RegexOutputCore.ParseHit(hit, off);
+                if (ro)
                 {
-                    if (hit.Length == 0)
-                        continue;
-
-                    try
+                    var records = RegexOutputCore
+                        .CreateRecords(
+                            parsedHit,
+                            patternName,
+                            regex,
+                            regexOutput: true,
+                            currentFile,
+                            "Regex"
+                        )
+                        .ToList();
+                    if (records.Count == 0)
                     {
-                        var parsedHit = RegexOutputCore.ParseHit(hit, off);
-                        if (ro)
+                        return 0;
+                    }
+
+                    lock (lockObject)
+                    {
+                        foreach (var record in records)
                         {
-                            var records = RegexOutputCore
-                                .CreateRecords(
-                                    parsedHit,
-                                    patternName,
-                                    regex,
-                                    regexOutput: true,
-                                    currentFile,
-                                    "Regex"
-                                )
-                                .ToList();
-                            if (records.Count == 0)
+                            if (!s && !suppressConsoleOutput)
                             {
-                                continue;
+                                Log.Information(
+                                    "{Output}",
+                                    RegexOutputCore.BuildRegexOnlyText(record)
+                                );
                             }
 
-                            localMatches++;
-                            lock (lockObject)
+                            if (isCsvOutput && sw != null)
                             {
-                                foreach (var record in records)
-                                {
-                                    if (!s && !suppressConsoleOutput)
-                                    {
-                                        Log.Information(
-                                            "{Output}",
-                                            RegexOutputCore.BuildRegexOnlyText(record)
-                                        );
-                                    }
-
-                                    if (isCsvOutput && sw != null)
-                                    {
-                                        sw.WriteLine(RegexOutputCore.BuildCsvLine(record));
-                                    }
-                                    else if (sw != null)
-                                    {
-                                        sw.WriteLine(RegexOutputCore.BuildRegexOnlyText(record));
-                                    }
-                                }
+                                sw.WriteLine(RegexOutputCore.BuildCsvLine(record));
                             }
-                        }
-                        else if (regex.IsMatch(parsedHit.Data))
-                        {
-                            localMatches++;
-                            var record = RegexOutputCore.CreateRecords(
-                                parsedHit,
-                                patternName,
-                                regex,
-                                regexOutput: false,
-                                currentFile,
-                                "Regex"
-                            ).Single();
-                            var fullHitText = RegexOutputCore.BuildFullHitText(parsedHit);
-
-                            lock (lockObject)
+                            else if (sw != null)
                             {
-                                if (!s && !suppressConsoleOutput)
-                                {
-                                    Log.Information("{Hit}", fullHitText);
-                                }
-
-                                if (isCsvOutput && sw != null)
-                                {
-                                    sw.WriteLine(RegexOutputCore.BuildCsvLine(record));
-                                }
-                                else
-                                {
-                                    sw?.WriteLine(fullHitText);
-                                }
+                                sw.WriteLine(RegexOutputCore.BuildRegexOnlyText(record));
                             }
                         }
                     }
-                    catch (RegexMatchTimeoutException)
+
+                    return 1;
+                }
+
+                if (regex.IsMatch(parsedHit.Data))
+                {
+                    var record = RegexOutputCore.CreateRecords(
+                        parsedHit,
+                        patternName,
+                        regex,
+                        regexOutput: false,
+                        currentFile,
+                        "Regex"
+                    ).Single();
+                    var fullHitText = RegexOutputCore.BuildFullHitText(parsedHit);
+
+                    lock (lockObject)
                     {
-                        if (_debug)
+                        if (!s && !suppressConsoleOutput)
                         {
-                            Log.Warning(
-                                "Regex '{PatternName}' timed out for one extracted string; continuing.",
-                                patternName
-                            );
+                            Log.Information("{Hit}", fullHitText);
+                        }
+
+                        if (isCsvOutput && sw != null)
+                        {
+                            sw.WriteLine(RegexOutputCore.BuildCsvLine(record));
+                        }
+                        else
+                        {
+                            sw?.WriteLine(fullHitText);
                         }
                     }
+
+                    return 1;
                 }
             }
-            catch (Exception ex)
+            catch (RegexMatchTimeoutException)
             {
-                Log.Error(
-                    ex,
-                    "Error processing regular expression '{RegString}': {Message}",
-                    regString,
-                    ex.Message
-                );
+                Interlocked.Increment(ref regexTimeouts);
+            }
+
+            return 0;
+        }
+
+        int ProcessPattern((string name, string pattern) patternInfo)
+        {
+            IEnumerable<string> sourceHits = orderedHits is not null ? orderedHits : hits;
+            var localMatches = 0;
+            foreach (var hit in sourceHits)
+            {
+                if (Volatile.Read(ref regexTimeouts) > 0)
+                {
+                    break;
+                }
+
+                localMatches += ProcessHitForPattern(patternInfo, hit);
             }
 
             return localMatches;
         }
 
+        int totalMatches;
         if (orderedHits is not null)
         {
-            return regexPatternsWithNames.Sum(ProcessPattern);
+            totalMatches = regexPatternsWithNames.Sum(ProcessPattern);
+        }
+        else if (
+            (
+                forcedPartition
+                ?? RegexParallelismPolicy.Choose(
+                    hits.Count,
+                    regexPatternsWithNames.Count,
+                    Environment.ProcessorCount
+                )
+            ) == RegexWorkPartition.Hits
+        )
+        {
+            totalMatches = 0;
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
+            };
+
+            Parallel.ForEach(
+                hits,
+                parallelOptions,
+                () => 0,
+                (hit, loopState, localMatches) =>
+                {
+                    foreach (var patternInfo in regexPatternsWithNames)
+                    {
+                        if (Volatile.Read(ref regexTimeouts) > 0)
+                        {
+                            loopState.Stop();
+                            break;
+                        }
+
+                        localMatches += ProcessHitForPattern(patternInfo, hit);
+                    }
+
+                    if (Volatile.Read(ref regexTimeouts) > 0)
+                    {
+                        loopState.Stop();
+                    }
+
+                    return localMatches;
+                },
+                localMatches => Interlocked.Add(ref totalMatches, localMatches)
+            );
+        }
+        else
+        {
+            totalMatches = 0;
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount),
+            };
+
+            Parallel.ForEach(
+                regexPatternsWithNames,
+                parallelOptions,
+                () => 0,
+                (patternInfo, loopState, localMatches) =>
+                {
+                    var result = localMatches + ProcessPattern(patternInfo);
+                    if (Volatile.Read(ref regexTimeouts) > 0)
+                    {
+                        loopState.Stop();
+                    }
+
+                    return result;
+                },
+                localMatches => Interlocked.Add(ref totalMatches, localMatches)
+            );
         }
 
-        var tasks = regexPatternsWithNames.Select(patternInfo =>
-            Task.Run(() => ProcessPattern(patternInfo))
-        );
-        var results = await Task.WhenAll(tasks);
-        return results.Sum();
+        if (regexTimeouts > 0)
+        {
+            throw new TimeoutException(
+                $"{regexTimeouts:N0} regex evaluations timed out; the result set is incomplete."
+            );
+        }
+
+        await Task.CompletedTask;
+        return totalMatches;
     }
 }

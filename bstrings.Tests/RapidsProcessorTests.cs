@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Diagnostics;
 using bstrings.Rapids;
 using Xunit;
 
@@ -63,7 +64,20 @@ public class RapidsProcessorTests
                 );
 
                 Assert.Equal(standardCount, bridgeCount);
-                Assert.Equal(standardOutput, bridgeOutput);
+                Assert.Equal(
+                    standardOutput
+                        .Split(
+                            Environment.NewLine,
+                            StringSplitOptions.RemoveEmptyEntries
+                        )
+                        .Order(),
+                    bridgeOutput
+                        .Split(
+                            Environment.NewLine,
+                            StringSplitOptions.RemoveEmptyEntries
+                        )
+                        .Order()
+                );
             }
         );
     }
@@ -85,6 +99,50 @@ public class RapidsProcessorTests
                 Assert.True(benchmark.StandardProcessingTimeMs >= 0);
                 Assert.Equal(0, benchmark.RapidsResultCount);
                 Assert.Equal(0, benchmark.RapidsProcessingTimeMs);
+                Assert.False(benchmark.CountParity);
+            }
+        );
+    }
+
+    [Fact]
+    public async Task BenchmarkPerformanceAsync_DeduplicatesTheSameRowsForEveryBackend()
+    {
+        await WithRapidsAvailabilityAsync(
+            available: false,
+            async () =>
+            {
+                var benchmark = await RapidsProcessor.BenchmarkPerformanceAsync(
+                    new[] { "Alpha1", "Alpha1" },
+                    [("alpha", "Alpha[0-9]+")]
+                );
+
+                Assert.Equal(1, benchmark.StandardResultCount);
+            }
+        );
+    }
+
+    [Fact]
+    public async Task ProcessRegexPatternsBridgeAsync_StrictModeRejectsCpuFallback()
+    {
+        await WithRapidsAvailabilityAsync(
+            available: false,
+            async () =>
+            {
+                var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    RapidsProcessor.ProcessRegexPatternsBridgeAsync(
+                        new HashSet<string> { "Alpha123" },
+                        [("alpha", "Alpha[0-9]+")],
+                        ro: false,
+                        off: false,
+                        s: true,
+                        sw: null!,
+                        q: true,
+                        o: string.Empty,
+                        allowCpuFallback: false
+                    )
+                );
+
+                Assert.Contains("fallback is disabled", exception.Message);
             }
         );
     }
@@ -99,13 +157,47 @@ public class RapidsProcessorTests
                 var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
                     RapidsProcessor.ProcessStringsWithRapidsAsync(
                         new[] { "Alpha123" },
-                        [("alpha", "Alpha\\d+")]
+                        [("alpha", "Alpha\\d+")],
+                        cancellationToken: TestContext.Current.CancellationToken
                     )
                 );
 
                 Assert.Contains("RAPIDS is not available", exception.Message);
             }
         );
+    }
+
+    [Fact]
+    public async Task WaitForExitWithDeadlineAsync_KillsANonTerminatingChild()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add("ping -n 30 127.0.0.1 > nul");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add("sleep 30");
+        }
+
+        using var process = new Process { StartInfo = startInfo };
+        process.Start();
+
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            RapidsProcessor.WaitForExitWithDeadlineAsync(
+                process,
+                TimeSpan.FromMilliseconds(100),
+                TestContext.Current.CancellationToken
+            )
+        );
+        Assert.True(process.HasExited);
     }
 
     private static async Task WithRapidsAvailabilityAsync(bool available, Func<Task> assertion)

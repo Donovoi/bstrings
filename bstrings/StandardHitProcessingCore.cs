@@ -41,13 +41,9 @@ internal static class StandardHitProcessingCore
                     new CompiledSearchPattern(
                         resolvePatternName(pattern) ?? pattern,
                         pattern,
-                        new Regex(
-                            pattern,
-                            RegexOptions.IgnoreCase
-                                | RegexOptions.IgnorePatternWhitespace
-                                | RegexOptions.CultureInvariant
-                                | RegexOptions.Compiled,
-                            RegexOutputCore.MatchTimeout
+                        RegexOutputCore.GetOrCreateRegex(
+                            resolvePatternName(pattern) ?? pattern,
+                            pattern
                         )
                     )
                 );
@@ -111,23 +107,16 @@ internal static class StandardHitProcessingCore
         {
             foreach (var regexTarget in compiledRegexes)
             {
-                try
+                if (regexTarget.Regex.IsMatch(parsedHit.Data))
                 {
-                    if (regexTarget.Regex.IsMatch(parsedHit.Data))
-                    {
-                        return new MatchedHit(
-                            hit,
-                            parsedHit.Data,
-                            parsedHit.Offset,
-                            regexTarget.Name,
-                            "Regex",
-                            sourceFile
-                        );
-                    }
-                }
-                catch (RegexMatchTimeoutException)
-                {
-                    continue;
+                    return new MatchedHit(
+                        hit,
+                        parsedHit.Data,
+                        parsedHit.Offset,
+                        regexTarget.Name,
+                        "Regex",
+                        sourceFile
+                    );
                 }
             }
 
