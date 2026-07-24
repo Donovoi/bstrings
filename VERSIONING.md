@@ -1,21 +1,20 @@
 # Versioning and releases
 
-The application version is the semantic version in
-`bstrings/bstrings.csproj`:
+The application version lives in `bstrings/bstrings.csproj`:
 
 ```xml
 <Version>1.9.0</Version>
 ```
 
-Use `MAJOR.MINOR.PATCH`:
+The project uses `MAJOR.MINOR.PATCH`:
 
-- increment `PATCH` for compatible fixes;
-- increment `MINOR` for compatible features;
-- increment `MAJOR` for breaking changes.
+- bump `PATCH` for a compatible fix;
+- bump `MINOR` for a compatible feature; and
+- bump `MAJOR` for a breaking change.
 
-## Update a version
+## Change the version
 
-The helper changes the project file locally:
+The helper updates the project file locally:
 
 ```powershell
 .\Scripts\UpdateVersion.ps1 patch
@@ -23,24 +22,33 @@ The helper changes the project file locally:
 .\Scripts\UpdateVersion.ps1 major
 ```
 
-Review and commit that change normally. Commit-message tokens do not modify
-versions, and CI does not commit changes back to the repository.
+Review the diff and commit it like any other change. Commit-message keywords do
+not change the version, and CI never writes a version commit back to the
+repository.
 
-## Validate and release
+## Validate before tagging
+
+Run the same core steps used by CI:
 
 ```powershell
 dotnet restore bstrings.sln
 dotnet build bstrings.sln -c Release --no-restore
 dotnet test bstrings.sln -c Release --no-build
+```
 
+The GitHub workflow also publishes and packages the self-contained Windows x64
+build. Create a release tag only from a commit whose full `master` workflow has
+passed.
+
+## Create a release
+
+Use a `v`-prefixed tag that matches the project version:
+
+```powershell
 git tag v1.9.0
 git push origin v1.9.0
 ```
 
-Pushes and pull requests validate the project and produce a temporary Windows
-x64 artifact. Only a pushed tag whose name starts with `v` creates a GitHub
-release. The release workflow publishes a self-contained, single-file Windows
-x64 zip.
-
-Create a version tag only from a commit that has passed the full validation
-workflow.
+Pull requests and ordinary pushes build a temporary artifact for validation.
+Only a pushed `v*` tag creates a GitHub release. The release contains the
+self-contained, single-file Windows x64 zip produced by the same workflow.

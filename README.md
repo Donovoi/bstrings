@@ -1,41 +1,50 @@
 # bstrings
 
-`bstrings` extracts code-page and UTF-16LE strings from files, directories, and
-supported raw-disk targets. It can filter the extracted strings with literal or
-regular-expression searches and write text or CSV output.
+`bstrings` pulls readable code-page and UTF-16LE strings from files,
+directories, and supported raw-disk targets. You can keep the complete output
+or narrow it with literal searches, custom regular expressions, and a catalog
+of common forensic patterns.
 
-This fork preserves Eric Zimmerman's original `bstrings` functionality while
-adding a bounded, parallel CPU pipeline, streaming output, expanded tests, and
-native CUDA GPU and CPU+GPU extraction paths.
+This fork keeps Eric Zimmerman's original workflow and adds the pieces needed
+for larger evidence sets: bounded parallel processing, streaming output,
+validated CPU and CUDA paths, safer regex handling, and reproducible tests and
+benchmarks.
 
-## Highlights
+## What this fork adds
 
-- Parallel, bounded chunk processing with ordered, offset-aware results
-- Code-page selection and configurable byte and UTF-16LE character ranges
-- Literal, file-backed, custom-regex, and built-in-regex filtering
-- Text and CSV output, sorting, quiet modes, and optional source offsets
-- Single-file Windows x64 publishing on .NET 9
-- Explicit CPU, CUDA GPU, hybrid CPU+GPU, and benchmark-informed automatic
-  extraction modes
-- Optional RAPIDS/cuDF regex processing when a working installation already
-  exists
+- Bounded, parallel scanning without a hidden result-count limit
+- SIMD CPU, native CUDA GPU, and mixed CPU+GPU extraction
+- Automatic backend selection based on measured crossover points
+- Offset-aware text and CSV output
+- Per-pattern regex options, timeouts, and boundary tests
+- 33 built-in forensic pattern candidates
+- Optional RAPIDS/cuDF prefiltering for compatible built-in regexes
+- A self-contained Windows x64 build produced by CI
 
-`--processor` controls extraction. The CPU path uses the existing SIMD scanner;
-the GPU path runs native ILGPU CUDA kernels; hybrid workers compete for chunks
-from one bounded queue. Every CUDA session runs a CPU/GPU parity check before it
-accepts evidence. Explicit `gpu` requests fail clearly when CUDA is unavailable,
-while `auto` avoids CUDA startup unless the measured size/minimum-length
-crossover is reached.
+For a compact explanation of the safety and concurrency decisions behind these
+changes, see the [engineering notes](ENGINEERING_NOTES.md).
 
-`--use-rapids` is separate and affects regex post-processing only. RAPIDS has a
-different regex feature set from .NET, remains experimental and opt-in.
-Catalog patterns use separately reviewed ASCII-only cuDF superset prefilters;
-every GPU candidate is verified by the authoritative .NET regex. Patterns
-without a safe prefilter—including all custom regexes—stay on CPU. A GPU
-execution failure falls back to CPU only before output begins; later output or
-verification failures are fatal so rows cannot be duplicated. RAPIDS probes
-and child processes have deadlines. `bstrings` does not install Python, CUDA,
-or RAPIDS.
+## Choose the right acceleration path
+
+There are two independent acceleration features. Most users only need the
+first one.
+
+| Feature | What it speeds up | When to use it |
+| --- | --- | --- |
+| `--processor auto|cpu|gpu|hybrid` | Extracting strings from bytes | Use `auto` unless you are testing or deliberately forcing a backend |
+| `--use-rapids` | Applying compatible built-in regexes after extraction | Use only when RAPIDS/cuDF is already installed and working |
+
+The native CUDA extractor validates its output against the CPU implementation
+before accepting a session. An explicit `gpu` request fails clearly when CUDA
+cannot be used. `auto` stays on CPU until the input size and minimum string
+length reach a measured GPU crossover.
+
+RAPIDS is more conservative. It uses a reviewed cuDF pattern only as a broad
+prefilter, then checks every candidate with the normal .NET regex. Custom
+regexes and built-ins without a safe cuDF prefilter remain on CPU. If the GPU
+step fails before writing output, the whole regex request is retried on CPU.
+Failures after output begins are fatal so the tool cannot quietly duplicate or
+mix results. `bstrings` never installs Python, CUDA, or RAPIDS for you.
 
 ## Quick start
 
@@ -43,46 +52,65 @@ or RAPIDS.
 # Extract strings from one file
 .\bstrings.exe -f C:\evidence\image.bin
 
-# Save without printing every hit to the console
+# Save results without printing every hit
 .\bstrings.exe -f C:\evidence\image.bin -s -o C:\results\strings.txt
-
-# Search with a built-in regular expression
-.\bstrings.exe -f C:\evidence\image.bin --lr email --ro -o C:\results\emails.txt
-
-# Use several built-in expressions
-.\bstrings.exe -f C:\evidence\image.bin --lr email,url3986,ipv4 --ro
-
-# Preserve a comma inside a custom regex quantifier
-.\bstrings.exe -f C:\evidence\image.bin --lr "\d{1,3}(?:,\d{3})*"
-
-# Custom regexes use normal .NET case-sensitive syntax; opt in to ignore case
-.\bstrings.exe -f C:\evidence\image.bin --lr "(?i)secret|password"
 
 # Scan a directory recursively
 .\bstrings.exe -d C:\evidence --mask "*.bin" -s -o C:\results\all.txt
 
-# Decode byte strings with Windows-1252 and include the source offset
+# Include source offsets and decode code-page strings as Windows-1252
 .\bstrings.exe -f C:\evidence\image.bin --cp 1252 --off
 
-# Force native CUDA extraction (fails if CUDA validation does not pass)
+# Return only email matches
+.\bstrings.exe -f C:\evidence\image.bin --lr email --ro
+
+# Run several built-in patterns
+.\bstrings.exe -f C:\evidence\image.bin --lr email,url3986,ipv4 --ro
+
+# Use a custom regex containing a comma
+.\bstrings.exe -f C:\evidence\image.bin --lr "\d{1,3}(?:,\d{3})*"
+
+# Custom regexes are case-sensitive unless you opt in to another mode
+.\bstrings.exe -f C:\evidence\image.bin --lr "(?i)secret|password"
+
+# Force native CUDA extraction
 .\bstrings.exe -f C:\evidence\memory.raw --processor gpu -s
 
-# Run CPU and CUDA workers against one work queue
+# Let CPU and CUDA workers share one queue
 .\bstrings.exe -f C:\evidence\disk.img --processor hybrid -s
 
-# Request experimental RAPIDS regex processing
+# Add experimental RAPIDS regex prefiltering
 .\bstrings.exe -f C:\evidence\image.bin --lr all --use-rapids
 ```
 
-Run `bstrings.exe --help` for the complete command reference and
-`bstrings.exe -p` for the built-in regex catalog.
+Run `bstrings.exe --help` for the full command reference. Run
+`bstrings.exe -p` to see every built-in pattern and its current description.
 
-The catalog includes network, Windows, identity, payment-card, encoding, and
-wallet candidates. The reviewed additions are `cve`, `pem_private_key`,
-`named_pipe`, `onion_v3`, `ethereum`, and `sha256`. A regex result is a
-candidate unless the format can be fully established from syntax alone:
-checksums, cryptographic signatures, account existence, and token validity are
-not inferred.
+## Built-in regex catalog
+
+The catalog contains 33 patterns:
+
+- **People and identifiers:** `guid`, `usPhone`, `ssn`, `zip`, `email`,
+  `urlUser`
+- **Networks and addresses:** `ipv4`, `ipv6`, `mac`, `url3986`, `onion_v3`
+- **Windows artifacts:** `unc`, `win_path`, `named_pipe`, `reg_path`, `sid`,
+  `bitlocker`, `var_set`
+- **Content and structured values:** `b64`, `xml`, `pem_private_key`, `sha256`,
+  `cve`, `cc`
+- **Wallet candidates:** `bitcoin`, `aeon`, `bytecoin`, `dashcoin`,
+  `dashcoin2`, `fantomcoin`, `monero`, `sumokoin`, `ethereum`
+
+These are search candidates, not verdicts. A 64-character hexadecimal string
+might be a SHA-256 digest, but the regex cannot establish how it was produced.
+The same limitation applies to checksums, account existence, key validity, and
+payment-card validation.
+
+`urlUser` is capture-aware: with `--ro`, it returns the username-shaped part of
+URL user information, not the password or URL prefix.
+
+The reasoning, sources, rejected candidates, benchmark data, and remaining
+RAPIDS limitation are in
+[the regex review](docs/regex-pattern-research-2026-07.md).
 
 ## Important options
 
@@ -90,54 +118,52 @@ not inferred.
 | --- | --- |
 | `-f <path>` | Scan one file |
 | `-d <path>` | Scan a directory recursively |
-| `-o <path>` | Write results to text, or CSV when the extension is `.csv` |
+| `--mask <glob>` | Limit a directory scan, for example `*.bin` |
+| `--ms <bytes>` | Skip larger files during a directory scan |
+| `-o <path>` | Write text output, or CSV when the filename ends in `.csv` |
 | `-a <bool>` | Enable or disable code-page strings; enabled by default |
 | `-u <bool>` | Enable or disable UTF-16LE strings; enabled by default |
 | `-m <n>` | Minimum string length; default `3` |
 | `-x <n>` | Maximum string length; unlimited by default |
-| `-b <MB>` | Chunk size from 1 to 1024 MB; `0` selects automatically |
+| `-b <MB>` | Chunk size from 1 to 1024 MB; `0` chooses automatically |
 | `-q` | Hide the header and final summary |
 | `-s` | Do not print hits to the console |
 | `--ls <text>` | Return strings containing literal text |
-| `--lr <value>` | Built-in names, a custom regex, comma-separated names, or `all` |
+| `--lr <value>` | Use built-in names, a custom regex, a comma-separated list, or `all` |
 | `--fs <path>` | Read literal searches from a file |
 | `--fr <path>` | Read regex searches from a file |
-| `--ar <range>` | Code-page byte range, such as `[\x20-\x7E]` |
-| `--ur <range>` | UTF-16LE range, such as `[\u0020-\u007E]` |
-| `--cp <id>` | Code page used to decode byte strings; default `1252` |
-| `--ro` | Output the regex match rather than the whole extracted string |
+| `--ar <range>` | Set the code-page byte range, such as `[\x20-\x7E]` |
+| `--ur <range>` | Set the UTF-16LE range, such as `[\u0020-\u007E]` |
+| `--cp <id>` | Choose the code page; default `1252` |
+| `--ro` | Write the matched part instead of the full extracted string |
 | `--off` | Include source byte offsets |
 | `--sa` / `--sl` | Sort alphabetically or by length |
-| `--processor <mode>` | Extraction mode: `auto`, `cpu`, `gpu`, or `hybrid` |
-| `--use-rapids` | Try an existing RAPIDS/cuDF installation |
+| `--processor <mode>` | Choose `auto`, `cpu`, `gpu`, or `hybrid` extraction |
+| `--use-rapids` | Try an existing RAPIDS/cuDF installation for regex prefiltering |
 
-`--force-rapids` remains as a deprecated compatibility alias for
-`--use-rapids`; it does not install third-party software.
+`--force-rapids` is retained as a deprecated alias for `--use-rapids`. Despite
+the old name, it does not install or force unsupported software.
 
-## Output and memory behavior
+## Output safety and memory use
 
-Unfiltered, unsorted text output can stream directly to disk. Filtering,
-sorting, regex-only output, and CSV generation require post-processing and are
-therefore collected before the final output is written. Large result sets can
-still require substantial memory when one of those modes is used.
+Plain, unsorted output can stream to disk as strings are found. Sorting,
+filtering, regex-only output, and CSV generation need post-processing and can
+use considerably more memory on a large image.
 
-No hidden result-count limit is applied. If a run cannot fit in available
-memory, narrow the search, increase the minimum string length, or use
-unfiltered text output.
+When `-o` is active, bstrings creates a sibling
+`<output>.incomplete` marker. The marker is removed only after the run
+finishes successfully. If the process exits nonzero or the marker remains, do
+not treat that output as a complete evidence set.
 
-When `-o` is used, a sibling `<output>.incomplete` marker exists for the
-duration of the run. It is removed only after successful completion. A
-nonzero exit or a remaining marker means the output must not be treated as a
-complete result set.
+Regex matching uses a two-second per-evaluation timeout. The first timeout
+stops new regex work and fails the run instead of silently dropping the
+problematic evidence item.
 
 ## Build and test
 
-Requirements:
-
-- .NET 9 SDK
-- Windows for the supported `win-x64` release artifact
-- NVIDIA CUDA-capable GPU and driver only for `gpu`/`hybrid`; CPU mode has no
-  GPU dependency
+You need the .NET 9 SDK. A CUDA-capable NVIDIA GPU and driver are optional and
+used only for `gpu` or `hybrid` extraction. The supported release artifact is
+Windows x64.
 
 ```powershell
 dotnet restore bstrings.sln
@@ -152,50 +178,42 @@ dotnet publish bstrings\bstrings.csproj `
   -p:PublishSingleFile=true
 ```
 
-The benchmark corpus generator accepts a size in MiB and an output path:
+To generate a repeatable extraction corpus:
 
 ```powershell
 dotnet run --project dev-tools\benchmark-generator -- 256 .\benchmark-256mb.dmp
 ```
 
-The deterministic regex microbenchmark compares the adaptive production
-topology with forced hit-major and pattern-major processing through the same
-matching/output code. It accepts hit count, repetitions, and one to five
-representative built-ins:
+To compare adaptive, forced hit-major, and forced pattern-major regex
+scheduling:
 
 ```powershell
-dotnet run --project dev-tools\regex-benchmark -c Release -- 2000000 7 1
+dotnet run --project dev-tools\regex-benchmark -c Release -- 2000000 7 5
 ```
 
-CPU regex scheduling is hardware-aware. At 10,000 or more hits, requests with
-fewer patterns than logical processors partition hits so small pattern sets do
-not leave most cores idle. Smaller requests, and requests with enough patterns
-to fill the machine, partition patterns. Both paths cap concurrency at
-`Environment.ProcessorCount`.
-
-The standards evidence, rejected candidates, engine restrictions, and remaining
-limits are recorded in
-[docs/regex-pattern-research-2026-07.md](docs/regex-pattern-research-2026-07.md).
+The three arguments are hit count, repetitions, and number of representative
+patterns. On the reviewed 22-logical-processor host, the adaptive policy uses
+hit-major scheduling when there are at least 10,000 hits and fewer patterns
+than logical processors. Other workloads use pattern-major scheduling. The
+benchmark is included so that policy can be checked on different hardware
+rather than treated as universal.
 
 ## Releases
 
-Pull requests and pushes to `master` run restore, build, test, and publish
-validation. A GitHub release is created only when a tag beginning with `v` is
-pushed. See [VERSIONING.md](VERSIONING.md) for the release procedure.
+Every pull request and push to `master` restores, builds, tests, publishes, and
+packages the Windows x64 artifact. Only a pushed tag beginning with `v` creates
+a GitHub release. See [VERSIONING.md](VERSIONING.md) for the release steps.
 
 ## Attribution
 
-Original project and continuing upstream development:
-[EricZimmerman/bstrings](https://github.com/EricZimmerman/bstrings).
+`bstrings` was created by
+[Eric Zimmerman](https://github.com/EricZimmerman/bstrings). This fork is
+maintained at [Donovoi/bstrings](https://github.com/Donovoi/bstrings).
 
-Fork enhancements:
-[Donovoi/bstrings](https://github.com/Donovoi/bstrings).
-
-Project documentation:
+The original project announcement is
 [Introducing bstrings, a Better Strings utility!](https://binaryforay.blogspot.com/2015/07/introducing-bstrings-better-strings.html).
-
-Open-source development funding and support for the original project was
-provided by [SANS Institute](https://www.sans.org/) and
+The original project also received support from
+[SANS Institute](https://www.sans.org/) and
 [SANS DFIR](https://www.sans.org/digital-forensics-incident-response/).
 
 See [LICENSE.md](LICENSE.md) for licensing terms.

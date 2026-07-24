@@ -3,11 +3,11 @@
     <OutputType>Exe</OutputType>
     <TargetFrameworks>net9.0</TargetFrameworks>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-    <AssemblyTitle>bstrings - Multi-Core Optimized</AssemblyTitle>
-    <Company>Eric Zimmerman (Enhanced by AI)</Company>
+    <AssemblyTitle>bstrings</AssemblyTitle>
+    <Company>Eric Zimmerman</Company>
     <LangVersion>12</LangVersion>
     <Product>bstrings</Product>
-    <Description>A better strings utility with parallel SIMD CPU, native CUDA GPU, hybrid extraction, bounded streaming, and optional RAPIDS regex acceleration</Description>
+    <Description>Extract strings with parallel CPU, CUDA, hybrid CPU/GPU, and optional RAPIDS-assisted regex processing</Description>
     <Copyright>Eric Zimmerman</Copyright>
     <Version>1.9.0</Version>
     <IsPackable>false</IsPackable>
