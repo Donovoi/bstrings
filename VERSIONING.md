@@ -4,7 +4,7 @@ The application version is the semantic version in
 `bstrings/bstrings.csproj`:
 
 ```xml
-<Version>1.8.6</Version>
+<Version>1.9.0</Version>
 ```
 
 Use `MAJOR.MINOR.PATCH`:
@@ -33,8 +33,8 @@ dotnet restore bstrings.sln
 dotnet build bstrings.sln -c Release --no-restore
 dotnet test bstrings.sln -c Release --no-build
 
-git tag v1.8.7
-git push origin v1.8.7
+git tag v1.9.0
+git push origin v1.9.0
 ```
 
 Pushes and pull requests validate the project and produce a temporary Windows

@@ -6,7 +6,7 @@ regular-expression searches and write text or CSV output.
 
 This fork preserves Eric Zimmerman's original `bstrings` functionality while
 adding a bounded, parallel CPU pipeline, streaming output, expanded tests, and
-an optional experimental NVIDIA RAPIDS regex path.
+native CUDA GPU and CPU+GPU extraction paths.
 
 ## Highlights
 
@@ -15,13 +15,22 @@ an optional experimental NVIDIA RAPIDS regex path.
 - Literal, file-backed, custom-regex, and built-in-regex filtering
 - Text and CSV output, sorting, quiet modes, and optional source offsets
 - Single-file Windows x64 publishing on .NET 9
+- Explicit CPU, CUDA GPU, hybrid CPU+GPU, and benchmark-informed automatic
+  extraction modes
 - Optional RAPIDS/cuDF regex processing when a working installation already
   exists
 
-The normal scanner uses the CPU. `--use-rapids` affects regex processing only;
-it does not accelerate string extraction. RAPIDS support is experimental and
-falls back to the CPU regex engine when initialization or processing fails.
-`bstrings` does not install Python, CUDA, or RAPIDS.
+`--processor` controls extraction. The CPU path uses the existing SIMD scanner;
+the GPU path runs native ILGPU CUDA kernels; hybrid workers compete for chunks
+from one bounded queue. Every CUDA session runs a CPU/GPU parity check before it
+accepts evidence. Explicit `gpu` requests fail clearly when CUDA is unavailable,
+while `auto` avoids CUDA startup unless the measured size/minimum-length
+crossover is reached.
+
+`--use-rapids` is separate and affects regex post-processing only. RAPIDS has a
+different regex feature set from .NET, remains experimental and opt-in, and
+falls back to the authoritative CPU regex engine when initialization or a
+pattern fails. `bstrings` does not install Python, CUDA, or RAPIDS.
 
 ## Quick start
 
@@ -46,6 +55,12 @@ falls back to the CPU regex engine when initialization or processing fails.
 
 # Decode byte strings with Windows-1252 and include the source offset
 .\bstrings.exe -f C:\evidence\image.bin --cp 1252 --off
+
+# Force native CUDA extraction (fails if CUDA validation does not pass)
+.\bstrings.exe -f C:\evidence\memory.raw --processor gpu -s
+
+# Run CPU and CUDA workers against one work queue
+.\bstrings.exe -f C:\evidence\disk.img --processor hybrid -s
 
 # Request experimental RAPIDS regex processing
 .\bstrings.exe -f C:\evidence\image.bin --lr all --use-rapids
@@ -78,6 +93,7 @@ Run `bstrings.exe --help` for the complete command reference and
 | `--ro` | Output the regex match rather than the whole extracted string |
 | `--off` | Include source byte offsets |
 | `--sa` / `--sl` | Sort alphabetically or by length |
+| `--processor <mode>` | Extraction mode: `auto`, `cpu`, `gpu`, or `hybrid` |
 | `--use-rapids` | Try an existing RAPIDS/cuDF installation |
 
 `--force-rapids` remains as a deprecated compatibility alias for
@@ -100,6 +116,8 @@ Requirements:
 
 - .NET 9 SDK
 - Windows for the supported `win-x64` release artifact
+- NVIDIA CUDA-capable GPU and driver only for `gpu`/`hybrid`; CPU mode has no
+  GPU dependency
 
 ```powershell
 dotnet restore bstrings.sln
@@ -108,6 +126,7 @@ dotnet test bstrings.sln -c Release --no-build
 
 dotnet publish bstrings\bstrings.csproj `
   -c Release `
+  -f net9.0 `
   -r win-x64 `
   --self-contained true `
   -p:PublishSingleFile=true

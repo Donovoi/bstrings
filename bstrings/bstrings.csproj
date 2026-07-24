@@ -7,9 +7,9 @@
     <Company>Eric Zimmerman (Enhanced by AI)</Company>
     <LangVersion>12</LangVersion>
     <Product>bstrings</Product>
-    <Description>A better strings utility with parallel CPU processing, bounded streaming, and optional RAPIDS regex acceleration</Description>
+    <Description>A better strings utility with parallel SIMD CPU, native CUDA GPU, hybrid extraction, bounded streaming, and optional RAPIDS regex acceleration</Description>
     <Copyright>Eric Zimmerman</Copyright>
-    <Version>1.8.6</Version>
+    <Version>1.9.0</Version>
     <IsPackable>false</IsPackable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
@@ -17,6 +17,7 @@
     <ApplicationIcon>Find Again256.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="ILGPU" Version="1.5.3" />
     <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.10" />
   </ItemGroup>
   <ItemGroup>

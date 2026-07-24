@@ -23,14 +23,19 @@ and corrected several issues:
 - CI now tests every pull request and creates releases only from explicit
   version tags.
 
-The normal scanner is a parallel CPU implementation. The old ILGPU experiment
-was not connected to the active scanning pipeline and must not be described as
-a working acceleration path.
+The active scanner now has three independently selectable paths: the optimized
+SIMD CPU implementation, native ILGPU CUDA kernels, and a hybrid bounded queue
+served by both. CUDA initialization includes an actual CPU/GPU result-parity
+self-test. `auto` uses benchmark-informed size and minimum-length crossover
+rules, while explicit `gpu` requests fail instead of silently pretending to use
+the GPU. Automatic chunk sizing now targets enough chunks to keep workers busy.
 
 RAPIDS remains optional and experimental. It invokes a separately installed
-Python/cuDF environment for regex processing and falls back to the CPU path on
-failure. Automatic third-party installation was intentionally disabled because
-the earlier installer was not reliable or verifiable.
+Python/cuDF environment for regex post-processing, not extraction. Its startup
+probe exercises the requested case-insensitive API, individual pattern errors
+abort the entire GPU result rather than returning partial evidence, and the
+bridge verifies returned candidates with the .NET regex engine. Automatic
+third-party installation remains disabled.
 
 Performance claims should be accompanied by the corpus, command line, hardware,
 run count, and raw measurements. Do not retain historical estimates as if they
