@@ -256,6 +256,28 @@ public class BuiltInPatternCatalogTests
         );
     }
 
+    [Fact]
+    public void BacktrackingBuiltIns_HaveBoundedOrLinearLargeInputHandling()
+    {
+        var specializedLinearMatchers = new HashSet<string>(
+            ["b64", "xml"],
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        foreach (
+            var definition in BuiltInPatternCatalog.Definitions.Where(
+                definition => !definition.UseNonBacktracking
+            )
+        )
+        {
+            Assert.True(
+                definition.BoundedRetryOverlap is > 0
+                    || specializedLinearMatchers.Contains(definition.Name),
+                $"{definition.Name} has no safe large-input timeout strategy"
+            );
+        }
+    }
+
     [Theory]
     [InlineData(@"(?<!x)y")]
     [InlineData(@"(?<name>x)")]
@@ -484,9 +506,120 @@ public class BuiltInPatternCatalogTests
                 testCase.Name,
                 BuiltInPatternCatalog.Patterns[testCase.Name]
             );
+            var records = RegexOutputCore
+                .CreateRecords(
+                    new ParsedHit(testCase.Input, testCase.Input, string.Empty),
+                    testCase.Name,
+                    regex,
+                    regexOutput: true,
+                    sourceFile: "sample.bin",
+                    patternType: "Regex"
+                )
+                .ToList();
 
-            Assert.Equal(testCase.Expected, regex.Match(testCase.Input).Value);
+            Assert.Equal(testCase.Expected, Assert.Single(records).DataFound);
         }
+    }
+
+    [Fact]
+    public void LinearBase64Matcher_PreservesRegexResultsAcrossRandomInputs()
+    {
+        const string alphabet =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=!?.: ";
+        var random = new Random(0xB64);
+        var regex = RegexOutputCore.GetOrCreateRegex(
+            "b64",
+            BuiltInPatternCatalog.Patterns["b64"]
+        );
+
+        for (var sample = 0; sample < 2_000; sample++)
+        {
+            var length = random.Next(0, 160);
+            var input = new string(
+                Enumerable
+                    .Range(0, length)
+                    .Select(_ => alphabet[random.Next(alphabet.Length)])
+                    .ToArray()
+            );
+            var expected = regex.Matches(input).Select(match => match.Value).ToList();
+            var actual = RegexOutputCore
+                .CreateRecords(
+                    new ParsedHit(input, input, string.Empty),
+                    "b64",
+                    regex,
+                    regexOutput: true,
+                    sourceFile: "sample.bin",
+                    patternType: "Regex"
+                )
+                .Select(record => record.DataFound)
+                .ToList();
+
+            Assert.True(
+                expected.SequenceEqual(actual),
+                $"Input: {input}\nExpected: {string.Join(" | ", expected)}\n"
+                    + $"Actual: {string.Join(" | ", actual)}"
+            );
+        }
+    }
+
+    [Fact]
+    public void LinearBase64Matcher_HandlesVeryLargeToken()
+    {
+        var input = new string('A', 20 * 1024 * 1024);
+        var regex = RegexOutputCore.GetOrCreateRegex(
+            "b64",
+            BuiltInPatternCatalog.Patterns["b64"]
+        );
+        var record = Assert.Single(
+            RegexOutputCore.CreateRecords(
+                new ParsedHit(input, input, string.Empty),
+                "b64",
+                regex,
+                regexOutput: true,
+                sourceFile: "sample.bin",
+                patternType: "Regex"
+            )
+        );
+
+        Assert.Equal(input.Length, record.DataFound.Length);
+    }
+
+    [Fact]
+    public void LinearXmlMatcher_PreservesSimpleElementRegexSemantics()
+    {
+        var regex = RegexOutputCore.GetOrCreateRegex(
+            "xml",
+            BuiltInPatternCatalog.Patterns["xml"]
+        );
+        var inputs = new[]
+        {
+            "<Root>value</Root>",
+            "<Root id=\"1\">value</Root>",
+            "<R1></R1>",
+            "<Root>one</Root><Root>two</Root>",
+            "<Root>value</root>",
+            "<Root>line\nnext</Root>",
+            "<Root_>value</Root_>",
+            "<1Root>value</1Root>",
+            "<Root>",
+            string.Empty,
+        };
+
+        foreach (var input in inputs)
+        {
+            Assert.Equal(
+                regex.IsMatch(input),
+                RegexOutputCore.IsSimpleXmlElementMatch(input)
+            );
+        }
+    }
+
+    [Fact]
+    public void LinearXmlMatcher_HandlesVeryLargeElement()
+    {
+        var value = "<Root id=\"1\">" + new string('x', 20 * 1024 * 1024) + "</Root>";
+
+        Assert.True(RegexOutputCore.IsSimpleXmlElementMatch(value));
     }
 
     [Fact]
