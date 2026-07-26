@@ -929,11 +929,26 @@ public static partial class Program
             var counter = 0;
             var hits = new HashSet<string>();
             var rawResultsStreamed = false;
+            var regexResultsStreamed = false;
             var withBoundaryHits = false;
 
             // Parse multiple patterns from lr parameter
             var regexPatternsWithNames = ParseRegexPatternsWithNames(lr);
             var regexPatterns = regexPatternsWithNames.Select(p => p.pattern).ToList();
+            var canStreamRegexResults =
+                sw is not null
+                && o.Length > 0
+                && regexPatterns.Count > 0
+                && off
+                && s
+                && q
+                && !sa
+                && !sl
+                && string.IsNullOrWhiteSpace(ls)
+                && string.IsNullOrWhiteSpace(fs)
+                && string.IsNullOrWhiteSpace(fr)
+                && !useRapids
+                && !forceRapids;
             var requiresPostProcessing =
                 isCsvOutput
                 || sa
@@ -944,6 +959,21 @@ public static partial class Program
                 || regexPatterns.Count > 0;
             var canStreamRawResults =
                 sw is not null && o.Length > 0 && !requiresPostProcessing;
+            var streamingRegexOutput = canStreamRegexResults
+                ? new StreamingRegexOutputCore(
+                    regexPatternsWithNames,
+                    ro,
+                    off,
+                    isCsvOutput,
+                    currentFile
+                )
+                : null;
+
+            if (canStreamRegexResults && isCsvOutput && !csvHeaderWritten)
+            {
+                await sw.WriteLineAsync(RegexOutputCore.CsvHeader);
+                csvHeaderWritten = true;
+            }
 
             if (regexPatterns.Count > 0 && !q)
             {
@@ -1099,7 +1129,8 @@ public static partial class Program
                 { // Process main chunks concurrently with streaming output for memory efficiency
                     if (sw != null && o.Length > 0)
                     {
-                        StreamWriter outputWriter = canStreamRawResults ? sw : null;
+                        StreamWriter outputWriter =
+                            canStreamRawResults || canStreamRegexResults ? sw : null;
                         await ProcessFileChunksConcurrentlyStreamingAsync(
                             mappedStream,
                             fileSizeBytes,
@@ -1116,11 +1147,17 @@ public static partial class Program
                             totalChunks,
                             progressTracker,
                             outputWriter,
-                            hits,
+                            canStreamRegexResults ? null : hits,
                             processingBackend,
-                            processingMode
+                            processingMode,
+                            canStreamRegexResults
+                                ? new Func<List<string>, List<string>>(
+                                    streamingRegexOutput!.TransformMainBatch
+                                )
+                                : null
                         );
                         rawResultsStreamed = canStreamRawResults;
+                        regexResultsStreamed = canStreamRegexResults;
                     }
                     else
                     {
@@ -1160,7 +1197,8 @@ public static partial class Program
                     // Process boundary chunks concurrently with streaming for memory efficiency
                     if (sw != null && o.Length > 0)
                     {
-                        StreamWriter boundaryOutputWriter = canStreamRawResults ? sw : null;
+                        StreamWriter boundaryOutputWriter =
+                            canStreamRawResults || canStreamRegexResults ? sw : null;
                         var boundaryResults = await ProcessBoundaryChunksConcurrentlyStreamingAsync(
                             mappedStream,
                             fileSizeBytes,
@@ -1176,9 +1214,14 @@ public static partial class Program
                             ur,
                             q,
                             boundaryOutputWriter,
-                            hits,
+                            canStreamRegexResults ? null : hits,
                             processingBackend,
-                            boundaryProcessingMode
+                            boundaryProcessingMode,
+                            canStreamRegexResults
+                                ? new Func<List<string>, List<string>>(
+                                    streamingRegexOutput!.TransformBoundaryBatch
+                                )
+                                : null
                         );
                         withBoundaryHits |= boundaryResults > 0;
                     }
@@ -1283,7 +1326,12 @@ public static partial class Program
 
             // Skip expensive post-processing if results are already written to file and no console output needed
             bool hasPatternProcessing = fileStrings.Count > 0 || regexStrings.Count > 0;
-            if (regexPatterns.Count > 0)
+            if (regexResultsStreamed)
+            {
+                counter = (int)Math.Min(streamingRegexOutput!.OutputRowCount, int.MaxValue);
+                goto skipGeneralProcessing;
+            }
+            else if (regexPatterns.Count > 0)
             { // Try RAPIDS processing if enabled and available
                 var rapidsRequested = useRapids || forceRapids;
                 var canUseRapidsForRun =
@@ -2351,7 +2399,8 @@ public static partial class Program
         StreamWriter outputWriter = null,
         HashSet<string> resultsSet = null,
         ProcessingBackendSession processingBackend = null,
-        ProcessingMode processingMode = ProcessingMode.Cpu
+        ProcessingMode processingMode = ProcessingMode.Cpu,
+        Func<List<string>, List<string>> resultTransform = null
     )
     {
         using var pipeline = new ChunkProcessingPipeline(
@@ -2381,7 +2430,8 @@ public static partial class Program
             ur,
             progressTracker,
             outputWriter,
-            resultsSet
+            resultsSet,
+            resultTransform
         );
 
         return totalResults;
@@ -2511,7 +2561,8 @@ public static partial class Program
         StreamWriter outputWriter = null,
         HashSet<string> resultsSet = null,
         ProcessingBackendSession processingBackend = null,
-        ProcessingMode processingMode = ProcessingMode.Cpu
+        ProcessingMode processingMode = ProcessingMode.Cpu,
+        Func<List<string>, List<string>> resultTransform = null
     )
     {
         using var pipeline = new ChunkProcessingPipeline(
@@ -2548,7 +2599,8 @@ public static partial class Program
             ur,
             new ProgressTracker(Math.Max(1, boundaryChunkCount), quiet),
             outputWriter,
-            resultsSet
+            resultsSet,
+            resultTransform
         );
 
         return totalResults;
@@ -2814,7 +2866,10 @@ public static partial class Program
             };
 
             var resultChannelOptions = new BoundedChannelOptions(
-                ConcurrentConfig.ProducerConsumerBufferSize * 2
+                Math.Max(
+                    4,
+                    Math.Min(16, ConcurrentConfig.ProducerConsumerBufferSize / 4)
+                )
             )
             {
                 FullMode = BoundedChannelFullMode.Wait,
@@ -2845,7 +2900,8 @@ public static partial class Program
             string ur,
             ProgressTracker progressTracker,
             StreamWriter outputWriter = null,
-            HashSet<string> resultsSet = null
+            HashSet<string> resultsSet = null,
+            Func<List<string>, List<string>> resultTransform = null
         )
         {
             var totalResultCount = 0L;
@@ -2858,7 +2914,8 @@ public static partial class Program
                 cp,
                 ar,
                 ur,
-                progressTracker
+                progressTracker,
+                resultTransform
             );
             var resultCollectionTask = CollectResultsStreamingAsync(outputWriter, resultsSet);
 
@@ -2869,6 +2926,14 @@ public static partial class Program
                 {
                     await _chunkWriter.WriteAsync(chunk, _cancellationTokenSource.Token);
                 }
+            }
+            catch (OperationCanceledException) when (_cancellationTokenSource.IsCancellationRequested)
+            {
+                // A worker cancels the shared token before rethrowing its real failure.
+                // Await it here so callers receive that failure instead of a masked
+                // channel cancellation from the producer.
+                await processingTask;
+                throw;
             }
             finally
             {
@@ -2921,6 +2986,11 @@ public static partial class Program
                     await _chunkWriter.WriteAsync(chunk, _cancellationTokenSource.Token);
                 }
             }
+            catch (OperationCanceledException) when (_cancellationTokenSource.IsCancellationRequested)
+            {
+                await processingTask;
+                throw;
+            }
             finally
             {
                 _chunkWriter.Complete();
@@ -2945,7 +3015,8 @@ public static partial class Program
             int cp,
             string ar,
             string ur,
-            ProgressTracker progressTracker
+            ProgressTracker progressTracker,
+            Func<List<string>, List<string>> resultTransform = null
         )
         {
             var gpuWorkers =
@@ -2975,7 +3046,8 @@ public static partial class Program
                         cp,
                         ar,
                         ur,
-                        progressTracker
+                        progressTracker,
+                        resultTransform
                     )
                 );
             }
@@ -2993,7 +3065,8 @@ public static partial class Program
                         cp,
                         ar,
                         ur,
-                        progressTracker
+                        progressTracker,
+                        resultTransform
                     )
                 );
             }
@@ -3011,7 +3084,8 @@ public static partial class Program
             int cp,
             string ar,
             string ur,
-            ProgressTracker progressTracker
+            ProgressTracker progressTracker,
+            Func<List<string>, List<string>> resultTransform = null
         )
         {
             await foreach (var chunk in _chunkReader.ReadAllAsync(_cancellationTokenSource.Token))
@@ -3078,8 +3152,14 @@ public static partial class Program
                         _processingBackend?.RecordCpuChunk();
                     }
 
+                    var extractedCount = results.Count;
+                    if (resultTransform is not null)
+                    {
+                        results = resultTransform(results);
+                    }
+
                     await _resultWriter.WriteAsync(results, _cancellationTokenSource.Token);
-                    progressTracker.ReportChunkComplete(results.Count);
+                    progressTracker.ReportChunkComplete(extractedCount);
                 }
                 catch (OperationCanceledException)
                 {
