@@ -16,10 +16,20 @@ internal static class ChunkProcessingCore
         bool includeOffset,
         string asciiRange,
         string unicodeRange,
-        int codePage = 1252
+        int codePage = 1252,
+        bool suppressLeadingFragment = false,
+        bool suppressTrailingFragment = false,
+        int boundaryCrossingOffset = 0
     )
     {
         var results = new List<string>();
+        var ownership = new ChunkHitOwnership(
+            suppressLeadingFragment,
+            suppressTrailingFragment,
+            isBoundaryChunk
+                ? (boundaryCrossingOffset > 0 ? boundaryCrossingOffset : chunk.Length / 2)
+                : -1
+        );
 
         if (unicodeSearch)
         {
@@ -30,7 +40,8 @@ internal static class ChunkProcessingCore
                     maxLength,
                     fileOffset,
                     includeOffset,
-                    unicodeRange
+                    unicodeRange,
+                    ownership
                 )
             )
             {
@@ -48,7 +59,8 @@ internal static class ChunkProcessingCore
                     fileOffset,
                     includeOffset,
                     asciiRange,
-                    codePage
+                    codePage,
+                    ownership
                 )
             )
             {

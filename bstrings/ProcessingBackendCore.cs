@@ -201,7 +201,10 @@ internal sealed class ProcessingBackendSession : IDisposable
             includeOffset,
             codePage,
             asciiRange,
-            unicodeRange
+            unicodeRange,
+            chunk.SuppressLeadingFragment,
+            chunk.SuppressTrailingFragment,
+            chunk.BoundaryCrossingOffset
         );
         Interlocked.Increment(ref _gpuChunks);
         return results;

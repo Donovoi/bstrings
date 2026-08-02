@@ -125,6 +125,9 @@ public static partial class Program
         public long FileOffset;
         public int ChunkIndex;
         public bool IsBoundaryChunk;
+        public int BoundaryCrossingOffset;
+        public bool SuppressLeadingFragment;
+        public bool SuppressTrailingFragment;
     }
 
     /// <summary>
@@ -1232,7 +1235,11 @@ public static partial class Program
                             mappedStream,
                             fileSizeBytes,
                             chunkSizeBytes,
-                            checked(minLength * 40), // boundaryChunkSize
+                            BoundarySizingCore.CalculateWindowSize(
+                                chunkSizeBytes,
+                                minLength,
+                                maxLength
+                            ),
                             minLength,
                             maxLength,
                             a,
@@ -1261,7 +1268,11 @@ public static partial class Program
                                 mappedStream,
                                 fileSizeBytes,
                                 chunkSizeBytes,
-                                checked(minLength * 40), // boundaryChunkSize
+                                BoundarySizingCore.CalculateWindowSize(
+                                    chunkSizeBytes,
+                                    minLength,
+                                    maxLength
+                                ),
                                 minLength,
                                 maxLength,
                                 a,
@@ -1663,7 +1674,10 @@ public static partial class Program
             off,
             ar,
             ur,
-            cp
+            cp,
+            chunk.SuppressLeadingFragment,
+            chunk.SuppressTrailingFragment,
+            chunk.BoundaryCrossingOffset
         );
         chunkStopwatch.Stop();
         if (_debug)
@@ -2584,11 +2598,8 @@ public static partial class Program
             processingMode
         );
 
-        long offset = Math.Max(0, chunkSizeBytes - minLength * 20L);
-        var boundaryChunkCount =
-            offset + boundaryChunkSize > fileSizeBytes
-                ? 1
-                : ((fileSizeBytes - boundaryChunkSize - offset) / chunkSizeBytes) + 1;
+        long offset = Math.Max(0, chunkSizeBytes - boundaryChunkSize / 2L);
+        var boundaryChunkCount = Math.Max(0, (fileSizeBytes - 1) / chunkSizeBytes);
 
         // Create async enumerable of boundary chunks
         var chunks = ReadChunksAsyncEnumerable(
@@ -2647,11 +2658,8 @@ public static partial class Program
             processingMode
         );
 
-        long offset = Math.Max(0, chunkSizeBytes - minLength * 20L);
-        var boundaryChunkCount =
-            offset + boundaryChunkSize > fileSizeBytes
-                ? 1
-                : ((fileSizeBytes - boundaryChunkSize - offset) / chunkSizeBytes) + 1;
+        long offset = Math.Max(0, chunkSizeBytes - boundaryChunkSize / 2L);
+        var boundaryChunkCount = Math.Max(0, (fileSizeBytes - 1) / chunkSizeBytes);
 
         // Create async enumerable of boundary chunks
         var chunks = ReadChunksAsyncEnumerable(
