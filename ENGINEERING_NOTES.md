@@ -18,14 +18,18 @@ output look complete.
 - Regex timeouts and output failures produce a nonzero exit instead of quietly
   discarding matches.
 
-Plain, unsorted extraction can still stream directly to disk. Operations that
-need a complete view of the hits—such as sorting, CSV formatting, and regex
-filtering—retain data for post-processing and may need more memory.
+Plain, unsorted extraction can stream directly to disk. Literal targets are
+compiled once into a .NET 9 multi-string `SearchValues` matcher and applied to
+each bounded batch, before global deduplication. Operations that need a complete
+view of the remaining hits—such as sorting and regex workflows outside the
+streaming path—may still need more memory.
 
 ## Extraction has three real backends
 
-The CPU scanner uses SIMD. The GPU scanner runs native ILGPU CUDA kernels. In
-`hybrid` mode, CPU and CUDA workers take chunks from the same bounded queue.
+The CPU scanner uses AVX2 or SSE2 when available and keeps a scalar fallback.
+It consumes SIMD validity masks by contiguous runs instead of branching once
+per byte. The GPU scanner runs native ILGPU CUDA kernels. In `hybrid` mode, CPU
+and CUDA workers take chunks from the same bounded queue.
 
 CUDA is not accepted merely because a device exists. Each session runs a small
 CPU/GPU parity check first. If an explicit `gpu` request cannot pass that

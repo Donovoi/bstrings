@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
@@ -265,64 +266,74 @@ internal static class SearchCore
     {
         var hits = new List<StringHitPosition>(Math.Min(data.Length / 64, 4096));
 
-        if (data.Length == 0)
+        if (data.Length == 0 || minChar > maxChar)
         {
             return hits;
         }
 
         fixed (byte* dataPtr = data)
         {
-            int stringStart = -1;
-            int i = 0;
+            var stringStart = -1;
+            var position = 0;
 
-            if (Sse2.IsSupported && data.Length >= 16)
+            if (Avx2.IsSupported && data.Length >= Vector256<byte>.Count)
             {
-                var minVecSigned = Vector128.Create((sbyte)(minChar - 128));
-                var maxVecSigned = Vector128.Create((sbyte)(maxChar - 128));
+                var minVector = Vector256.Create(minChar);
+                var maxVector = Vector256.Create(maxChar);
 
-                for (; i <= data.Length - 16; i += 16)
+                for (; position <= data.Length - Vector256<byte>.Count; position += Vector256<byte>.Count)
                 {
-                    var chunk = Sse2.LoadVector128(dataPtr + i);
-                    var chunkSigned = Sse2.Subtract(
-                        chunk.AsSByte(),
-                        Vector128.Create(unchecked((sbyte)128))
+                    var block = Avx.LoadVector256(dataPtr + position);
+                    var atLeastMin = Avx2.CompareEqual(Avx2.Max(block, minVector), block);
+                    var atMostMax = Avx2.CompareEqual(Avx2.Min(block, maxVector), block);
+                    var validMask = (uint)Avx2.MoveMask(
+                        Avx2.And(atLeastMin, atMostMax).AsSByte()
                     );
-
-                    var geMin = Sse2.CompareGreaterThan(
-                        chunkSigned,
-                        Sse2.Subtract(minVecSigned, Vector128.Create((sbyte)1))
+                    ProcessValidityMask(
+                        validMask,
+                        Vector256<byte>.Count,
+                        position,
+                        ref stringStart,
+                        minLength,
+                        maxLength,
+                        fileOffset,
+                        hits
                     );
-                    var leMax = Sse2.CompareGreaterThan(
-                        Sse2.Add(maxVecSigned, Vector128.Create((sbyte)1)),
-                        chunkSigned
-                    );
-                    var isValid = Sse2.And(geMin, leMax);
-
-                    uint mask = (uint)Sse2.MoveMask(isValid);
-
-                    for (int bit = 0; bit < 16; bit++)
-                    {
-                        bool charValid = (mask & (1u << bit)) != 0;
-                        ProcessCharForStringHit(
-                            charValid,
-                            i + bit,
-                            ref stringStart,
-                            minLength,
-                            maxLength,
-                            fileOffset,
-                            hits
-                        );
-                    }
                 }
             }
 
-            for (; i < data.Length; i++)
+            if (Sse2.IsSupported && position <= data.Length - Vector128<byte>.Count)
             {
-                byte currentByte = dataPtr[i];
-                bool charValid = currentByte >= minChar && currentByte <= maxChar;
+                var minVector = Vector128.Create(minChar);
+                var maxVector = Vector128.Create(maxChar);
+
+                for (; position <= data.Length - Vector128<byte>.Count; position += Vector128<byte>.Count)
+                {
+                    var block = Sse2.LoadVector128(dataPtr + position);
+                    var atLeastMin = Sse2.CompareEqual(Sse2.Max(block, minVector), block);
+                    var atMostMax = Sse2.CompareEqual(Sse2.Min(block, maxVector), block);
+                    var validMask = (uint)Sse2.MoveMask(
+                        Sse2.And(atLeastMin, atMostMax).AsSByte()
+                    );
+                    ProcessValidityMask(
+                        validMask,
+                        Vector128<byte>.Count,
+                        position,
+                        ref stringStart,
+                        minLength,
+                        maxLength,
+                        fileOffset,
+                        hits
+                    );
+                }
+            }
+
+            for (; position < data.Length; position++)
+            {
+                var currentByte = dataPtr[position];
                 ProcessCharForStringHit(
-                    charValid,
-                    i,
+                    currentByte >= minChar && currentByte <= maxChar,
+                    position,
                     ref stringStart,
                     minLength,
                     maxLength,
@@ -331,14 +342,9 @@ internal static class SearchCore
                 );
             }
 
-            if (stringStart != -1)
+            if (stringStart >= 0)
             {
-                int length = i - stringStart;
-                if (length >= minLength)
-                {
-                    int actualLength = maxLength > 0 && length > maxLength ? maxLength : length;
-                    hits.Add(new StringHitPosition(stringStart, actualLength, fileOffset));
-                }
+                AddStringHit(stringStart, position, minLength, maxLength, fileOffset, hits);
             }
         }
 
@@ -547,6 +553,71 @@ internal static class SearchCore
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void ProcessValidityMask(
+        uint validMask,
+        int width,
+        int blockStart,
+        ref int stringStart,
+        int minLength,
+        int maxLength,
+        long fileOffset,
+        List<StringHitPosition> hits
+    )
+    {
+        var bit = 0;
+        while (bit < width)
+        {
+            var remainingMask = validMask >> bit;
+            if ((remainingMask & 1) == 0)
+            {
+                if (stringStart >= 0)
+                {
+                    AddStringHit(
+                        stringStart,
+                        blockStart + bit,
+                        minLength,
+                        maxLength,
+                        fileOffset,
+                        hits
+                    );
+                    stringStart = -1;
+                }
+
+                if (remainingMask == 0)
+                {
+                    return;
+                }
+
+                bit += BitOperations.TrailingZeroCount(remainingMask);
+                continue;
+            }
+
+            if (stringStart < 0)
+            {
+                stringStart = blockStart + bit;
+            }
+
+            var runLength = Math.Min(
+                BitOperations.TrailingZeroCount(~remainingMask),
+                width - bit
+            );
+            bit += runLength;
+            if (bit < width)
+            {
+                AddStringHit(
+                    stringStart,
+                    blockStart + bit,
+                    minLength,
+                    maxLength,
+                    fileOffset,
+                    hits
+                );
+                stringStart = -1;
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ProcessCharForStringHit(
         bool charValid,
         int position,
@@ -559,21 +630,39 @@ internal static class SearchCore
     {
         if (charValid)
         {
-            if (stringStart == -1)
+            if (stringStart < 0)
             {
                 stringStart = position;
             }
-        }
-        else if (stringStart != -1)
-        {
-            int length = position - stringStart;
-            if (length >= minLength)
-            {
-                int actualLength = maxLength > 0 && length > maxLength ? maxLength : length;
-                hits.Add(new StringHitPosition(stringStart, actualLength, fileOffset));
-            }
 
+            return;
+        }
+
+        if (stringStart >= 0)
+        {
+            AddStringHit(stringStart, position, minLength, maxLength, fileOffset, hits);
             stringStart = -1;
         }
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddStringHit(
+        int stringStart,
+        int stringEnd,
+        int minLength,
+        int maxLength,
+        long fileOffset,
+        List<StringHitPosition> hits
+    )
+    {
+        var length = stringEnd - stringStart;
+        if (length < minLength)
+        {
+            return;
+        }
+
+        var actualLength = maxLength > 0 && length > maxLength ? maxLength : length;
+        hits.Add(new StringHitPosition(stringStart, actualLength, fileOffset));
+    }
+
 }

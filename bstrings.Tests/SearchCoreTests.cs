@@ -190,6 +190,55 @@ public class SearchCoreTests
     }
 
     [Fact]
+    public void FindAsciiStringHits_MatchesScalarReferenceAcrossRandomInputs()
+    {
+        var random = new Random(unchecked((int)0xB57A1A65));
+        var ranges = new (byte Min, byte Max)[]
+        {
+            (0x00, 0x00),
+            (0x20, 0x7E),
+            (0x30, 0x39),
+            (0x80, 0xFF),
+            (0x00, 0xFF),
+            (0xFF, 0x00),
+        };
+
+        for (var iteration = 0; iteration < 250; iteration++)
+        {
+            var data = new byte[random.Next(0, 4097)];
+            random.NextBytes(data);
+            var minLength = random.Next(1, 17);
+            var maxLength = random.Next(0, 3) == 0 ? -1 : random.Next(1, 33);
+            var fileOffset = random.NextInt64(0, 1L << 40);
+
+            foreach (var (minChar, maxChar) in ranges)
+            {
+                var expected = FindAsciiStringHitsScalar(
+                    data,
+                    minLength,
+                    maxLength,
+                    fileOffset,
+                    minChar,
+                    maxChar
+                );
+                var actual = SearchCore.FindAsciiStringHits(
+                    data,
+                    minLength,
+                    maxLength,
+                    fileOffset,
+                    minChar,
+                    maxChar
+                );
+
+                Assert.Equal(
+                    expected.Select(hit => (hit.Start, hit.Length, hit.FileOffset)),
+                    actual.Select(hit => (hit.Start, hit.Length, hit.FileOffset))
+                );
+            }
+        }
+    }
+
+    [Fact]
     public void GetAsciiHits_UsesRequestedCodePage()
     {
         var hits = SearchCore.GetAsciiHits(
@@ -203,6 +252,53 @@ public class SearchCoreTests
         );
 
         Assert.Equal(["€€"], hits);
+    }
+
+    private static List<StringHitPosition> FindAsciiStringHitsScalar(
+        ReadOnlySpan<byte> data,
+        int minLength,
+        int maxLength,
+        long fileOffset,
+        byte minChar,
+        byte maxChar
+    )
+    {
+        var hits = new List<StringHitPosition>();
+        var stringStart = -1;
+
+        for (var position = 0; position <= data.Length; position++)
+        {
+            var isValid =
+                position < data.Length
+                && minChar <= maxChar
+                && data[position] >= minChar
+                && data[position] <= maxChar;
+            if (isValid)
+            {
+                if (stringStart < 0)
+                {
+                    stringStart = position;
+                }
+
+                continue;
+            }
+
+            if (stringStart < 0)
+            {
+                continue;
+            }
+
+            var length = position - stringStart;
+            if (length >= minLength)
+            {
+                var actualLength = maxLength > 0 && length > maxLength ? maxLength : length;
+                hits.Add(new StringHitPosition(stringStart, actualLength, fileOffset));
+            }
+
+            stringStart = -1;
+        }
+
+        return hits;
     }
 
     [Fact]

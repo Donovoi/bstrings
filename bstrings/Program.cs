@@ -935,6 +935,31 @@ public static partial class Program
             // Parse multiple patterns from lr parameter
             var regexPatternsWithNames = ParseRegexPatternsWithNames(lr);
             var regexPatterns = regexPatternsWithNames.Select(p => p.pattern).ToList();
+            var searchTargets = SearchTargetConfigurationCore.Build(
+                ls,
+                lr,
+                fs,
+                fr,
+                regexPatterns,
+                File.Exists,
+                File.ReadAllLines
+            );
+            var fileStrings = new HashSet<string>(searchTargets.FileStrings);
+            var regexStrings = new HashSet<string>(searchTargets.RegexStrings);
+            foreach (var missingFile in searchTargets.MissingFiles)
+            {
+                Log.Error("{Message}", missingFile);
+            }
+
+            // Literal targets take precedence in standard post-processing. Apply
+            // the same predicate while each bounded extraction batch is still
+            // local so rejected hits never enter the global deduplication set.
+            var literalBatchFilter =
+                regexPatterns.Count == 0 && fileStrings.Count > 0
+                    ? new LiteralBatchFilterCore(fileStrings, off)
+                    : null;
+            Func<List<string>, List<string>> literalBatchTransform =
+                literalBatchFilter is null ? null : literalBatchFilter.TransformBatch;
             var canStreamRegexResults =
                 sw is not null
                 && o.Length > 0
@@ -1153,20 +1178,21 @@ public static partial class Program
                             canStreamRegexResults
                                 ? new Func<List<string>, List<string>>(
                                     streamingRegexOutput!.TransformMainBatch
-                                )
-                                : null
+                                  )
+                                : literalBatchTransform
                         );
                         rawResultsStreamed = canStreamRawResults;
                         regexResultsStreamed = canStreamRegexResults;
                     }
                     else
                     {
-                        // Fallback to in-memory collection when no output file specified
-                        await ProcessFileChunksConcurrentlyAsync(
+                        // Keep the bounded producer/consumer path even without an output file.
+                        // This avoids retaining every hit in one large List and then walking
+                        // that list again to build the deduplicated result set.
+                        await ProcessFileChunksConcurrentlyStreamingAsync(
                             mappedStream,
                             fileSizeBytes,
                             chunkSizeBytes,
-                            hits,
                             minLength,
                             maxLength,
                             a,
@@ -1178,8 +1204,11 @@ public static partial class Program
                             q,
                             totalChunks,
                             progressTracker,
+                            null,
+                            hits,
                             processingBackend,
-                            processingMode
+                            processingMode,
+                            literalBatchTransform
                         );
                     } //do chunk boundary checks to make sure we get everything and not split things
                     if (!q)
@@ -1220,32 +1249,34 @@ public static partial class Program
                             canStreamRegexResults
                                 ? new Func<List<string>, List<string>>(
                                     streamingRegexOutput!.TransformBoundaryBatch
-                                )
-                                : null
+                                  )
+                                : literalBatchTransform
                         );
                         withBoundaryHits |= boundaryResults > 0;
                     }
                     else
                     {
-                        // Fallback to in-memory boundary processing
-                        withBoundaryHits |= await ProcessBoundaryChunksConcurrentlyAsync(
-                            mappedStream,
-                            fileSizeBytes,
-                            chunkSizeBytes,
-                            checked(minLength * 40), // boundaryChunkSize
-                            hits,
-                            minLength,
-                            maxLength,
-                            a,
-                            u,
-                            off,
-                            cp,
-                            ar,
-                            ur,
-                            q,
-                            processingBackend,
-                            boundaryProcessingMode
-                        );
+                        withBoundaryHits |=
+                            await ProcessBoundaryChunksConcurrentlyStreamingAsync(
+                                mappedStream,
+                                fileSizeBytes,
+                                chunkSizeBytes,
+                                checked(minLength * 40), // boundaryChunkSize
+                                minLength,
+                                maxLength,
+                                a,
+                                u,
+                                off,
+                                cp,
+                                ar,
+                                ur,
+                                q,
+                                null,
+                                hits,
+                                processingBackend,
+                                boundaryProcessingMode,
+                                literalBatchTransform
+                            ) > 0;
                     }
                 }
 
@@ -1293,23 +1324,6 @@ public static partial class Program
                 Log.Information("Sorting by length...");
                 Console.WriteLine();
                 orderedHits = OrderHits(hits, alphabetically: false, byLength: true, off);
-            }
-
-            var searchTargets = SearchTargetConfigurationCore.Build(
-                ls,
-                lr,
-                fs,
-                fr,
-                regexPatterns,
-                File.Exists,
-                File.ReadAllLines
-            );
-            var fileStrings = new HashSet<string>(searchTargets.FileStrings);
-            var regexStrings = new HashSet<string>(searchTargets.RegexStrings);
-
-            foreach (var missingFile in searchTargets.MissingFiles)
-            {
-                Log.Error("{Message}", missingFile);
             }
 
             //AddHighlightingRules(fileStrings.ToList());
