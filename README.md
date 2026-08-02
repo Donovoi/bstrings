@@ -14,6 +14,7 @@ benchmarks.
 
 - Bounded, parallel scanning without a hidden result-count limit
 - SIMD CPU, native CUDA GPU, and mixed CPU+GPU extraction
+- Cached, vectorized multi-string prefiltering for `--ls` and `--fs`
 - Automatic backend selection based on measured crossover points
 - Offset-aware text and CSV output
 - Per-pattern regex options, timeouts, and boundary tests
@@ -146,9 +147,11 @@ the old name, it does not install or force unsupported software.
 
 ## Output safety and memory use
 
-Plain, unsorted output can stream to disk as strings are found. Sorting,
-filtering, regex-only output, and CSV generation need post-processing and can
-use considerably more memory on a large image.
+Plain, unsorted output streams to disk as strings are found. Literal searches
+from `--ls` and `--fs` are also applied inside each bounded extraction batch,
+so rejected strings do not enter the global deduplication set. Sorting and
+regex workflows that cannot use the streaming regex path may still retain
+matches for post-processing and use considerably more memory on a large image.
 
 When `-o` is active, bstrings creates a sibling
 `<output>.incomplete` marker. The marker is removed only after the run
@@ -197,6 +200,10 @@ hit-major scheduling when there are at least 10,000 hits and fewer patterns
 than logical processors. Other workloads use pattern-major scheduling. The
 benchmark is included so that policy can be checked on different hardware
 rather than treated as universal.
+
+The reasoning and measurements behind the SIMD, bounded collection, and
+literal-prefilter changes are in the
+[ripgrep performance review](docs/ripgrep-performance-review-2026-08.md).
 
 ## Releases
 
