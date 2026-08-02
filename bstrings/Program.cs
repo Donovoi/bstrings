@@ -3445,7 +3445,14 @@ public static partial class Program
                     return 1;
                 }
 
-                if (regex.IsMatch(parsedHit.Data))
+                if (
+                    RegexOutputCore.IsMatchWithGeneratedShortInput(
+                        patternName,
+                        regString,
+                        regex,
+                        parsedHit.Data
+                    )
+                )
                 {
                     var record = RegexOutputCore.CreateRecords(
                         parsedHit,

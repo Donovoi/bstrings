@@ -86,8 +86,13 @@ output semantics.
 
 ## Next candidates
 
-1. Benchmark block-buffered UTF-8 output on a representative high-match case.
-   The real 80 GiB runs showed that output density can dominate total time.
+The second optimization round profiled and tested the output-heavy path before
+choosing another change. Its results are recorded below, so the remaining list
+has been reordered.
+
+1. Profile the `RegexOutputRecord` enumeration and construction hotspot seen in
+   the latest trace. Confirm that it is not a sampling artifact before changing
+   the record representation.
 2. Prototype lazy decoding: retain byte offset and length descriptors until a
    literal or regex candidate actually needs a managed string. This is a larger
    change because code pages, UTF-16LE, offsets, maximum lengths, and boundary
@@ -96,5 +101,72 @@ output semantics.
    Windows and Linux, under both warm and cold cache. Do not infer a win from
    the `MappedStream` type name; it is a DiscUtils stream abstraction, not an OS
    memory mapping.
-4. Add an output-heavy benchmark fixture before changing writer buffering.
-   Small quiet benchmarks cannot validate improvements to 100+ GB CSV runs.
+4. Revisit output batching only if a different design clears a 15% end-to-end
+   gate. The first attempt made the isolated writer 1.82x faster but improved
+   real output-heavy runs by only 5–9%, so it was removed.
+
+## Second round: source-generated short URL matching
+
+The research loop used `Donovoi/robin` at commit
+`001a84f43f79c073c25660f8364e4416ce03d358`. Its first recommendation was to
+batch complete output records. That prototype was rejected by the gate above.
+A [`dotnet-trace`](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-trace)
+CPU sample then showed that output formatting was no longer the largest
+actionable cost: the URL regular expression and `Match`/capture materialization
+dominated the hot path.
+
+The accepted design is intentionally specific:
+
+- `url3986` uses .NET's
+  [source-generated regex engine](https://learn.microsoft.com/en-us/dotnet/standard/base-types/regular-expression-source-generators)
+  for extracted strings up to 2,048 characters;
+- it uses allocation-light
+  [`Regex.EnumerateMatches`](https://learn.microsoft.com/en-us/dotnet/api/system.text.regularexpressions.regex.enumeratematches?view=net-9.0)
+  ranges and derives the URI range from the pattern's single optional leading
+  delimiter;
+- all values are buffered before output, with a 10 ms timeout that discards the
+  partial buffer and replays the whole string through the existing
+  non-backtracking matcher; and
+- longer strings bypass the generated path.
+
+The 2,048-character boundary came from an isolated engine sweep at 128, 256,
+512, 1,024, and 2,048 characters, not a guess. Across seven rotated runs per
+size, the generated path was 12.6x to 119.6x faster than the non-backtracking
+engine in that matcher-only test. It fell back 21 times in 3,555,328 valid
+matches (0.0006%) and did not fall back in 400 deliberately awkward
+2,048-character near-misses. The timeout remains necessary because those
+samples cannot prove that every possible input is cheap.
+
+### End-to-end acceptance result
+
+The final test used a deterministic 64 MiB output-heavy fixture containing
+alternating ASCII and UTF-16LE records. Each process searched `email,url3986`,
+wrote regex-only results and offsets, used the CPU extractor, and ran in an
+alternating old/new order. Nine-run medians were:
+
+| Build | Median | IQR | Output bytes |
+| --- | ---: | ---: | ---: |
+| Previous `master` | 2,228.21 ms | 27.44 ms | 142,859,898 |
+| Source-generated range path | 1,851.09 ms | 55.26 ms | 142,859,898 |
+
+That is a 16.93% median wall-time reduction, or 1.204x throughput. A
+single-worker run produced byte-identical 142,859,307-byte files with SHA-256
+`F2F4AF168233157319D754482AEC6E75A3EF3926B297FC90A63026CB3BE8AE82`.
+
+The detractor's regression cases also passed:
+
+| Workload | Candidate change |
+| --- | ---: |
+| 1,024-character dense URL records | 2.25% faster |
+| 4,096-character bypass records | 0.22% faster |
+| Multi-megabyte bypass records | 0.41% faster |
+| Sparse 256 MiB fixture with all built-ins | 0.68% slower |
+| Sparse all-built-in search without `--ro` | 2.63% faster |
+
+The last figure is below the 2% rejection threshold and inside the run-to-run
+dispersion. The CPU trace also showed the sampled regex execution share falling
+from roughly 25% to roughly 9%; the earlier symbolic non-backtracking URL
+hotspot disappeared. Differential tests cover the dispatch boundary, a reduced
+exhaustive alphabet, 2,000 generated URL-grammar cases, multiple matches,
+Unicode context, and a forced timeout/replay. The full suite has 186 passing
+tests.

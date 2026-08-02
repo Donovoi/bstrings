@@ -19,6 +19,26 @@ internal static class Program
         }
 
         var outputPath = args.Length > 1 ? Path.GetFullPath(args[1]) : "benchmark.dmp";
+        var denseOutput = args.Skip(2).Any(
+            argument => argument.Equals("--dense-output", StringComparison.OrdinalIgnoreCase)
+        );
+        var denseRecordLength = args
+            .Skip(2)
+            .Select(argument =>
+                argument.StartsWith("--dense-record-length=", StringComparison.OrdinalIgnoreCase)
+                    ? argument[(argument.IndexOf('=') + 1)..]
+                    : null
+            )
+            .Where(value => value is not null)
+            .Select(value => int.Parse(value!))
+            .SingleOrDefault();
+        if (denseRecordLength is > 0 and < 96)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(args),
+                "Dense record length must be at least 96 characters."
+            );
+        }
         var fileSize = checked((long)sizeMb * 1024 * 1024);
         var random = new Random(0x42);
         var buffer = new byte[BufferSize];
@@ -31,6 +51,15 @@ internal static class Program
             BufferSize,
             FileOptions.SequentialScan
         );
+
+        if (denseOutput)
+        {
+            var recordCount = WriteDenseOutputFixture(stream, fileSize, denseRecordLength);
+            Console.WriteLine(
+                $"Created {outputPath} ({sizeMb} MB, {recordCount:N0} dense output records)."
+            );
+            return;
+        }
 
         var remaining = fileSize;
         while (remaining > 0)
@@ -65,5 +94,46 @@ internal static class Program
         }
 
         Console.WriteLine($"Created {outputPath} ({sizeMb} MB).");
+    }
+
+    private static long WriteDenseOutputFixture(
+        FileStream stream,
+        long fileSize,
+        int denseRecordLength
+    )
+    {
+        long recordCount = 0;
+
+        while (stream.Position < fileSize)
+        {
+            var record =
+                $"record-{recordCount:D10} contact=user{recordCount:D10}@example.test "
+                + $"url=https://example.test/item/{recordCount:X10}";
+            if (denseRecordLength > record.Length)
+            {
+                record += " " + new string('x', denseRecordLength - record.Length - 1);
+            }
+            var recordBytes =
+                recordCount % 2 == 0
+                    ? Encoding.ASCII.GetBytes(record)
+                    : Encoding.Unicode.GetBytes(record);
+            var separatorLength = recordCount % 2 == 0 ? 1 : 2;
+
+            if (recordBytes.Length + separatorLength > fileSize - stream.Position)
+            {
+                break;
+            }
+
+            stream.Write(recordBytes);
+            stream.WriteByte(0);
+            if (separatorLength == 2)
+            {
+                stream.WriteByte(0);
+            }
+            recordCount++;
+        }
+
+        stream.SetLength(fileSize);
+        return recordCount;
     }
 }

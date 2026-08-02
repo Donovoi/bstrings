@@ -95,6 +95,28 @@ public class StandardHitProcessingCoreTests
     }
 
     [Fact]
+    public void TryMatchHit_MatchesShortBuiltInUrlThroughGeneratedEngine()
+    {
+        var definition = BuiltInPatternCatalog.ByName["url3986"];
+        var compiled = StandardHitProcessingCore.CompileRegexTargets(
+            [definition.Pattern],
+            _ => definition.Name
+        );
+
+        var matched = StandardHitProcessingCore.TryMatchHit(
+            "prefix https://example.test/path?q=1 suffix",
+            [],
+            compiled,
+            includeOffset: false,
+            currentFile: "sample.bin"
+        );
+
+        Assert.NotNull(matched);
+        Assert.Equal("url3986", matched!.PatternName);
+        Assert.Equal("Regex", matched.PatternType);
+    }
+
+    [Fact]
     public void TryMatchHit_ReturnsRawHitWhenNoPatternsAreSpecified()
     {
         var matched = StandardHitProcessingCore.TryMatchHit(

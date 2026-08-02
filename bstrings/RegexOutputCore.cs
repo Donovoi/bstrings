@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace bstrings;
 
@@ -23,7 +24,11 @@ internal static class RegexOutputCore
 
     internal const string CsvHeader = "Name of search pattern,Data found,Source file,Offset,Pattern type";
     internal static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(2);
+    internal static readonly TimeSpan ShortInputMatchTimeout = TimeSpan.FromMilliseconds(10);
     private static readonly ConcurrentDictionary<RegexCacheKey, Regex> RegexCache = new();
+    private static long _shortInputFallbackCount;
+
+    internal static long ShortInputFallbackCount => Interlocked.Read(ref _shortInputFallbackCount);
 
     internal static ParsedHit ParseHit(string hit, bool includeOffset)
     {
@@ -95,7 +100,40 @@ internal static class RegexOutputCore
             }
 
             var outputGroup = isBuiltIn ? definition.OutputGroup : null;
-            foreach (Match match in regex.Matches(parsedHit.Data))
+            MatchCollection matches;
+            if (
+                isBuiltIn
+                && definition.GeneratedShortInputLimit is int generatedShortInputLimit
+                && parsedHit.Data.Length <= generatedShortInputLimit
+                && TryGetGeneratedShortInputRegex(
+                    definition,
+                    parsedHit.Data,
+                    out var shortInputRegex
+                )
+            )
+            {
+                foreach (
+                    var dataFound in GetUrlValuesWithFallback(
+                        parsedHit.Data,
+                        shortInputRegex,
+                        regex
+                    )
+                )
+                {
+                    yield return new RegexOutputRecord(
+                        patternName,
+                        dataFound,
+                        sourceFile,
+                        parsedHit.Offset,
+                        patternType
+                    );
+                }
+
+                yield break;
+            }
+            matches = regex.Matches(parsedHit.Data);
+
+            foreach (Match match in matches)
             {
                 var dataFound =
                     outputGroup is not null && match.Groups[outputGroup].Success
@@ -209,9 +247,129 @@ internal static class RegexOutputCore
             {
                 return IsSimpleXmlElementMatch(data);
             }
+            if (
+                definition.GeneratedShortInputLimit is int generatedShortInputLimit
+                && data.Length <= generatedShortInputLimit
+                && TryGetGeneratedShortInputRegex(
+                    definition,
+                    data,
+                    out var shortInputRegex
+                )
+            )
+            {
+                try
+                {
+                    return shortInputRegex.IsMatch(data);
+                }
+                catch (RegexMatchTimeoutException)
+                {
+                    Interlocked.Increment(ref _shortInputFallbackCount);
+                    return regex.IsMatch(data);
+                }
+            }
         }
 
         return regex.IsMatch(data);
+    }
+
+    internal static bool IsMatchWithGeneratedShortInput(
+        string patternName,
+        string pattern,
+        Regex fallbackRegex,
+        string data
+    )
+    {
+        if (
+            data.Length <= BuiltInPatternCatalog.Url3986GeneratedInputLimit
+            && string.Equals(patternName, "url3986", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(
+                pattern,
+                BuiltInPatternCatalog.Url3986Pattern,
+                StringComparison.Ordinal
+            )
+        )
+        {
+            try
+            {
+                return BuiltInGeneratedRegexes.Url3986ShortInput().IsMatch(data);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                Interlocked.Increment(ref _shortInputFallbackCount);
+            }
+        }
+
+        return fallbackRegex.IsMatch(data);
+    }
+
+    internal static bool TryGetGeneratedShortInputRegex(
+        BuiltInPatternDefinition definition,
+        string data,
+        out Regex regex
+    )
+    {
+        if (
+            definition.GeneratedShortInputLimit is not > 0
+            || data.Length > definition.GeneratedShortInputLimit.Value
+        )
+        {
+            regex = null!;
+            return false;
+        }
+
+        if (
+            string.Equals(definition.Name, "url3986", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(
+                definition.Pattern,
+                BuiltInPatternCatalog.Url3986Pattern,
+                StringComparison.Ordinal
+            )
+        )
+        {
+            regex = BuiltInGeneratedRegexes.Url3986ShortInput();
+            return true;
+        }
+
+        regex = null!;
+        return false;
+    }
+
+    internal static IReadOnlyList<string> GetUrlValuesWithFallback(
+        string data,
+        Regex preferredRegex,
+        Regex fallbackRegex
+    )
+    {
+        var values = new List<string>(capacity: 1);
+        try
+        {
+            foreach (var match in preferredRegex.EnumerateMatches(data))
+            {
+                // The only text outside the named URI group is either the zero-width
+                // start anchor or one leading delimiter. RFC 3986 schemes must start
+                // with an ASCII letter, so the group range is recoverable without a
+                // capture allocation.
+                var groupOffset = IsAsciiLetter(data[match.Index]) ? 0 : 1;
+                values.Add(
+                    data.Substring(match.Index + groupOffset, match.Length - groupOffset)
+                );
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Values are buffered before the caller emits rows. A timeout can
+            // therefore discard them and replay the whole input without duplicates.
+            Interlocked.Increment(ref _shortInputFallbackCount);
+            values.Clear();
+            var matches = fallbackRegex.Matches(data);
+            _ = matches.Count;
+            foreach (Match match in matches)
+            {
+                values.Add(match.Groups["uri"].Value);
+            }
+        }
+
+        return values;
     }
 
     private static IEnumerable<CandidateRange> EnumerateBase64Candidates(string data)
