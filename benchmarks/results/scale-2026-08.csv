@@ -1,0 +1,17 @@
+tier,tool,runs,median_seconds,iqr_seconds,median_mib_per_second,relative_time_vs_fork,counts_valid,markers_valid,bytes_valid
+256m,current,5,0.3070,0.0221,833.8,1.00,true,true,true
+256m,upstream,5,0.7221,0.0701,354.5,2.35,true,true,true
+256m,ripgrep,5,0.3472,0.0059,737.3,1.13,true,true,true
+256m,bulk_extractor,5,1.3052,0.0723,196.1,4.25,true,true,true
+1g,current,5,0.4981,0.0276,2055.7,1.00,true,true,true
+1g,upstream,5,2.1048,0.0449,486.5,4.23,true,true,true
+1g,ripgrep,5,1.2514,0.0346,818.3,2.51,true,true,true
+1g,bulk_extractor,5,3.6439,0.1235,281.0,7.32,true,true,true
+10g,current,3,2.9094,0.0657,3519.7,1.00,true,true,true
+10g,upstream,3,19.8659,0.7370,515.5,6.83,true,true,true
+10g,ripgrep,3,12.5225,0.0997,817.7,4.30,true,true,true
+10g,bulk_extractor,3,33.0963,1.2391,309.4,11.38,true,true,true
+100g,current,1,42.1922,0.0000,2427.0,1.00,true,true,true
+100g,upstream,1,187.6632,0.0000,545.7,4.45,true,true,true
+100g,ripgrep,1,180.7688,0.0000,566.5,4.28,true,true,true
+100g,bulk_extractor,1,319.3391,0.0000,320.7,7.57,true,true,true

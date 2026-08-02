@@ -149,7 +149,10 @@ internal sealed class GpuStringScanner : IDisposable
         bool includeOffset,
         int codePage,
         string asciiRange,
-        string unicodeRange
+        string unicodeRange,
+        bool suppressLeadingFragment = false,
+        bool suppressTrailingFragment = false,
+        int boundaryCrossingOffset = 0
     )
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -162,6 +165,13 @@ internal sealed class GpuStringScanner : IDisposable
 
         List<GpuHitPosition> unicodePositions = [];
         List<GpuHitPosition> asciiPositions = [];
+        var ownership = new ChunkHitOwnership(
+            suppressLeadingFragment,
+            suppressTrailingFragment,
+            isBoundaryChunk
+                ? (boundaryCrossingOffset > 0 ? boundaryCrossingOffset : chunk.Length / 2)
+                : -1
+        );
 
         _laneSemaphore.Wait();
         if (!_availableLanes.TryDequeue(out var lane))
@@ -217,7 +227,8 @@ internal sealed class GpuStringScanner : IDisposable
             unicodePositions,
             fileOffset,
             includeOffset,
-            isBoundaryChunk
+            isBoundaryChunk,
+            ownership
         );
         MaterializeAsciiHits(
             results,
@@ -226,7 +237,8 @@ internal sealed class GpuStringScanner : IDisposable
             fileOffset,
             includeOffset,
             isBoundaryChunk,
-            codePage
+            codePage,
+            ownership
         );
 
         return results;
@@ -350,7 +362,8 @@ internal sealed class GpuStringScanner : IDisposable
         long fileOffset,
         bool includeOffset,
         bool isBoundaryChunk,
-        int codePage
+        int codePage,
+        ChunkHitOwnership ownership
     )
     {
         var encoding =
@@ -359,6 +372,11 @@ internal sealed class GpuStringScanner : IDisposable
 
         foreach (var hit in hits)
         {
+            if (!ownership.Accepts(hit.Start, hit.Length, data.Length))
+            {
+                continue;
+            }
+
             var value = encoding.GetString(data.Slice(hit.Start, hit.Length));
             AddResult(
                 results,
@@ -376,11 +394,17 @@ internal sealed class GpuStringScanner : IDisposable
         IEnumerable<GpuHitPosition> hits,
         long fileOffset,
         bool includeOffset,
-        bool isBoundaryChunk
+        bool isBoundaryChunk,
+        ChunkHitOwnership ownership
     )
     {
         foreach (var hit in hits)
         {
+            if (!ownership.Accepts(hit.Start, hit.Length * 2, data.Length))
+            {
+                continue;
+            }
+
             var value = Encoding.Unicode.GetString(data.Slice(hit.Start, hit.Length * 2));
             AddResult(
                 results,

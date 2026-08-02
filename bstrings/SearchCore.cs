@@ -35,7 +35,8 @@ internal static class SearchCore
         int maxLength,
         long currentOffset,
         bool includeOffset,
-        string unicodeRange
+        string unicodeRange,
+        ChunkHitOwnership ownership = default
     )
     {
         var (minChar, maxChar) = ParseUnicodeRange(unicodeRange);
@@ -47,7 +48,8 @@ internal static class SearchCore
             includeOffset,
             isUnicode: true,
             minChar,
-            maxChar
+            maxChar,
+            ownership
         );
     }
 
@@ -58,7 +60,8 @@ internal static class SearchCore
         long currentOffset,
         bool includeOffset,
         string asciiRange,
-        int codePage = 1252
+        int codePage = 1252,
+        ChunkHitOwnership ownership = default
     )
     {
         var (minChar, maxChar) = ParseCharRange(asciiRange);
@@ -70,6 +73,11 @@ internal static class SearchCore
             minChar,
             maxChar
         );
+        if (!ownership.IsUnrestricted)
+        {
+            var chunkLength = chunk.Length;
+            hits.RemoveAll(hit => !ownership.Accepts(hit.Start, hit.Length, chunkLength));
+        }
         return MaterializeStringHits(chunk, hits, includeOffset, codePage);
     }
 
@@ -395,7 +403,8 @@ internal static class SearchCore
         bool includeOffset,
         bool isUnicode,
         char minChar = ' ',
-        char maxChar = '~'
+        char maxChar = '~',
+        ChunkHitOwnership ownership = default
     )
     {
         var results = new List<string>();
@@ -448,7 +457,8 @@ internal static class SearchCore
                             stringLength,
                             maxLength,
                             currentOffsetInFile,
-                            includeOffset
+                            includeOffset,
+                            ownership
                         );
                     }
                     else
@@ -460,7 +470,8 @@ internal static class SearchCore
                             stringLength,
                             maxLength,
                             currentOffsetInFile,
-                            includeOffset
+                            includeOffset,
+                            ownership
                         );
                     }
                 }
@@ -481,7 +492,8 @@ internal static class SearchCore
                     stringLength,
                     maxLength,
                     currentOffsetInFile,
-                    includeOffset
+                    includeOffset,
+                    ownership
                 );
             }
             else
@@ -493,7 +505,8 @@ internal static class SearchCore
                     stringLength,
                     maxLength,
                     currentOffsetInFile,
-                    includeOffset
+                    includeOffset,
+                    ownership
                 );
             }
         }
@@ -508,10 +521,15 @@ internal static class SearchCore
         int stringLength,
         int maxLength,
         long currentOffsetInFile,
-        bool includeOffset
+        bool includeOffset,
+        ChunkHitOwnership ownership
     )
     {
         var actualLength = maxLength > 0 && stringLength > maxLength ? maxLength : stringLength;
+        if (!ownership.Accepts(stringStart, actualLength, chunk.Length))
+        {
+            return;
+        }
         var value = Encoding.ASCII.GetString(chunk.Slice(stringStart, actualLength));
 
         if (includeOffset)
@@ -531,12 +549,18 @@ internal static class SearchCore
         int stringLength,
         int maxLength,
         long currentOffsetInFile,
-        bool includeOffset
+        bool includeOffset,
+        ChunkHitOwnership ownership
     )
     {
         var actualLength = maxLength > 0 && stringLength > maxLength ? maxLength : stringLength;
         var byteLength = actualLength * 2;
         if (stringStart + byteLength > chunk.Length)
+        {
+            return;
+        }
+
+        if (!ownership.Accepts(stringStart, byteLength, chunk.Length))
         {
             return;
         }

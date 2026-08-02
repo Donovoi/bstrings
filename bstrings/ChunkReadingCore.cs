@@ -44,14 +44,18 @@ internal static class ChunkReadingCore
 
         if (isBoundaryMode)
         {
-            while (bytesRemaining > 0 && offset + boundaryChunkSize <= totalBytes)
+            while (
+                bytesRemaining > 0
+                && offset + boundaryChunkSize / 2L < totalBytes
+            )
             {
-                var chunk = rent(boundaryChunkSize);
+                var currentChunkSize = (int)Math.Min(boundaryChunkSize, totalBytes - offset);
+                var chunk = rent(currentChunkSize);
                 int bytesRead;
                 try
                 {
                     stream.Position = offset;
-                    bytesRead = await stream.ReadAsync(chunk.AsMemory(0, boundaryChunkSize));
+                    bytesRead = await stream.ReadAsync(chunk.AsMemory(0, currentChunkSize));
                 }
                 catch
                 {
@@ -73,6 +77,9 @@ internal static class ChunkReadingCore
                         FileOffset = offset,
                         ChunkIndex = chunkIndex,
                         IsBoundaryChunk = true,
+                        BoundaryCrossingOffset = boundaryChunkSize / 2,
+                        SuppressLeadingFragment = offset > 0,
+                        SuppressTrailingFragment = offset + bytesRead < totalBytes,
                     }
                 );
 
@@ -118,6 +125,8 @@ internal static class ChunkReadingCore
                         FileOffset = offset,
                         ChunkIndex = chunkIndex,
                         IsBoundaryChunk = false,
+                        SuppressLeadingFragment = offset > 0,
+                        SuppressTrailingFragment = offset + bytesRead < totalBytes,
                     }
                 );
 

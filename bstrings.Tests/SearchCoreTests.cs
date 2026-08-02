@@ -777,6 +777,118 @@ public class SearchCoreTests
     }
 
     [Fact]
+    public void ProcessChunk_BoundaryOwnershipRejectsClippedAndNonCrossingHits()
+    {
+        var complete = new byte[64];
+        Encoding.ASCII.GetBytes("https://example.test/item").CopyTo(complete, 20);
+
+        var clippedAtStart = new byte[64];
+        Encoding.ASCII.GetBytes("ps://example.test/item-that-crosses").CopyTo(clippedAtStart, 0);
+
+        var clippedAtEnd = new byte[64];
+        Encoding.ASCII
+            .GetBytes("https://example.test/".PadRight(40, 'x'))
+            .CopyTo(clippedAtEnd, 24);
+
+        var leftOnly = new byte[64];
+        Encoding.ASCII.GetBytes("https://left.test").CopyTo(leftOnly, 4);
+
+        Assert.Equal(["  https://example.test/item"], ProcessBoundary(complete));
+        Assert.Empty(ProcessBoundary(clippedAtStart));
+        Assert.Empty(ProcessBoundary(clippedAtEnd));
+        Assert.Empty(ProcessBoundary(leftOnly));
+    }
+
+    [Fact]
+    public void ProcessChunk_PrimaryOwnershipRejectsUnfinishedEdgeFragments()
+    {
+        var left = Encoding.ASCII.GetBytes("\u0001https://example.test");
+        var right = Encoding.ASCII.GetBytes("ps://example.test\u0001");
+
+        var leftResults = ChunkProcessingCore.ProcessChunk(
+            left,
+            fileOffset: 0,
+            isBoundaryChunk: false,
+            minLength: 3,
+            maxLength: -1,
+            asciiSearch: true,
+            unicodeSearch: false,
+            includeOffset: false,
+            asciiRange: "[\\x20-\\x7E]",
+            unicodeRange: "[\\u0020-\\u007E]",
+            suppressTrailingFragment: true
+        );
+        var rightResults = ChunkProcessingCore.ProcessChunk(
+            right,
+            fileOffset: 16,
+            isBoundaryChunk: false,
+            minLength: 3,
+            maxLength: -1,
+            asciiSearch: true,
+            unicodeSearch: false,
+            includeOffset: false,
+            asciiRange: "[\\x20-\\x7E]",
+            unicodeRange: "[\\u0020-\\u007E]",
+            suppressLeadingFragment: true
+        );
+
+        Assert.Empty(leftResults);
+        Assert.Empty(rightResults);
+    }
+
+    [Theory]
+    [InlineData(16 * 1024 * 1024, 3, -1, 256 * 1024)]
+    [InlineData(1024 * 1024, 3, -1, 256 * 1024)]
+    [InlineData(16 * 1024 * 1024, 3, 4096, 16 * 1024)]
+    [InlineData(16 * 1024 * 1024, 3, 1_000_000, 4_000_000)]
+    public void BoundarySizingCore_UsesBoundedContextAndHonorsExplicitMaximum(
+        int chunkSize,
+        int minLength,
+        int maxLength,
+        int expected
+    )
+    {
+        Assert.Equal(
+            expected,
+            BoundarySizingCore.CalculateWindowSize(chunkSize, minLength, maxLength)
+        );
+    }
+
+    [Fact]
+    public void BoundarySizingCore_CapsWindowAtMaximumArrayLength()
+    {
+        var expected = Array.MaxLength - (Array.MaxLength % 2);
+
+        Assert.Equal(
+            expected,
+            BoundarySizingCore.CalculateWindowSize(
+                1024 * 1024 * 1024,
+                minLength: 3,
+                maxLength: int.MaxValue
+            )
+        );
+    }
+
+    private static List<string> ProcessBoundary(byte[] bytes)
+    {
+        return ChunkProcessingCore.ProcessChunk(
+            bytes,
+            fileOffset: 0,
+            isBoundaryChunk: true,
+            minLength: 3,
+            maxLength: -1,
+            asciiSearch: true,
+            unicodeSearch: false,
+            includeOffset: false,
+            asciiRange: "[\\x20-\\x7E]",
+            unicodeRange: "[\\u0020-\\u007E]",
+            suppressLeadingFragment: true,
+            suppressTrailingFragment: true,
+            boundaryCrossingOffset: bytes.Length / 2
+        );
+    }
+
+    [Fact]
     public async Task ChunkProcessingPipeline_ProcessChunksAsync_CollectsResults()
     {
         using var pipeline = new Program.ChunkProcessingPipeline(maxConcurrency: 1);
@@ -961,6 +1073,31 @@ public class SearchCoreTests
         Assert.Equal(2, chunks[0].FileOffset);
         Assert.Equal(6, chunks[1].FileOffset);
         Assert.All(chunks, chunk => Assert.True(chunk.IsBoundaryChunk));
+    }
+
+    [Fact]
+    public async Task ChunkReadingCore_ReadChunksAsync_KeepsPartialFinalBoundaryWindow()
+    {
+        using var stream = new MemoryStream(Encoding.ASCII.GetBytes("ABCDEFGHI"));
+
+        var chunks = await ChunkReadingCore.ReadChunksAsync(
+            stream,
+            totalBytes: 9,
+            chunkSizeBytes: 4,
+            startOffset: 2,
+            isBoundaryMode: true,
+            boundaryChunkSize: 4,
+            maxReadAheadChunks: 10,
+            rent: size => new byte[size]
+        );
+
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal("CDEF", Encoding.ASCII.GetString(chunks[0].Data, 0, chunks[0].ValidBytes));
+        Assert.Equal("GHI", Encoding.ASCII.GetString(chunks[1].Data, 0, chunks[1].ValidBytes));
+        Assert.Equal(2, chunks[0].BoundaryCrossingOffset);
+        Assert.Equal(2, chunks[1].BoundaryCrossingOffset);
+        Assert.True(chunks[1].SuppressLeadingFragment);
+        Assert.False(chunks[1].SuppressTrailingFragment);
     }
 
     [Fact]

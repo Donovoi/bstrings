@@ -10,6 +10,23 @@ for larger evidence sets: bounded parallel processing, streaming output,
 validated CPU and CUDA paths, safer regex handling, and reproducible tests and
 benchmarks.
 
+## Why choose this fork?
+
+| Decision point | Donovoi/bstrings | Original bstrings | ripgrep | bulk_extractor |
+| --- | --- | --- | --- | --- |
+| 100 GiB sparse URL/email scan | **42.19 s / 2,427 MiB/s** | 187.66 s / 545.7 MiB/s | 180.77 s / 566.5 MiB/s | 319.34 s / 320.7 MiB/s |
+| Readable-string extraction | Code-page and UTF-16LE, offsets, streaming filters | Code-page and UTF-16LE | Raw byte/text search, not a strings extractor | Structured feature scanners and carving, not generic strings output |
+| Chunk-boundary handling | Rejects clipped edge fragments and recovers complete crossing strings | Can emit clipped or duplicate boundary matches | Searcher-managed | Page margins managed by each scanner |
+| Parallel hardware paths | SIMD CPU, validated CUDA GPU, and CPU+GPU hybrid | CPU | CPU | Multi-threaded CPU scanners |
+| Best fit | Large evidence images when you need strings, forensic patterns, and auditable output completion | Compatibility with the original CLI | Very fast known-pattern triage over raw bytes | Broad feature extraction, recursive decoding, carving, and histograms |
+
+All four tools returned the exact ground-truth count at every measured size.
+The speed row is a CPU, warm-cache result on one deliberately sparse synthetic
+corpus; `bulk_extractor` also did extra work such as feature contexts,
+histograms, and a report hash. Read the
+[scale benchmark and its limitations](docs/scale-benchmark-2026-08.md) before
+generalizing the numbers.
+
 ## What this fork adds
 
 - Bounded, parallel scanning without a hidden result-count limit
@@ -192,6 +209,19 @@ dotnet run --project dev-tools\benchmark-generator -- 64 .\dense-output.dmp --de
 # Exercise the long-record regex path without using evidence data
 dotnet run --project dev-tools\benchmark-generator -- 64 .\dense-4096.dmp --dense-output --dense-record-length=4096
 ```
+
+For a sparse, ground-truth corpus that scales cleanly to 100 GiB and exercises
+16 MiB chunk boundaries:
+
+```powershell
+dotnet run --project benchmarks\ScaleCorpusGenerator -c Release -- `
+  --output C:\bench\scale-1g.bin `
+  --size-bytes 1073741824
+```
+
+The generator writes a SHA-256 manifest with the expected literal, URL, and
+email counts. The matching four-tool harness is documented in
+[benchmarks/README.md](benchmarks/README.md).
 
 To compare adaptive, forced hit-major, and forced pattern-major regex
 scheduling:
