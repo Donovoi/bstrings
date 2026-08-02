@@ -185,6 +185,12 @@ To generate a repeatable extraction corpus:
 
 ```powershell
 dotnet run --project dev-tools\benchmark-generator -- 256 .\benchmark-256mb.dmp
+
+# Build an output-heavy synthetic fixture with ordinary short records
+dotnet run --project dev-tools\benchmark-generator -- 64 .\dense-output.dmp --dense-output
+
+# Exercise the long-record regex path without using evidence data
+dotnet run --project dev-tools\benchmark-generator -- 64 .\dense-4096.dmp --dense-output --dense-record-length=4096
 ```
 
 To compare adaptive, forced hit-major, and forced pattern-major regex

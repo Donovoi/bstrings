@@ -107,7 +107,14 @@ internal static class StandardHitProcessingCore
         {
             foreach (var regexTarget in compiledRegexes)
             {
-                if (regexTarget.Regex.IsMatch(parsedHit.Data))
+                if (
+                    RegexOutputCore.IsMatchWithGeneratedShortInput(
+                        regexTarget.Name,
+                        regexTarget.Pattern,
+                        regexTarget.Regex,
+                        parsedHit.Data
+                    )
+                )
                 {
                     return new MatchedHit(
                         hit,

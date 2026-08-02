@@ -51,6 +51,14 @@ the same two-second timeout. CPU scheduling switches between hit-major and
 pattern-major work according to the number of hits, patterns, and logical
 processors.
 
+One deliberately narrow exception speeds up the heavily used `url3986`
+pattern. Extracted strings up to 2,048 characters use a source-generated .NET
+matcher and allocation-light match ranges. The complete set of ranges is
+buffered before any row is emitted. If the generated matcher reaches its 10 ms
+deadline, the input is replayed from the beginning with the non-backtracking
+engine, so the output is complete and contains no retry duplicates. Longer
+strings go directly to the non-backtracking engine.
+
 The catalog contains 33 patterns. The 2026 review added `cve`,
 `pem_private_key`, `named_pipe`, `onion_v3`, `ethereum`, and `sha256`, and
 tightened boundaries in many older patterns. Details and primary sources are in
@@ -81,3 +89,7 @@ temporary artifact. A release is created only for an explicit `v*` tag.
 Benchmarks should always include the corpus, command, hardware, runtime, and
 repeat count. The repository includes generators for extraction and regex
 scheduling so results can be reproduced instead of repeated as folklore.
+The benchmark generator's `--dense-output` mode creates a synthetic mix of
+ASCII and UTF-16LE records containing email and URL matches;
+`--dense-record-length=<characters>` is useful for checking dispatch boundaries
+without using case data.

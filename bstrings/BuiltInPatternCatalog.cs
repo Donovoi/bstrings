@@ -17,12 +17,28 @@ internal sealed record BuiltInPatternDefinition(
     bool UseNonBacktracking = true,
     string? RapidsSupersetPattern = null,
     string? OutputGroup = null,
-    int? BoundedRetryOverlap = null
+    int? BoundedRetryOverlap = null,
+    int? GeneratedShortInputLimit = null
 );
 
 internal static class BuiltInPatternCatalog
 {
     private const string Base58 = "1-9A-HJ-NP-Za-km-z";
+    internal const int Url3986GeneratedInputLimit = 2048;
+    internal const string Url3986Pattern = """
+        (?:\A|[^A-Za-z0-9+\-.])
+        (?<uri>
+        [A-Za-z][A-Za-z0-9+\-.]*://                  # Scheme
+        ([A-Za-z0-9\-._~%!$&'()*+,;=:]+@)?           # User information
+        (?<host>[A-Za-z0-9\-._~%]+                   # Registered name
+        |\[[A-Fa-f0-9:.]+\]                          # IPv6 candidate
+        |\[v[A-Fa-f0-9][A-Za-z0-9\-._~%!$&'()*+,;=:]+\])
+        (:[0-9]+)?                                   # Port
+        (/[A-Za-z0-9\-._~%!$&'()*+,;=:@]*)*           # Path
+        (\?[A-Za-z0-9\-._~%!$&'()*+,;=:@/?]*)?       # Query
+        (\#[A-Za-z0-9\-._~%!$&'()*+,;=:@/?]*)?       # Fragment
+        )
+        """;
 
     internal static IReadOnlyList<BuiltInPatternDefinition> Definitions { get; } =
     [
@@ -130,22 +146,11 @@ internal static class BuiltInPatternCatalog
         new(
             "url3986",
             "Finds absolute hierarchical URI candidates using RFC 3986 syntax",
-            @"(?:\A|[^A-Za-z0-9+\-.])
-        (?<uri>
-        [A-Za-z][A-Za-z0-9+\-.]*://                  # Scheme
-        ([A-Za-z0-9\-._~%!$&'()*+,;=:]+@)?           # User information
-        (?<host>[A-Za-z0-9\-._~%]+                   # Registered name
-        |\[[A-Fa-f0-9:.]+\]                          # IPv6 candidate
-        |\[v[A-Fa-f0-9][A-Za-z0-9\-._~%!$&'()*+,;=:]+\])
-        (:[0-9]+)?                                   # Port
-        (/[A-Za-z0-9\-._~%!$&'()*+,;=:@]*)*           # Path
-        (\?[A-Za-z0-9\-._~%!$&'()*+,;=:@/?]*)?       # Query
-        (\#[A-Za-z0-9\-._~%!$&'()*+,;=:@/?]*)?       # Fragment
-        )
-        ",
+            Url3986Pattern,
             "https://www.rfc-editor.org/rfc/rfc3986",
             RegexOptions.IgnorePatternWhitespace,
-            OutputGroup: "uri"
+            OutputGroup: "uri",
+            GeneratedShortInputLimit: Url3986GeneratedInputLimit
         ),
         new(
             "xml",

@@ -522,6 +522,161 @@ public class BuiltInPatternCatalogTests
     }
 
     [Fact]
+    public void Url3986_GeneratedRegexUsesTheBoundedShortInputPolicy()
+    {
+        var definition = BuiltInPatternCatalog.ByName["url3986"];
+        var longInputRegex = RegexOutputCore.GetOrCreateRegex(
+            definition.Name,
+            definition.Pattern
+        );
+
+        Assert.Equal(
+            BuiltInPatternCatalog.Url3986GeneratedInputLimit,
+            definition.GeneratedShortInputLimit
+        );
+        Assert.True(longInputRegex.Options.HasFlag(RegexOptions.NonBacktracking));
+        Assert.True(
+            RegexOutputCore.TryGetGeneratedShortInputRegex(
+                definition,
+                new string('a', BuiltInPatternCatalog.Url3986GeneratedInputLimit),
+                out var shortInputRegex
+            )
+        );
+        Assert.False(shortInputRegex.Options.HasFlag(RegexOptions.NonBacktracking));
+        Assert.True(shortInputRegex.Options.HasFlag(RegexOptions.IgnorePatternWhitespace));
+        Assert.Equal(RegexOutputCore.ShortInputMatchTimeout, shortInputRegex.MatchTimeout);
+        Assert.False(
+            RegexOutputCore.TryGetGeneratedShortInputRegex(
+                definition,
+                new string('a', BuiltInPatternCatalog.Url3986GeneratedInputLimit + 1),
+                out _
+            )
+        );
+    }
+
+    [Fact]
+    public void Url3986_GeneratedRegexMatchesLinearEngineOnReducedAlphabet()
+    {
+        var definition = BuiltInPatternCatalog.ByName["url3986"];
+        var linearRegex = RegexOutputCore.GetOrCreateRegex(
+            definition.Name,
+            definition.Pattern
+        );
+        Assert.True(
+            RegexOutputCore.TryGetGeneratedShortInputRegex(
+                definition,
+                string.Empty,
+                out var compiledRegex
+            )
+        );
+
+        foreach (var input in GenerateStrings(['a', ':', '/'], maximumLength: 8))
+        {
+            var expectedValues = linearRegex
+                .Matches(input)
+                .Select(match => match.Groups[definition.OutputGroup!].Value)
+                .ToList();
+            var actualValues = RegexOutputCore.GetUrlValuesWithFallback(
+                input,
+                compiledRegex,
+                linearRegex
+            );
+            Assert.Equal(expectedValues, actualValues);
+        }
+    }
+
+    [Fact]
+    public void Url3986_GeneratedRegexMatchesLinearEngineAcrossUrlGrammarCorpus()
+    {
+        var definition = BuiltInPatternCatalog.ByName["url3986"];
+        var linearRegex = RegexOutputCore.GetOrCreateRegex(
+            definition.Name,
+            definition.Pattern
+        );
+        Assert.True(
+            RegexOutputCore.TryGetGeneratedShortInputRegex(
+                definition,
+                string.Empty,
+                out var generatedRegex
+            )
+        );
+        foreach (var input in GenerateUrlParityCorpus())
+        {
+            Assert.InRange(input.Length, 0, definition.GeneratedShortInputLimit!.Value);
+            var expectedValues = linearRegex
+                .Matches(input)
+                .Select(match => match.Groups[definition.OutputGroup!].Value)
+                .ToList();
+            var actualValues = RegexOutputCore.GetUrlValuesWithFallback(
+                input,
+                generatedRegex,
+                linearRegex
+            );
+            Assert.Equal(expectedValues, actualValues);
+        }
+    }
+
+    [Fact]
+    public void ShortInputUrlMatcher_TimeoutReplaysWithLinearEngineBeforeReturningValues()
+    {
+        const string catastrophicPattern = "^(a|aa)+$";
+        var preferredRegex = new Regex(
+            catastrophicPattern,
+            RegexOptions.Compiled | RegexOptions.CultureInvariant,
+            TimeSpan.FromMilliseconds(1)
+        );
+        var definition = BuiltInPatternCatalog.ByName["url3986"];
+        var fallbackRegex = RegexOutputCore.GetOrCreateRegex(
+            definition.Name,
+            definition.Pattern
+        );
+        var fallbackCountBefore = RegexOutputCore.ShortInputFallbackCount;
+        var input = new string('a', 100_000) + "! https://example.test/fallback";
+
+        var values = RegexOutputCore.GetUrlValuesWithFallback(
+            input,
+            preferredRegex,
+            fallbackRegex
+        );
+
+        Assert.Equal(["https://example.test/fallback"], values);
+        Assert.True(RegexOutputCore.ShortInputFallbackCount > fallbackCountBefore);
+    }
+
+    [Theory]
+    [InlineData(BuiltInPatternCatalog.Url3986GeneratedInputLimit - 1)]
+    [InlineData(BuiltInPatternCatalog.Url3986GeneratedInputLimit)]
+    [InlineData(BuiltInPatternCatalog.Url3986GeneratedInputLimit + 1)]
+    public void Url3986_AdaptiveRecordsPreserveOrderedValuesAtThreshold(int inputLength)
+    {
+        const string prefix = "prefix https://example.test/";
+        var input = prefix + new string('a', inputLength - prefix.Length);
+        var definition = BuiltInPatternCatalog.ByName["url3986"];
+        var linearRegex = RegexOutputCore.GetOrCreateRegex(
+            definition.Name,
+            definition.Pattern
+        );
+        var expected = linearRegex
+            .Matches(input)
+            .Select(match => match.Groups[definition.OutputGroup!].Value)
+            .ToList();
+
+        var actual = RegexOutputCore
+            .CreateRecords(
+                new ParsedHit(input, input, string.Empty),
+                definition.Name,
+                linearRegex,
+                regexOutput: true,
+                sourceFile: "sample.bin",
+                patternType: "Regex"
+            )
+            .Select(record => record.DataFound)
+            .ToList();
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
     public void LinearBase64Matcher_PreservesRegexResultsAcrossRandomInputs()
     {
         const string alphabet =
@@ -664,4 +819,72 @@ public class BuiltInPatternCatalogTests
             RegexParallelismPolicy.Choose(hitCount, patternCount, processorCount)
         );
     }
+
+    private static IEnumerable<string> GenerateStrings(
+        IReadOnlyList<char> alphabet,
+        int maximumLength
+    )
+    {
+        yield return string.Empty;
+
+        for (var length = 1; length <= maximumLength; length++)
+        {
+            var count = (int)Math.Pow(alphabet.Count, length);
+            for (var value = 0; value < count; value++)
+            {
+                var remaining = value;
+                var characters = new char[length];
+                for (var index = length - 1; index >= 0; index--)
+                {
+                    characters[index] = alphabet[remaining % alphabet.Count];
+                    remaining /= alphabet.Count;
+                }
+
+                yield return new string(characters);
+            }
+        }
+    }
+
+    private static IEnumerable<string> GenerateUrlParityCorpus()
+    {
+        string[] prefixes = ["", "prefix ", "(", "\u2603 ", "a."];
+        string[] schemes = ["http", "https", "ftp", "git+ssh", "x"];
+        string[] users = ["", "user@", "user:pass@", "u%20s@"];
+        string[] hosts = [
+            "example.test",
+            "sub-domain.example.test",
+            "127.0.0.1",
+            "[2001:db8::1]",
+            "[v1.alpha]",
+            "bad host",
+        ];
+        string[] ports = ["", ":443", ":0", ":not-a-port"];
+        string[] paths = ["", "/", "/one/two", "/a%20b", "/:@!$&'()*+,;="];
+        string[] queries = ["", "?a=b", "?next=https://other.test/x", "?q=%20"];
+        string[] fragments = ["", "#part", "#a/b?c"];
+        string[] suffixes = ["", " suffix", ")", "\r\n", " https://second.test/z"];
+        var random = new Random(3986);
+
+        yield return string.Empty;
+        yield return "not a URL";
+        yield return "https://example.test/one https://second.test/two";
+
+        for (var index = 0; index < 2_000; index++)
+        {
+            var input =
+                prefixes[random.Next(prefixes.Length)]
+                + schemes[random.Next(schemes.Length)]
+                + "://"
+                + users[random.Next(users.Length)]
+                + hosts[random.Next(hosts.Length)]
+                + ports[random.Next(ports.Length)]
+                + paths[random.Next(paths.Length)]
+                + queries[random.Next(queries.Length)]
+                + fragments[random.Next(fragments.Length)]
+                + suffixes[random.Next(suffixes.Length)];
+
+            yield return input;
+        }
+    }
+
 }
