@@ -145,7 +145,10 @@ Run `bstrings.exe --help` for the full command reference. Run
 `bstrings.exe -p` to see every built-in pattern and its current description.
 The [extractor and translation guide](docs/enrichment-pipeline.md) explains how
 to route carved files with Magika, normalize FLOSS output, run a pinned offline
-MADLAD-400 translation pass, and interpret derived matches safely.
+Hy-MT2/llama.cpp translation pass (with MADLAD-400 as the wide-language
+fallback), and interpret derived matches safely. The
+[translation benchmark](docs/translation-benchmark-2026-08-04.md) records the
+model-selection evidence and exact reproducibility inputs.
 
 ## Built-in regex catalog
 
