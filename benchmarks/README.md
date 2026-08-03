@@ -123,3 +123,42 @@ host, but the benchmark remains the authority when hardware or expressions
 change.
 
 See the [pattern and engine results](../docs/pattern-engine-benchmark-2026-08.md).
+
+## Rust ASCII engine crossover
+
+`AsciiEngineBenchmark` compares the established C#/.NET ASCII span scanner
+with the opt-in Rust engine through the real native boundary. It includes
+native invocation and direct consumption of caller-owned pooled hit storage.
+Each scenario must produce exactly the same ordered offsets and lengths before
+timing begins.
+
+```powershell
+cargo build --manifest-path .\native\bstrings_core\Cargo.toml --release --locked
+
+dotnet run --project .\benchmarks\AsciiEngineBenchmark -c Release -- `
+  --rounds 7 `
+  --target-mib 256 `
+  --output .\benchmarks\results\ascii-engine-local.csv
+```
+
+The four deterministic workloads cover sparse binary input, uniform random
+bytes, one dense printable run, and many short fragmented runs. Sizes of 64
+KiB, 1 MiB, and 16 MiB expose native-call and chunk-size crossovers. The
+[reviewed prototype result and limitations](../docs/rust-engine-prototype-2026-08.md)
+should be read before changing the default engine.
+
+`Invoke-RustEngineScaleBenchmark.ps1` compares both engines through the real
+CLI. It alternates execution order, verifies corpus SHA-256 when requested,
+checks the complete interior/boundary/terminal marker multiset, verifies byte
+coverage, and requires the canonicalized output lines to match across engines.
+Raw hashes are retained because parallel chunk scheduling can legitimately
+change line order.
+
+```powershell
+.\benchmarks\Invoke-RustEngineScaleBenchmark.ps1 `
+  -DataRoot C:\bench `
+  -Bstrings C:\tools\bstrings.exe `
+  -RunRoot C:\bench\rust-engine-run `
+  -Tiers @('1g','10g') `
+  -VerifyHashes
+```

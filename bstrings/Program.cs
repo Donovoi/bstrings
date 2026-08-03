@@ -538,6 +538,12 @@ public static partial class Program
                 "Extraction processor: auto, cpu, gpu, or hybrid. Default is auto",
             DefaultValueFactory = _ => "auto",
         };
+        var cpuEngineOpt = new Option<string>("--cpu-engine")
+        {
+            Description =
+                "ASCII CPU engine: dotnet, rust, or auto. Rust is parity-checked before use; default is dotnet",
+            DefaultValueFactory = _ => "dotnet",
+        };
         var useRapidsOpt = new Option<bool>("--use-rapids")
         {
             Description = "Use an existing NVIDIA RAPIDS installation for regex processing",
@@ -579,6 +585,7 @@ public static partial class Program
             debugOpt,
             traceOpt,
             processorOpt,
+            cpuEngineOpt,
             useRapidsOpt,
             forceRapidsOpt,
         };
@@ -614,6 +621,7 @@ public static partial class Program
                     result.GetValue(debugOpt),
                     result.GetValue(traceOpt),
                     result.GetValue(processorOpt),
+                    result.GetValue(cpuEngineOpt),
                     result.GetValue(useRapidsOpt),
                     result.GetValue(forceRapidsOpt)
                 )
@@ -658,6 +666,7 @@ public static partial class Program
         bool debug,
         bool trace,
         string processor,
+        string cpuEngine,
         bool useRapids, // use NVIDIA RAPIDS for GPU-accelerated regex processing
         bool forceRapids // deprecated compatibility flag
     )
@@ -667,6 +676,18 @@ public static partial class Program
         if (!ProcessingBackendCore.TryParseMode(processor, out var requestedMode, out var modeError))
         {
             Console.Error.WriteLine(modeError);
+            return;
+        }
+
+        if (
+            !RustAsciiEngine.TryParseMode(
+                cpuEngine,
+                out var requestedCpuEngine,
+                out var cpuEngineError
+            )
+        )
+        {
+            Console.Error.WriteLine(cpuEngineError);
             return;
         }
 
@@ -846,6 +867,25 @@ public static partial class Program
                 "Command line: {Args}",
                 string.Join(" ", Environment.GetCommandLineArgs().Skip(1))
             );
+            Console.WriteLine();
+        }
+
+        if (
+            !RustAsciiEngine.Configure(
+                requestedCpuEngine,
+                out var cpuEngineStatus,
+                out cpuEngineError
+            )
+        )
+        {
+            throw new InvalidOperationException(
+                $"The requested Rust CPU engine is unavailable: {cpuEngineError}"
+            );
+        }
+
+        if (!q)
+        {
+            Log.Information("ASCII CPU engine: {Status}", cpuEngineStatus);
             Console.WriteLine();
         }
 

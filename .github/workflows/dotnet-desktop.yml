@@ -28,6 +28,24 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.95.0
+          components: clippy, rustfmt
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path native/bstrings_core/Cargo.toml --check
+
+      - name: Lint Rust engine
+        run: cargo clippy --manifest-path native/bstrings_core/Cargo.toml --release --all-targets --locked -- -D warnings
+
+      - name: Test Rust engine
+        run: cargo test --manifest-path native/bstrings_core/Cargo.toml --release --locked
+
+      - name: Build Rust engine
+        run: cargo build --manifest-path native/bstrings_core/Cargo.toml --release --locked
+
       - name: Restore
         run: dotnet restore bstrings.sln --verbosity minimal
 

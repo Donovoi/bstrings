@@ -12,6 +12,9 @@
     <Version>1.9.0</Version>
     <IsPackable>false</IsPackable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RustEngineLibrary Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)..\native\bstrings_core\target\release\bstrings_core.dll</RustEngineLibrary>
+    <RustEngineLibrary Condition="$([MSBuild]::IsOSPlatform('Linux'))">$(MSBuildThisFileDirectory)..\native\bstrings_core\target\release\libbstrings_core.so</RustEngineLibrary>
+    <RustEngineLibrary Condition="$([MSBuild]::IsOSPlatform('OSX'))">$(MSBuildThisFileDirectory)..\native\bstrings_core\target\release\libbstrings_core.dylib</RustEngineLibrary>
   </PropertyGroup>
   <PropertyGroup>
     <ApplicationIcon>Find Again256.ico</ApplicationIcon>
@@ -22,6 +25,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Find Again256.ico" />
+    <None Include="$(RustEngineLibrary)" Link="%(Filename)%(Extension)" Condition="Exists('$(RustEngineLibrary)')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="DiscUtils.Ntfs" Version="0.16.13" />
