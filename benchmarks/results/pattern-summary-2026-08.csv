@@ -1,0 +1,5 @@
+Tool,ExactPatterns,TotalPatterns,MedianExactSeconds,ForkWinsOnExactOverlap,MedianOtherTimeDividedByFork,MinimumRatio,MaximumRatio
+Donovoi/bstrings,33,33,0.29,,,1.00,1.00
+Original bstrings,15,33,0.65,15,2.23,2.02,2.39
+ripgrep PCRE2,25,33,0.25,10,0.90,0.64,3.72
+bulk_extractor find/RE2,0,33,,0,,,

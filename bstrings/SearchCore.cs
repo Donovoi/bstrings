@@ -29,6 +29,24 @@ internal static class SearchCore
 {
     private static readonly ConcurrentDictionary<int, Encoding> Encodings = new();
 
+    internal static string CpuKernelDescription
+    {
+        get
+        {
+            var ascii = Avx2.IsSupported ? "AVX2" : Sse2.IsSupported ? "SSE2" : "scalar";
+            var unicode = Avx2.IsSupported
+                ? Bmi2.IsSupported
+                    ? "AVX2 + BMI2 PEXT"
+                    : "AVX2"
+                : Sse41.IsSupported
+                    ? Bmi2.IsSupported
+                        ? "SSE4.1 + BMI2 PEXT"
+                        : "SSE4.1"
+                    : "scalar";
+            return $"ASCII {ascii}; UTF-16LE {unicode}";
+        }
+    }
+
     internal static List<string> GetUnicodeHits(
         ReadOnlySpan<byte> chunk,
         int minLength,
@@ -40,17 +58,20 @@ internal static class SearchCore
     )
     {
         var (minChar, maxChar) = ParseUnicodeRange(unicodeRange);
-        return GetStringHitsUnified(
+        var hits = FindUnicodeStringHits(
             chunk,
             minLength,
             maxLength,
             currentOffset,
-            includeOffset,
-            isUnicode: true,
             minChar,
-            maxChar,
-            ownership
+            maxChar
         );
+        if (!ownership.IsUnrestricted)
+        {
+            var chunkLength = chunk.Length;
+            hits.RemoveAll(hit => !ownership.Accepts(hit.Start, hit.Length, chunkLength));
+        }
+        return MaterializeUnicodeStringHits(chunk, hits, includeOffset);
     }
 
     internal static List<string> GetAsciiHits(
@@ -357,6 +378,171 @@ internal static class SearchCore
         }
 
         return hits;
+    }
+
+    internal static unsafe List<StringHitPosition> FindUnicodeStringHits(
+        ReadOnlySpan<byte> data,
+        int minLength,
+        int maxLength,
+        long fileOffset,
+        char minChar = ' ',
+        char maxChar = '~'
+    )
+    {
+        var unitCount = data.Length / sizeof(ushort);
+        var hits = new List<StringHitPosition>(Math.Min(unitCount / 64, 4096));
+
+        if (unitCount == 0 || minChar > maxChar)
+        {
+            return hits;
+        }
+
+        fixed (byte* dataPtr = data)
+        {
+            var stringStart = -1;
+            var position = 0;
+
+            if (Avx2.IsSupported && unitCount >= Vector256<ushort>.Count)
+            {
+                var minVector = Vector256.Create((ushort)minChar);
+                var rangeVector = Vector256.Create((ushort)(maxChar - minChar));
+
+                for (
+                    ;
+                    position <= unitCount - Vector256<ushort>.Count;
+                    position += Vector256<ushort>.Count
+                )
+                {
+                    var block = Avx.LoadVector256((ushort*)(dataPtr + position * sizeof(ushort)));
+                    var normalized = Avx2.Subtract(block, minVector);
+                    var valid = Avx2.CompareEqual(
+                        Avx2.Min(normalized, rangeVector),
+                        normalized
+                    );
+                    var byteMask = (uint)Avx2.MoveMask(valid.AsSByte());
+                    var validMask = CompressUtf16ValidityMask(
+                        byteMask,
+                        Vector256<ushort>.Count
+                    );
+                    ProcessValidityMask(
+                        validMask,
+                        Vector256<ushort>.Count,
+                        position,
+                        ref stringStart,
+                        minLength,
+                        maxLength,
+                        fileOffset,
+                        hits
+                    );
+                }
+            }
+
+            if (Sse41.IsSupported && position <= unitCount - Vector128<ushort>.Count)
+            {
+                var minVector = Vector128.Create((ushort)minChar);
+                var rangeVector = Vector128.Create((ushort)(maxChar - minChar));
+
+                for (
+                    ;
+                    position <= unitCount - Vector128<ushort>.Count;
+                    position += Vector128<ushort>.Count
+                )
+                {
+                    var block = Sse2.LoadVector128((ushort*)(dataPtr + position * sizeof(ushort)));
+                    var normalized = Sse2.Subtract(block, minVector);
+                    var valid = Sse2.CompareEqual(
+                        Sse41.Min(normalized, rangeVector),
+                        normalized
+                    );
+                    var byteMask = (uint)Sse2.MoveMask(valid.AsSByte());
+                    var validMask = CompressUtf16ValidityMask(
+                        byteMask,
+                        Vector128<ushort>.Count
+                    );
+                    ProcessValidityMask(
+                        validMask,
+                        Vector128<ushort>.Count,
+                        position,
+                        ref stringStart,
+                        minLength,
+                        maxLength,
+                        fileOffset,
+                        hits
+                    );
+                }
+            }
+
+            for (; position < unitCount; position++)
+            {
+                var byteIndex = position * sizeof(ushort);
+                var current = (ushort)(dataPtr[byteIndex] | (dataPtr[byteIndex + 1] << 8));
+                ProcessCharForStringHit(
+                    current >= minChar && current <= maxChar,
+                    position,
+                    ref stringStart,
+                    minLength,
+                    maxLength,
+                    fileOffset,
+                    hits
+                );
+            }
+
+            if (stringStart >= 0)
+            {
+                AddStringHit(stringStart, position, minLength, maxLength, fileOffset, hits);
+            }
+        }
+
+        for (var index = 0; index < hits.Count; index++)
+        {
+            var hit = hits[index];
+            hits[index] = new StringHitPosition(
+                hit.Start * sizeof(ushort),
+                hit.Length * sizeof(ushort),
+                hit.FileOffset
+            );
+        }
+
+        return hits;
+    }
+
+    internal static List<string> MaterializeUnicodeStringHits(
+        ReadOnlySpan<byte> data,
+        List<StringHitPosition> hits,
+        bool includeOffset
+    )
+    {
+        var results = new List<string>(hits.Count);
+        foreach (var hit in hits)
+        {
+            if (hit.Start + hit.Length > data.Length)
+            {
+                continue;
+            }
+
+            var value = Encoding.Unicode.GetString(data.Slice(hit.Start, hit.Length));
+            results.Add(includeOffset ? $"0x{hit.FileOffset + hit.Start:X}\t{value}" : value);
+        }
+
+        return results;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint CompressUtf16ValidityMask(uint byteMask, int width)
+    {
+        var evenByteBits = width == Vector256<ushort>.Count ? 0x55555555U : 0x5555U;
+        if (Bmi2.IsSupported)
+        {
+            return Bmi2.ParallelBitExtract(byteMask, evenByteBits);
+        }
+
+        uint result = 0;
+        for (var index = 0; index < width; index++)
+        {
+            result |= ((byteMask >> (index * 2)) & 1U) << index;
+        }
+
+        return result;
     }
 
     internal static List<string> MaterializeStringHits(

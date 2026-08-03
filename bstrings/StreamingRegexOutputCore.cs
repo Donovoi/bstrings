@@ -15,7 +15,7 @@ namespace bstrings;
 /// </summary>
 internal sealed class StreamingRegexOutputCore
 {
-    private readonly IReadOnlyList<(string Name, Regex Regex)> _patterns;
+    private readonly IReadOnlyList<AdaptivePatternMatcher> _patterns;
     private readonly bool _regexOnly;
     private readonly bool _includeOffset;
     private readonly bool _isCsvOutput;
@@ -29,14 +29,21 @@ internal sealed class StreamingRegexOutputCore
         bool regexOnly,
         bool includeOffset,
         bool isCsvOutput,
-        string sourceFile
+        string sourceFile,
+        long estimatedBatchCount = 1
     )
     {
-        var regexMap = RegexOutputCore.BuildRegexMap(patterns);
-        var compiledPatterns = new List<(string Name, Regex Regex)>(regexMap.Count);
-        foreach (var (name, regex) in regexMap)
+        var compiledPatterns = new List<AdaptivePatternMatcher>();
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (name, pattern) in patterns)
         {
-            compiledPatterns.Add((name, regex));
+            if (string.IsNullOrWhiteSpace(name) || !seenNames.Add(name))
+            {
+                continue;
+            }
+            compiledPatterns.Add(
+                new AdaptivePatternMatcher(name, pattern, estimatedBatchCount)
+            );
         }
 
         _patterns = compiledPatterns;
@@ -47,6 +54,8 @@ internal sealed class StreamingRegexOutputCore
     }
 
     internal long OutputRowCount => Interlocked.Read(ref _outputRowCount);
+
+    internal int CompiledPromotionCount => _patterns.Sum(pattern => pattern.PromotionCount);
 
     internal List<string> TransformMainBatch(List<string> hits)
     {
@@ -61,6 +70,11 @@ internal sealed class StreamingRegexOutputCore
     private List<string> TransformBatch(List<string> hits, bool isBoundaryBatch)
     {
         var output = new List<string>();
+
+        foreach (var pattern in _patterns)
+        {
+            pattern.PrepareForBatch(hits.Count);
+        }
 
         try
         {
@@ -79,8 +93,10 @@ internal sealed class StreamingRegexOutputCore
                         : rawHit;
                 var parsedHit = RegexOutputCore.ParseHit(normalizedHit, _includeOffset);
 
-                foreach (var (patternName, regex) in _patterns)
+                foreach (var pattern in _patterns)
                 {
+                    var patternName = pattern.Name;
+                    var regex = pattern.GetRegexForNextCandidate();
                     try
                     {
                         if (_regexOnly)
@@ -325,5 +341,117 @@ internal sealed class StreamingRegexOutputCore
 
         overlap = 0;
         return false;
+    }
+
+    private sealed class AdaptivePatternMatcher
+    {
+        private static readonly IReadOnlyDictionary<string, long> PromotionThresholds =
+            new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["usPhone"] = 10_000,
+                ["ipv4"] = 10_000,
+                ["email"] = 20_000,
+                ["mac"] = 20_000,
+                ["pem_private_key"] = 20_000,
+                ["ssn"] = 20_000,
+                ["ipv6"] = 40_000,
+                ["monero"] = 40_000,
+                ["aeon"] = 60_000,
+                ["fantomcoin"] = 60_000,
+                ["unc"] = 60_000,
+                ["sid"] = 80_000,
+            };
+
+        private readonly string _patternText;
+        private readonly long _promotionThreshold;
+        private readonly long _estimatedBatchCount;
+        private readonly object _promotionGate = new();
+        private Regex? _regex;
+        private long _attempts;
+        private int _promotionCount;
+
+        internal AdaptivePatternMatcher(
+            string name,
+            string patternText,
+            long estimatedBatchCount
+        )
+        {
+            Name = name;
+            _patternText = patternText;
+            _promotionThreshold =
+                BuiltInPatternCatalog.TryGetDefinition(name, patternText, out var definition)
+                && !definition.UseNonBacktracking
+                    ? PromotionThresholds.GetValueOrDefault(name)
+                    : 0;
+            _estimatedBatchCount = Math.Max(1, estimatedBatchCount);
+            if (_promotionThreshold == 0)
+            {
+                _regex = RegexOutputCore.GetOrCreateRegex(name, patternText);
+            }
+        }
+
+        internal string Name { get; }
+
+        internal int PromotionCount => Volatile.Read(ref _promotionCount);
+
+        internal void PrepareForBatch(int candidateCount)
+        {
+            if (
+                candidateCount > 0
+                && _promotionThreshold > 0
+                && (
+                    Interlocked.Read(ref _attempts) + candidateCount >= _promotionThreshold
+                    || candidateCount
+                        >= _promotionThreshold / _estimatedBatchCount
+                            + (_promotionThreshold % _estimatedBatchCount == 0 ? 0 : 1)
+                )
+            )
+            {
+                Promote();
+            }
+        }
+
+        internal Regex GetRegexForNextCandidate()
+        {
+            if (
+                _promotionThreshold > 0
+                && Interlocked.Increment(ref _attempts) >= _promotionThreshold
+                && Volatile.Read(ref _promotionCount) == 0
+            )
+            {
+                Promote();
+            }
+
+            return Volatile.Read(ref _regex) ?? GetOrCreateInterpreted();
+        }
+
+        private Regex GetOrCreateInterpreted()
+        {
+            lock (_promotionGate)
+            {
+                return _regex ??= RegexOutputCore.GetOrCreateRegex(Name, _patternText);
+            }
+        }
+
+        private void Promote()
+        {
+            if (Volatile.Read(ref _promotionCount) != 0)
+            {
+                return;
+            }
+
+            lock (_promotionGate)
+            {
+                if (_promotionCount == 0)
+                {
+                    _regex = RegexOutputCore.GetOrCreateRegex(
+                        Name,
+                        _patternText,
+                        preferCompiledBuiltIn: true
+                    );
+                    Volatile.Write(ref _promotionCount, 1);
+                }
+            }
+        }
     }
 }

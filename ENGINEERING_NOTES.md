@@ -26,16 +26,20 @@ streaming path—may still need more memory.
 
 ## Extraction has three real backends
 
-The CPU scanner uses AVX2 or SSE2 when available and keeps a scalar fallback.
-It consumes SIMD validity masks by contiguous runs instead of branching once
-per byte. The GPU scanner runs native ILGPU CUDA kernels. In `hybrid` mode, CPU
-and CUDA workers take chunks from the same bounded queue.
+The CPU scanner selects kernels from the host's actual instruction set. ASCII
+uses AVX2 or SSE2 when available; UTF-16LE uses AVX2 with BMI2 PEXT, AVX2
+without PEXT, or SSE4.1, and both paths keep exact scalar tails and fallbacks.
+The scanners consume SIMD validity masks by contiguous runs instead of
+branching once per unit. The GPU scanner runs native ILGPU CUDA kernels. In
+`hybrid` mode, CPU and CUDA workers take chunks from the same bounded queue.
 
 CUDA is not accepted merely because a device exists. Each session runs a small
 CPU/GPU parity check first. If an explicit `gpu` request cannot pass that
-check, the command fails. `auto` uses measured input-size and minimum-length
-crossovers, while automatic chunk sizing aims to leave enough work for all
-available workers.
+check, the command fails. On large inputs, `auto` races CPU, GPU, and hybrid
+over evenly spaced samples, requires exact parity, includes CUDA startup cost,
+and only selects an accelerator after a projected five-percent win. A failed
+automatic accelerator measurement safely returns to CPU. Automatic chunk
+sizing aims to leave enough work for all available workers.
 
 ## Regex handling is deliberately stricter
 
@@ -45,9 +49,10 @@ definition. That removes the old global ignore-case and free-spacing behavior.
 Custom regexes now behave like normal .NET regexes unless the caller requests
 inline options such as `(?i)` or `(?x)`.
 
-Regex objects are cached. Compatible built-ins use the non-backtracking engine;
-patterns that need lookarounds or backreferences use compiled matching under
-the same two-second timeout. CPU scheduling switches between hit-major and
+Regex objects are cached. Compatible built-ins use the non-backtracking engine.
+Patterns that need lookarounds or backreferences start interpreted and promote
+once to compiled code only when measured batch density and remaining work
+justify the construction cost. CPU scheduling switches between hit-major and
 pattern-major work according to the number of hits, patterns, and logical
 processors.
 
@@ -87,8 +92,9 @@ self-contained Windows x64 executable, package it, and upload the zip as a
 temporary artifact. A release is created only for an explicit `v*` tag.
 
 Benchmarks should always include the corpus, command, hardware, runtime, and
-repeat count. The repository includes generators for extraction and regex
-scheduling so results can be reproduced instead of repeated as folklore.
+repeat count. The repository includes generators for extraction, exact
+per-pattern competitor checks, and regex scheduling so results can be
+reproduced instead of repeated as folklore.
 The benchmark generator's `--dense-output` mode creates a synthetic mix of
 ASCII and UTF-16LE records containing email and URL matches;
 `--dense-record-length=<characters>` is useful for checking dispatch boundaries

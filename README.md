@@ -15,24 +15,29 @@ benchmarks.
 | Decision point | Donovoi/bstrings | Original bstrings | ripgrep | bulk_extractor |
 | --- | --- | --- | --- | --- |
 | 100 GiB sparse URL/email scan | **42.19 s / 2,427 MiB/s** | 187.66 s / 545.7 MiB/s | 180.77 s / 566.5 MiB/s | 319.34 s / 320.7 MiB/s |
+| 33-pattern exactness at 256 MiB | **33/33** | 15/33 | 25/33 stream-comparable | 0/33 through find/RE2 |
+| Speed on exact per-pattern overlaps | **15/15 wins vs original, 2.02–2.39x** | Slower on every exact overlap | Fork wins 10/25; ripgrep wins 15/25 | Not ranked: no pattern passed the complete boundary corpus |
 | Readable-string extraction | Code-page and UTF-16LE, offsets, streaming filters | Code-page and UTF-16LE | Raw byte/text search, not a strings extractor | Structured feature scanners and carving, not generic strings output |
 | Chunk-boundary handling | Rejects clipped edge fragments and recovers complete crossing strings | Can emit clipped or duplicate boundary matches | Searcher-managed | Page margins managed by each scanner |
-| Parallel hardware paths | SIMD CPU, validated CUDA GPU, and CPU+GPU hybrid | CPU | CPU | Multi-threaded CPU scanners |
+| Parallel hardware paths | Runtime-selected SIMD CPU, validated CUDA GPU, and CPU+GPU hybrid | CPU | CPU | Multi-threaded CPU scanners |
 | Best fit | Large evidence images when you need strings, forensic patterns, and auditable output completion | Compatibility with the original CLI | Very fast known-pattern triage over raw bytes | Broad feature extraction, recursive decoding, carving, and histograms |
 
-All four tools returned the exact ground-truth count at every measured size.
-The speed row is a CPU, warm-cache result on one deliberately sparse synthetic
-corpus; `bulk_extractor` also did extra work such as feature contexts,
-histograms, and a report hash. Read the
-[scale benchmark and its limitations](docs/scale-benchmark-2026-08.md) before
-generalizing the numbers.
+The first row is the earlier scale benchmark, where all four commands returned
+the exact marker set. The next two rows are a stricter pattern-by-pattern run:
+positive, negative, chunk-crossing, and terminal records had to match by value
+and byte offset. A failed semantic or accuracy gate is not used for a speed
+claim. Both benchmarks are warm-cache results on deliberately synthetic data.
+Read the [scale benchmark](docs/scale-benchmark-2026-08.md) and the
+[pattern and engine benchmark](docs/pattern-engine-benchmark-2026-08.md)
+before generalizing them.
 
 ## What this fork adds
 
 - Bounded, parallel scanning without a hidden result-count limit
 - SIMD CPU, native CUDA GPU, and mixed CPU+GPU extraction
 - Cached, vectorized multi-string prefiltering for `--ls` and `--fs`
-- Automatic backend selection based on measured crossover points
+- Hardware- and workload-aware CPU/GPU/hybrid calibration for very large inputs
+- Lazy regex compilation based on measured per-pattern candidate density
 - Offset-aware text and CSV output
 - Per-pattern regex options, timeouts, and boundary tests
 - 33 built-in forensic pattern candidates
@@ -52,10 +57,17 @@ first one.
 | `--processor auto|cpu|gpu|hybrid` | Extracting strings from bytes | Use `auto` unless you are testing or deliberately forcing a backend |
 | `--use-rapids` | Applying compatible built-in regexes after extraction | Use only when RAPIDS/cuDF is already installed and working |
 
-The native CUDA extractor validates its output against the CPU implementation
-before accepting a session. An explicit `gpu` request fails clearly when CUDA
-cannot be used. `auto` stays on CPU until the input size and minimum string
-length reach a measured GPU crossover.
+The CPU path reports the instructions it selected at runtime. On the reviewed
+host that is AVX2 for code-page strings and AVX2 plus BMI2 `PEXT` mask
+compression for UTF-16LE; SSE4.1 and scalar UTF-16LE fallbacks are tested too.
+
+The native CUDA extractor compiles its ILGPU kernels for the detected device
+and validates output against the CPU implementation before accepting a
+session. An explicit `gpu` request fails clearly when CUDA cannot be used.
+`auto` avoids CUDA startup for workloads where the local CPU class has already
+won, then races CPU, GPU, and hybrid over representative file samples on very
+large inputs. Every calibration candidate must match the CPU sample exactly,
+and an accelerated mode needs a projected five-percent win after CUDA startup.
 
 RAPIDS is more conservative. It uses a reviewed cuDF pattern only as a broad
 prefilter, then checks every candidate with the normal .NET regex. Custom
@@ -223,19 +235,43 @@ The generator writes a SHA-256 manifest with the expected literal, URL, and
 email counts. The matching four-tool harness is documented in
 [benchmarks/README.md](benchmarks/README.md).
 
-To compare adaptive, forced hit-major, and forced pattern-major regex
-scheduling:
+To exercise every built-in pattern, encoding, and complexity class:
 
 ```powershell
-dotnet run --project dev-tools\regex-benchmark -c Release -- 2000000 7 5
+dotnet run --project benchmarks\PatternCorpusGenerator -c Release -- `
+  --output-dir C:\bench\patterns `
+  --size-mib 256 `
+  --segment-mib 16 `
+  --encoding ascii `
+  --complexity adversarial
+
+.\benchmarks\Invoke-PatternBenchmark.ps1 `
+  -DataRoot C:\bench\patterns `
+  -CurrentBstrings C:\tools\fork\bstrings.exe `
+  -UpstreamBstrings C:\tools\upstream\bstrings.exe `
+  -BulkExtractor C:\tools\bulk_extractor64.exe `
+  -RunRoot C:\bench\pattern-run-001 `
+  -Repetitions 3 `
+  -VerifyHashes
 ```
 
-The three arguments are hit count, repetitions, and number of representative
-patterns. On the reviewed 22-logical-processor host, the adaptive policy uses
-hit-major scheduling when there are at least 10,000 hits and fewer patterns
-than logical processors. Other workloads use pattern-major scheduling. The
-benchmark is included so that policy can be checked on different hardware
-rather than treated as universal.
+`sparse`, `dense`, and `adversarial` corpora are supported, as are `ascii`
+and `utf16le`. The harness records unsupported semantics instead of weakening
+a pattern until another tool happens to accept it.
+
+To measure interpreted-versus-compiled regex crossover points:
+
+```powershell
+dotnet run --project benchmarks\RegexEngineBenchmark -c Release -- `
+  --iterations 1,1000,10000,100000 `
+  --rounds 5 `
+  --output C:\bench\regex-engines.csv
+```
+
+The main streaming path starts measured built-ins with the interpreted engine
+when candidate density is low. It constructs a compiled engine once when the
+first bounded batch and remaining chunk count project enough attempts to repay
+compilation. Custom regex behavior is unchanged.
 
 The reasoning and measurements behind the SIMD, bounded collection, and
 literal-prefilter changes are in the

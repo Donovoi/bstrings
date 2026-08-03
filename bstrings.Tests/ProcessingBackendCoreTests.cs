@@ -43,8 +43,8 @@ public class ProcessingBackendCoreTests
     [InlineData(ProcessingMode.Auto, 1L * 1024 * 1024 * 1024, true, 8, ProcessingMode.Cpu)]
     [InlineData(ProcessingMode.Auto, 4L * 1024 * 1024 * 1024, false, 8, ProcessingMode.Cpu)]
     [InlineData(ProcessingMode.Auto, 4L * 1024 * 1024 * 1024, true, 3, ProcessingMode.Cpu)]
-    [InlineData(ProcessingMode.Auto, 4L * 1024 * 1024 * 1024, true, 8, ProcessingMode.Gpu)]
-    public void ResolveMode_UsesMeasuredAutoCrossover(
+    [InlineData(ProcessingMode.Auto, 100L * 1024 * 1024 * 1024, true, 8, ProcessingMode.Cpu)]
+    public void ResolveMode_KeepsAutoConservativeUntilCalibration(
         ProcessingMode requested,
         long fileSizeBytes,
         bool gpuAvailable,
@@ -59,6 +59,33 @@ public class ProcessingBackendCoreTests
                 fileSizeBytes,
                 gpuAvailable,
                 minLength
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData(1.0, 0.5, 0.8, 0.1, ProcessingMode.Gpu)]
+    [InlineData(1.0, 0.8, 0.5, 0.1, ProcessingMode.Hybrid)]
+    [InlineData(1.0, 0.96, 0.99, 0.0, ProcessingMode.Cpu)]
+    [InlineData(1.0, 0.5, 0.8, 60.0, ProcessingMode.Cpu)]
+    [InlineData(double.NaN, 0.5, 0.4, 0.0, ProcessingMode.Cpu)]
+    public void SelectCalibratedMode_RequiresProjectedFivePercentWin(
+        double cpuSeconds,
+        double gpuSeconds,
+        double hybridSeconds,
+        double gpuStartupSeconds,
+        ProcessingMode expected
+    )
+    {
+        Assert.Equal(
+            expected,
+            ProcessingBackendCore.SelectCalibratedMode(
+                cpuSeconds,
+                gpuSeconds,
+                hybridSeconds,
+                gpuStartupSeconds,
+                fileSizeBytes: 1024,
+                sampledBytes: 1024
             )
         );
     }
