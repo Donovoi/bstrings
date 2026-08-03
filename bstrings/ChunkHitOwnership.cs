@@ -31,7 +31,9 @@ internal readonly record struct ChunkHitOwnership(
             return false;
         }
 
+        // Primary chunks suppress both edge cases. The boundary window must
+        // therefore own complete hits that cross or exactly touch its midpoint.
         return RequiredCrossingOffset <= 0
-            || (start < RequiredCrossingOffset && end > RequiredCrossingOffset);
+            || (start <= RequiredCrossingOffset && end >= RequiredCrossingOffset);
     }
 }

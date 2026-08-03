@@ -897,10 +897,40 @@ public class SearchCoreTests
         var leftOnly = new byte[64];
         Encoding.ASCII.GetBytes("https://left.test").CopyTo(leftOnly, 4);
 
+        var rightOnly = new byte[64];
+        Encoding.ASCII.GetBytes("https://right.test").CopyTo(rightOnly, 40);
+
         Assert.Equal(["  https://example.test/item"], ProcessBoundary(complete));
         Assert.Empty(ProcessBoundary(clippedAtStart));
         Assert.Empty(ProcessBoundary(clippedAtEnd));
         Assert.Empty(ProcessBoundary(leftOnly));
+        Assert.Empty(ProcessBoundary(rightOnly));
+    }
+
+    [Fact]
+    public void ProcessChunk_BoundaryOwnershipRecoversHitsTouchingEitherSideOfBoundary()
+    {
+        var startsAtBoundary = new byte[64];
+        Encoding.ASCII.GetBytes("RightSide").CopyTo(startsAtBoundary, 32);
+
+        var endsAtBoundary = new byte[64];
+        Encoding.ASCII.GetBytes("LeftSide").CopyTo(endsAtBoundary, 24);
+
+        Assert.Equal(["  RightSide"], ProcessBoundary(startsAtBoundary));
+        Assert.Equal(["  LeftSide"], ProcessBoundary(endsAtBoundary));
+    }
+
+    [Fact]
+    public void ProcessChunk_BoundaryOwnershipRecoversUtf16HitsTouchingEitherSideOfBoundary()
+    {
+        var startsAtBoundary = new byte[64];
+        Encoding.Unicode.GetBytes("Right").CopyTo(startsAtBoundary, 32);
+
+        var endsAtBoundary = new byte[64];
+        Encoding.Unicode.GetBytes("Left").CopyTo(endsAtBoundary, 24);
+
+        Assert.Equal(["  Right"], ProcessUnicodeBoundary(startsAtBoundary));
+        Assert.Equal(["  Left"], ProcessUnicodeBoundary(endsAtBoundary));
     }
 
     [Fact]
@@ -983,6 +1013,25 @@ public class SearchCoreTests
             maxLength: -1,
             asciiSearch: true,
             unicodeSearch: false,
+            includeOffset: false,
+            asciiRange: "[\\x20-\\x7E]",
+            unicodeRange: "[\\u0020-\\u007E]",
+            suppressLeadingFragment: true,
+            suppressTrailingFragment: true,
+            boundaryCrossingOffset: bytes.Length / 2
+        );
+    }
+
+    private static List<string> ProcessUnicodeBoundary(byte[] bytes)
+    {
+        return ChunkProcessingCore.ProcessChunk(
+            bytes,
+            fileOffset: 0,
+            isBoundaryChunk: true,
+            minLength: 3,
+            maxLength: -1,
+            asciiSearch: false,
+            unicodeSearch: true,
             includeOffset: false,
             asciiRange: "[\\x20-\\x7E]",
             unicodeRange: "[\\u0020-\\u007E]",
