@@ -1,0 +1,19 @@
+[project]
+name = "bstrings-enrichment"
+version = "0.1.0"
+description = "Optional Magika, FLOSS, and offline translation adapters for bstrings"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+translation = [
+    "sentencepiece>=0.2,<1",
+    "torch>=2.7,<3",
+    "transformers>=4.57,<5",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
