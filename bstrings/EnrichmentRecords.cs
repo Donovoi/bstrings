@@ -1,0 +1,69 @@
+#nullable enable
+
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace bstrings;
+
+internal sealed record EnrichmentLocation
+{
+    public string Kind { get; init; } = string.Empty;
+    public string Value { get; init; } = string.Empty;
+}
+
+internal sealed record EnrichmentOrigin
+{
+    public string Extractor { get; init; } = string.Empty;
+    public string? Version { get; init; }
+    public string Kind { get; init; } = string.Empty;
+}
+
+internal sealed record EnrichmentTransform
+{
+    public string Kind { get; init; } = string.Empty;
+    public string Engine { get; init; } = string.Empty;
+    public string? EngineVersion { get; init; }
+    public string? Model { get; init; }
+    public string? Revision { get; init; }
+    public string? ModelSha256 { get; init; }
+    public string? SourceLanguage { get; init; }
+    public string? TargetLanguage { get; init; }
+}
+
+internal sealed record EnrichmentStringRecord
+{
+    public int SchemaVersion { get; init; }
+    public string RecordType { get; init; } = string.Empty;
+    public string RecordId { get; init; } = string.Empty;
+    public string? Text { get; init; }
+    public string SourceFile { get; init; } = string.Empty;
+    public EnrichmentLocation? Location { get; init; }
+    public EnrichmentOrigin? Origin { get; init; }
+    public string? ParentRecordId { get; init; }
+    public EnrichmentTransform? Transform { get; init; }
+    public Dictionary<string, JsonElement>? Attributes { get; init; }
+}
+
+internal sealed record EnrichmentRegexMatchRecord
+{
+    public int SchemaVersion { get; init; } = 1;
+    public string RecordType { get; init; } = "regex-match";
+    public string PatternName { get; init; } = string.Empty;
+    public string Pattern { get; init; } = string.Empty;
+    public string Match { get; init; } = string.Empty;
+    public string SourceRecordId { get; init; } = string.Empty;
+    public string SourceFile { get; init; } = string.Empty;
+    public EnrichmentLocation? Location { get; init; }
+    public EnrichmentOrigin? Origin { get; init; }
+    public string? ParentRecordId { get; init; }
+    public EnrichmentTransform? Transform { get; init; }
+    public string EvidenceClass { get; init; } = string.Empty;
+    public Dictionary<string, JsonElement>? Attributes { get; init; }
+}
+
+internal readonly record struct EnrichmentPipelineStats(
+    long InputRecords,
+    long TranslatedRecords,
+    long MatchRecords
+);

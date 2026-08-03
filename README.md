@@ -18,6 +18,7 @@ and reproducible tests and benchmarks.
 | 33-pattern exactness at 256 MiB | **33/33** | 15/33 | 25/33 stream-comparable | 0/33 through find/RE2 |
 | Speed on exact per-pattern overlaps | **15/15 wins vs original, 2.02–2.39x** | Slower on every exact overlap | Fork wins 10/25; ripgrep wins 15/25 | Not ranked: no pattern passed the complete boundary corpus |
 | Readable-string extraction | Code-page and UTF-16LE, offsets, streaming filters | Code-page and UTF-16LE | Raw byte/text search, not a strings extractor | Structured feature scanners and carving, not generic strings output |
+| Optional enrichment | Magika-routed FLOSS recovery and provenance-preserving offline translation input | None | None | Recursive decoding and feature scanners, but no FLOSS/translation lineage into this regex catalog |
 | Chunk-boundary handling | Rejects clipped edge fragments and recovers complete crossing strings | Can emit clipped or duplicate boundary matches | Searcher-managed | Page margins managed by each scanner |
 | Parallel hardware paths | Runtime-selected SIMD CPU, opt-in Rust AVX2/SSE2 ASCII scanning, validated CUDA GPU, and CPU+GPU hybrid | CPU | CPU | Multi-threaded CPU scanners |
 | Best fit | Large evidence images when you need strings, forensic patterns, and auditable output completion | Compatibility with the original CLI | Very fast known-pattern triage over raw bytes | Broad feature extraction, recursive decoding, carving, and histograms |
@@ -51,6 +52,7 @@ explain why it is not the default yet.
 - Offset-aware text and CSV output
 - Per-pattern regex options, timeouts, and boundary tests
 - 33 built-in forensic pattern candidates
+- Provenance-preserving regex input for Magika/FLOSS and offline translation enrichment
 - Optional RAPIDS/cuDF prefiltering for compatible built-in regexes
 - A self-contained Windows x64 build produced by CI
 
@@ -134,10 +136,16 @@ mix results. `bstrings` never installs Python, CUDA, or RAPIDS for you.
 
 # Add experimental RAPIDS regex prefiltering
 .\bstrings.exe -f C:\evidence\image.bin --lr all --use-rapids
+
+# Apply the same regex catalog to FLOSS/translation enrichment records
+.\bstrings.exe --enrich-jsonl C:\results\enriched-strings.jsonl --lr all -o C:\results\enriched-matches.jsonl
 ```
 
 Run `bstrings.exe --help` for the full command reference. Run
 `bstrings.exe -p` to see every built-in pattern and its current description.
+The [extractor and translation guide](docs/enrichment-pipeline.md) explains how
+to route carved files with Magika, normalize FLOSS output, run a pinned offline
+MADLAD-400 translation pass, and interpret derived matches safely.
 
 ## Built-in regex catalog
 
@@ -194,6 +202,7 @@ RAPIDS limitation are in
 | `--processor <mode>` | Choose `auto`, `cpu`, `gpu`, or `hybrid` extraction |
 | `--cpu-engine <mode>` | Choose `dotnet`, `rust`, or availability-fallback `auto` for ASCII CPU span discovery |
 | `--use-rapids` | Try an existing RAPIDS/cuDF installation for regex prefiltering |
+| `--enrich-jsonl <path>` | Apply `--lr`/`--fr` to normalized extractor or translation records and preserve their lineage in JSONL output |
 
 `--force-rapids` is retained as a deprecated alias for `--use-rapids`. Despite
 the old name, it does not install or force unsupported software.

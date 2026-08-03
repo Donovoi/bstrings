@@ -14,6 +14,7 @@ using System.Reflection;
 using System.Runtime.InteropServices; // Keep one instance
 using System.Security.AccessControl;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Channels;
@@ -53,14 +54,18 @@ public static partial class Program
         + @"bstrings.exe -f ""C:\evidence\memory.raw"" --processor hybrid -s"
         + "\r\n\t "
         + @"bstrings.exe -f ""C:\evidence\image.bin"" --lr all --use-rapids"
+        + "\r\n\t "
+        + @"bstrings.exe --enrich-jsonl ""C:\results\enriched.jsonl"" --lr all -o ""C:\results\matches.jsonl"""
         + "\r\n"
-        + "\r\n--processor controls string extraction. --use-rapids is a separate, optional regex prefilter.";
+        + "\r\n--processor controls string extraction. --use-rapids is a separate, optional regex prefilter."
+        + "\r\n--enrich-jsonl processes provenance-preserving external string records without rescanning file bytes.";
 
     private static RootCommand _rootCommand;
 
     private static IFileSystem _fileSystem;
 
     public static bool _debug = false;
+    private static bool _actionFailed;
 
     private sealed class OutputCompletionScope : IAsyncDisposable
     {
@@ -555,6 +560,11 @@ public static partial class Program
                 "Deprecated compatibility flag. Third-party software is not installed automatically",
             DefaultValueFactory = _ => false,
         };
+        var enrichJsonlOpt = new Option<string>("--enrich-jsonl")
+        {
+            Description =
+                "Apply --lr/--fr patterns to provenance-preserving enrichment JSONL instead of extracting file bytes",
+        };
 
         _rootCommand = new RootCommand
         {
@@ -588,6 +598,7 @@ public static partial class Program
             cpuEngineOpt,
             useRapidsOpt,
             forceRapidsOpt,
+            enrichJsonlOpt,
         };
 
         _rootCommand.Description = Header + "\r\n\r\n" + Footer;
@@ -623,13 +634,15 @@ public static partial class Program
                     result.GetValue(processorOpt),
                     result.GetValue(cpuEngineOpt),
                     result.GetValue(useRapidsOpt),
-                    result.GetValue(forceRapidsOpt)
+                    result.GetValue(forceRapidsOpt),
+                    result.GetValue(enrichJsonlOpt)
                 )
         );
 
         try
         {
-            return await _rootCommand.Parse(args).InvokeAsync();
+            var exitCode = await _rootCommand.Parse(args).InvokeAsync();
+            return _actionFailed && exitCode == 0 ? 2 : exitCode;
         }
         finally
         {
@@ -668,10 +681,47 @@ public static partial class Program
         string processor,
         string cpuEngine,
         bool useRapids, // use NVIDIA RAPIDS for GPU-accelerated regex processing
-        bool forceRapids // deprecated compatibility flag
+        bool forceRapids, // deprecated compatibility flag
+        string enrichJsonl // normalized external-extractor/translation records
     )
     { // Set the global debug flag
         _debug = debug;
+
+        if (!string.IsNullOrWhiteSpace(enrichJsonl))
+        {
+            if (!string.IsNullOrWhiteSpace(f) || !string.IsNullOrWhiteSpace(d))
+            {
+                Console.Error.WriteLine("--enrich-jsonl cannot be combined with -f or -d.");
+                _actionFailed = true;
+                return;
+            }
+            if (!string.IsNullOrWhiteSpace(ls) || !string.IsNullOrWhiteSpace(fs))
+            {
+                Console.Error.WriteLine(
+                    "--enrich-jsonl accepts regex targets through --lr or --fr; literal filters are not supported."
+                );
+                _actionFailed = true;
+                return;
+            }
+            if (useRapids || forceRapids)
+            {
+                Console.Error.WriteLine(
+                    "--use-rapids is not supported with --enrich-jsonl; normalized records use the authoritative CPU regex path."
+                );
+                _actionFailed = true;
+                return;
+            }
+            if (sa || sl)
+            {
+                Console.Error.WriteLine(
+                    "Sorting is not supported with streaming enrichment JSONL output."
+                );
+                _actionFailed = true;
+                return;
+            }
+            await ProcessEnrichmentJsonlAsync(enrichJsonl, o, lr, fr, q);
+            return;
+        }
 
         if (!ProcessingBackendCore.TryParseMode(processor, out var requestedMode, out var modeError))
         {
@@ -3519,6 +3569,74 @@ public static partial class Program
     private static List<string> ParseRegexPatterns(string lr)
     {
         return SearchCore.ParseRegexPatterns(lr, RegExPatterns);
+    }
+
+    private static async Task ProcessEnrichmentJsonlAsync(
+        string inputPath,
+        string outputPath,
+        string lr,
+        string regexFilePath,
+        bool quiet
+    )
+    {
+        var patterns = ParseRegexPatternsWithNames(lr);
+        if (!string.IsNullOrWhiteSpace(regexFilePath))
+        {
+            if (!File.Exists(regexFilePath))
+            {
+                Console.Error.WriteLine($"Regex file '{regexFilePath}' was not found.");
+                _actionFailed = true;
+                return;
+            }
+
+            var lineNumber = 0;
+            foreach (var line in File.ReadLines(regexFilePath))
+            {
+                lineNumber++;
+                var pattern = line.Trim();
+                if (pattern.Length == 0 || pattern.StartsWith('#'))
+                {
+                    continue;
+                }
+                patterns.Add(($"file:{lineNumber}", pattern));
+            }
+        }
+
+        if (patterns.Count == 0)
+        {
+            Console.Error.WriteLine("--enrich-jsonl requires at least one --lr or --fr pattern.");
+            _actionFailed = true;
+            return;
+        }
+
+        try
+        {
+            var stats = await EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                string.IsNullOrWhiteSpace(outputPath) ? null : outputPath,
+                patterns
+            );
+            if (!quiet)
+            {
+                Console.Error.WriteLine(
+                    $"Processed {stats.InputRecords:N0} enrichment strings "
+                        + $"({stats.TranslatedRecords:N0} translated) and wrote "
+                        + $"{stats.MatchRecords:N0} provenance-preserving regex matches."
+                );
+            }
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException
+            or IOException
+            or InvalidDataException
+            or JsonException
+            or TimeoutException
+            or UnauthorizedAccessException
+        )
+        {
+            Console.Error.WriteLine($"Enrichment processing failed: {ex.Message}");
+            _actionFailed = true;
+        }
     }
 
     /// <summary>

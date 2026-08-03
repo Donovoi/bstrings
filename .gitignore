@@ -193,3 +193,7 @@ ModelManifest.xml
 
 # Rust build output
 /native/**/target/
+
+# Python adapter caches
+__pycache__/
+*.py[cod]
