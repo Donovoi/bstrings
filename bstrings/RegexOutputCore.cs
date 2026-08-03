@@ -176,6 +176,60 @@ internal static class RegexOutputCore
         List<string> output
     )
     {
+        var offset = parsedHit.Offset;
+        AppendStreamingRecordsCore(
+            parsedHit.Data,
+            absoluteOffset: 0,
+            formatNumericOffset: false,
+            ref offset,
+            patternName,
+            regex,
+            definition,
+            isCsvOutput,
+            sourceFile,
+            output
+        );
+    }
+
+    internal static void AppendStreamingRecords(
+        ExtractedStringHit extractedHit,
+        bool includeOffset,
+        ref string formattedOffset,
+        string patternName,
+        Regex regex,
+        BuiltInPatternDefinition definition,
+        bool isCsvOutput,
+        string sourceFile,
+        List<string> output
+    )
+    {
+        AppendStreamingRecordsCore(
+            extractedHit.Data,
+            extractedHit.Offset,
+            formatNumericOffset: includeOffset,
+            ref formattedOffset,
+            patternName,
+            regex,
+            definition,
+            isCsvOutput,
+            sourceFile,
+            output
+        );
+    }
+
+    private static void AppendStreamingRecordsCore(
+        string data,
+        long absoluteOffset,
+        bool formatNumericOffset,
+        ref string formattedOffset,
+        string patternName,
+        Regex regex,
+        BuiltInPatternDefinition definition,
+        bool isCsvOutput,
+        string sourceFile,
+        List<string> output
+    )
+    {
         Span<CandidateRange> inlineRanges = stackalloc CandidateRange[4];
         List<CandidateRange> overflowRanges = null;
         var rangeCount = 0;
@@ -185,7 +239,7 @@ internal static class RegexOutputCore
             && string.Equals(definition.Name, "b64", StringComparison.OrdinalIgnoreCase)
         )
         {
-            foreach (var candidate in EnumerateBase64Candidates(parsedHit.Data))
+            foreach (var candidate in EnumerateBase64Candidates(data))
             {
                 AddCandidateRange(
                     inlineRanges,
@@ -200,34 +254,34 @@ internal static class RegexOutputCore
             && string.Equals(definition.Name, "xml", StringComparison.OrdinalIgnoreCase)
         )
         {
-            if (IsSimpleXmlElementMatch(parsedHit.Data))
+            if (IsSimpleXmlElementMatch(data))
             {
                 AddCandidateRange(
                     inlineRanges,
                     ref overflowRanges,
                     ref rangeCount,
-                    new CandidateRange(0, parsedHit.Data.Length)
+                    new CandidateRange(0, data.Length)
                 );
             }
         }
         else if (
             definition is not null
             && definition.GeneratedShortInputLimit is int generatedShortInputLimit
-            && parsedHit.Data.Length <= generatedShortInputLimit
+            && data.Length <= generatedShortInputLimit
             && TryGetGeneratedShortInputRegex(
                 definition,
-                parsedHit.Data,
+                data,
                 out var shortInputRegex
             )
         )
         {
             try
             {
-                foreach (var match in shortInputRegex.EnumerateMatches(parsedHit.Data))
+                foreach (var match in shortInputRegex.EnumerateMatches(data))
                 {
                     // The generated URL pattern has either a zero-width start anchor
                     // or one leading delimiter outside the URI capture.
-                    var groupOffset = IsAsciiLetter(parsedHit.Data[match.Index]) ? 0 : 1;
+                    var groupOffset = IsAsciiLetter(data[match.Index]) ? 0 : 1;
                     AddCandidateRange(
                         inlineRanges,
                         ref overflowRanges,
@@ -245,7 +299,7 @@ internal static class RegexOutputCore
                 overflowRanges?.Clear();
                 rangeCount = 0;
                 CollectMatchRanges(
-                    parsedHit.Data,
+                    data,
                     regex,
                     definition.OutputGroup,
                     inlineRanges,
@@ -257,7 +311,7 @@ internal static class RegexOutputCore
         else
         {
             CollectMatchRanges(
-                parsedHit.Data,
+                data,
                 regex,
                 definition?.OutputGroup,
                 inlineRanges,
@@ -266,15 +320,20 @@ internal static class RegexOutputCore
             );
         }
 
+        if (rangeCount > 0 && formatNumericOffset && formattedOffset is null)
+        {
+            formattedOffset = $"0x{absoluteOffset:X}";
+        }
+
         for (var index = 0; index < rangeCount; index++)
         {
             var range =
                 overflowRanges is null ? inlineRanges[index] : overflowRanges[index];
             var record = new RegexOutputRecord(
                 patternName,
-                parsedHit.Data.Substring(range.Start, range.Length),
+                data.Substring(range.Start, range.Length),
                 sourceFile,
-                parsedHit.Offset,
+                formattedOffset,
                 "Regex"
             );
             output.Add(

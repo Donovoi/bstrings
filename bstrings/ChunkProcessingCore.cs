@@ -5,6 +5,63 @@ namespace bstrings;
 
 internal static class ChunkProcessingCore
 {
+    internal static List<ExtractedStringHit> ProcessStructuredChunk(
+        ReadOnlySpan<byte> chunk,
+        long fileOffset,
+        bool isBoundaryChunk,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        string asciiRange,
+        string unicodeRange,
+        int codePage = 1252,
+        bool suppressLeadingFragment = false,
+        bool suppressTrailingFragment = false,
+        int boundaryCrossingOffset = 0
+    )
+    {
+        var results = new List<ExtractedStringHit>();
+        var ownership = new ChunkHitOwnership(
+            suppressLeadingFragment,
+            suppressTrailingFragment,
+            isBoundaryChunk
+                ? (boundaryCrossingOffset > 0 ? boundaryCrossingOffset : chunk.Length / 2)
+                : -1
+        );
+
+        if (unicodeSearch)
+        {
+            results.AddRange(
+                SearchCore.GetUnicodeStructuredHits(
+                    chunk,
+                    minLength,
+                    maxLength,
+                    fileOffset,
+                    unicodeRange,
+                    ownership
+                )
+            );
+        }
+
+        if (asciiSearch)
+        {
+            results.AddRange(
+                SearchCore.GetAsciiStructuredHits(
+                    chunk,
+                    minLength,
+                    maxLength,
+                    fileOffset,
+                    asciiRange,
+                    codePage,
+                    ownership
+                )
+            );
+        }
+
+        return results;
+    }
+
     internal static List<string> ProcessChunk(
         ReadOnlySpan<byte> chunk,
         long fileOffset,

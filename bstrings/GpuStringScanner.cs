@@ -163,6 +163,115 @@ internal sealed class GpuStringScanner : IDisposable
             return results;
         }
 
+        var scan = FindHitPositions(
+            chunk,
+            isBoundaryChunk,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            asciiRange,
+            unicodeRange,
+            suppressLeadingFragment,
+            suppressTrailingFragment,
+            boundaryCrossingOffset
+        );
+
+        MaterializeUnicodeHits(
+            results,
+            chunk,
+            scan.UnicodePositions,
+            fileOffset,
+            includeOffset,
+            isBoundaryChunk,
+            scan.Ownership
+        );
+        MaterializeAsciiHits(
+            results,
+            chunk,
+            scan.AsciiPositions,
+            fileOffset,
+            includeOffset,
+            isBoundaryChunk,
+            codePage,
+            scan.Ownership
+        );
+
+        return results;
+    }
+
+    internal List<ExtractedStringHit> ProcessStructuredChunk(
+        ReadOnlySpan<byte> chunk,
+        long fileOffset,
+        bool isBoundaryChunk,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        int codePage,
+        string asciiRange,
+        string unicodeRange,
+        bool suppressLeadingFragment = false,
+        bool suppressTrailingFragment = false,
+        int boundaryCrossingOffset = 0
+    )
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var results = new List<ExtractedStringHit>();
+        if (chunk.IsEmpty || (!asciiSearch && !unicodeSearch))
+        {
+            return results;
+        }
+
+        var scan = FindHitPositions(
+            chunk,
+            isBoundaryChunk,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            asciiRange,
+            unicodeRange,
+            suppressLeadingFragment,
+            suppressTrailingFragment,
+            boundaryCrossingOffset
+        );
+        MaterializeStructuredUnicodeHits(
+            results,
+            chunk,
+            scan.UnicodePositions,
+            fileOffset,
+            scan.Ownership
+        );
+        MaterializeStructuredAsciiHits(
+            results,
+            chunk,
+            scan.AsciiPositions,
+            fileOffset,
+            codePage,
+            scan.Ownership
+        );
+        return results;
+    }
+
+    private (
+        List<GpuHitPosition> UnicodePositions,
+        List<GpuHitPosition> AsciiPositions,
+        ChunkHitOwnership Ownership
+    ) FindHitPositions(
+        ReadOnlySpan<byte> chunk,
+        bool isBoundaryChunk,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        string asciiRange,
+        string unicodeRange,
+        bool suppressLeadingFragment,
+        bool suppressTrailingFragment,
+        int boundaryCrossingOffset
+    )
+    {
         List<GpuHitPosition> unicodePositions = [];
         List<GpuHitPosition> asciiPositions = [];
         var ownership = new ChunkHitOwnership(
@@ -190,10 +299,9 @@ internal sealed class GpuStringScanner : IDisposable
             if (unicodeSearch)
             {
                 var (minChar, maxChar) = SearchCore.ParseUnicodeRange(unicodeRange);
-                var unitCount = chunk.Length / 2;
                 unicodePositions = FindUnicodeHits(
                     lane,
-                    unitCount,
+                    chunk.Length / 2,
                     chunk.Length,
                     minLength,
                     maxLength,
@@ -221,27 +329,7 @@ internal sealed class GpuStringScanner : IDisposable
             _laneSemaphore.Release();
         }
 
-        MaterializeUnicodeHits(
-            results,
-            chunk,
-            unicodePositions,
-            fileOffset,
-            includeOffset,
-            isBoundaryChunk,
-            ownership
-        );
-        MaterializeAsciiHits(
-            results,
-            chunk,
-            asciiPositions,
-            fileOffset,
-            includeOffset,
-            isBoundaryChunk,
-            codePage,
-            ownership
-        );
-
-        return results;
+        return (unicodePositions, asciiPositions, ownership);
     }
 
     private List<GpuHitPosition> FindAsciiHits(
@@ -412,6 +500,59 @@ internal sealed class GpuStringScanner : IDisposable
                 fileOffset + hit.Start,
                 includeOffset,
                 isBoundaryChunk
+            );
+        }
+    }
+
+    private static void MaterializeStructuredAsciiHits(
+        List<ExtractedStringHit> results,
+        ReadOnlySpan<byte> data,
+        IEnumerable<GpuHitPosition> hits,
+        long fileOffset,
+        int codePage,
+        ChunkHitOwnership ownership
+    )
+    {
+        var encoding =
+            CodePagesEncodingProvider.Instance.GetEncoding(codePage)
+            ?? Encoding.GetEncoding(codePage);
+
+        foreach (var hit in hits)
+        {
+            if (!ownership.Accepts(hit.Start, hit.Length, data.Length))
+            {
+                continue;
+            }
+
+            results.Add(
+                new ExtractedStringHit(
+                    encoding.GetString(data.Slice(hit.Start, hit.Length)),
+                    fileOffset + hit.Start
+                )
+            );
+        }
+    }
+
+    private static void MaterializeStructuredUnicodeHits(
+        List<ExtractedStringHit> results,
+        ReadOnlySpan<byte> data,
+        IEnumerable<GpuHitPosition> hits,
+        long fileOffset,
+        ChunkHitOwnership ownership
+    )
+    {
+        foreach (var hit in hits)
+        {
+            if (!ownership.Accepts(hit.Start, hit.Length * 2, data.Length))
+            {
+                continue;
+            }
+
+            results.Add(
+                new ExtractedStringHit(
+                    Encoding.Unicode.GetString(data.Slice(hit.Start, hit.Length * 2)),
+                    fileOffset + hit.Start
+                )
             );
         }
     }

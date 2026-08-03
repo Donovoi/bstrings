@@ -83,13 +83,11 @@ They show a repeatable benefit for dense all-pattern output, not a universal
 speed claim. At 1 GiB, extraction and I/O make the regex allocation saving a
 smaller share of total elapsed time.
 
-## Next target
+## Follow-up target
 
-The new allocation profile makes offset parsing the next bounded managed-code
-candidate. `ParseHit` accounts for 5.28 percent of exclusive allocation-stack
-samples because extraction materializes `offset + tab + data`, then regex
-processing slices it back into separate strings. Carrying a structured hit
-through the streaming pipeline could remove that round trip. It should be
-attempted before a wider Rust port and accepted only if end-to-end exact-output
-benchmarks improve; an earlier general regex prefilter was correctly rejected
-because it slowed the complete pattern workload.
+The offset-parsing target has now been implemented and measured. Regex-only
+streaming carries structured text and numeric offsets through extraction,
+removing the format-and-split round trip while retaining the compatibility
+paths. See the
+[structured-hit result](structured-hit-streaming-optimization-2026-08.md) for
+the exact-output checks and workload-sensitive timings.

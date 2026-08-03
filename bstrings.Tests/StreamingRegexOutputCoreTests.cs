@@ -72,7 +72,45 @@ public class StreamingRegexOutputCoreTests
             actual
         );
 
+        var structuredActual = new List<string>();
+        string? formattedOffset = null;
+        RegexOutputCore.AppendStreamingRecords(
+            new ExtractedStringHit(data, 0x200),
+            includeOffset: true,
+            ref formattedOffset,
+            patternName,
+            regex,
+            definition,
+            isCsvOutput: true,
+            "input.bin",
+            structuredActual
+        );
+
         Assert.Equal(expected, actual);
+        Assert.Equal(expected, structuredActual);
+        Assert.Equal("0x200", formattedOffset);
+    }
+
+    [Fact]
+    public void AppendStreamingRecords_DoesNotFormatOffsetForNonMatch()
+    {
+        var output = new List<string>();
+        string? formattedOffset = null;
+
+        RegexOutputCore.AppendStreamingRecords(
+            new ExtractedStringHit("ordinary text", 0xABC),
+            includeOffset: true,
+            ref formattedOffset,
+            "digits",
+            RegexOutputCore.GetOrCreateRegex("digits", "[0-9]+"),
+            definition: null,
+            isCsvOutput: false,
+            "input.bin",
+            output
+        );
+
+        Assert.Empty(output);
+        Assert.Null(formattedOffset);
     }
 
     [Fact]
@@ -115,6 +153,59 @@ public class StreamingRegexOutputCoreTests
             ["\"email\",\"user@example.com\",\"input.bin\",\"0xABC\",\"Regex\""],
             rows
         );
+    }
+
+    [Fact]
+    public void TransformStructuredBatch_MatchesLegacyRowsAndReleasesHits()
+    {
+        var structuredProcessor = new StreamingRegexOutputCore(
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            regexOnly: true,
+            includeOffset: true,
+            isCsvOutput: true,
+            sourceFile: "input.bin"
+        );
+        var legacyProcessor = new StreamingRegexOutputCore(
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            regexOnly: true,
+            includeOffset: true,
+            isCsvOutput: true,
+            sourceFile: "input.bin"
+        );
+        var structuredHits = new List<ExtractedStringHit>
+        {
+            new("user@example.com", 0xABC),
+            new("not a match", 0xDEF),
+        };
+        var legacyHits = new List<string>
+        {
+            "0xABC\tuser@example.com",
+            "0xDEF\tnot a match",
+        };
+
+        var structuredRows = structuredProcessor.TransformStructuredBatch(structuredHits);
+        var legacyRows = legacyProcessor.TransformMainBatch(legacyHits);
+
+        Assert.Empty(structuredHits);
+        Assert.Equal(legacyRows, structuredRows);
+        Assert.Equal(1, structuredProcessor.OutputRowCount);
+    }
+
+    [Fact]
+    public void TransformStructuredBatch_OmitsOffsetWhenDisabled()
+    {
+        var processor = new StreamingRegexOutputCore(
+            [("letters", "Alpha\\d+")],
+            regexOnly: true,
+            includeOffset: false,
+            isCsvOutput: false,
+            sourceFile: "input.bin"
+        );
+        var hits = new List<ExtractedStringHit> { new("Alpha123", 0xABC) };
+
+        var rows = processor.TransformStructuredBatch(hits);
+
+        Assert.Equal(["Alpha123"], rows);
     }
 
     [Fact]
@@ -386,6 +477,49 @@ public class StreamingRegexOutputCoreTests
         Assert.Equal(1, totalCount);
         Assert.Equal(["Alpha123\t~0x201"], output);
         Assert.Empty(resultsSet);
+    }
+
+    [Fact]
+    public async Task StreamingPipeline_TransformsStructuredHitsBeforeWriting()
+    {
+        using var pipeline = new Program.ChunkProcessingPipeline(maxConcurrency: 1);
+        using var stream = new MemoryStream();
+        using var writer = new StreamWriter(stream, leaveOpen: true);
+        var processor = new StreamingRegexOutputCore(
+            [("letters", "Alpha\\d+")],
+            regexOnly: true,
+            includeOffset: true,
+            isCsvOutput: false,
+            sourceFile: "sample.bin"
+        );
+
+        var totalCount = await pipeline.ProcessChunksStreamingAsync(
+            GetChunks(CreateChunk("\u0001Alpha123\u0002", 0x200, 0)),
+            minLength: 4,
+            maxLength: -1,
+            asciiSearch: true,
+            unicodeSearch: false,
+            off: true,
+            cp: 1252,
+            ar: "[\\x20-\\x7E]",
+            ur: "[\\u0020-\\u007E]",
+            progressTracker: new Program.ProgressTracker(totalChunks: 1, quiet: true),
+            outputWriter: writer,
+            resultsSet: null,
+            resultTransform: null,
+            structuredResultTransform: processor.TransformStructuredBatch
+        );
+
+        await writer.FlushAsync(TestContext.Current.CancellationToken);
+        stream.Position = 0;
+        using var reader = new StreamReader(stream);
+        var output = (
+            await reader.ReadToEndAsync(TestContext.Current.CancellationToken)
+        )
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+
+        Assert.Equal(1, totalCount);
+        Assert.Equal(["Alpha123\t~0x201"], output);
     }
 
     [Fact]

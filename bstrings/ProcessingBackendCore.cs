@@ -696,6 +696,41 @@ internal sealed class ProcessingBackendSession : IDisposable
         return results;
     }
 
+    internal List<ExtractedStringHit> ProcessGpuStructuredChunk(
+        Program.DataChunk chunk,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        int codePage,
+        string asciiRange,
+        string unicodeRange
+    )
+    {
+        if (!IsGpuEnabled || _gpuScanner is null)
+        {
+            throw new InvalidOperationException("The CUDA processing path is not available.");
+        }
+
+        var results = _gpuScanner.ProcessStructuredChunk(
+            chunk.Data.AsSpan(0, chunk.ValidBytes),
+            chunk.FileOffset,
+            chunk.IsBoundaryChunk,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            codePage,
+            asciiRange,
+            unicodeRange,
+            chunk.SuppressLeadingFragment,
+            chunk.SuppressTrailingFragment,
+            chunk.BoundaryCrossingOffset
+        );
+        Interlocked.Increment(ref _gpuChunks);
+        return results;
+    }
+
     internal void RecordCpuChunk()
     {
         Interlocked.Increment(ref _cpuChunks);

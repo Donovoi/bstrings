@@ -149,6 +149,13 @@ and the
 [`all-pattern-streaming-2026-08.csv`](results/all-pattern-streaming-2026-08.csv)
 measurements.
 
+The follow-up structured-hit benchmark reuses the same fixtures and CLI. It
+validates the optimization that keeps numeric offsets separate until an
+extracted string produces a regex result. See the
+[structured-hit result](../docs/structured-hit-streaming-optimization-2026-08.md)
+and
+[`structured-hit-streaming-2026-08.csv`](results/structured-hit-streaming-2026-08.csv).
+
 ## Automatic CPU chunk sizing
 
 The automatic CPU policy is validated with real CLI runs rather than timing the
