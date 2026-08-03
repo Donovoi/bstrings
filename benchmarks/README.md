@@ -124,6 +124,26 @@ change.
 
 See the [pattern and engine results](../docs/pattern-engine-benchmark-2026-08.md).
 
+## Automatic CPU chunk sizing
+
+The automatic CPU policy is validated with real CLI runs rather than timing the
+size calculation itself. The reviewed comparison used the 10 GiB scale corpus
+and a dense 1 GiB mixed ASCII/UTF-16LE fixture:
+
+```powershell
+dotnet run --project .\dev-tools\benchmark-generator -c Release -- `
+  1024 C:\bench\dense-1g.bin `
+  --dense-output `
+  --dense-record-length=4096
+```
+
+Old and new policies were alternated for five rounds. Each run had to return the
+same complete canonical output before its timing was accepted. See the
+[scheduling result, boundary repair, and limitations](../docs/chunk-scheduling-optimization-2026-08.md)
+and the
+[`auto-chunk-sizing-2026-08.csv`](results/auto-chunk-sizing-2026-08.csv)
+measurements.
+
 ## Rust ASCII engine crossover
 
 `AsciiEngineBenchmark` compares the established C#/.NET ASCII span scanner

@@ -29,7 +29,10 @@ and byte offset. A failed semantic or accuracy gate is not used for a speed
 claim. Both benchmarks are warm-cache results on deliberately synthetic data.
 Read the [scale benchmark](docs/scale-benchmark-2026-08.md) and the
 [pattern and engine benchmark](docs/pattern-engine-benchmark-2026-08.md)
-before generalizing them. The Rust engine remains an opt-in prototype; its
+before generalizing them. The
+[CPU scheduling benchmark](docs/chunk-scheduling-optimization-2026-08.md)
+explains the current automatic chunk-size policy and its boundary-correctness
+gate. The Rust engine remains an opt-in prototype; its
 [separate benchmark and design notes](docs/rust-engine-prototype-2026-08.md)
 explain why it is not the default yet.
 

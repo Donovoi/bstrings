@@ -6,6 +6,10 @@ namespace bstrings;
 
 internal static class ChunkSizingCore
 {
+    // Keep enough independent work queued to overlap reads, extraction, and
+    // transforms instead of sizing for only one active chunk per CPU worker.
+    internal const int DefaultCpuChunksPerWorker = 32;
+
     internal static int CalculateCpuChunkSizeMBFromMemory(
         long availableMemoryBytes,
         int maxConcurrentChunks,
@@ -55,7 +59,8 @@ internal static class ChunkSizingCore
         return SelectParallelChunkSizeMB(
             baseChunkSize,
             fileSizeBytes,
-            targetConcurrency > 0 ? targetConcurrency : Environment.ProcessorCount
+            targetConcurrency > 0 ? targetConcurrency : Environment.ProcessorCount,
+            chunksPerWorker: DefaultCpuChunksPerWorker
         );
     }
 
