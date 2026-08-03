@@ -101,19 +101,15 @@ internal sealed class StreamingRegexOutputCore
                     {
                         if (_regexOnly)
                         {
-                            foreach (
-                                var record in RegexOutputCore.CreateRecords(
-                                    parsedHit,
-                                    patternName,
-                                    regex,
-                                    regexOutput: true,
-                                    _sourceFile,
-                                    "Regex"
-                                )
-                            )
-                            {
-                                output.Add(FormatRecord(record, parsedHit));
-                            }
+                            RegexOutputCore.AppendStreamingRecords(
+                                parsedHit,
+                                patternName,
+                                regex,
+                                pattern.Definition,
+                                _isCsvOutput,
+                                _sourceFile,
+                                output
+                            );
                         }
                         else if (
                             RegexOutputCore.IsMatch(
@@ -378,9 +374,12 @@ internal sealed class StreamingRegexOutputCore
         {
             Name = name;
             _patternText = patternText;
-            _promotionThreshold =
+            Definition =
                 BuiltInPatternCatalog.TryGetDefinition(name, patternText, out var definition)
-                && !definition.UseNonBacktracking
+                    ? definition
+                    : null;
+            _promotionThreshold =
+                Definition is not null && !Definition.UseNonBacktracking
                     ? PromotionThresholds.GetValueOrDefault(name)
                     : 0;
             _estimatedBatchCount = Math.Max(1, estimatedBatchCount);
@@ -391,6 +390,8 @@ internal sealed class StreamingRegexOutputCore
         }
 
         internal string Name { get; }
+
+        internal BuiltInPatternDefinition? Definition { get; }
 
         internal int PromotionCount => Volatile.Read(ref _promotionCount);
 

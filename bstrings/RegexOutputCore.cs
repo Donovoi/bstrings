@@ -160,6 +160,193 @@ internal static class RegexOutputCore
         );
     }
 
+    /// <summary>
+    /// Formats regex-only streaming results without allocating an iterator, a
+    /// Match object for every ordinary match, or an intermediate URL value list.
+    /// Match ranges are buffered before output so a timeout can be retried without
+    /// duplicating records that were discovered before the timeout.
+    /// </summary>
+    internal static void AppendStreamingRecords(
+        ParsedHit parsedHit,
+        string patternName,
+        Regex regex,
+        BuiltInPatternDefinition definition,
+        bool isCsvOutput,
+        string sourceFile,
+        List<string> output
+    )
+    {
+        Span<CandidateRange> inlineRanges = stackalloc CandidateRange[4];
+        List<CandidateRange> overflowRanges = null;
+        var rangeCount = 0;
+
+        if (
+            definition is not null
+            && string.Equals(definition.Name, "b64", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            foreach (var candidate in EnumerateBase64Candidates(parsedHit.Data))
+            {
+                AddCandidateRange(
+                    inlineRanges,
+                    ref overflowRanges,
+                    ref rangeCount,
+                    candidate
+                );
+            }
+        }
+        else if (
+            definition is not null
+            && string.Equals(definition.Name, "xml", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            if (IsSimpleXmlElementMatch(parsedHit.Data))
+            {
+                AddCandidateRange(
+                    inlineRanges,
+                    ref overflowRanges,
+                    ref rangeCount,
+                    new CandidateRange(0, parsedHit.Data.Length)
+                );
+            }
+        }
+        else if (
+            definition is not null
+            && definition.GeneratedShortInputLimit is int generatedShortInputLimit
+            && parsedHit.Data.Length <= generatedShortInputLimit
+            && TryGetGeneratedShortInputRegex(
+                definition,
+                parsedHit.Data,
+                out var shortInputRegex
+            )
+        )
+        {
+            try
+            {
+                foreach (var match in shortInputRegex.EnumerateMatches(parsedHit.Data))
+                {
+                    // The generated URL pattern has either a zero-width start anchor
+                    // or one leading delimiter outside the URI capture.
+                    var groupOffset = IsAsciiLetter(parsedHit.Data[match.Index]) ? 0 : 1;
+                    AddCandidateRange(
+                        inlineRanges,
+                        ref overflowRanges,
+                        ref rangeCount,
+                        new CandidateRange(
+                            match.Index + groupOffset,
+                            match.Length - groupOffset
+                        )
+                    );
+                }
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                Interlocked.Increment(ref _shortInputFallbackCount);
+                overflowRanges?.Clear();
+                rangeCount = 0;
+                CollectMatchRanges(
+                    parsedHit.Data,
+                    regex,
+                    definition.OutputGroup,
+                    inlineRanges,
+                    ref overflowRanges,
+                    ref rangeCount
+                );
+            }
+        }
+        else
+        {
+            CollectMatchRanges(
+                parsedHit.Data,
+                regex,
+                definition?.OutputGroup,
+                inlineRanges,
+                ref overflowRanges,
+                ref rangeCount
+            );
+        }
+
+        for (var index = 0; index < rangeCount; index++)
+        {
+            var range =
+                overflowRanges is null ? inlineRanges[index] : overflowRanges[index];
+            var record = new RegexOutputRecord(
+                patternName,
+                parsedHit.Data.Substring(range.Start, range.Length),
+                sourceFile,
+                parsedHit.Offset,
+                "Regex"
+            );
+            output.Add(
+                isCsvOutput ? BuildCsvLine(record) : BuildRegexOnlyText(record)
+            );
+        }
+    }
+
+    private static void CollectMatchRanges(
+        string data,
+        Regex regex,
+        string outputGroup,
+        Span<CandidateRange> inlineRanges,
+        ref List<CandidateRange> overflowRanges,
+        ref int rangeCount
+    )
+    {
+        if (outputGroup is null)
+        {
+            foreach (var match in regex.EnumerateMatches(data))
+            {
+                AddCandidateRange(
+                    inlineRanges,
+                    ref overflowRanges,
+                    ref rangeCount,
+                    new CandidateRange(match.Index, match.Length)
+                );
+            }
+
+            return;
+        }
+
+        foreach (Match match in regex.Matches(data))
+        {
+            var group = match.Groups[outputGroup];
+            AddCandidateRange(
+                inlineRanges,
+                ref overflowRanges,
+                ref rangeCount,
+                group.Success
+                    ? new CandidateRange(group.Index, group.Length)
+                    : new CandidateRange(match.Index, match.Length)
+            );
+        }
+    }
+
+    private static void AddCandidateRange(
+        Span<CandidateRange> inlineRanges,
+        ref List<CandidateRange> overflowRanges,
+        ref int rangeCount,
+        CandidateRange candidate
+    )
+    {
+        if (overflowRanges is null && rangeCount < inlineRanges.Length)
+        {
+            inlineRanges[rangeCount++] = candidate;
+            return;
+        }
+
+        if (overflowRanges is null)
+        {
+            overflowRanges = new List<CandidateRange>(inlineRanges.Length * 2);
+            for (var index = 0; index < rangeCount; index++)
+            {
+                overflowRanges.Add(inlineRanges[index]);
+            }
+        }
+
+        overflowRanges.Add(candidate);
+        rangeCount++;
+    }
+
     internal static string BuildCsvLine(RegexOutputRecord record)
     {
         return string.Join(
