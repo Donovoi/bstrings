@@ -80,6 +80,32 @@ internal static class SearchCore
         return MaterializeUnicodeStringHits(chunk, hits, includeOffset);
     }
 
+    internal static List<ExtractedStringHit> GetUnicodeStructuredHits(
+        ReadOnlySpan<byte> chunk,
+        int minLength,
+        int maxLength,
+        long currentOffset,
+        string unicodeRange,
+        ChunkHitOwnership ownership = default
+    )
+    {
+        var (minChar, maxChar) = ParseUnicodeRange(unicodeRange);
+        var hits = FindUnicodeStringHits(
+            chunk,
+            minLength,
+            maxLength,
+            currentOffset,
+            minChar,
+            maxChar
+        );
+        if (!ownership.IsUnrestricted)
+        {
+            var chunkLength = chunk.Length;
+            hits.RemoveAll(hit => !ownership.Accepts(hit.Start, hit.Length, chunkLength));
+        }
+        return MaterializeUnicodeStructuredHits(chunk, hits);
+    }
+
     internal static List<string> GetAsciiHits(
         ReadOnlySpan<byte> chunk,
         int minLength,
@@ -130,6 +156,51 @@ internal static class SearchCore
             hits.RemoveAll(hit => !ownership.Accepts(hit.Start, hit.Length, chunkLength));
         }
         return MaterializeStringHits(chunk, hits, includeOffset, codePage);
+    }
+
+    internal static List<ExtractedStringHit> GetAsciiStructuredHits(
+        ReadOnlySpan<byte> chunk,
+        int minLength,
+        int maxLength,
+        long currentOffset,
+        string asciiRange,
+        int codePage = 1252,
+        ChunkHitOwnership ownership = default
+    )
+    {
+        var (minChar, maxChar) = ParseCharRange(asciiRange);
+        if (
+            RustAsciiEngine.TryRentConfigured(
+                chunk,
+                minLength,
+                maxLength,
+                currentOffset,
+                minChar,
+                maxChar,
+                out var nativeHits
+            )
+        )
+        {
+            using (nativeHits)
+            {
+                return MaterializeStructuredHits(chunk, nativeHits, codePage, ownership);
+            }
+        }
+
+        var hits = FindAsciiStringHitsManaged(
+            chunk,
+            minLength,
+            maxLength,
+            currentOffset,
+            minChar,
+            maxChar
+        );
+        if (!ownership.IsUnrestricted)
+        {
+            var chunkLength = chunk.Length;
+            hits.RemoveAll(hit => !ownership.Accepts(hit.Start, hit.Length, chunkLength));
+        }
+        return MaterializeStructuredHits(chunk, hits, codePage);
     }
 
     internal static (byte minChar, byte maxChar) ParseCharRange(string range)
@@ -591,6 +662,30 @@ internal static class SearchCore
         return results;
     }
 
+    internal static List<ExtractedStringHit> MaterializeUnicodeStructuredHits(
+        ReadOnlySpan<byte> data,
+        List<StringHitPosition> hits
+    )
+    {
+        var results = new List<ExtractedStringHit>(hits.Count);
+        foreach (var hit in hits)
+        {
+            if (hit.Start + hit.Length > data.Length)
+            {
+                continue;
+            }
+
+            results.Add(
+                new ExtractedStringHit(
+                    Encoding.Unicode.GetString(data.Slice(hit.Start, hit.Length)),
+                    hit.FileOffset + hit.Start
+                )
+            );
+        }
+
+        return results;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static uint CompressUtf16ValidityMask(uint byteMask, int width)
     {
@@ -641,6 +736,41 @@ internal static class SearchCore
         return results;
     }
 
+    internal static List<ExtractedStringHit> MaterializeStructuredHits(
+        ReadOnlySpan<byte> data,
+        RustAsciiEngine.HitBatch hits,
+        int codePage = 1252,
+        ChunkHitOwnership ownership = default
+    )
+    {
+        var results = new List<ExtractedStringHit>(hits.Count);
+        var encoding = Encodings.GetOrAdd(
+            codePage,
+            static value =>
+                CodePagesEncodingProvider.Instance.GetEncoding(value)
+                ?? Encoding.GetEncoding(value)
+        );
+
+        foreach (var hit in hits.Hits)
+        {
+            var start = (int)hit.Start;
+            var length = (int)hit.Length;
+            if (!ownership.IsUnrestricted && !ownership.Accepts(start, length, data.Length))
+            {
+                continue;
+            }
+
+            results.Add(
+                new ExtractedStringHit(
+                    encoding.GetString(data.Slice(start, length)),
+                    hits.FileOffset + start
+                )
+            );
+        }
+
+        return results;
+    }
+
     internal static List<string> MaterializeStringHits(
         ReadOnlySpan<byte> data,
         List<StringHitPosition> hits,
@@ -671,6 +801,36 @@ internal static class SearchCore
                 {
                     results.Add(str);
                 }
+            }
+        }
+
+        return results;
+    }
+
+    internal static List<ExtractedStringHit> MaterializeStructuredHits(
+        ReadOnlySpan<byte> data,
+        List<StringHitPosition> hits,
+        int codePage = 1252
+    )
+    {
+        var results = new List<ExtractedStringHit>(hits.Count);
+        var encoding = Encodings.GetOrAdd(
+            codePage,
+            static value =>
+                CodePagesEncodingProvider.Instance.GetEncoding(value)
+                ?? Encoding.GetEncoding(value)
+        );
+
+        foreach (var hit in hits)
+        {
+            if (hit.Start + hit.Length <= data.Length)
+            {
+                results.Add(
+                    new ExtractedStringHit(
+                        encoding.GetString(data.Slice(hit.Start, hit.Length)),
+                        hit.FileOffset + hit.Start
+                    )
+                );
             }
         }
 

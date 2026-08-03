@@ -1234,11 +1234,16 @@ public static partial class Program
                             canStreamRegexResults ? null : hits,
                             processingBackend,
                             processingMode,
-                            canStreamRegexResults
+                            canStreamRegexResults && !ro
                                 ? new Func<List<string>, List<string>>(
                                     streamingRegexOutput!.TransformMainBatch
                                   )
-                                : literalBatchTransform
+                                : literalBatchTransform,
+                            canStreamRegexResults && ro
+                                ? new Func<List<ExtractedStringHit>, List<string>>(
+                                    streamingRegexOutput!.TransformStructuredBatch
+                                  )
+                                : null
                         );
                         rawResultsStreamed = canStreamRawResults;
                         regexResultsStreamed = canStreamRegexResults;
@@ -1309,11 +1314,16 @@ public static partial class Program
                             canStreamRegexResults ? null : hits,
                             processingBackend,
                             boundaryProcessingMode,
-                            canStreamRegexResults
+                            canStreamRegexResults && !ro
                                 ? new Func<List<string>, List<string>>(
                                     streamingRegexOutput!.TransformBoundaryBatch
                                   )
-                                : literalBatchTransform
+                                : literalBatchTransform,
+                            canStreamRegexResults && ro
+                                ? new Func<List<ExtractedStringHit>, List<string>>(
+                                    streamingRegexOutput!.TransformStructuredBatch
+                                  )
+                                : null
                         );
                         withBoundaryHits |= boundaryResults > 0;
                     }
@@ -1744,6 +1754,35 @@ public static partial class Program
         }
 
         return finalResults;
+    }
+
+    private static List<ExtractedStringHit> ProcessStructuredChunk(
+        DataChunk chunk,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        int cp,
+        string ar,
+        string ur
+    )
+    {
+        var validChunk = chunk.Data.AsSpan(0, chunk.ValidBytes);
+        return ChunkProcessingCore.ProcessStructuredChunk(
+            validChunk,
+            chunk.FileOffset,
+            chunk.IsBoundaryChunk,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            ar,
+            ur,
+            cp,
+            chunk.SuppressLeadingFragment,
+            chunk.SuppressTrailingFragment,
+            chunk.BoundaryCrossingOffset
+        );
     }
 
     /// <summary>
@@ -2484,7 +2523,8 @@ public static partial class Program
         HashSet<string> resultsSet = null,
         ProcessingBackendSession processingBackend = null,
         ProcessingMode processingMode = ProcessingMode.Cpu,
-        Func<List<string>, List<string>> resultTransform = null
+        Func<List<string>, List<string>> resultTransform = null,
+        Func<List<ExtractedStringHit>, List<string>> structuredResultTransform = null
     )
     {
         using var pipeline = new ChunkProcessingPipeline(
@@ -2515,7 +2555,8 @@ public static partial class Program
             progressTracker,
             outputWriter,
             resultsSet,
-            resultTransform
+            resultTransform,
+            structuredResultTransform
         );
 
         return totalResults;
@@ -2646,7 +2687,8 @@ public static partial class Program
         HashSet<string> resultsSet = null,
         ProcessingBackendSession processingBackend = null,
         ProcessingMode processingMode = ProcessingMode.Cpu,
-        Func<List<string>, List<string>> resultTransform = null
+        Func<List<string>, List<string>> resultTransform = null,
+        Func<List<ExtractedStringHit>, List<string>> structuredResultTransform = null
     )
     {
         using var pipeline = new ChunkProcessingPipeline(
@@ -2681,7 +2723,8 @@ public static partial class Program
             new ProgressTracker(Math.Max(1, boundaryChunkCount), quiet),
             outputWriter,
             resultsSet,
-            resultTransform
+            resultTransform,
+            structuredResultTransform
         );
 
         return totalResults;
@@ -2979,7 +3022,8 @@ public static partial class Program
             ProgressTracker progressTracker,
             StreamWriter outputWriter = null,
             HashSet<string> resultsSet = null,
-            Func<List<string>, List<string>> resultTransform = null
+            Func<List<string>, List<string>> resultTransform = null,
+            Func<List<ExtractedStringHit>, List<string>> structuredResultTransform = null
         )
         {
             var totalResultCount = 0L;
@@ -2993,7 +3037,8 @@ public static partial class Program
                 ar,
                 ur,
                 progressTracker,
-                resultTransform
+                resultTransform,
+                structuredResultTransform
             );
             var resultCollectionTask = CollectResultsStreamingAsync(outputWriter, resultsSet);
 
@@ -3094,7 +3139,8 @@ public static partial class Program
             string ar,
             string ur,
             ProgressTracker progressTracker,
-            Func<List<string>, List<string>> resultTransform = null
+            Func<List<string>, List<string>> resultTransform = null,
+            Func<List<ExtractedStringHit>, List<string>> structuredResultTransform = null
         )
         {
             var gpuWorkers =
@@ -3125,7 +3171,8 @@ public static partial class Program
                         ar,
                         ur,
                         progressTracker,
-                        resultTransform
+                        resultTransform,
+                        structuredResultTransform
                     )
                 );
             }
@@ -3144,7 +3191,8 @@ public static partial class Program
                         ar,
                         ur,
                         progressTracker,
-                        resultTransform
+                        resultTransform,
+                        structuredResultTransform
                     )
                 );
             }
@@ -3163,7 +3211,8 @@ public static partial class Program
             string ar,
             string ur,
             ProgressTracker progressTracker,
-            Func<List<string>, List<string>> resultTransform = null
+            Func<List<string>, List<string>> resultTransform = null,
+            Func<List<ExtractedStringHit>, List<string>> structuredResultTransform = null
         )
         {
             await foreach (var chunk in _chunkReader.ReadAllAsync(_cancellationTokenSource.Token))
@@ -3171,35 +3220,117 @@ public static partial class Program
                 try
                 {
                     List<string> results;
-                    if (useGpu && _processingBackend?.IsGpuEnabled == true)
+                    int extractedCount;
+                    if (structuredResultTransform is not null)
                     {
-                        try
+                        List<ExtractedStringHit> structuredResults;
+                        if (useGpu && _processingBackend?.IsGpuEnabled == true)
                         {
-                            results = _processingBackend.ProcessGpuChunk(
+                            try
+                            {
+                                structuredResults =
+                                    _processingBackend.ProcessGpuStructuredChunk(
+                                        chunk,
+                                        minLength,
+                                        maxLength,
+                                        asciiSearch,
+                                        unicodeSearch,
+                                        cp,
+                                        ar,
+                                        ur
+                                    );
+                            }
+                            catch (Exception ex) when (_processingMode == ProcessingMode.Hybrid)
+                            {
+                                _processingBackend.DisableGpuAfterFailure(
+                                    ex,
+                                    Console.Error.WriteLine
+                                );
+                                structuredResults = ProcessStructuredChunk(
+                                    chunk,
+                                    minLength,
+                                    maxLength,
+                                    asciiSearch,
+                                    unicodeSearch,
+                                    cp,
+                                    ar,
+                                    ur
+                                );
+                                _processingBackend.RecordCpuChunk();
+                            }
+
+                            if (_debug)
+                            {
+                                Console.Error.WriteLine(
+                                    $"[Chunk {chunk.ChunkIndex}] CUDA completed, found {structuredResults.Count} strings"
+                                );
+                            }
+                        }
+                        else
+                        {
+                            structuredResults = ProcessStructuredChunk(
                                 chunk,
                                 minLength,
                                 maxLength,
                                 asciiSearch,
                                 unicodeSearch,
-                                off,
                                 cp,
                                 ar,
                                 ur
                             );
+                            _processingBackend?.RecordCpuChunk();
+                        }
 
-                            if (_debug)
+                        extractedCount = structuredResults.Count;
+                        results = structuredResultTransform(structuredResults);
+                    }
+                    else
+                    {
+                        if (useGpu && _processingBackend?.IsGpuEnabled == true)
+                        {
+                            try
                             {
-                                Console.Error.WriteLine(
-                                    $"[Chunk {chunk.ChunkIndex}] CUDA completed, found {results.Count} strings"
+                                results = _processingBackend.ProcessGpuChunk(
+                                    chunk,
+                                    minLength,
+                                    maxLength,
+                                    asciiSearch,
+                                    unicodeSearch,
+                                    off,
+                                    cp,
+                                    ar,
+                                    ur
                                 );
+
+                                if (_debug)
+                                {
+                                    Console.Error.WriteLine(
+                                        $"[Chunk {chunk.ChunkIndex}] CUDA completed, found {results.Count} strings"
+                                    );
+                                }
+                            }
+                            catch (Exception ex) when (_processingMode == ProcessingMode.Hybrid)
+                            {
+                                _processingBackend.DisableGpuAfterFailure(
+                                    ex,
+                                    Console.Error.WriteLine
+                                );
+                                results = ProcessChunk(
+                                    chunk,
+                                    minLength,
+                                    maxLength,
+                                    asciiSearch,
+                                    unicodeSearch,
+                                    off,
+                                    cp,
+                                    ar,
+                                    ur
+                                );
+                                _processingBackend.RecordCpuChunk();
                             }
                         }
-                        catch (Exception ex) when (_processingMode == ProcessingMode.Hybrid)
+                        else
                         {
-                            _processingBackend.DisableGpuAfterFailure(
-                                ex,
-                                Console.Error.WriteLine
-                            );
                             results = ProcessChunk(
                                 chunk,
                                 minLength,
@@ -3211,29 +3342,14 @@ public static partial class Program
                                 ar,
                                 ur
                             );
-                            _processingBackend.RecordCpuChunk();
+                            _processingBackend?.RecordCpuChunk();
                         }
-                    }
-                    else
-                    {
-                        results = ProcessChunk(
-                            chunk,
-                            minLength,
-                            maxLength,
-                            asciiSearch,
-                            unicodeSearch,
-                            off,
-                            cp,
-                            ar,
-                            ur
-                        );
-                        _processingBackend?.RecordCpuChunk();
-                    }
 
-                    var extractedCount = results.Count;
-                    if (resultTransform is not null)
-                    {
-                        results = resultTransform(results);
+                        extractedCount = results.Count;
+                        if (resultTransform is not null)
+                        {
+                            results = resultTransform(results);
+                        }
                     }
 
                     await _resultWriter.WriteAsync(results, _cancellationTokenSource.Token);

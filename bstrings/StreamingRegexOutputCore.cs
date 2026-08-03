@@ -67,6 +67,94 @@ internal sealed class StreamingRegexOutputCore
         return TransformBatch(hits, isBoundaryBatch: true);
     }
 
+    internal List<string> TransformStructuredBatch(List<ExtractedStringHit> hits)
+    {
+        if (!_regexOnly)
+        {
+            throw new InvalidOperationException(
+                "Structured streaming is only valid for regex-only output."
+            );
+        }
+
+        var output = new List<string>();
+        foreach (var pattern in _patterns)
+        {
+            pattern.PrepareForBatch(hits.Count);
+        }
+
+        try
+        {
+            foreach (var extractedHit in hits)
+            {
+                if (string.IsNullOrEmpty(extractedHit.Data))
+                {
+                    continue;
+                }
+
+                string? formattedOffset = null;
+                foreach (var pattern in _patterns)
+                {
+                    var patternName = pattern.Name;
+                    var regex = pattern.GetRegexForNextCandidate();
+                    try
+                    {
+                        RegexOutputCore.AppendStreamingRecords(
+                            extractedHit,
+                            _includeOffset,
+                            ref formattedOffset,
+                            patternName,
+                            regex,
+                            pattern.Definition,
+                            _isCsvOutput,
+                            _sourceFile,
+                            output
+                        );
+                    }
+                    catch (RegexMatchTimeoutException ex)
+                    {
+                        if (
+                            TryGetBoundedRetryOverlap(
+                                patternName,
+                                regex,
+                                out var retryOverlap
+                            )
+                        )
+                        {
+                            formattedOffset ??= _includeOffset
+                                ? $"0x{extractedHit.Offset:X}"
+                                : string.Empty;
+                            var parsedHit = new ParsedHit(
+                                extractedHit.Data,
+                                extractedHit.Data,
+                                formattedOffset
+                            );
+                            AppendBoundedRetryRecords(
+                                parsedHit,
+                                patternName,
+                                regex,
+                                retryOverlap,
+                                output
+                            );
+                            continue;
+                        }
+
+                        throw new TimeoutException(
+                            $"Regex '{patternName}' timed out; the result set is incomplete.",
+                            ex
+                        );
+                    }
+                }
+            }
+        }
+        finally
+        {
+            hits.Clear();
+        }
+
+        Interlocked.Add(ref _outputRowCount, output.Count);
+        return output;
+    }
+
     private List<string> TransformBatch(List<string> hits, bool isBoundaryBatch)
     {
         var output = new List<string>();
@@ -139,48 +227,13 @@ internal sealed class StreamingRegexOutputCore
                             )
                         )
                         {
-                            if (_boundedRetryWarnings.TryAdd(patternName, 0))
-                            {
-                                Console.Error.WriteLine(
-                                    $"Built-in {patternName} matching exceeded the whole-string timeout; "
-                                        + "retrying in bounded overlapping windows."
-                                );
-                            }
-
-                            if (_regexOnly)
-                            {
-                                foreach (
-                                    var record in CreateBoundedRecords(
-                                        parsedHit,
-                                        patternName,
-                                        regex,
-                                        _sourceFile,
-                                        retryOverlap
-                                    )
-                                )
-                                {
-                                    output.Add(FormatRecord(record, parsedHit));
-                                }
-                            }
-                            else if (
-                                HasBoundedMatch(
-                                    parsedHit.Data,
-                                    patternName,
-                                    regex,
-                                    retryOverlap
-                                )
-                            )
-                            {
-                                var record = new RegexOutputRecord(
-                                    patternName,
-                                    parsedHit.Data,
-                                    _sourceFile,
-                                    parsedHit.Offset,
-                                    "Regex"
-                                );
-                                output.Add(FormatRecord(record, parsedHit));
-                            }
-
+                            AppendBoundedRetryRecords(
+                                parsedHit,
+                                patternName,
+                                regex,
+                                retryOverlap,
+                                output
+                            );
                             continue;
                         }
 
@@ -200,6 +253,50 @@ internal sealed class StreamingRegexOutputCore
 
         Interlocked.Add(ref _outputRowCount, output.Count);
         return output;
+    }
+
+    private void AppendBoundedRetryRecords(
+        ParsedHit parsedHit,
+        string patternName,
+        Regex regex,
+        int retryOverlap,
+        List<string> output
+    )
+    {
+        if (_boundedRetryWarnings.TryAdd(patternName, 0))
+        {
+            Console.Error.WriteLine(
+                $"Built-in {patternName} matching exceeded the whole-string timeout; "
+                    + "retrying in bounded overlapping windows."
+            );
+        }
+
+        if (_regexOnly)
+        {
+            foreach (
+                var record in CreateBoundedRecords(
+                    parsedHit,
+                    patternName,
+                    regex,
+                    _sourceFile,
+                    retryOverlap
+                )
+            )
+            {
+                output.Add(FormatRecord(record, parsedHit));
+            }
+        }
+        else if (HasBoundedMatch(parsedHit.Data, patternName, regex, retryOverlap))
+        {
+            var record = new RegexOutputRecord(
+                patternName,
+                parsedHit.Data,
+                _sourceFile,
+                parsedHit.Offset,
+                "Regex"
+            );
+            output.Add(FormatRecord(record, parsedHit));
+        }
     }
 
     private string FormatRecord(RegexOutputRecord record, ParsedHit parsedHit)

@@ -860,6 +860,36 @@ public class SearchCoreTests
     }
 
     [Fact]
+    public void ProcessStructuredChunk_PreservesDataAndNumericOffsets()
+    {
+        var asciiResults = ChunkProcessingCore.ProcessStructuredChunk(
+            Encoding.ASCII.GetBytes("\u0001Alpha\u0002"),
+            fileOffset: 256,
+            isBoundaryChunk: false,
+            minLength: 4,
+            maxLength: -1,
+            asciiSearch: true,
+            unicodeSearch: false,
+            asciiRange: "[\\x20-\\x7E]",
+            unicodeRange: "[\\u0020-\\u007E]"
+        );
+        var unicodeResults = ChunkProcessingCore.ProcessStructuredChunk(
+            Encoding.Unicode.GetBytes("Beta"),
+            fileOffset: 512,
+            isBoundaryChunk: false,
+            minLength: 4,
+            maxLength: -1,
+            asciiSearch: false,
+            unicodeSearch: true,
+            asciiRange: "[\\x20-\\x7E]",
+            unicodeRange: "[\\u0020-\\u007E]"
+        );
+
+        Assert.Equal([new ExtractedStringHit("Alpha", 0x101)], asciiResults);
+        Assert.Equal([new ExtractedStringHit("Beta", 0x200)], unicodeResults);
+    }
+
+    [Fact]
     public void ProcessChunk_PrefixesBoundaryHits()
     {
         var bytes = Encoding.ASCII.GetBytes("\u0001Alpha\u0002");

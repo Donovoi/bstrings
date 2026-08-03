@@ -204,6 +204,33 @@ public class ProcessingBackendCoreTests
                 );
 
                 Assert.Equal(expected, actual);
+
+                var expectedStructured = ChunkProcessingCore.ProcessStructuredChunk(
+                    scanCase.Data,
+                    scanCase.Offset,
+                    scanCase.IsBoundary,
+                    scanCase.MinLength,
+                    scanCase.MaxLength,
+                    scanCase.Ascii,
+                    scanCase.Unicode,
+                    scanCase.AsciiRange,
+                    scanCase.UnicodeRange,
+                    scanCase.CodePage
+                );
+                var actualStructured = scanner.ProcessStructuredChunk(
+                    scanCase.Data,
+                    scanCase.Offset,
+                    scanCase.IsBoundary,
+                    scanCase.MinLength,
+                    scanCase.MaxLength,
+                    scanCase.Ascii,
+                    scanCase.Unicode,
+                    scanCase.CodePage,
+                    scanCase.AsciiRange,
+                    scanCase.UnicodeRange
+                );
+
+                Assert.Equal(expectedStructured, actualStructured);
             }
         }
     }
