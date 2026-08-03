@@ -5,6 +5,9 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <RustEngineLibrary Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)..\native\bstrings_core\target\release\bstrings_core.dll</RustEngineLibrary>
+    <RustEngineLibrary Condition="$([MSBuild]::IsOSPlatform('Linux'))">$(MSBuildThisFileDirectory)..\native\bstrings_core\target\release\libbstrings_core.so</RustEngineLibrary>
+    <RustEngineLibrary Condition="$([MSBuild]::IsOSPlatform('OSX'))">$(MSBuildThisFileDirectory)..\native\bstrings_core\target\release\libbstrings_core.dylib</RustEngineLibrary>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,5 +25,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\bstrings\bstrings.csproj" />
+    <None Include="$(RustEngineLibrary)" Link="%(Filename)%(Extension)" Condition="Exists('$(RustEngineLibrary)')" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

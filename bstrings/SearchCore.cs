@@ -33,7 +33,13 @@ internal static class SearchCore
     {
         get
         {
-            var ascii = Avx2.IsSupported ? "AVX2" : Sse2.IsSupported ? "SSE2" : "scalar";
+            var ascii = RustAsciiEngine.IsEnabled
+                ? $"Rust {RustAsciiEngine.KernelDescription}"
+                : Avx2.IsSupported
+                    ? "C#/.NET AVX2"
+                    : Sse2.IsSupported
+                        ? "C#/.NET SSE2"
+                        : "C#/.NET scalar";
             var unicode = Avx2.IsSupported
                 ? Bmi2.IsSupported
                     ? "AVX2 + BMI2 PEXT"
@@ -86,7 +92,31 @@ internal static class SearchCore
     )
     {
         var (minChar, maxChar) = ParseCharRange(asciiRange);
-        var hits = FindAsciiStringHits(
+        if (
+            RustAsciiEngine.TryRentConfigured(
+                chunk,
+                minLength,
+                maxLength,
+                currentOffset,
+                minChar,
+                maxChar,
+                out var nativeHits
+            )
+        )
+        {
+            using (nativeHits)
+            {
+                return MaterializeStringHits(
+                    chunk,
+                    nativeHits,
+                    includeOffset,
+                    codePage,
+                    ownership
+                );
+            }
+        }
+
+        var hits = FindAsciiStringHitsManaged(
             chunk,
             minLength,
             maxLength,
@@ -284,7 +314,41 @@ internal static class SearchCore
             .ToList();
     }
 
-    internal static unsafe List<StringHitPosition> FindAsciiStringHits(
+    internal static List<StringHitPosition> FindAsciiStringHits(
+        ReadOnlySpan<byte> data,
+        int minLength,
+        int maxLength,
+        long fileOffset,
+        byte minChar = 32,
+        byte maxChar = 126
+    )
+    {
+        if (
+            RustAsciiEngine.TryFindConfigured(
+                data,
+                minLength,
+                maxLength,
+                fileOffset,
+                minChar,
+                maxChar,
+                out var nativeHits
+            )
+        )
+        {
+            return nativeHits;
+        }
+
+        return FindAsciiStringHitsManaged(
+            data,
+            minLength,
+            maxLength,
+            fileOffset,
+            minChar,
+            maxChar
+        );
+    }
+
+    internal static unsafe List<StringHitPosition> FindAsciiStringHitsManaged(
         ReadOnlySpan<byte> data,
         int minLength,
         int maxLength,
@@ -543,6 +607,38 @@ internal static class SearchCore
         }
 
         return result;
+    }
+
+    internal static List<string> MaterializeStringHits(
+        ReadOnlySpan<byte> data,
+        RustAsciiEngine.HitBatch hits,
+        bool includeOffset,
+        int codePage = 1252,
+        ChunkHitOwnership ownership = default
+    )
+    {
+        var results = new List<string>(hits.Count);
+        var encoding = Encodings.GetOrAdd(
+            codePage,
+            static value =>
+                CodePagesEncodingProvider.Instance.GetEncoding(value)
+                ?? Encoding.GetEncoding(value)
+        );
+
+        foreach (var hit in hits.Hits)
+        {
+            var start = (int)hit.Start;
+            var length = (int)hit.Length;
+            if (!ownership.IsUnrestricted && !ownership.Accepts(start, length, data.Length))
+            {
+                continue;
+            }
+
+            var str = encoding.GetString(data.Slice(start, length));
+            results.Add(includeOffset ? $"0x{hits.FileOffset + start:X}\t{str}" : str);
+        }
+
+        return results;
     }
 
     internal static List<string> MaterializeStringHits(

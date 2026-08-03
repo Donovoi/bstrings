@@ -7,8 +7,8 @@ of common forensic patterns.
 
 This fork keeps Eric Zimmerman's original workflow and adds the pieces needed
 for larger evidence sets: bounded parallel processing, streaming output,
-validated CPU and CUDA paths, safer regex handling, and reproducible tests and
-benchmarks.
+validated CPU and CUDA paths, an opt-in Rust ASCII engine, safer regex handling,
+and reproducible tests and benchmarks.
 
 ## Why choose this fork?
 
@@ -19,7 +19,7 @@ benchmarks.
 | Speed on exact per-pattern overlaps | **15/15 wins vs original, 2.02–2.39x** | Slower on every exact overlap | Fork wins 10/25; ripgrep wins 15/25 | Not ranked: no pattern passed the complete boundary corpus |
 | Readable-string extraction | Code-page and UTF-16LE, offsets, streaming filters | Code-page and UTF-16LE | Raw byte/text search, not a strings extractor | Structured feature scanners and carving, not generic strings output |
 | Chunk-boundary handling | Rejects clipped edge fragments and recovers complete crossing strings | Can emit clipped or duplicate boundary matches | Searcher-managed | Page margins managed by each scanner |
-| Parallel hardware paths | Runtime-selected SIMD CPU, validated CUDA GPU, and CPU+GPU hybrid | CPU | CPU | Multi-threaded CPU scanners |
+| Parallel hardware paths | Runtime-selected SIMD CPU, opt-in Rust AVX2/SSE2 ASCII scanning, validated CUDA GPU, and CPU+GPU hybrid | CPU | CPU | Multi-threaded CPU scanners |
 | Best fit | Large evidence images when you need strings, forensic patterns, and auditable output completion | Compatibility with the original CLI | Very fast known-pattern triage over raw bytes | Broad feature extraction, recursive decoding, carving, and histograms |
 
 The first row is the earlier scale benchmark, where all four commands returned
@@ -29,12 +29,15 @@ and byte offset. A failed semantic or accuracy gate is not used for a speed
 claim. Both benchmarks are warm-cache results on deliberately synthetic data.
 Read the [scale benchmark](docs/scale-benchmark-2026-08.md) and the
 [pattern and engine benchmark](docs/pattern-engine-benchmark-2026-08.md)
-before generalizing them.
+before generalizing them. The Rust engine remains an opt-in prototype; its
+[separate benchmark and design notes](docs/rust-engine-prototype-2026-08.md)
+explain why it is not the default yet.
 
 ## What this fork adds
 
 - Bounded, parallel scanning without a hidden result-count limit
 - SIMD CPU, native CUDA GPU, and mixed CPU+GPU extraction
+- An opt-in Rust ASCII span scanner with startup parity validation and managed fallback
 - Cached, vectorized multi-string prefiltering for `--ls` and `--fs`
 - Hardware- and workload-aware CPU/GPU/hybrid calibration for very large inputs
 - Lazy regex compilation based on measured per-pattern candidate density
@@ -55,11 +58,21 @@ first one.
 | Feature | What it speeds up | When to use it |
 | --- | --- | --- |
 | `--processor auto|cpu|gpu|hybrid` | Extracting strings from bytes | Use `auto` unless you are testing or deliberately forcing a backend |
+| `--cpu-engine dotnet|rust|auto` | Finding code-page/ASCII byte spans on CPU | Use `rust` for the validated opt-in path; keep `dotnet` when portability or the established default matters |
 | `--use-rapids` | Applying compatible built-in regexes after extraction | Use only when RAPIDS/cuDF is already installed and working |
 
 The CPU path reports the instructions it selected at runtime. On the reviewed
 host that is AVX2 for code-page strings and AVX2 plus BMI2 `PEXT` mask
 compression for UTF-16LE; SSE4.1 and scalar UTF-16LE fallbacks are tested too.
+
+The Rust prototype currently replaces only code-page/ASCII span discovery.
+Decoding, offsets, chunk ownership, regex matching, output, raw disks, CUDA,
+and UTF-16LE extraction remain in C#. `--cpu-engine rust` requires the native
+library and fails if its ABI or startup parity checks fail. `auto` prefers Rust
+after those checks and falls back to C#/.NET if the library is unavailable or
+later fails. In this option, `auto` means availability fallback; it is not yet
+a workload-performance selector. The default remains `dotnet` while more
+hardware and evidence-shaped workloads are measured.
 
 The native CUDA extractor compiles its ILGPU kernels for the detected device
 and validates output against the CPU implementation before accepting a
@@ -108,6 +121,9 @@ mix results. `bstrings` never installs Python, CUDA, or RAPIDS for you.
 
 # Let CPU and CUDA workers share one queue
 .\bstrings.exe -f C:\evidence\disk.img --processor hybrid -s
+
+# Evaluate the parity-gated Rust ASCII engine without changing the GPU policy
+.\bstrings.exe -f C:\evidence\memory.raw --processor cpu --cpu-engine rust -s
 
 # Add experimental RAPIDS regex prefiltering
 .\bstrings.exe -f C:\evidence\image.bin --lr all --use-rapids
@@ -169,6 +185,7 @@ RAPIDS limitation are in
 | `--off` | Include source byte offsets |
 | `--sa` / `--sl` | Sort alphabetically or by length |
 | `--processor <mode>` | Choose `auto`, `cpu`, `gpu`, or `hybrid` extraction |
+| `--cpu-engine <mode>` | Choose `dotnet`, `rust`, or availability-fallback `auto` for ASCII CPU span discovery |
 | `--use-rapids` | Try an existing RAPIDS/cuDF installation for regex prefiltering |
 
 `--force-rapids` is retained as a deprecated alias for `--use-rapids`. Despite
@@ -193,11 +210,17 @@ problematic evidence item.
 
 ## Build and test
 
-You need the .NET 9 SDK. A CUDA-capable NVIDIA GPU and driver are optional and
-used only for `gpu` or `hybrid` extraction. The supported release artifact is
-Windows x64.
+You need the .NET 9 SDK. Rust 1.95 is needed only to build or test the optional
+native engine. A CUDA-capable NVIDIA GPU and driver are optional and used only
+for `gpu` or `hybrid` extraction. The supported release artifact is Windows
+x64.
 
 ```powershell
+cargo fmt --manifest-path native\bstrings_core\Cargo.toml --check
+cargo clippy --manifest-path native\bstrings_core\Cargo.toml --release --all-targets --locked -- -D warnings
+cargo test --manifest-path native\bstrings_core\Cargo.toml --release --locked
+cargo build --manifest-path native\bstrings_core\Cargo.toml --release --locked
+
 dotnet restore bstrings.sln
 dotnet build bstrings.sln -c Release --no-restore
 dotnet test bstrings.sln -c Release --no-build
@@ -234,6 +257,35 @@ dotnet run --project benchmarks\ScaleCorpusGenerator -c Release -- `
 The generator writes a SHA-256 manifest with the expected literal, URL, and
 email counts. The matching four-tool harness is documented in
 [benchmarks/README.md](benchmarks/README.md).
+
+To compare the managed and Rust ASCII span engines directly, including the
+native call and direct consumption of the pooled hit buffer:
+
+```powershell
+dotnet run --project benchmarks\AsciiEngineBenchmark -c Release -- `
+  --rounds 7 `
+  --target-mib 256 `
+  --output benchmarks\results\ascii-engine-local.csv
+```
+
+Every scenario is parity-checked before it is timed. The checked-in reviewed
+result is
+[`ascii-engine-rust-prototype-2026-08.csv`](benchmarks/results/ascii-engine-rust-prototype-2026-08.csv).
+
+The real-CLI scale runner alternates both engines over the same corpus and
+requires exact marker, byte-coverage, and canonical-output parity:
+
+```powershell
+.\benchmarks\Invoke-RustEngineScaleBenchmark.ps1 `
+  -DataRoot C:\bench `
+  -Bstrings C:\tools\bstrings.exe `
+  -RunRoot C:\bench\rust-engine-run `
+  -Tiers @('1g','10g') `
+  -VerifyHashes
+```
+
+The reviewed 1 GiB and 10 GiB measurements are in
+[`rust-engine-scale-2026-08.csv`](benchmarks/results/rust-engine-scale-2026-08.csv).
 
 To exercise every built-in pattern, encoding, and complexity class:
 
