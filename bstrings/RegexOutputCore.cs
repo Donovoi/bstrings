@@ -204,7 +204,11 @@ internal static class RegexOutputCore
         return regexes;
     }
 
-    internal static Regex GetOrCreateRegex(string name, string pattern)
+    internal static Regex GetOrCreateRegex(
+        string name,
+        string pattern,
+        bool preferCompiledBuiltIn = false
+    )
     {
         var options = RegexOptions.CultureInvariant;
         if (BuiltInPatternCatalog.TryGetDefinition(name, pattern, out var definition))
@@ -212,7 +216,9 @@ internal static class RegexOutputCore
             options |= definition.Options;
             options |= definition.UseNonBacktracking
                 ? RegexOptions.NonBacktracking
-                : RegexOptions.Compiled;
+                : preferCompiledBuiltIn
+                    ? RegexOptions.Compiled
+                    : RegexOptions.None;
         }
         else
         {

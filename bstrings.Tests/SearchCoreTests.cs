@@ -317,6 +317,110 @@ public class SearchCoreTests
     }
 
     [Fact]
+    public void FindUnicodeStringHits_MatchesScalarReferenceAcrossRandomInputs()
+    {
+        var random = new Random(unchecked((int)0x16B57A1A));
+        var ranges = new (char Min, char Max)[]
+        {
+            ('\0', '\0'),
+            (' ', '~'),
+            ('0', '9'),
+            ('\u0100', '\u017F'),
+            ('\0', '\uFFFF'),
+            ('\uFFFF', '\0'),
+        };
+
+        for (var iteration = 0; iteration < 250; iteration++)
+        {
+            var data = new byte[random.Next(0, 4097)];
+            random.NextBytes(data);
+            var minLength = random.Next(1, 17);
+            var maxLength = random.Next(0, 3) == 0 ? -1 : random.Next(1, 33);
+            var fileOffset = random.NextInt64(0, 1L << 40);
+
+            foreach (var (minChar, maxChar) in ranges)
+            {
+                var expected = FindUnicodeStringHitsScalar(
+                    data,
+                    minLength,
+                    maxLength,
+                    fileOffset,
+                    minChar,
+                    maxChar
+                );
+                var actual = SearchCore.FindUnicodeStringHits(
+                    data,
+                    minLength,
+                    maxLength,
+                    fileOffset,
+                    minChar,
+                    maxChar
+                );
+
+                Assert.Equal(
+                    expected.Select(hit => (hit.Start, hit.Length, hit.FileOffset)),
+                    actual.Select(hit => (hit.Start, hit.Length, hit.FileOffset))
+                );
+            }
+        }
+    }
+
+    private static List<StringHitPosition> FindUnicodeStringHitsScalar(
+        ReadOnlySpan<byte> data,
+        int minLength,
+        int maxLength,
+        long fileOffset,
+        char minChar,
+        char maxChar
+    )
+    {
+        var hits = new List<StringHitPosition>();
+        var unitCount = data.Length / sizeof(ushort);
+        var stringStart = -1;
+
+        for (var position = 0; position <= unitCount; position++)
+        {
+            var byteIndex = position * sizeof(ushort);
+            var value = position < unitCount
+                ? (char)(data[byteIndex] | (data[byteIndex + 1] << 8))
+                : '\0';
+            var isValid =
+                position < unitCount && minChar <= maxChar && value >= minChar && value <= maxChar;
+            if (isValid)
+            {
+                if (stringStart < 0)
+                {
+                    stringStart = position;
+                }
+
+                continue;
+            }
+
+            if (stringStart < 0)
+            {
+                continue;
+            }
+
+            var length = position - stringStart;
+            if (length >= minLength)
+            {
+                var actualLength = maxLength > 0 && length > maxLength ? maxLength : length;
+                hits.Add(
+                    new StringHitPosition(
+                        stringStart * sizeof(ushort),
+                        actualLength * sizeof(ushort),
+                        fileOffset
+                    )
+                );
+            }
+
+            stringStart = -1;
+        }
+
+        return hits;
+    }
+
+    [Fact]
     public void OrderHits_SortsExtractedDataRatherThanOffsetPrefixes()
     {
         var hits = new[]

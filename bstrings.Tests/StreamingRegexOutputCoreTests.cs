@@ -48,6 +48,44 @@ public class StreamingRegexOutputCoreTests
     }
 
     [Fact]
+    public void TransformMainBatch_PromotesMeasuredPatternExactlyOnceAtCrossover()
+    {
+        var processor = new StreamingRegexOutputCore(
+            [("usPhone", BuiltInPatternCatalog.Patterns["usPhone"])],
+            regexOnly: true,
+            includeOffset: false,
+            isCsvOutput: false,
+            sourceFile: "input.bin"
+        );
+        var first = Enumerable.Repeat("this is not a phone number", 6_000).ToList();
+        var second = Enumerable.Repeat("this is also not a phone number", 6_000).ToList();
+
+        Parallel.Invoke(
+            () => Assert.Empty(processor.TransformMainBatch(first)),
+            () => Assert.Empty(processor.TransformMainBatch(second))
+        );
+
+        Assert.Equal(1, processor.CompiledPromotionCount);
+    }
+
+    [Fact]
+    public void TransformMainBatch_UsesProjectedCandidateDensityForEarlyPromotion()
+    {
+        var processor = new StreamingRegexOutputCore(
+            [("usPhone", BuiltInPatternCatalog.Patterns["usPhone"])],
+            regexOnly: true,
+            includeOffset: false,
+            isCsvOutput: false,
+            sourceFile: "input.bin",
+            estimatedBatchCount: 100
+        );
+        var hits = Enumerable.Repeat("this is not a phone number", 100).ToList();
+
+        Assert.Empty(processor.TransformMainBatch(hits));
+        Assert.Equal(1, processor.CompiledPromotionCount);
+    }
+
+    [Fact]
     public void TransformMainBatch_PreservesRepeatedMatchesWithinOneExtractedString()
     {
         var processor = new StreamingRegexOutputCore(

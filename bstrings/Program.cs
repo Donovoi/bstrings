@@ -987,15 +987,7 @@ public static partial class Program
                 || regexPatterns.Count > 0;
             var canStreamRawResults =
                 sw is not null && o.Length > 0 && !requiresPostProcessing;
-            var streamingRegexOutput = canStreamRegexResults
-                ? new StreamingRegexOutputCore(
-                    regexPatternsWithNames,
-                    ro,
-                    off,
-                    isCsvOutput,
-                    currentFile
-                )
-                : null;
+            StreamingRegexOutputCore streamingRegexOutput = null;
 
             if (canStreamRegexResults && isCsvOutput && !csvHeaderWritten)
             {
@@ -1037,13 +1029,25 @@ public static partial class Program
             }
 
             var fileSizeBytes = new FileInfo(currentFile).Length; // Use currentFile
-            var processingMode = processingBackend.ResolveForFile(fileSizeBytes, minLength);
+            var calibration = processingBackend.CalibrateForFile(
+                currentFile,
+                fileSizeBytes,
+                minLength,
+                maxLength,
+                a,
+                u,
+                cp,
+                ar,
+                ur
+            );
+            var processingMode = calibration.Mode;
 
             if (!q && _debug)
             {
                 Console.Error.WriteLine(
                     $"Selected {processingMode.ToString().ToLowerInvariant()} extraction for '{currentFile}'."
                 );
+                Console.Error.WriteLine(processingBackend.LastCalibrationMessage);
             }
 
             if (b < 0 || b > 1024)
@@ -1072,6 +1076,18 @@ public static partial class Program
                 1,
                 (fileSizeBytes + chunkSizeBytes - 1L) / chunkSizeBytes
             );
+
+            if (canStreamRegexResults)
+            {
+                streamingRegexOutput = new StreamingRegexOutputCore(
+                    regexPatternsWithNames,
+                    ro,
+                    off,
+                    isCsvOutput,
+                    currentFile,
+                    totalChunks
+                );
+            }
 
             ProgressTracker progressTracker = new ProgressTracker(totalChunks, q);
 
