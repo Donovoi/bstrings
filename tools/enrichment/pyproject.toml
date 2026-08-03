@@ -11,6 +11,9 @@ translation = [
     "torch>=2.7,<3",
     "transformers>=4.57,<5",
 ]
+benchmark = [
+    "sacrebleu>=2.5,<3",
+]
 
 [tool.ruff]
 line-length = 100

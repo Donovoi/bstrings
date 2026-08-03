@@ -3,7 +3,10 @@
 `bstrings` can now apply its regex catalog to strings recovered by other tools.
 The first adapter uses Magika to route extracted files, FLOSS to recover
 executable strings that ordinary byte scanning cannot see, and an optional
-offline MADLAD-400 pass to translate candidate text before matching it again.
+offline translation pass to translate candidate text before matching it again.
+Hy-MT2 through llama.cpp is the recommended path for its supported languages;
+MADLAD-400 remains available when much wider language coverage matters more
+than speed.
 
 This is intentionally a companion pipeline. Magika, FLOSS, Python, PyTorch,
 and model weights are not installed or loaded by the core `bstrings`
@@ -17,7 +20,7 @@ adapter.
 | --- | --- | --- |
 | Magika | Classifies a complete extracted file and decides whether FLOSS is appropriate | It does not extract strings and should not be treated as a classifier for arbitrary disk blocks |
 | FLOSS | Recovers Go/Rust language strings plus stack, tight-loop, and decoded strings from supported executables | It does not replace filesystem parsing, carving, or normal byte-string extraction |
-| MADLAD-400 | Produces an optional offline English child record from a recovered string | It does not prove that a translated identifier existed in the source bytes |
+| Hy-MT2 or MADLAD-400 | Produces an optional offline English child record from a recovered string | It does not prove that a translated identifier existed in the source bytes |
 | `bstrings --enrich-jsonl` | Applies the same built-in or custom regex semantics to every normalized record | It never rewrites or discards the parent evidence record |
 
 FLOSS is only selected automatically for Magika's `pebin` result. Known 32-
@@ -83,29 +86,56 @@ regex has completed. A bad schema, missing parent, or regex timeout therefore
 leaves an existing result untouched. Console output cannot provide that
 rollback guarantee.
 
-## Offline Google research translation
+## Offline translation
 
-Google ML Kit exposes the same compact models used by Google Translate's
-offline mode, but its supported SDKs are Android and iOS. It is not a
-supported Windows or server-side engine. For a desktop forensic workflow this
-adapter uses MADLAD-400-3B-MT instead: a Google Research multilingual T5 model
-with a Hugging Face conversion. It is an open research model, not the
-proprietary Google Translate service, and its model card warns that quality
-varies by language and domain.
+The current recommendation is the Apache-2.0
+[Hy-MT2-1.8B GGUF](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF), using Q8
+when translation quality is the priority and Q4_K_M when memory or speed is
+tighter. The adapter owns a short-lived llama.cpp server, binds it to
+`127.0.0.1`, disables the web UI and reasoning output, uses deterministic
+decoding, and tears the server down before returning. It hashes the GGUF before
+startup and records the exact model, revision, hash, llama.cpp version, and
+actual CPU/CUDA path on every translated child.
 
-Download and pin a snapshot before moving the analysis environment offline.
-This reviewed snapshot is about 11.8 GB in its unquantized safetensors form:
+Download a pinned model revision and a pinned llama.cpp release before moving
+the examination environment offline. The model files are not bundled with
+`bstrings`:
 
 ```powershell
-hf download google/madlad400-3b-mt `
-  --revision fa184c675da0b5c9e1c8694fccd4e12e2d422094 `
-  --local-dir C:\forensic-models\madlad400-3b-mt
+hf download tencent/Hy-MT2-1.8B-GGUF `
+  --revision 1cd5208700acedef4ef93019b6cfc148b8522d45 `
+  --include Hy-MT2-1.8B-Q8_0.gguf `
+  --include LICENSE.txt `
+  --local-dir C:\forensic-models\hy-mt2-1.8b
 ```
 
-Install the translation dependencies into the adapter environment, then pass
-only the local snapshot. The runner sets `HF_HUB_OFFLINE=1`, sets
-`TRANSFORMERS_OFFLINE=1`, and asks Transformers for local files only, so it
-cannot silently fetch model data during examination.
+This example translates an existing normalized string stream. A `.gguf` model
+file selects the llama.cpp engine automatically:
+
+```powershell
+python tools\enrichment\bstrings_enrich.py `
+  --input-jsonl C:\case\results\other-normalized-strings.jsonl `
+  --translate `
+  --llama-server C:\forensic-tools\llama.cpp\llama-server.exe `
+  --translation-model-path C:\forensic-models\hy-mt2-1.8b\Hy-MT2-1.8B-Q8_0.gguf `
+  --translation-model-id tencent/Hy-MT2-1.8B-GGUF `
+  --translation-revision 1cd5208700acedef4ef93019b6cfc148b8522d45 `
+  --translation-model-sha256 5C3FE0B1408A5CEB0143184EF247B11B579C525F4B02B060E6C851BB76FEF1A4 `
+  --translation-device auto `
+  --translation-target en `
+  -o C:\case\results\other-normalized-strings-translated.jsonl
+```
+
+`auto` uses CUDA when the supplied llama.cpp binary lists a CUDA device and
+otherwise uses CPU. `cuda` fails before examination if no CUDA device is
+visible; `cpu` forces zero GPU layers. The Q8 and Q4 CPU/GPU paths were both
+exercised during integration. The server executable itself is an explicit,
+local dependency so an examiner can pin and hash the build used in a case.
+
+Hy-MT2 does not replace MADLAD everywhere. Its model card describes support
+for 33 languages (Hugging Face metadata currently exposes 36 language tags),
+whereas [MADLAD-400](https://huggingface.co/google/madlad400-3b-mt) exposes 419.
+Keep MADLAD as a fallback for languages outside Hy-MT2's supported set:
 
 ```powershell
 uv pip install --python C:\forensic-tools\translate\Scripts\python.exe `
@@ -113,47 +143,36 @@ uv pip install --python C:\forensic-tools\translate\Scripts\python.exe `
 
 C:\forensic-tools\translate\Scripts\python.exe `
   tools\enrichment\bstrings_enrich.py `
-  --magika C:\forensic-tools\magika\Scripts\magika.exe `
-  --floss C:\forensic-tools\floss\floss.exe `
+  --input-jsonl C:\case\results\other-normalized-strings.jsonl `
   --translate `
+  --translation-engine madlad `
   --translation-model-path C:\forensic-models\madlad400-3b-mt `
   --translation-model-id google/madlad400-3b-mt `
   --translation-revision fa184c675da0b5c9e1c8694fccd4e12e2d422094 `
   --translation-model-sha256 66FF5F8FCAF92291DA486FDFBD4D5233CEC90E1359348A56E3172C978B3A76D4 `
-  --translation-target en `
-  -o C:\case\results\enriched-and-translated.jsonl `
-  C:\case\extracted\sample.exe
-```
-
-The same translator can enrich normalized strings produced by another
-extractor without invoking Magika or FLOSS again:
-
-```powershell
-C:\forensic-tools\translate\Scripts\python.exe `
-  tools\enrichment\bstrings_enrich.py `
-  --input-jsonl C:\case\results\other-normalized-strings.jsonl `
-  --translate `
-  --translation-model-path C:\forensic-models\madlad400-3b-mt `
-  --translation-revision fa184c675da0b5c9e1c8694fccd4e12e2d422094 `
-  --translation-model-sha256 66FF5F8FCAF92291DA486FDFBD4D5233CEC90E1359348A56E3172C978B3A76D4 `
+  --translation-device cpu `
   -o C:\case\results\other-normalized-strings-translated.jsonl
 ```
 
-`--translation-device auto` uses CUDA only when PyTorch reports CUDA and the
-GPU has at least 16 GiB of memory; otherwise it uses CPU. This conservative
-gate avoids loading the 11.8 GB checkpoint onto an 8 GiB GPU and failing after
-analysis has begun. `cpu` and `cuda` can be forced for a separately validated
-environment. A CUDA run also requires a CUDA-enabled PyTorch wheel selected
-from the [official PyTorch installer](https://pytorch.org/get-started/locally/);
-the ordinary package source may provide a CPU build. Quantized Candle or
-CTranslate2 workers are promising future
-paths, but they should not become defaults until their translations match the
-pinned reference model on a multilingual forensic corpus.
+The MADLAD runner sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`, and
+loads local files only. Its `auto` device gate still requires at least 16 GiB
+of CUDA memory for the unquantized 11.8 GB checkpoint; otherwise it selects
+CPU. Transformers 5 remains rejected because it produced destructive
+repeated-token output with this checkpoint during validation.
+
+Google ML Kit's compact offline models remain mobile SDK components, not a
+supported Windows/server engine. TranslateGemma 4B is a strong 2026 candidate,
+but its weights required accepted Gemma access and were unavailable to the
+unauthenticated test host, so it was not promoted without a hands-on result.
+NLLB-200 and SeamlessM4T were excluded as defaults because their model cards
+use CC-BY-NC-4.0. See the
+[full benchmark record](translation-benchmark-2026-08-04.md) for the research
+gate and measured comparison.
 
 Only strings containing letters and within the configured character limits
 are translated. Empty or unchanged translations are not emitted. Translation
-is batched, but regex matching remains a separate bstrings step so CPU, GPU,
-and regex policy remain independently auditable.
+and regex matching remain separate steps so model policy, hardware choice,
+and regex policy stay independently auditable.
 
 ## Provenance and interpretation
 
@@ -218,6 +237,25 @@ the test identifier. Transformers `4.57.6` generated the correct translations
 and preserved the identifier, so the adapter now enforces `>=4.57,<5` at both
 installation and runtime. This is why dependency version is evidence
 provenance rather than incidental environment detail.
+
+The 2026-08-04 model-selection gate then ran 60 deterministic WMT24++ rows
+(five each across 12 languages) and 12 synthetic forensic strings. Hy-MT2 Q8
+beat the existing unquantized MADLAD CPU path on both quality suites, preserved
+all 22 identifiers, and translated 13.1 times as many strings per second. A
+second Q8 run produced the same 72 hypotheses byte for byte. The Q4 build was
+18.9 times faster than MADLAD and also retained every identifier, but Q8 kept
+the stronger quality score and is the recommendation when it fits.
+
+| Model/runtime | WMT24++ chrF++ | Forensic chrF++ | Exact identifiers | Strings/s |
+| --- | ---: | ---: | ---: | ---: |
+| Hy-MT2-1.8B Q8, llama.cpp/CUDA | 59.74 | 87.53 | 22/22 | 1.289 |
+| Hy-MT2-1.8B Q4_K_M, llama.cpp/CUDA | 58.42 | 86.31 | 22/22 | 1.855 |
+| MADLAD-400-3B-MT, Transformers/CPU | 54.65 | 85.94 | 22/22 | 0.098 |
+
+These figures describe one laptop and a deliberately small selection gate;
+they are not universal model rankings. They are sufficient to choose the
+adapter's preferred path on the reviewed hardware, while the checked-in
+benchmark makes later model or runtime changes falsifiable.
 
 ## Tests
 

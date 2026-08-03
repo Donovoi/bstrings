@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,11 +13,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bstrings_enrich import (  # noqa: E402
     Classification,
     EnrichmentError,
+    LlamaCppTranslator,
     MadladTranslator,
     add_translations,
+    llama_translation_prompt,
     normalize_floss,
     read_normalized_jsonl,
     run_floss,
+    selected_translation_engine,
     translate_normalized_records,
     unique_records,
     validate_transformers_version,
@@ -202,6 +206,49 @@ class EnrichmentTests(unittest.TestCase):
                     16,
                     16,
                 )
+
+    def test_gguf_hash_mismatch_fails_before_starting_llama_server(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            model_path = Path(directory) / "model.gguf"
+            model_path.write_bytes(b"not-the-pinned-model")
+            with self.assertRaisesRegex(EnrichmentError, "SHA-256 mismatch"):
+                LlamaCppTranslator(
+                    "missing-llama-server",
+                    model_path,
+                    "test/model",
+                    "revision",
+                    "0" * 64,
+                    "cpu",
+                    16,
+                    16,
+                    30,
+                    30,
+                )
+
+    def test_translation_engine_is_selected_from_local_model_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gguf = root / "model.gguf"
+            gguf.write_bytes(b"model")
+            self.assertEqual(
+                "llama-cpp",
+                selected_translation_engine(
+                    Namespace(translation_engine="auto", translation_model_path=gguf)
+                ),
+            )
+            self.assertEqual(
+                "madlad",
+                selected_translation_engine(
+                    Namespace(translation_engine="auto", translation_model_path=root)
+                ),
+            )
+
+    def test_llama_prompt_names_language_and_protects_identifiers(self) -> None:
+        prompt = llama_translation_prompt("cuenta analyst@example.com", "en")
+        self.assertIn("into English", prompt)
+        self.assertIn("analyst@example.com", prompt)
+        self.assertIn("Preserve every email address", prompt)
+        self.assertIn("into Traditional Chinese", llama_translation_prompt("evidence", "zh-Hant"))
 
     @patch("bstrings_enrich.run_checked")
     def test_shellcode_format_is_explicitly_forwarded_to_floss(self, run_checked_mock) -> None:

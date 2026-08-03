@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from collections.abc import Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -19,6 +24,47 @@ from typing import Any, Protocol
 
 SCHEMA_VERSION = 1
 DEFAULT_MODEL_ID = "google/madlad400-3b-mt"
+DEFAULT_LLAMA_MODEL_ID = "tencent/Hy-MT2-1.8B-GGUF"
+LANGUAGE_NAMES = {
+    "ar": "Arabic",
+    "bn": "Bengali",
+    "bo": "Tibetan",
+    "cs": "Czech",
+    "de": "German",
+    "en": "English",
+    "es": "Spanish",
+    "fa": "Persian",
+    "gu": "Gujarati",
+    "he": "Hebrew",
+    "fr": "French",
+    "hi": "Hindi",
+    "id": "Indonesian",
+    "it": "Italian",
+    "ja": "Japanese",
+    "kk": "Kazakh",
+    "km": "Khmer",
+    "ko": "Korean",
+    "mn": "Mongolian",
+    "mr": "Marathi",
+    "ms": "Malay",
+    "my": "Burmese",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "th": "Thai",
+    "tl": "Filipino",
+    "tr": "Turkish",
+    "ug": "Uyghur",
+    "uk": "Ukrainian",
+    "ur": "Urdu",
+    "vi": "Vietnamese",
+    "yue": "Cantonese",
+    "zh": "Chinese",
+    "zh-hant": "Traditional Chinese",
+}
 FLOSS_CATEGORIES = (
     "language_strings",
     "stack_strings",
@@ -520,6 +566,215 @@ class MadladTranslator:
         return self._tokenizer.batch_decode(generated, skip_special_tokens=True)
 
 
+def llama_translation_prompt(text: str, target_language: str) -> str:
+    language_name = LANGUAGE_NAMES.get(target_language.lower(), target_language)
+    return (
+        f"Translate the following text into {language_name}. Only output the translated result "
+        "without explanation. Preserve every email address, username, IP address, URL, file "
+        "path, file name, hash, CVE, registry path, host name, port, GUID, placeholder, and "
+        "delimiter exactly as written:\n" + text
+    )
+
+
+class LlamaCppTranslator:
+    """Offline GGUF translation through a private, short-lived llama.cpp server."""
+
+    engine = "llama.cpp"
+
+    def __init__(
+        self,
+        server: str,
+        model_path: Path,
+        model_id: str,
+        revision: str,
+        expected_model_sha256: str,
+        device: str,
+        max_input_tokens: int,
+        max_new_tokens: int,
+        startup_timeout_seconds: int,
+        request_timeout_seconds: int,
+    ) -> None:
+        if not model_path.is_file():
+            raise EnrichmentError(f"Local GGUF model was not found: {model_path}")
+        actual_model_sha256 = sha256_file(model_path)
+        if actual_model_sha256 != expected_model_sha256.lower():
+            raise EnrichmentError(
+                "Translation model SHA-256 mismatch: "
+                f"expected {expected_model_sha256.lower()}, got {actual_model_sha256}"
+            )
+
+        self._server = executable_path(server)
+        version_result = run_checked([self._server, "--version"], 30)
+        version_lines = (version_result.stdout + "\n" + version_result.stderr).splitlines()
+        version = next(
+            (line.strip() for line in version_lines if "version" in line.lower()),
+            next((line.strip() for line in version_lines if line.strip()), "unknown"),
+        )
+        devices_result = run_checked([self._server, "--list-devices"], 30)
+        devices = devices_result.stdout + "\n" + devices_result.stderr
+        cuda_device = next(
+            (
+                line.strip().split(":", maxsplit=1)[0]
+                for line in devices.splitlines()
+                if line.strip().upper().startswith("CUDA")
+            ),
+            None,
+        )
+        cuda_available = cuda_device is not None
+        if device == "cuda" and not cuda_available:
+            raise EnrichmentError(
+                "CUDA translation was requested but llama.cpp did not list a CUDA device"
+            )
+        actual_device = "cuda" if device != "cpu" and cuda_available else "cpu"
+        self.engine_version = f"{version}; device={actual_device}"
+        self.model_id = model_id
+        self.revision = revision
+        self.model_sha256 = actual_model_sha256
+        self._max_new_tokens = max_new_tokens
+        self._request_timeout_seconds = request_timeout_seconds
+        self._url_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self._closed = False
+        self._temporary_directory = tempfile.TemporaryDirectory(prefix="bstrings-llama-")
+        temporary_path = Path(self._temporary_directory.name)
+        self._stdout_path = temporary_path / "stdout.log"
+        self._stderr_path = temporary_path / "stderr.log"
+        self._stdout_handle = self._stdout_path.open("w", encoding="utf-8")
+        self._stderr_handle = self._stderr_path.open("w", encoding="utf-8")
+        self._port = self._available_loopback_port()
+        context_size = max(2048, max_input_tokens + max_new_tokens + 512)
+        gpu_layers = "all" if actual_device == "cuda" else "0"
+        command = [
+            self._server,
+            "-m",
+            str(model_path.resolve()),
+            "-ngl",
+            gpu_layers,
+            "--device",
+            cuda_device if actual_device == "cuda" else "none",
+            "-c",
+            str(context_size),
+            "-np",
+            "1",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(self._port),
+            "--jinja",
+            "--reasoning",
+            "off",
+            "--no-warmup",
+            "--no-webui",
+            "--flash-attn",
+            "on",
+        ]
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        try:
+            self._process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=self._stdout_handle,
+                stderr=self._stderr_handle,
+                creationflags=creation_flags,
+            )
+            self._wait_until_healthy(startup_timeout_seconds)
+        except BaseException:
+            self.close()
+            raise
+        atexit.register(self.close)
+
+    @staticmethod
+    def _available_loopback_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            return int(listener.getsockname()[1])
+
+    def _wait_until_healthy(self, timeout_seconds: int) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        health_url = f"http://127.0.0.1:{self._port}/health"
+        while time.monotonic() < deadline:
+            if self._process.poll() is not None:
+                self._stderr_handle.flush()
+                diagnostic = self._stderr_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+                raise EnrichmentError(
+                    f"llama.cpp exited before becoming healthy: {diagnostic.strip()}"
+                )
+            try:
+                with self._url_opener.open(health_url, timeout=2) as response:
+                    payload = json.load(response)
+                if payload.get("status") == "ok":
+                    return
+            except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
+                pass
+            time.sleep(0.2)
+        raise EnrichmentError(f"llama.cpp did not become healthy within {timeout_seconds} seconds")
+
+    def translate(self, texts: Sequence[str], target_language: str) -> list[str]:
+        return [self._translate_one(text, target_language) for text in texts]
+
+    def _translate_one(self, text: str, target_language: str) -> str:
+        payload = json.dumps(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": llama_translation_prompt(text, target_language),
+                    }
+                ],
+                "temperature": 0,
+                "top_p": 1,
+                "top_k": 1,
+                "seed": 1,
+                "max_tokens": self._max_new_tokens,
+                "stream": False,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self._port}/v1/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with self._url_opener.open(request, timeout=self._request_timeout_seconds) as response:
+                body = json.load(response)
+            content = body["choices"][0]["message"]["content"]
+        except (
+            OSError,
+            TimeoutError,
+            urllib.error.URLError,
+            json.JSONDecodeError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
+            raise EnrichmentError(f"llama.cpp translation request failed: {exc}") from exc
+        if not isinstance(content, str) or not content.strip():
+            raise EnrichmentError("llama.cpp returned an empty translation")
+        return content.strip()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        process = getattr(self, "_process", None)
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+        for handle_name in ("_stdout_handle", "_stderr_handle"):
+            handle = getattr(self, handle_name, None)
+            if handle is not None:
+                handle.close()
+        temporary_directory = getattr(self, "_temporary_directory", None)
+        if temporary_directory is not None:
+            temporary_directory.cleanup()
+        with suppress(Exception):
+            atexit.unregister(self.close)
+
+
 def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -561,11 +816,20 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--translate", action="store_true", help="Add offline English translations")
+    parser.add_argument(
+        "--translation-engine",
+        choices=("auto", "madlad", "llama-cpp"),
+        default="auto",
+        help="Select from the local model path automatically, or force one offline engine",
+    )
     parser.add_argument("--translation-model-path", type=Path)
-    parser.add_argument("--translation-model-id", default=DEFAULT_MODEL_ID)
+    parser.add_argument("--translation-model-id")
     parser.add_argument("--translation-revision")
     parser.add_argument("--translation-model-sha256")
     parser.add_argument("--translation-device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--llama-server", default="llama-server")
+    parser.add_argument("--translation-startup-timeout", type=int, default=120)
+    parser.add_argument("--translation-request-timeout", type=int, default=120)
     parser.add_argument("--translation-batch-size", type=int, default=8)
     parser.add_argument("--translation-target", default="en")
     parser.add_argument("--translation-min-characters", type=int, default=8)
@@ -573,6 +837,15 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--translation-max-input-tokens", type=int, default=512)
     parser.add_argument("--translation-max-new-tokens", type=int, default=512)
     return parser.parse_args(argv)
+
+
+def selected_translation_engine(args: argparse.Namespace) -> str:
+    if args.translation_engine != "auto":
+        return str(args.translation_engine)
+    model_path = args.translation_model_path
+    if model_path is not None and model_path.is_file() and model_path.suffix.lower() == ".gguf":
+        return "llama-cpp"
+    return "madlad"
 
 
 def validate_arguments(args: argparse.Namespace) -> None:
@@ -589,24 +862,34 @@ def validate_arguments(args: argparse.Namespace) -> None:
         raise EnrichmentError("--minimum-length must be at least 3")
     if args.magika_timeout <= 0 or args.floss_timeout <= 0:
         raise EnrichmentError("Tool timeouts must be positive")
+    if args.translation_startup_timeout <= 0 or args.translation_request_timeout <= 0:
+        raise EnrichmentError("Translation timeouts must be positive")
     if args.translation_batch_size <= 0:
         raise EnrichmentError("--translation-batch-size must be positive")
     if args.translation_min_characters <= 0:
         raise EnrichmentError("--translation-min-characters must be positive")
     if args.translation_max_characters < args.translation_min_characters:
         raise EnrichmentError("Translation maximum characters must not be below the minimum")
+    target_parts = args.translation_target.split("-")
     if not (
-        2 <= len(args.translation_target) <= 8
+        2 <= len(args.translation_target) <= 16
         and args.translation_target.isascii()
-        and args.translation_target.isalnum()
+        and all(part.isalnum() for part in target_parts)
     ):
-        raise EnrichmentError("--translation-target must be a 2-8 character ASCII language code")
+        raise EnrichmentError("--translation-target must be a 2-16 character ASCII language code")
     if args.translate:
-        if args.translation_model_path is None or not args.translation_model_path.is_dir():
+        if args.translation_model_path is None or not args.translation_model_path.exists():
             raise EnrichmentError(
-                "--translate requires --translation-model-path pointing to an existing local "
-                "model snapshot"
+                "--translate requires --translation-model-path pointing to an existing local model"
             )
+        engine = selected_translation_engine(args)
+        if engine == "madlad" and not args.translation_model_path.is_dir():
+            raise EnrichmentError("The MADLAD engine requires a local model snapshot directory")
+        if engine == "llama-cpp" and (
+            not args.translation_model_path.is_file()
+            or args.translation_model_path.suffix.lower() != ".gguf"
+        ):
+            raise EnrichmentError("The llama.cpp engine requires a local GGUF model file")
         if not args.translation_revision:
             raise EnrichmentError(
                 "--translate requires --translation-revision so derived evidence can identify "
@@ -650,6 +933,7 @@ def write_jsonl_atomic(output_path: Path, records: Iterable[dict[str, Any]]) -> 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_arguments(argv)
+    translator: Translator | None = None
     try:
         validate_arguments(args)
         magika = ""
@@ -661,17 +945,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             floss = executable_path(args.floss)
             magika_version = tool_version(magika)
             floss_version = tool_version(floss)
-        translator: Translator | None = None
         if args.translate:
-            translator = MadladTranslator(
-                args.translation_model_path.resolve(),
-                args.translation_model_id,
-                args.translation_revision,
-                args.translation_model_sha256,
-                args.translation_device,
-                args.translation_max_input_tokens,
-                args.translation_max_new_tokens,
-            )
+            engine = selected_translation_engine(args)
+            if engine == "llama-cpp":
+                translator = LlamaCppTranslator(
+                    args.llama_server,
+                    args.translation_model_path.resolve(),
+                    args.translation_model_id or DEFAULT_LLAMA_MODEL_ID,
+                    args.translation_revision,
+                    args.translation_model_sha256,
+                    args.translation_device,
+                    args.translation_max_input_tokens,
+                    args.translation_max_new_tokens,
+                    args.translation_startup_timeout,
+                    args.translation_request_timeout,
+                )
+            else:
+                translator = MadladTranslator(
+                    args.translation_model_path.resolve(),
+                    args.translation_model_id or DEFAULT_MODEL_ID,
+                    args.translation_revision,
+                    args.translation_model_sha256,
+                    args.translation_device,
+                    args.translation_max_input_tokens,
+                    args.translation_max_new_tokens,
+                )
 
         processed = 0
         skipped = 0
@@ -761,6 +1059,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (KeyError, OSError, RuntimeError, TypeError, ValueError) as exc:
         print(f"enrichment failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
+    finally:
+        close = getattr(translator, "close", None)
+        if close is not None:
+            close()
 
 
 if __name__ == "__main__":
