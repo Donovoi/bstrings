@@ -124,6 +124,31 @@ change.
 
 See the [pattern and engine results](../docs/pattern-engine-benchmark-2026-08.md).
 
+## All-pattern streaming output
+
+The dense all-pattern benchmark exercises the real `--lr all --ro` streaming
+path rather than one regex in isolation. Generate the mixed ASCII/UTF-16LE
+fixtures with the development generator:
+
+```powershell
+dotnet run --project .\dev-tools\benchmark-generator -c Release -- `
+  256 C:\bench\dense-all-256m.bin `
+  --dense-output `
+  --dense-record-length=512
+```
+
+The reviewed run used 64 MiB and 256 MiB fixtures with 512-character records,
+plus a 1 GiB fixture with 4,096-character records. Baseline and candidate
+processes alternated for five rounds at each size. Output lines were sorted
+ordinally before hashing because parallel completion may change raw row order.
+All 30 runs had to reproduce the complete reference multiset.
+
+See the
+[profiling decision, results, and limitations](../docs/all-pattern-streaming-optimization-2026-08.md)
+and the
+[`all-pattern-streaming-2026-08.csv`](results/all-pattern-streaming-2026-08.csv)
+measurements.
+
 ## Automatic CPU chunk sizing
 
 The automatic CPU policy is validated with real CLI runs rather than timing the

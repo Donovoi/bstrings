@@ -69,10 +69,11 @@ is large enough to provide 32 chunks per worker. Explicit `-b` values remain
 available when an examiner needs a fixed size or is validating different
 hardware.
 
-## Next target
+## Follow-up
 
-The next round should profile a dense all-pattern workload after this scheduling
-change. If regex transformation becomes dominant, reducing per-hit parsing and
-regex allocations is a better target than moving UTF-16LE discovery to Rust.
-If UTF-16LE discovery becomes dominant on another corpus, it remains the next
-narrow native experiment and can reuse the existing pooled hit boundary.
+The proposed dense all-pattern profile is complete. It confirmed that regex
+transformation, rather than UTF-16LE discovery, was the next useful target. The
+streaming path now buffers compact match ranges and formats rows directly,
+avoiding the old per-candidate iterator, ordinary `Match` objects, and temporary
+URL value lists. See the
+[all-pattern streaming optimization](all-pattern-streaming-optimization-2026-08.md).

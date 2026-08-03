@@ -5,6 +5,76 @@ namespace bstrings.Tests;
 
 public class StreamingRegexOutputCoreTests
 {
+    public static TheoryData<string, string, string> StreamingParityCases =>
+        new()
+        {
+            {
+                "email",
+                BuiltInPatternCatalog.Patterns["email"],
+                "first@example.test second@example.technology"
+            },
+            {
+                "urlUser",
+                BuiltInPatternCatalog.Patterns["urlUser"],
+                "https://analyst:secret@example.com/path"
+            },
+            {
+                "url3986",
+                BuiltInPatternCatalog.Patterns["url3986"],
+                "https://example.test/one http://example.test/two"
+            },
+            {
+                "b64",
+                BuiltInPatternCatalog.Patterns["b64"],
+                "bstrings separate QWxwaGExMjM="
+            },
+            { "xml", BuiltInPatternCatalog.Patterns["xml"], "<item>value</item>" },
+            { "custom", "[0-9]+", "1 22 333 4444 55555 666666" },
+        };
+
+    [Theory]
+    [MemberData(nameof(StreamingParityCases))]
+    public void AppendStreamingRecords_MatchesLegacyRecordSemantics(
+        string patternName,
+        string patternText,
+        string data
+    )
+    {
+        var parsedHit = new ParsedHit("0x200\t" + data, data, "0x200");
+        var regex = RegexOutputCore.GetOrCreateRegex(patternName, patternText);
+        var definition = BuiltInPatternCatalog.TryGetDefinition(
+            patternName,
+            patternText,
+            out var builtIn
+        )
+            ? builtIn
+            : null;
+        var expected = RegexOutputCore
+            .CreateRecords(
+                parsedHit,
+                patternName,
+                regex,
+                regexOutput: true,
+                "input.bin",
+                "Regex"
+            )
+            .Select(RegexOutputCore.BuildCsvLine)
+            .ToList();
+        var actual = new List<string>();
+
+        RegexOutputCore.AppendStreamingRecords(
+            parsedHit,
+            patternName,
+            regex,
+            definition,
+            isCsvOutput: true,
+            "input.bin",
+            actual
+        );
+
+        Assert.Equal(expected, actual);
+    }
+
     [Fact]
     public void TransformMainBatch_WritesCsvRowsAndReleasesRawHits()
     {

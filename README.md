@@ -32,7 +32,10 @@ Read the [scale benchmark](docs/scale-benchmark-2026-08.md) and the
 before generalizing them. The
 [CPU scheduling benchmark](docs/chunk-scheduling-optimization-2026-08.md)
 explains the current automatic chunk-size policy and its boundary-correctness
-gate. The Rust engine remains an opt-in prototype; its
+gate. The
+[all-pattern streaming benchmark](docs/all-pattern-streaming-optimization-2026-08.md)
+shows how regex-only output now avoids per-candidate iterator and match-object
+allocations. The Rust engine remains an opt-in prototype; its
 [separate benchmark and design notes](docs/rust-engine-prototype-2026-08.md)
 explain why it is not the default yet.
 
@@ -44,6 +47,7 @@ explain why it is not the default yet.
 - Cached, vectorized multi-string prefiltering for `--ls` and `--fs`
 - Hardware- and workload-aware CPU/GPU/hybrid calibration for very large inputs
 - Lazy regex compilation based on measured per-pattern candidate density
+- Allocation-conscious match-range streaming for dense `--lr all --ro` runs
 - Offset-aware text and CSV output
 - Per-pattern regex options, timeouts, and boundary tests
 - 33 built-in forensic pattern candidates
