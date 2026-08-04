@@ -76,6 +76,25 @@ public class SearchCoreTests
     }
 
     [Fact]
+    public void ParseRegexPatternsWithNames_ExpandsWalletGroupAndDeduplicatesMembers()
+    {
+        var patterns = SearchCore.ParseRegexPatternsWithNames(
+            "wallets,bitcoin,email",
+            BuiltInPatternCatalog.Patterns,
+            BuiltInPatternCatalog.Groups
+        );
+
+        Assert.Equal(28, patterns.Count);
+        Assert.Equal("bitcoin", patterns[0].name);
+        Assert.Single(patterns, pattern => pattern.name == "bitcoin");
+        Assert.Equal("email", patterns[^1].name);
+        Assert.All(
+            BuiltInPatternCatalog.Groups["wallets"],
+            member => Assert.Contains(patterns, pattern => pattern.name == member)
+        );
+    }
+
+    [Fact]
     public void ParseRegexPatternsWithNames_PreservesCommasInsideRegexConstructsAndDeduplicates()
     {
         var patterns = SearchCore.ParseRegexPatternsWithNames(
@@ -809,8 +828,8 @@ public class SearchCoreTests
     [Fact]
     public void BuiltInPatternCatalog_ContainsExpectedInventory()
     {
-        Assert.Equal(33, BuiltInPatternCatalog.Descriptions.Count);
-        Assert.Equal(33, BuiltInPatternCatalog.Patterns.Count);
+        Assert.Equal(51, BuiltInPatternCatalog.Descriptions.Count);
+        Assert.Equal(51, BuiltInPatternCatalog.Patterns.Count);
         Assert.Equal(
             BuiltInPatternCatalog.Descriptions.Keys.OrderBy(key => key),
             BuiltInPatternCatalog.Patterns.Keys.OrderBy(key => key)

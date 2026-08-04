@@ -5,7 +5,7 @@ using System.Text.Json;
 using bstrings;
 using bstrings.Benchmarks;
 
-const int generatorVersion = 1;
+const int generatorVersion = 4;
 const int defaultSegmentMiB = 16;
 const ulong defaultSeed = 0x5041545445524E53;
 
@@ -97,6 +97,7 @@ foreach (var definition in definitions)
             segmentCount = sizeBytes / segmentBytes,
             encoding = corpusEncoding,
             complexity,
+            expected.NegativeRecordsPerSegment,
             seed = $"0x{defaultSeed:X16}",
             sha256 = expected.Sha256,
         },
@@ -137,7 +138,23 @@ static CorpusResult GenerateCorpus(
     var working = new byte[segmentBytes];
     byte[] pendingBoundarySuffix = [];
     var positiveRecordsPerSegment = complexity == "dense" ? 64 : 1;
-    var negativeRecordsPerSegment = complexity == "adversarial" ? 4096 : complexity == "dense" ? 64 : 1;
+    var requestedNegativeRecordsPerSegment =
+        complexity == "adversarial" ? 4096 : complexity == "dense" ? 64 : 1;
+    var negativeStride = negative.Length + (corpusEncoding == "utf16le" ? 2 : 1);
+    var negativeStart = segmentBytes / 2 + segmentBytes / 16;
+    var negativeEnd = segmentBytes - segmentBytes / 16 - negative.Length;
+    var maximumNonOverlappingNegatives =
+        negativeEnd < negativeStart
+            ? 0
+            : 1 + (negativeEnd - negativeStart) / negativeStride;
+    var negativeRecordsPerSegment = Math.Min(
+        requestedNegativeRecordsPerSegment,
+        maximumNonOverlappingNegatives
+    );
+    if (negativeRecordsPerSegment == 0)
+    {
+        throw new InvalidOperationException("The negative witness does not fit in a segment.");
+    }
     var records = new List<ExpectedRecord>(
         segmentCount * positiveRecordsPerSegment + segmentCount
     );
@@ -182,10 +199,11 @@ static CorpusResult GenerateCorpus(
 
         foreach (
             var negativeIndex in GetPlacementOffsets(
-                segmentBytes / 2 + segmentBytes / 16,
-                segmentBytes - segmentBytes / 16 - negative.Length,
+                negativeStart,
+                negativeEnd,
                 negativeRecordsPerSegment,
-                corpusEncoding
+                corpusEncoding,
+                minimumSpacing: negativeStride
             )
         )
         {
@@ -228,7 +246,8 @@ static CorpusResult GenerateCorpus(
     output.Flush(flushToDisk: true);
     return new CorpusResult(
         Convert.ToHexString(hasher.GetHashAndReset()).ToLowerInvariant(),
-        records
+        records,
+        negativeRecordsPerSegment
     );
 }
 
@@ -236,7 +255,8 @@ static IEnumerable<int> GetPlacementOffsets(
     int start,
     int end,
     int count,
-    string corpusEncoding
+    string corpusEncoding,
+    int minimumSpacing = 1
 )
 {
     if (count <= 0 || end < start)
@@ -252,9 +272,11 @@ static IEnumerable<int> GetPlacementOffsets(
             ? start + (end - start) / 2
             : start + (int)((long)(end - start) * index / (count - 1));
         offset -= offset % alignment;
-        if (offset == previous)
+        if (previous >= 0 && offset - previous < minimumSpacing)
         {
-            throw new InvalidOperationException("The segment is too small for the requested complexity.");
+            throw new InvalidOperationException(
+                "The segment is too small to place the requested records without overlap."
+            );
         }
         previous = offset;
         yield return offset;
@@ -350,4 +372,8 @@ static int ParsePositiveInt(string value, string name) =>
 
 internal sealed record ExpectedRecord(long Offset, string Value, string Placement);
 
-internal sealed record CorpusResult(string Sha256, List<ExpectedRecord> Records);
+internal sealed record CorpusResult(
+    string Sha256,
+    List<ExpectedRecord> Records,
+    int NegativeRecordsPerSegment
+);

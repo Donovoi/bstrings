@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from argparse import Namespace
 from pathlib import Path
@@ -15,10 +17,14 @@ from bstrings_enrich import (  # noqa: E402
     EnrichmentError,
     LlamaCppTranslator,
     MadladTranslator,
+    TranslationCache,
     add_translations,
+    build_llama_server_command,
     llama_translation_prompt,
     normalize_floss,
+    protected_identifiers,
     read_normalized_jsonl,
+    resolve_translation_parallelism,
     run_floss,
     selected_translation_engine,
     translate_normalized_records,
@@ -34,9 +40,19 @@ class FakeTranslator:
     model_id = "google/test-model"
     revision = "deadbeef"
     model_sha256 = "a" * 64
+    parallelism = 1
+    execution_metadata = {
+        "device": "cpu",
+        "parallelism": 1,
+        "decoding": "greedy",
+    }
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
 
     def translate(self, texts: list[str], target_language: str) -> list[str]:
         self.target_language = target_language
+        self.calls.append(list(texts))
         return [f"translated {text}" for text in texts]
 
 
@@ -127,6 +143,7 @@ class EnrichmentTests(unittest.TestCase):
         self.assertEqual("1.0", child["transform"]["engineVersion"])
         self.assertEqual("deadbeef", child["transform"]["revision"])
         self.assertEqual("a" * 64, child["transform"]["modelSha256"])
+        self.assertEqual("cpu", child["transform"]["execution"]["device"])
         self.assertEqual("language text", parent["text"])
         self.assertEqual("translated language text", child["text"])
 
@@ -139,6 +156,61 @@ class EnrichmentTests(unittest.TestCase):
 
         with self.assertRaisesRegex(EnrichmentError, "batch of 1"):
             add_translations([parent], BrokenTranslator(), "en", 4, 4, 200)
+
+    def test_translation_deduplicates_text_without_collapsing_provenance(self) -> None:
+        first = normalize_floss(self.payload, Path("first.exe"), self.classification, "3.1.1")[0]
+        second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
+        translator = FakeTranslator()
+
+        translated = add_translations(
+            [first, second],
+            translator,
+            "en",
+            8,
+            2,
+            200,
+            TranslationCache(16),
+        )
+
+        self.assertEqual([["language text"]], translator.calls)
+        self.assertEqual(2, len(translated))
+        self.assertEqual(
+            [first["recordId"], second["recordId"]],
+            [record["parentRecordId"] for record in translated],
+        )
+
+    def test_translation_cache_reuses_results_across_windows(self) -> None:
+        first = normalize_floss(self.payload, Path("first.exe"), self.classification, "3.1.1")[0]
+        second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
+        translator = FakeTranslator()
+        cache = TranslationCache(16)
+
+        output = list(
+            translate_normalized_records(
+                [first, second],
+                translator,
+                "en",
+                batch_size=1,
+                minimum_characters=4,
+                maximum_characters=200,
+                window_size=1,
+                cache=cache,
+            )
+        )
+
+        self.assertEqual([["language text"]], translator.calls)
+        self.assertEqual(4, len(output))
+
+    def test_changed_structured_identifier_is_fatal(self) -> None:
+        parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
+        parent = {**parent, "text": "cuenta analyst@example.com"}
+
+        class IdentifierBreakingTranslator(FakeTranslator):
+            def translate(self, texts: list[str], target_language: str) -> list[str]:
+                return ["translated account"]
+
+        with self.assertRaisesRegex(EnrichmentError, "analyst@example.com"):
+            add_translations([parent], IdentifierBreakingTranslator(), "en", 4, 4, 200)
 
     def test_deduplication_keeps_distinct_provenance(self) -> None:
         records = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")
@@ -249,6 +321,139 @@ class EnrichmentTests(unittest.TestCase):
         self.assertIn("analyst@example.com", prompt)
         self.assertIn("Preserve every email address", prompt)
         self.assertIn("into Traditional Chinese", llama_translation_prompt("evidence", "zh-Hant"))
+
+    def test_protected_identifier_extraction_is_conservative_and_ordered(self) -> None:
+        text = (
+            "CVE-2025-12345 from analyst@example.com used C:\\Evidence\\memory.raw and "
+            "https://example.org/a?id=42."
+        )
+        self.assertEqual(
+            (
+                "CVE-2025-12345",
+                "analyst@example.com",
+                "C:\\Evidence\\memory.raw",
+                "https://example.org/a?id=42",
+            ),
+            protected_identifiers(text),
+        )
+
+    def test_llama_parallel_translation_preserves_input_order(self) -> None:
+        translator = object.__new__(LlamaCppTranslator)
+        translator.parallelism = 3
+        barrier = threading.Barrier(3)
+
+        def translate_one(text: str, target_language: str) -> str:
+            barrier.wait(timeout=2)
+            return f"{target_language}:{text}"
+
+        translator._translate_one = translate_one  # type: ignore[method-assign]
+
+        self.assertEqual(
+            ["en:first", "en:second", "en:third"],
+            translator.translate(["first", "second", "third"], "en"),
+        )
+
+    def test_auto_parallelism_scales_with_hardware_and_work(self) -> None:
+        self.assertEqual(
+            2,
+            resolve_translation_parallelism(
+                0,
+                strict_determinism=False,
+                has_cuda=True,
+                model_size_bytes=2 * 1024**3,
+                batch_size=8,
+                logical_processors=22,
+            ),
+        )
+        self.assertEqual(
+            1,
+            resolve_translation_parallelism(
+                0,
+                strict_determinism=True,
+                has_cuda=True,
+                model_size_bytes=2 * 1024**3,
+                batch_size=8,
+                logical_processors=22,
+            ),
+        )
+        self.assertEqual(
+            2,
+            resolve_translation_parallelism(
+                0,
+                strict_determinism=False,
+                has_cuda=False,
+                model_size_bytes=12 * 1024**3,
+                batch_size=8,
+                logical_processors=22,
+            ),
+        )
+        self.assertEqual(
+            1,
+            resolve_translation_parallelism(
+                0,
+                strict_determinism=False,
+                has_cuda=True,
+                model_size_bytes=12 * 1024**3,
+                batch_size=8,
+                logical_processors=22,
+            ),
+        )
+
+    def test_llama_command_allocates_context_per_parallel_slot(self) -> None:
+        command = build_llama_server_command(
+            "llama-server",
+            Path("model.gguf"),
+            gpu_layers="auto",
+            device="CUDA0",
+            context_size=8192,
+            parallelism=4,
+            port=18089,
+            threads=16,
+        )
+
+        self.assertEqual("4", command[command.index("-np") + 1])
+        self.assertEqual("8192", command[command.index("-c") + 1])
+        self.assertEqual("auto", command[command.index("-ngl") + 1])
+        self.assertIn("-cb", command)
+        self.assertEqual("16", command[command.index("--threads") + 1])
+
+    def test_airgap_mode_blocks_external_network_and_allows_loopback(self) -> None:
+        enrichment_root = Path(__file__).resolve().parents[1]
+        probe = """
+import os
+import socket
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from bstrings_enrich import AirgapNetworkError, enable_airgap_mode
+
+enable_airgap_mode()
+assert os.environ["HF_HUB_OFFLINE"] == "1"
+assert os.environ["PIP_NO_INDEX"] == "1"
+try:
+    socket.getaddrinfo("example.com", 443)
+except AirgapNetworkError:
+    pass
+else:
+    raise AssertionError("external DNS was not blocked")
+
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    with socket.create_connection(listener.getsockname(), timeout=2):
+        connection, _ = listener.accept()
+        connection.close()
+"""
+
+        result = subprocess.run(
+            [sys.executable, "-c", probe, str(enrichment_root)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
 
     @patch("bstrings_enrich.run_checked")
     def test_shellcode_format_is_explicitly_forwarded_to_floss(self, run_checked_mock) -> None:

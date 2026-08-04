@@ -8,6 +8,29 @@ namespace bstrings.Tests;
 public class RapidsProcessorTests
 {
     [Fact]
+    public void ResolvePythonExecutable_UsesOnlyTheConfiguredLocalRuntime()
+    {
+        var previous = Environment.GetEnvironmentVariable("BSTRINGS_RAPIDS_PYTHON");
+        var temporary = Path.GetTempFileName();
+        try
+        {
+            Environment.SetEnvironmentVariable("BSTRINGS_RAPIDS_PYTHON", temporary);
+            Assert.Equal(Path.GetFullPath(temporary), RapidsProcessor.ResolvePythonExecutable());
+
+            Environment.SetEnvironmentVariable(
+                "BSTRINGS_RAPIDS_PYTHON",
+                temporary + ".missing"
+            );
+            Assert.Throws<FileNotFoundException>(RapidsProcessor.ResolvePythonExecutable);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("BSTRINGS_RAPIDS_PYTHON", previous);
+            File.Delete(temporary);
+        }
+    }
+
+    [Fact]
     public async Task ProcessRegexPatternsBridgeAsync_WhenRapidsUnavailable_MatchesStandardProcessing()
     {
         await WithRapidsAvailabilityAsync(
@@ -78,6 +101,46 @@ public class RapidsProcessorTests
                         )
                         .Order()
                 );
+            }
+        );
+    }
+
+    [Fact]
+    public async Task RapidsBridgeCpuFallback_AppliesBuiltInSemanticValidation()
+    {
+        await WithRapidsAvailabilityAsync(
+            available: false,
+            async () =>
+            {
+                using var stream = new MemoryStream();
+                using var writer = new StreamWriter(stream, leaveOpen: true);
+                var definition = BuiltInPatternCatalog.ByName["cc"];
+
+                var count = await RapidsProcessor.ProcessRegexPatternsBridgeAsync(
+                    new HashSet<string>
+                    {
+                        "valid 4111111111111111",
+                        "invalid 4111111111111112",
+                    },
+                    [(definition.Name, definition.Pattern)],
+                    ro: true,
+                    off: false,
+                    s: true,
+                    sw: writer,
+                    q: true,
+                    o: "results.txt",
+                    currentFile: "sample.bin",
+                    isCsvOutput: false,
+                    csvHeaderAlreadyWritten: false
+                );
+
+                await writer.FlushAsync(TestContext.Current.CancellationToken);
+                stream.Position = 0;
+                using var reader = new StreamReader(stream);
+                var output = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
+
+                Assert.Equal(1, count);
+                Assert.Equal("4111111111111111" + Environment.NewLine, output);
             }
         );
     }

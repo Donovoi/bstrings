@@ -4,6 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -15,6 +16,7 @@ from benchmark_translation import (  # noqa: E402
     load_forensic_cases,
     load_wmt_cases,
     run_cases,
+    validate_arguments,
 )
 
 
@@ -104,6 +106,49 @@ class TranslationBenchmarkTests(unittest.TestCase):
     def test_remote_endpoint_is_rejected(self) -> None:
         with self.assertRaisesRegex(BenchmarkError, "loopback-only"):
             OpenAIChatBackend("https://example.com", 30, 128)
+
+        with self.assertRaisesRegex(BenchmarkError, "loopback-only"):
+            OpenAIChatBackend("http://localhost:18089@198.51.100.10", 30, 128)
+
+    def test_ipv6_loopback_endpoint_is_accepted(self) -> None:
+        backend = OpenAIChatBackend("http://[::1]:18089", 30, 128)
+
+        self.assertEqual("http://[::1]:18089/v1/chat/completions", backend._url)
+
+    def test_local_llama_auto_parallelism_accepts_zero(self) -> None:
+        validate_arguments(
+            Namespace(
+                wmt_per_locale=1,
+                batch_size=8,
+                parallelism=0,
+                strict_determinism=False,
+                engine="llama-cpp",
+                model_path=Path("model.gguf"),
+                threads=0,
+                startup_timeout_seconds=30,
+                gpu_layers=-1,
+                device="auto",
+                model_sha256="a" * 64,
+            )
+        )
+
+    def test_hybrid_benchmark_requires_explicit_gpu_layer_count(self) -> None:
+        args = Namespace(
+            wmt_per_locale=1,
+            batch_size=8,
+            parallelism=2,
+            strict_determinism=False,
+            engine="llama-cpp",
+            model_path=Path("model.gguf"),
+            threads=0,
+            startup_timeout_seconds=30,
+            gpu_layers=-1,
+            device="hybrid",
+            model_sha256="a" * 64,
+        )
+
+        with self.assertRaisesRegex(BenchmarkError, "explicit --gpu-layers"):
+            validate_arguments(args)
 
 
 if __name__ == "__main__":

@@ -70,6 +70,11 @@ witnesses, SHA-256, and every expected value/offset pair. Positive records are
 placed inside segments, across each segment boundary, and next to EOF. Negative
 witnesses are present but must never appear in tool output.
 
+Generator version 4 covers the current 51-pattern catalog, including every
+member of the `wallets` group. Older checked-in comparison reports remain
+explicitly labeled as 33-pattern snapshots so their totals are not mistaken
+for current catalog coverage.
+
 ```powershell
 dotnet run --project .\benchmarks\PatternCorpusGenerator -c Release -- `
   --output-dir C:\bench\patterns-256m `
@@ -80,9 +85,12 @@ dotnet run --project .\benchmarks\PatternCorpusGenerator -c Release -- `
 ```
 
 Available encodings are `ascii` and `utf16le`. Complexity can be `sparse`,
-`dense`, or `adversarial`; the last class fills each segment with thousands of
-authoritative near-misses to stress regex rejection paths. The generator
-refuses to overwrite an existing corpus unless `--overwrite` is explicit.
+`dense`, or `adversarial`; the last class fills each segment with as many as
+4,096 non-overlapping, delimiter-separated authoritative near-misses to stress
+rejection paths. Long witnesses are capped at the largest count that physically
+fits, and the actual per-segment count is recorded in the manifest. The
+generator refuses to overwrite an existing corpus unless `--overwrite` is
+explicit.
 
 Run the four-tool comparison with:
 

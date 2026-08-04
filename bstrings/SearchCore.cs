@@ -271,7 +271,8 @@ internal static class SearchCore
 
     internal static List<(string name, string pattern)> ParseRegexPatternsWithNames(
         string input,
-        IReadOnlyDictionary<string, string> builtInPatterns
+        IReadOnlyDictionary<string, string> builtInPatterns,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> builtInGroups = null
     )
     {
         var patterns = new List<(string name, string pattern)>();
@@ -300,6 +301,24 @@ internal static class SearchCore
             var trimmedName = patternName.Trim();
             if (trimmedName.Length == 0)
             {
+                continue;
+            }
+
+            var groupName = builtInGroups?.Keys.FirstOrDefault(name =>
+                string.Equals(name, trimmedName, StringComparison.OrdinalIgnoreCase)
+            );
+            if (groupName is not null)
+            {
+                foreach (var memberName in builtInGroups![groupName])
+                {
+                    if (
+                        builtInPatterns.TryGetValue(memberName, out var memberPattern)
+                        && addedBuiltIns.Add(memberName)
+                    )
+                    {
+                        patterns.Add((memberName, memberPattern));
+                    }
+                }
                 continue;
             }
 
@@ -377,10 +396,11 @@ internal static class SearchCore
 
     internal static List<string> ParseRegexPatterns(
         string input,
-        IReadOnlyDictionary<string, string> builtInPatterns
+        IReadOnlyDictionary<string, string> builtInPatterns,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> builtInGroups = null
     )
     {
-        return ParseRegexPatternsWithNames(input, builtInPatterns)
+        return ParseRegexPatternsWithNames(input, builtInPatterns, builtInGroups)
             .Select(pattern => pattern.pattern)
             .ToList();
     }

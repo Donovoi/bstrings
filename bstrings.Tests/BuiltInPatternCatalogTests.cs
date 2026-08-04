@@ -42,7 +42,10 @@ public class BuiltInPatternCatalogTests
                 ["ssn 123-45-6789", "ssn 123 45 6789"],
                 ["ssn 666-45-6789", "ssn 123-45 6789", "ssn 123 45-6789"]
             ),
-            ["cc"] = new("card 4111 1111 1111 1111 end", "card 4111 1111 end"),
+            ["cc"] = new(
+                ["card 4111 1111 1111 1111 end"],
+                ["card 4111 1111 end", "card 4111 1111 1111 1112 end"]
+            ),
             ["ipv4"] = new("peer=192.168.1.250:443", "peer=1.2.3.4.5"),
             ["ipv6"] = new("peer ::ffff:192.0.2.128 active", "peer 2001:::1"),
             ["email"] = new(
@@ -50,20 +53,41 @@ public class BuiltInPatternCatalogTests
                     "mail user.name+tag@example.technology now",
                     "mail #@example.com now",
                     "mail !foo@example.com now",
+                    "mail string@g.com now",
                 ],
-                ["mail user@-example.com"]
+                ["mail user@-example.com", "mail " + new string('a', 65) + "@g.com"]
             ),
             ["zip"] = new("Sydney mirror 90210-1234 ready", "code 1234 ready"),
             ["urlUser"] = new(
-                "proxy=https://analyst:secret@example.com/path",
-                "https://example.com/path"
+                [
+                    "proxy=https://analyst:secret@example.com/path",
+                    "proxy=https://u%20s@example.com/path",
+                ],
+                [
+                    "https://example.com/path",
+                    "proxy=https://u%zz@example.com/path",
+                    "proxy=https://user:%zz@example.com/path",
+                ]
             ),
             ["url3986"] = new(
-                "visit https://user@example.com:8443/a//b?x=1#fragment now",
-                "not a url"
+                [
+                    "visit https://user@example.com:8443/a//b?x=1#fragment now",
+                    "visit https://[2001:db8::1]/a%20b now",
+                ],
+                [
+                    "not a url",
+                    "visit https://example.com/a%zz now",
+                    "visit https://[::::]/ now",
+                ]
             ),
-            ["xml"] = new("<Root id=\"1\">value</Root>", "<Root>value</root>"),
-            ["sid"] = new("owner=S-1-5-21-1-2-3-1001;", "owner=S-1-x-21"),
+            ["xml"] = new(
+                ["<Root id=\"1\">value</Root>"],
+                ["<Root>value</root>", "<Root id=>value</Root>"]
+            ),
+            ["sid"] = new(
+                ["owner=S-1-5-21-1-2-3-1001;"],
+                ["owner=S-1-x-21", "owner=S-2-5-21"]
+            ),
             ["win_path"] = new(
                 "open \"C:\\folder one\\file.txt\" now",
                 "open C:relative.txt"
@@ -82,19 +106,136 @@ public class BuiltInPatternCatalogTests
                 @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows",
                 @"HKEY_LOCAL_MACHINE\NOT_A_HIVE\Microsoft"
             ),
-            ["b64"] = new("token=SGVsbG8=", "token=abcd"),
+            ["b64"] = new(["token=SGVsbG8="], ["token=abcd", "token=SGVsbG9="]),
             ["bitlocker"] = new(
-                "key=123456-234567-345678-456789-567890-678901-789012-890123",
-                "key=123456-234567-345678-456789-567890-678901-789012"
+                ["key=001155-002310-003465-004620-005775-006930-008085-009240"],
+                [
+                    "key=001155-002310-003465-004620-005775-006930-008085",
+                    "key=001156-002310-003465-004620-005775-006930-008085-009240",
+                ]
             ),
-            ["bitcoin"] = new("wallet=1" + new string('A', 25), "wallet=1" + new string('O', 25)),
-            ["aeon"] = new("Wms" + new string('A', 94), "WmS" + new string('A', 94)),
-            ["bytecoin"] = new("2A" + new string('A', 93), "2O" + new string('A', 93)),
-            ["dashcoin"] = new("D" + new string('A', 94), "d" + new string('A', 94)),
-            ["dashcoin2"] = new("X" + new string('A', 33), "x" + new string('A', 33)),
-            ["fantomcoin"] = new("6" + new string('A', 94), "6" + new string('O', 94)),
-            ["monero"] = new("8" + new string('A', 94), "4O" + new string('A', 93)),
-            ["sumokoin"] = new("Sumoo" + new string('A', 94), "sumoo" + new string('A', 94)),
+            ["bitcoin"] = new(
+                ["wallet=1BoatSLRHtKNngkdXEeobR76b53LETtpyT"],
+                ["wallet=1" + new string('O', 25), "wallet=1BoatSLRHtKNngkdXEeobR76b53LETtpyU"]
+            ),
+            ["bitcoin_segwit"] = new(
+                ["wallet=BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4"],
+                ["wallet=bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5"]
+            ),
+            ["tron"] = new(
+                ["wallet=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"],
+                ["wallet=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj61"]
+            ),
+            ["solana"] = new(
+                ["wallet=11111111111111111111111111111111"],
+                ["wallet=" + new string('1', 31)]
+            ),
+            ["xrp"] = new(
+                ["wallet=rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"],
+                ["wallet=rHb9CJAWyB4rj91VRWn96DkukG4bwdtyT1"]
+            ),
+            ["dogecoin"] = new(
+                ["wallet=D5ERdEN1gsouFSs7zsq7VYJxyWP6dP28H1"],
+                ["wallet=D5ERdEN1gsouFSs7zsq7VYJxyWP6dP28H2"]
+            ),
+            ["zcash"] = new(
+                [
+                    "wallet=t1Hxw6JqWMnhDK5jRCieg5bFHM2qt7UtQvu",
+                    "wallet=zs1qqqsyqcyq5rqwzqfpg9scrgwpugpzysnzs23v9ccrydpk8qarc0jqgfzyvjz2f389q5j5ctfvp5",
+                ],
+                ["wallet=t1Hxw6JqWMnhDK5jRCieg5bFHM2qt7UtQv1"]
+            ),
+            ["cardano"] = new(
+                ["wallet=addr1vx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzers66hrl8"],
+                ["wallet=addr1vx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzers66hrl1"]
+            ),
+            ["stellar"] = new(
+                ["wallet=GCM5WPR4DDR24FSAX5LIEM4J7AI3KOWJYANSXEPKYXCSZOTAYXE75AFN"],
+                ["wallet=GCM5WPR4DDR24FSAX5LIEM4J7AI3KOWJYANSXEPKYXCSZOTAYXE75AFA"]
+            ),
+            ["bitcoin_cash"] = new(
+                ["wallet=bitcoincash:qp3wjpa3tjlj042z2wv7hahsldgwhwy0rq9sywjpyy"],
+                ["wallet=bitcoincash:qp3wjpa3tjlj042z2wv7hahsldgwhwy0rq9sywjpyq"]
+            ),
+            ["ton"] = new(
+                ["wallet=EQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPrHF"],
+                ["wallet=EQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPrHA"]
+            ),
+            ["litecoin"] = new(
+                [
+                    "wallet=LKKHMBjCU89fyFNgSRprDoD8Jb25N8uWvd",
+                    "wallet=ltc1qqypqxpq9qcrsszg2pvxq6rs0zqg3yyc5dyg36p",
+                ],
+                ["wallet=LKKHMBjCU89fyFNgSRprDoD8Jb25N8uWv1"]
+            ),
+            ["avalanche"] = new(
+                ["wallet=X-avax1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc52qphlp"],
+                ["wallet=X-avax1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc52qphlq"]
+            ),
+            ["move_address"] = new(
+                ["wallet=0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"],
+                ["wallet=0x0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"]
+            ),
+            ["near"] = new(["wallet=alice.sub.near"], ["wallet=alice..sub.near"]),
+            ["bittensor"] = new(
+                ["wallet=5DfhGyQdFobKM8NsWvEeAKk5EQQgYe9AydgJ7rMB6E1EqRzV"],
+                ["wallet=5DfhGyQdFobKM8NsWvEeAKk5EQQgYe9AydgJ7rMB6E1EqRz1"]
+            ),
+            ["hedera"] = new(["wallet=0.0.123-vfmkw"], ["wallet=0.0.123-abcde"]),
+            ["canton_party"] = new(
+                ["wallet=Alice::1220f2fe29866fd6a0009ecc8a64ccdc09f1958bd0f801166baaee469d1251b2eb72"],
+                ["wallet=Alice::1320f2fe29866fd6a0009ecc8a64ccdc09f1958bd0f801166baaee469d1251b2eb72"]
+            ),
+            ["provenance_scope"] = new(
+                ["wallet=scope1qzge0zaztu65tx5x5llv5xc9ztsqxlkwel"],
+                ["wallet=scope1qzge0zaztu65tx5x5llv5xc9ztsqxlkw1"]
+            ),
+            ["aeon"] = new(
+                ["WmsSWgtT1JPg5e3cK41hKXSHVpKW7e47bjgiKmWZkYrhSS5LhRemNyqayaSBtAQ6517eo5PtH9wxHVmM78JDZSUu2W8PqRiNs"],
+                [
+                    "WmS" + new string('A', 94),
+                    "WmsSWgtT1JPg5e3cK41hKXSHVpKW7e47bjgiKmWZkYrhSS5LhRemNyqayaSBtAQ6517eo5PtH9wxHVmM78JDZSUu2W8PqRiN1",
+                ]
+            ),
+            ["bytecoin"] = new(
+                ["2AaF4qEmER6dNeM6dfiBFL7kqund3HYGvMBF3ttsNd9SfzgYB6L7ep1Yg1osYJzLdaKAYSLVh6e6jKnAuzj3bw1oGyd1x7Z"],
+                [
+                    "2O" + new string('A', 93),
+                    "2AaF4qEmER6dNeM6dfiBFL7kqund3HYGvMBF3ttsNd9SfzgYB6L7ep1Yg1osYJzLdaKAYSLVh6e6jKnAuzj3bw1oGyd1x71",
+                ]
+            ),
+            ["dashcoin"] = new(
+                ["D3XeV6X3otr2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8EmnBXn"],
+                [
+                    "d" + new string('A', 94),
+                    "D3XeV6X3otr2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8EmnBX1",
+                ]
+            ),
+            ["dashcoin2"] = new(
+                ["Xgtyuk76vhuFW2iT7UAiHgNdWXCf3J34wh"],
+                ["x" + new string('A', 33), "Xgtyuk76vhuFW2iT7UAiHgNdWXCf3J34wi"]
+            ),
+            ["fantomcoin"] = new(
+                ["6gt5xRQJhjC2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8KzEdBp"],
+                [
+                    "6" + new string('O', 94),
+                    "6gt5xRQJhjC2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8KzEdB1",
+                ]
+            ),
+            ["monero"] = new(
+                ["4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge"],
+                [
+                    "4O" + new string('A', 93),
+                    "4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rg1",
+                ]
+            ),
+            ["sumokoin"] = new(
+                ["Sumoo72D2v7KEGvfPzGH5qC5VHGnLmafaAhoMooPwRALNwm2oSyK3myTaFefvyg5bviMbBXUFWN8McswTRowHNYXfo34VD9oWr7"],
+                [
+                    "sumoo" + new string('A', 94),
+                    "Sumoo72D2v7KEGvfPzGH5qC5VHGnLmafaAhoMooPwRALNwm2oSyK3myTaFefvyg5bviMbBXUFWN8McswTRowHNYXfo34VD9oWr1",
+                ]
+            ),
             ["cve"] = new(
                 ["fixed cve-2026-1234", "CVE-2026-" + new string('1', 19)],
                 [
@@ -117,12 +258,16 @@ public class BuiltInPatternCatalogTests
                 ]
             ),
             ["onion_v3"] = new(
-                [new string('a', 56) + ".onion", new string('A', 56) + ".ONION:443"],
+                [
+                    "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion",
+                    "PG6MMJIYJMCRSSLVYKFWNNTLARU7P5SVN6Y2YMMJU6NUBXNDF4PSCRYD.ONION:443",
+                ],
                 [
                     new string('a', 55) + ".onion",
                     "8" + new string('a', 56) + ".onion",
                     new string('a', 56) + ".onion.com",
                     new string('a', 56) + ".onion-evil",
+                    "qg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion",
                 ]
             ),
             ["ethereum"] = new(
@@ -133,6 +278,7 @@ public class BuiltInPatternCatalogTests
                 [
                     "to=0x5e97870f263700f46aa00d967821199b9bc5a12",
                     "g0x5e97870f263700f46aa00d967821199b9bc5a120z",
+                    "to=0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
                 ]
             ),
             ["sha256"] = new(
@@ -161,7 +307,7 @@ public class BuiltInPatternCatalogTests
     }
 
     [Fact]
-    public void EveryBuiltIn_CompilesMatchesPositiveRejectsNegativeAndDoesNotMatchEmpty()
+    public void EveryBuiltIn_CompilesAndTheAuthoritativePipelineAcceptsPositivesRejectsNegatives()
     {
         foreach (var definition in BuiltInPatternCatalog.Definitions)
         {
@@ -174,12 +320,28 @@ public class BuiltInPatternCatalogTests
                     regex.IsMatch(positive),
                     $"{definition.Name} missed positive witness: {positive}"
                 );
+                Assert.NotEmpty(
+                    RegexOutputCore.CreateRecords(
+                        new ParsedHit(positive, positive, string.Empty),
+                        definition.Name,
+                        regex,
+                        regexOutput: true,
+                        sourceFile: "corpus.bin",
+                        patternType: "Regex"
+                    )
+                );
             }
             foreach (var negative in corpus.Negatives)
             {
-                Assert.False(
-                    regex.IsMatch(negative),
-                    $"{definition.Name} accepted negative witness: {negative}"
+                Assert.Empty(
+                    RegexOutputCore.CreateRecords(
+                        new ParsedHit(negative, negative, string.Empty),
+                        definition.Name,
+                        regex,
+                        regexOutput: true,
+                        sourceFile: "corpus.bin",
+                        patternType: "Regex"
+                    )
                 );
             }
             Assert.False(regex.IsMatch(string.Empty), $"{definition.Name} matches the empty string");
@@ -696,7 +858,12 @@ public class BuiltInPatternCatalogTests
                     .Select(_ => alphabet[random.Next(alphabet.Length)])
                     .ToArray()
             );
-            var expected = regex.Matches(input).Select(match => match.Value).ToList();
+            var definition = BuiltInPatternCatalog.ByName["b64"];
+            var expected = regex
+                .Matches(input)
+                .Where(match => BuiltInSemanticValidator.IsValid(definition, match.Value))
+                .Select(match => match.Value)
+                .ToList();
             var actual = RegexOutputCore
                 .CreateRecords(
                     new ParsedHit(input, input, string.Empty),

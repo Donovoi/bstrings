@@ -473,7 +473,7 @@ public static partial class Program
         var lrOpt = new Option<string>("--lr")
         {
             Description =
-                "Only return regex matches. Accepts built-in names separated by commas, a custom regex, or 'all'",
+                "Only return regex matches. Accepts built-in names separated by commas, 'wallets', a custom regex, or 'all'",
         };
         var fsOpt = new Option<string>("--fs")
         {
@@ -797,7 +797,16 @@ public static partial class Program
             }
 
             Console.WriteLine();
-            Log.Information("Pass a name from this list to --lr, for example: --lr email\r\n");
+            Log.Information("Groups");
+            foreach (var group in BuiltInPatternCatalog.Groups.OrderBy(group => group.Key))
+            {
+                Log.Information("{Key}\t{Members}", group.Key, string.Join(",", group.Value));
+            }
+
+            Console.WriteLine();
+            Log.Information(
+                "Pass a name or group from this list to --lr, for example: --lr wallets\r\n"
+            );
 
             return;
         }
@@ -3563,12 +3572,16 @@ public static partial class Program
     /// <returns>List of resolved regex patterns</returns>
     private static List<(string name, string pattern)> ParseRegexPatternsWithNames(string lr)
     {
-        return SearchCore.ParseRegexPatternsWithNames(lr, RegExPatterns);
+        return SearchCore.ParseRegexPatternsWithNames(
+            lr,
+            RegExPatterns,
+            BuiltInPatternCatalog.Groups
+        );
     }
 
     private static List<string> ParseRegexPatterns(string lr)
     {
-        return SearchCore.ParseRegexPatterns(lr, RegExPatterns);
+        return SearchCore.ParseRegexPatterns(lr, RegExPatterns, BuiltInPatternCatalog.Groups);
     }
 
     private static async Task ProcessEnrichmentJsonlAsync(

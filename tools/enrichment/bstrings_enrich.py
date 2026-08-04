@@ -6,21 +6,26 @@ from __future__ import annotations
 import argparse
 import atexit
 import hashlib
+import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterable, Sequence
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
 SCHEMA_VERSION = 1
 DEFAULT_MODEL_ID = "google/madlad400-3b-mt"
@@ -71,10 +76,101 @@ FLOSS_CATEGORIES = (
     "tight_strings",
     "decoded_strings",
 )
+PROTECTED_IDENTIFIER_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"https?://[^\s<>\"']+",
+        r"\b[A-Z]:\\[^\s<>\"']+",
+        r"\b(?:HKLM|HKCU|HKCR|HKU|HKCC|HKEY_[A-Z_]+)\\[^\s<>\"']+",
+        r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,63}\b",
+        r"\b(?:[0-9A-F]{64}|[0-9A-F]{40}|[0-9A-F]{32})\b",
+        r"\b[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\b",
+        r"\bCVE-[0-9]{4}-[0-9]{4,}\b",
+        r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b",
+        r"\b[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?:[0-9]{1,5}\b",
+        r"\b[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+\b",
+        r"\b[A-Z0-9_-]+\.(?:7Z|BAT|BIN|CAB|CFG|CONF|CSV|DLL|DOCX?|EXE|INI|JAR|JSONL?|LOG|PDF|PNG|PS1|RAR|RAW|SYS|TXT|XLSX?|XML|ZIP)\b",
+        r"(?<![A-Z0-9])[A-Z0-9]+(?:[-_][A-Z0-9]+)+(?![A-Z0-9])",
+        r"\$\{[A-Z0-9_.-]+\}|\{[A-Z0-9_.-]+\}|%[A-Z0-9_]+%",
+    )
+)
+_TRAILING_IDENTIFIER_PUNCTUATION = ".,;:!?)]}\u3002\uff0c\uff1b\uff1a\uff01\uff1f"
+T = TypeVar("T")
+_AIRGAP_ENABLED = False
+
+AIRGAP_ENVIRONMENT = {
+    "DO_NOT_TRACK": "1",
+    "HF_DATASETS_OFFLINE": "1",
+    "HF_HUB_DISABLE_TELEMETRY": "1",
+    "HF_HUB_OFFLINE": "1",
+    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    "PIP_NO_INDEX": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONNOUSERSITE": "1",
+    "TRANSFORMERS_OFFLINE": "1",
+    "UV_OFFLINE": "1",
+}
 
 
 class EnrichmentError(RuntimeError):
     """Raised when an enrichment stage cannot produce complete, attributable output."""
+
+
+class AirgapNetworkError(EnrichmentError):
+    """Raised when air-gap mode observes a non-loopback network attempt."""
+
+
+def _is_loopback_host(host: object) -> bool:
+    if isinstance(host, bytes):
+        host = host.decode("ascii", errors="ignore")
+    if not isinstance(host, str):
+        return False
+    normalized = host.strip().lower().rstrip(".")
+    if normalized == "localhost":
+        return True
+    with suppress(ValueError):
+        return ipaddress.ip_address(normalized.split("%", maxsplit=1)[0]).is_loopback
+    return False
+
+
+def _airgap_audit_hook(event: str, arguments: tuple[Any, ...]) -> None:
+    if event == "socket.connect" and len(arguments) >= 2:
+        address = arguments[1]
+        if isinstance(address, tuple) and address and not _is_loopback_host(address[0]):
+            raise AirgapNetworkError(
+                f"Air-gap mode blocked a non-loopback connection to {address[0]!r}"
+            )
+    elif event == "socket.getaddrinfo" and arguments:
+        host = arguments[0]
+        if host is not None and not _is_loopback_host(host):
+            raise AirgapNetworkError(f"Air-gap mode blocked DNS resolution for {host!r}")
+
+
+def enable_airgap_mode() -> None:
+    """Disable online package/model behavior and reject non-loopback Python sockets."""
+    global _AIRGAP_ENABLED
+    for name, value in AIRGAP_ENVIRONMENT.items():
+        os.environ[name] = value
+    no_proxy = "127.0.0.1,localhost,::1"
+    dead_proxy = "http://127.0.0.1:9"
+    for name in ("NO_PROXY", "no_proxy"):
+        os.environ[name] = no_proxy
+    for name in (
+        "ALL_PROXY",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "all_proxy",
+        "https_proxy",
+        "http_proxy",
+    ):
+        os.environ[name] = dead_proxy
+    if not _AIRGAP_ENABLED:
+        sys.addaudithook(_airgap_audit_hook)
+        _AIRGAP_ENABLED = True
+
+
+def airgap_mode_enabled() -> bool:
+    return _AIRGAP_ENABLED
 
 
 @dataclass(frozen=True)
@@ -92,8 +188,105 @@ class Translator(Protocol):
     model_id: str
     revision: str
     model_sha256: str
+    parallelism: int
+    execution_metadata: dict[str, Any]
 
     def translate(self, texts: Sequence[str], target_language: str) -> list[str]: ...
+
+
+class TranslationCache:
+    """Bounded LRU for exact translations within one examination run."""
+
+    def __init__(self, capacity: int) -> None:
+        if capacity < 0:
+            raise ValueError("Translation cache capacity cannot be negative")
+        self.capacity = capacity
+        self._values: OrderedDict[tuple[str, str], str] = OrderedDict()
+
+    def get(self, target_language: str, text: str) -> tuple[bool, str]:
+        key = (target_language, text)
+        value = self._values.get(key)
+        if value is None:
+            return False, ""
+        self._values.move_to_end(key)
+        return True, value
+
+    def put(self, target_language: str, text: str, translated_text: str) -> None:
+        if self.capacity == 0:
+            return
+        key = (target_language, text)
+        self._values[key] = translated_text
+        self._values.move_to_end(key)
+        while len(self._values) > self.capacity:
+            self._values.popitem(last=False)
+
+
+def map_ordered_parallel(
+    function: Callable[[T], str], values: Sequence[T], workers: int
+) -> list[str]:
+    """Run independent calls concurrently while retaining input order and fatal errors."""
+    if workers <= 1 or len(values) <= 1:
+        return [function(value) for value in values]
+    with ThreadPoolExecutor(max_workers=min(workers, len(values))) as executor:
+        return list(executor.map(function, values))
+
+
+def protected_identifiers(text: str) -> tuple[str, ...]:
+    """Return conservative, strongly structured tokens that translation must preserve."""
+    matches: list[tuple[int, int, str]] = []
+    for pattern in PROTECTED_IDENTIFIER_PATTERNS:
+        for match in pattern.finditer(text):
+            value = match.group(0).rstrip(_TRAILING_IDENTIFIER_PUNCTUATION)
+            if value:
+                matches.append((match.start(), match.start() + len(value), value))
+    matches.sort(key=lambda item: (item[0], -len(item[2])))
+    unique: list[str] = []
+    seen: set[str] = set()
+    accepted_ranges: list[tuple[int, int]] = []
+    for start, end, value in matches:
+        if any(
+            parent_start <= start and end <= parent_end
+            for parent_start, parent_end in accepted_ranges
+        ):
+            continue
+        if value not in seen:
+            seen.add(value)
+            unique.append(value)
+            accepted_ranges.append((start, end))
+    return tuple(unique)
+
+
+def validate_identifier_retention(source: str, translated: str) -> None:
+    missing = [value for value in protected_identifiers(source) if value not in translated]
+    if missing:
+        preview = ", ".join(repr(value) for value in missing[:3])
+        raise EnrichmentError(
+            "Translation changed or removed protected evidence identifiers: " + preview
+        )
+
+
+def resolve_translation_parallelism(
+    requested: int,
+    *,
+    strict_determinism: bool,
+    has_cuda: bool,
+    model_size_bytes: int,
+    batch_size: int,
+    logical_processors: int | None = None,
+) -> int:
+    """Choose a conservative number of shared-model inference slots."""
+    if strict_determinism:
+        return 1
+    if requested > 0:
+        return min(requested, batch_size)
+    processors = logical_processors or os.cpu_count() or 1
+    if has_cuda:
+        # Two shared slots retained quality on the pinned forensic/WMT gate while
+        # four slots introduced more schedule-dependent output variation.
+        automatic = 1 if model_size_bytes > 8 * 1024**3 else 2
+    else:
+        automatic = 2 if processors >= 12 else 1
+    return max(1, min(automatic, batch_size))
 
 
 def canonical_json(value: dict[str, Any]) -> str:
@@ -326,48 +519,78 @@ def add_translations(
     batch_size: int,
     minimum_characters: int,
     maximum_characters: int,
+    cache: TranslationCache | None = None,
 ) -> list[dict[str, Any]]:
     candidates = [
         record
         for record in records
         if should_translate(str(record["text"]), minimum_characters, maximum_characters)
     ]
-    translated_records: list[dict[str, Any]] = []
-    for start in range(0, len(candidates), batch_size):
-        batch = candidates[start : start + batch_size]
-        translated = translator.translate(
-            [str(record["text"]) for record in batch], target_language
-        )
+    translations_by_text: dict[str, str] = {}
+    missing_texts: list[str] = []
+    missing_text_set: set[str] = set()
+    for record in candidates:
+        text = str(record["text"])
+        if text in translations_by_text or text in missing_text_set:
+            continue
+        found, translated_text = cache.get(target_language, text) if cache else (False, "")
+        if found:
+            translations_by_text[text] = translated_text
+        else:
+            missing_texts.append(text)
+            missing_text_set.add(text)
+
+    # Group similar lengths to reduce padding for batched encoder-decoder runtimes.
+    missing_texts.sort(key=lambda value: (len(value), value))
+    for start in range(0, len(missing_texts), batch_size):
+        batch = missing_texts[start : start + batch_size]
+        translated = translator.translate(batch, target_language)
         if len(translated) != len(batch):
             raise EnrichmentError(
                 f"Translation engine returned {len(translated)} rows for a batch of {len(batch)}"
             )
-        for parent, translated_text in zip(batch, translated, strict=True):
+        for source_text, translated_text in zip(batch, translated, strict=True):
             translated_text = translated_text.strip()
-            if not translated_text or translated_text == parent["text"]:
-                continue
-            derived = {
-                key: value
-                for key, value in parent.items()
-                if key not in {"recordId", "text", "parentRecordId", "transform"}
+            if not translated_text:
+                raise EnrichmentError("Translation engine returned an empty translation")
+            validate_identifier_retention(source_text, translated_text)
+            translations_by_text[source_text] = translated_text
+            if cache:
+                cache.put(target_language, source_text, translated_text)
+
+    translated_records: list[dict[str, Any]] = []
+    execution_metadata = getattr(translator, "execution_metadata", None)
+    for parent in candidates:
+        source_text = str(parent["text"])
+        translated_text = translations_by_text[source_text]
+        validate_identifier_retention(source_text, translated_text)
+        if translated_text == source_text:
+            continue
+        derived = {
+            key: value
+            for key, value in parent.items()
+            if key not in {"recordId", "text", "parentRecordId", "transform"}
+        }
+        transform = {
+            "kind": "translation",
+            "engine": translator.engine,
+            "engineVersion": translator.engine_version,
+            "model": translator.model_id,
+            "revision": translator.revision,
+            "modelSha256": translator.model_sha256,
+            "sourceLanguage": "auto",
+            "targetLanguage": target_language,
+        }
+        if execution_metadata:
+            transform["execution"] = dict(execution_metadata)
+        derived.update(
+            {
+                "text": translated_text,
+                "parentRecordId": parent["recordId"],
+                "transform": transform,
             }
-            derived.update(
-                {
-                    "text": translated_text,
-                    "parentRecordId": parent["recordId"],
-                    "transform": {
-                        "kind": "translation",
-                        "engine": translator.engine,
-                        "engineVersion": translator.engine_version,
-                        "model": translator.model_id,
-                        "revision": translator.revision,
-                        "modelSha256": translator.model_sha256,
-                        "sourceLanguage": "auto",
-                        "targetLanguage": target_language,
-                    },
-                }
-            )
-            translated_records.append(with_record_id(derived))
+        )
+        translated_records.append(with_record_id(derived))
     return translated_records
 
 
@@ -409,8 +632,11 @@ def translate_normalized_records(
     batch_size: int,
     minimum_characters: int,
     maximum_characters: int,
+    window_size: int | None = None,
+    cache: TranslationCache | None = None,
 ) -> Iterable[dict[str, Any]]:
     pending: list[dict[str, Any]] = []
+    effective_window_size = window_size or batch_size
 
     def flush_pending() -> Iterable[dict[str, Any]]:
         translated = add_translations(
@@ -420,6 +646,7 @@ def translate_normalized_records(
             batch_size,
             minimum_characters,
             maximum_characters,
+            cache,
         )
         pending.clear()
         return translated
@@ -430,7 +657,7 @@ def translate_normalized_records(
             str(record["text"]), minimum_characters, maximum_characters
         ):
             pending.append(record)
-            if len(pending) >= batch_size:
+            if len(pending) >= effective_window_size:
                 yield from flush_pending()
     if pending:
         yield from flush_pending()
@@ -489,6 +716,7 @@ class MadladTranslator:
         device: str,
         max_input_tokens: int,
         max_new_tokens: int,
+        threads: int = 0,
     ) -> None:
         model_file = model_path / "model.safetensors"
         if not model_file.is_file():
@@ -513,15 +741,28 @@ class MadladTranslator:
             ) from exc
 
         validate_transformers_version(transformers.__version__)
-        self.engine_version = f"transformers={transformers.__version__};torch={torch.__version__}"
-
         self._torch = torch
+        if threads > 0:
+            self._torch.set_num_threads(threads)
         self.model_id = model_id
         self.revision = revision
         self.model_sha256 = actual_model_sha256
         self._max_input_tokens = max_input_tokens
         self._max_new_tokens = max_new_tokens
         self._device = self._choose_device(device)
+        self.parallelism = 1
+        self.execution_metadata = {
+            "device": self._device,
+            "airgap": airgap_mode_enabled(),
+            "parallelism": self.parallelism,
+            "batching": "length-bucketed",
+            "decoding": "greedy",
+            "threads": threads if threads > 0 else "runtime-auto",
+        }
+        self.engine_version = (
+            f"transformers={transformers.__version__};torch={torch.__version__};"
+            f"device={self._device}"
+        )
         self._tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
         self._model = AutoModelForSeq2SeqLM.from_pretrained(
             str(model_path), local_files_only=True, dtype="auto"
@@ -530,6 +771,11 @@ class MadladTranslator:
         self._model.eval()
 
     def _choose_device(self, requested: str) -> str:
+        if requested == "hybrid":
+            raise EnrichmentError(
+                "The Transformers MADLAD engine cannot split this checkpoint across CPU and GPU; "
+                "use cpu/cuda or the llama.cpp engine's adaptive offload"
+            )
         if requested == "cpu":
             return "cpu"
         if requested == "cuda":
@@ -576,6 +822,47 @@ def llama_translation_prompt(text: str, target_language: str) -> str:
     )
 
 
+def build_llama_server_command(
+    server: str,
+    model_path: Path,
+    *,
+    gpu_layers: str,
+    device: str,
+    context_size: int,
+    parallelism: int,
+    port: int,
+    threads: int,
+) -> list[str]:
+    command = [
+        server,
+        "-m",
+        str(model_path.resolve()),
+        "-ngl",
+        gpu_layers,
+        "--device",
+        device,
+        "-c",
+        str(context_size),
+        "-np",
+        str(parallelism),
+        "-cb",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--jinja",
+        "--reasoning",
+        "off",
+        "--no-warmup",
+        "--no-webui",
+        "--flash-attn",
+        "on",
+    ]
+    if threads > 0:
+        command.extend(("--threads", str(threads), "--threads-batch", str(threads)))
+    return command
+
+
 class LlamaCppTranslator:
     """Offline GGUF translation through a private, short-lived llama.cpp server."""
 
@@ -593,6 +880,11 @@ class LlamaCppTranslator:
         max_new_tokens: int,
         startup_timeout_seconds: int,
         request_timeout_seconds: int,
+        batch_size: int = 8,
+        parallelism: int = 0,
+        strict_determinism: bool = False,
+        threads: int = 0,
+        gpu_layers: int = -1,
     ) -> None:
         if not model_path.is_file():
             raise EnrichmentError(f"Local GGUF model was not found: {model_path}")
@@ -625,14 +917,71 @@ class LlamaCppTranslator:
             raise EnrichmentError(
                 "CUDA translation was requested but llama.cpp did not list a CUDA device"
             )
-        actual_device = "cuda" if device != "cpu" and cuda_available else "cpu"
-        self.engine_version = f"{version}; device={actual_device}"
+        if device == "hybrid" and not cuda_available:
+            raise EnrichmentError(
+                "Hybrid translation was requested but llama.cpp did not list a CUDA device"
+            )
+        if gpu_layers < -1:
+            raise EnrichmentError("Translation GPU layers must be -1 (automatic) or non-negative")
+        if device == "cpu" and gpu_layers not in {-1, 0}:
+            raise EnrichmentError("CPU translation cannot offload layers to a GPU")
+        if device == "auto" and gpu_layers != -1:
+            raise EnrichmentError("Automatic translation cannot use an exact GPU layer count")
+        if device == "cuda" and gpu_layers != -1:
+            raise EnrichmentError(
+                "CUDA translation always uses full offload; select hybrid for an exact layer count"
+            )
+        if device == "hybrid" and gpu_layers <= 0:
+            raise EnrichmentError(
+                "Hybrid translation requires an explicit positive GPU layer count"
+            )
+        if gpu_layers > 0 and not cuda_available:
+            raise EnrichmentError("GPU layer offload was requested but CUDA is unavailable")
+        if device == "cpu" or not cuda_available:
+            actual_device = "cpu"
+            selected_gpu_layers = "0"
+            server_device = "none"
+        elif device == "cuda":
+            actual_device = "cuda"
+            selected_gpu_layers = "all"
+            server_device = str(cuda_device)
+        else:
+            selected_gpu_layers = str(gpu_layers) if gpu_layers >= 0 else "auto"
+            actual_device = (
+                "hybrid-cuda-cpu" if selected_gpu_layers != "auto" else "adaptive-cuda-offload"
+            )
+            server_device = str(cuda_device)
+
+        self.parallelism = resolve_translation_parallelism(
+            parallelism,
+            strict_determinism=strict_determinism,
+            has_cuda=cuda_available and device != "cpu",
+            model_size_bytes=model_path.stat().st_size,
+            batch_size=batch_size,
+        )
+        self._strict_determinism = strict_determinism
+        self.execution_metadata = {
+            "device": actual_device,
+            "airgap": airgap_mode_enabled(),
+            "gpuLayers": selected_gpu_layers,
+            "parallelism": self.parallelism,
+            "continuousBatching": True,
+            "promptCache": not strict_determinism,
+            "decoding": "greedy-top1",
+            "threads": threads if threads > 0 else "runtime-auto",
+        }
+        self.engine_version = (
+            f"{version};device={actual_device};parallelism={self.parallelism};"
+            f"gpu-layers={selected_gpu_layers};"
+            f"prompt-cache={'off' if strict_determinism else 'on'}"
+        )
         self.model_id = model_id
         self.revision = revision
         self.model_sha256 = actual_model_sha256
         self._max_new_tokens = max_new_tokens
         self._request_timeout_seconds = request_timeout_seconds
-        self._url_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self._health_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        self._thread_state = threading.local()
         self._closed = False
         self._temporary_directory = tempfile.TemporaryDirectory(prefix="bstrings-llama-")
         temporary_path = Path(self._temporary_directory.name)
@@ -641,32 +990,18 @@ class LlamaCppTranslator:
         self._stdout_handle = self._stdout_path.open("w", encoding="utf-8")
         self._stderr_handle = self._stderr_path.open("w", encoding="utf-8")
         self._port = self._available_loopback_port()
-        context_size = max(2048, max_input_tokens + max_new_tokens + 512)
-        gpu_layers = "all" if actual_device == "cuda" else "0"
-        command = [
+        per_slot_context = max(2048, max_input_tokens + max_new_tokens + 512)
+        context_size = per_slot_context * self.parallelism
+        command = build_llama_server_command(
             self._server,
-            "-m",
-            str(model_path.resolve()),
-            "-ngl",
-            gpu_layers,
-            "--device",
-            cuda_device if actual_device == "cuda" else "none",
-            "-c",
-            str(context_size),
-            "-np",
-            "1",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(self._port),
-            "--jinja",
-            "--reasoning",
-            "off",
-            "--no-warmup",
-            "--no-webui",
-            "--flash-attn",
-            "on",
-        ]
+            model_path,
+            gpu_layers=selected_gpu_layers,
+            device=server_device,
+            context_size=context_size,
+            parallelism=self.parallelism,
+            port=self._port,
+            threads=threads,
+        )
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             self._process = subprocess.Popen(
@@ -699,7 +1034,7 @@ class LlamaCppTranslator:
                     f"llama.cpp exited before becoming healthy: {diagnostic.strip()}"
                 )
             try:
-                with self._url_opener.open(health_url, timeout=2) as response:
+                with self._health_opener.open(health_url, timeout=2) as response:
                     payload = json.load(response)
                 if payload.get("status") == "ok":
                     return
@@ -709,7 +1044,18 @@ class LlamaCppTranslator:
         raise EnrichmentError(f"llama.cpp did not become healthy within {timeout_seconds} seconds")
 
     def translate(self, texts: Sequence[str], target_language: str) -> list[str]:
-        return [self._translate_one(text, target_language) for text in texts]
+        return map_ordered_parallel(
+            lambda text: self._translate_one(text, target_language),
+            texts,
+            self.parallelism,
+        )
+
+    def _thread_opener(self) -> urllib.request.OpenerDirector:
+        opener = getattr(self._thread_state, "opener", None)
+        if opener is None:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            self._thread_state.opener = opener
+        return opener
 
     def _translate_one(self, text: str, target_language: str) -> str:
         payload = json.dumps(
@@ -726,6 +1072,7 @@ class LlamaCppTranslator:
                 "seed": 1,
                 "max_tokens": self._max_new_tokens,
                 "stream": False,
+                "cache_prompt": not self._strict_determinism,
             }
         ).encode("utf-8")
         request = urllib.request.Request(
@@ -735,7 +1082,9 @@ class LlamaCppTranslator:
             method="POST",
         )
         try:
-            with self._url_opener.open(request, timeout=self._request_timeout_seconds) as response:
+            with self._thread_opener().open(
+                request, timeout=self._request_timeout_seconds
+            ) as response:
                 body = json.load(response)
             content = body["choices"][0]["message"]["content"]
         except (
@@ -784,6 +1133,11 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("paths", nargs="*", type=Path, help="Extracted/carved files to inspect")
     parser.add_argument(
+        "--airgap",
+        action="store_true",
+        help=("Enforce offline environment settings and block non-loopback Python network access"),
+    )
+    parser.add_argument(
         "--input-jsonl",
         type=Path,
         help=(
@@ -826,11 +1180,54 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--translation-model-id")
     parser.add_argument("--translation-revision")
     parser.add_argument("--translation-model-sha256")
-    parser.add_argument("--translation-device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument(
+        "--translation-device",
+        choices=("auto", "cpu", "cuda", "hybrid"),
+        default="auto",
+        help=(
+            "Translation hardware: auto uses adaptive llama.cpp offload, cuda requires full "
+            "GPU offload, hybrid requires CUDA and allows partial offload"
+        ),
+    )
     parser.add_argument("--llama-server", default="llama-server")
     parser.add_argument("--translation-startup-timeout", type=int, default=120)
     parser.add_argument("--translation-request-timeout", type=int, default=120)
     parser.add_argument("--translation-batch-size", type=int, default=8)
+    parser.add_argument(
+        "--translation-parallelism",
+        type=int,
+        default=0,
+        help="llama.cpp request slots; 0 chooses conservatively from model size and hardware",
+    )
+    parser.add_argument(
+        "--translation-threads",
+        type=int,
+        default=0,
+        help="CPU threads supplied to the runtime; 0 keeps its hardware-aware default",
+    )
+    parser.add_argument(
+        "--translation-gpu-layers",
+        type=int,
+        default=-1,
+        help=("Exact llama.cpp GPU layer count for hybrid mode; -1 lets the runtime choose"),
+    )
+    parser.add_argument(
+        "--translation-window-size",
+        type=int,
+        default=0,
+        help="Records buffered for deduplication and length bucketing; 0 selects automatically",
+    )
+    parser.add_argument(
+        "--translation-cache-size",
+        type=int,
+        default=4096,
+        help="Maximum exact source/translation pairs retained in memory; 0 disables caching",
+    )
+    parser.add_argument(
+        "--translation-strict-determinism",
+        action="store_true",
+        help="Use one llama.cpp slot and disable prompt-cache reuse for maximum repeatability",
+    )
     parser.add_argument("--translation-target", default="en")
     parser.add_argument("--translation-min-characters", type=int, default=8)
     parser.add_argument("--translation-max-characters", type=int, default=2048)
@@ -866,6 +1263,38 @@ def validate_arguments(args: argparse.Namespace) -> None:
         raise EnrichmentError("Translation timeouts must be positive")
     if args.translation_batch_size <= 0:
         raise EnrichmentError("--translation-batch-size must be positive")
+    if args.translation_parallelism < 0:
+        raise EnrichmentError("--translation-parallelism cannot be negative")
+    if args.translation_threads < 0:
+        raise EnrichmentError("--translation-threads cannot be negative")
+    if args.translation_gpu_layers < -1:
+        raise EnrichmentError("--translation-gpu-layers must be -1 or non-negative")
+    if args.translation_device == "cpu" and args.translation_gpu_layers not in {-1, 0}:
+        raise EnrichmentError("CPU translation cannot use --translation-gpu-layers above zero")
+    if args.translation_device == "auto" and args.translation_gpu_layers != -1:
+        raise EnrichmentError(
+            "Use --translation-device hybrid with an exact --translation-gpu-layers value"
+        )
+    if args.translation_device == "cuda" and args.translation_gpu_layers != -1:
+        raise EnrichmentError(
+            "Use --translation-device hybrid with an exact --translation-gpu-layers value"
+        )
+    if args.translation_device == "hybrid" and args.translation_gpu_layers <= 0:
+        raise EnrichmentError(
+            "Hybrid translation requires an explicit --translation-gpu-layers value above zero"
+        )
+    if args.translation_window_size < 0:
+        raise EnrichmentError("--translation-window-size cannot be negative")
+    if 0 < args.translation_window_size < args.translation_batch_size:
+        raise EnrichmentError(
+            "--translation-window-size must be zero or at least --translation-batch-size"
+        )
+    if args.translation_cache_size < 0:
+        raise EnrichmentError("--translation-cache-size cannot be negative")
+    if args.translation_strict_determinism and args.translation_parallelism > 1:
+        raise EnrichmentError(
+            "--translation-strict-determinism cannot be combined with parallelism above 1"
+        )
     if args.translation_min_characters <= 0:
         raise EnrichmentError("--translation-min-characters must be positive")
     if args.translation_max_characters < args.translation_min_characters:
@@ -883,6 +1312,10 @@ def validate_arguments(args: argparse.Namespace) -> None:
                 "--translate requires --translation-model-path pointing to an existing local model"
             )
         engine = selected_translation_engine(args)
+        if engine == "madlad" and args.translation_device == "hybrid":
+            raise EnrichmentError(
+                "--translation-device hybrid is supported by llama.cpp, not MADLAD/Transformers"
+            )
         if engine == "madlad" and not args.translation_model_path.is_dir():
             raise EnrichmentError("The MADLAD engine requires a local model snapshot directory")
         if engine == "llama-cpp" and (
@@ -934,7 +1367,11 @@ def write_jsonl_atomic(output_path: Path, records: Iterable[dict[str, Any]]) -> 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_arguments(argv)
     translator: Translator | None = None
+    translation_cache: TranslationCache | None = None
+    translation_window_size = args.translation_batch_size
     try:
+        if args.airgap:
+            enable_airgap_mode()
         validate_arguments(args)
         magika = ""
         floss = ""
@@ -949,16 +1386,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             engine = selected_translation_engine(args)
             if engine == "llama-cpp":
                 translator = LlamaCppTranslator(
-                    args.llama_server,
-                    args.translation_model_path.resolve(),
-                    args.translation_model_id or DEFAULT_LLAMA_MODEL_ID,
-                    args.translation_revision,
-                    args.translation_model_sha256,
-                    args.translation_device,
-                    args.translation_max_input_tokens,
-                    args.translation_max_new_tokens,
-                    args.translation_startup_timeout,
-                    args.translation_request_timeout,
+                    server=args.llama_server,
+                    model_path=args.translation_model_path.resolve(),
+                    model_id=args.translation_model_id or DEFAULT_LLAMA_MODEL_ID,
+                    revision=args.translation_revision,
+                    expected_model_sha256=args.translation_model_sha256,
+                    device=args.translation_device,
+                    max_input_tokens=args.translation_max_input_tokens,
+                    max_new_tokens=args.translation_max_new_tokens,
+                    startup_timeout_seconds=args.translation_startup_timeout,
+                    request_timeout_seconds=args.translation_request_timeout,
+                    batch_size=args.translation_batch_size,
+                    parallelism=args.translation_parallelism,
+                    strict_determinism=args.translation_strict_determinism,
+                    threads=args.translation_threads,
+                    gpu_layers=args.translation_gpu_layers,
                 )
             else:
                 translator = MadladTranslator(
@@ -969,7 +1411,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.translation_device,
                     args.translation_max_input_tokens,
                     args.translation_max_new_tokens,
+                    args.translation_threads,
                 )
+            translation_cache = TranslationCache(args.translation_cache_size)
+            translation_window_size = args.translation_window_size or (
+                args.translation_batch_size * max(4, translator.parallelism)
+            )
+            print(
+                "Translation plan: "
+                + json.dumps(
+                    {
+                        **translator.execution_metadata,
+                        "batchSize": args.translation_batch_size,
+                        "windowSize": translation_window_size,
+                        "cacheSize": args.translation_cache_size,
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
 
         processed = 0
         skipped = 0
@@ -986,6 +1447,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.translation_batch_size,
                     args.translation_min_characters,
                     args.translation_max_characters,
+                    translation_window_size,
+                    translation_cache,
                 )
                 return
             for raw_path in args.paths:
@@ -1028,6 +1491,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         args.translation_batch_size,
                         args.translation_min_characters,
                         args.translation_max_characters,
+                        translation_cache,
                     )
                     yield from translated_records
                 processed += 1

@@ -29,27 +29,27 @@ internal static class PatternWitnessCatalog
             ),
             ["mac"] = new("00:11:22:aa:BB:cc", "00:11-22:33:44:55", "00:11:22:aa:BB:cc"),
             ["ssn"] = new("123-45-6789", "666-45-6789", "123-45-6789"),
-            ["cc"] = new("4111 1111 1111 1111", "4111 1111", "4111 1111 1111 1111"),
+            ["cc"] = new("4111 1111 1111 1111", "4111 1111 1111 1112", "4111 1111 1111 1111"),
             ["ipv4"] = new("198.51.100.250", "1.2.3.4.5", "198.51.100.250"),
             ["ipv6"] = new("::ffff:192.0.2.128", "2001:::1", "::ffff:192.0.2.128"),
             ["email"] = new(
-                "user.name+tag@example.technology",
-                "user@-example.com",
-                "user.name+tag@example.technology"
+                "string@g.com",
+                new string('a', 65) + "@g.com",
+                "string@g.com"
             ),
             ["zip"] = new("90210-1234", "1234", "90210-1234"),
             ["urlUser"] = new(
                 "https://analyst:secret@example.com/path",
-                "https://example.com/path",
+                "https://analyst%zz@example.com/path",
                 "analyst"
             ),
             ["url3986"] = new(
                 "https://user@example.com:8443/a//b?x=1#fragment",
-                "not-a-url",
+                "https://example.com/a%zz",
                 "https://user@example.com:8443/a//b?x=1#fragment"
             ),
-            ["xml"] = new("<Root id=\"1\">value</Root>", "<Root>value</root>", "<Root id=\"1\">value</Root>"),
-            ["sid"] = new("S-1-5-21-1-2-3-1001", "S-1-x-21", "S-1-5-21-1-2-3-1001"),
+            ["xml"] = new("<Root id=\"1\">value</Root>", "<Root id=>value</Root>", "<Root id=\"1\">value</Root>"),
+            ["sid"] = new("S-1-5-21-1-2-3-1001", "S-2-5-21", "S-1-5-21-1-2-3-1001"),
             ["win_path"] = new(
                 "\"C:\\folder one\\file.txt\"",
                 "C:relative.txt",
@@ -65,20 +65,134 @@ internal static class PatternWitnessCatalog
                 @"HKEY_LOCAL_MACHINE\NOT_A_HIVE\Microsoft",
                 @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows"
             ),
-            ["b64"] = new("SGVsbG8=", "abcd", "SGVsbG8="),
+            ["b64"] = new("SGVsbG8=", "SGVsbG9=", "SGVsbG8="),
             ["bitlocker"] = new(
-                "123456-234567-345678-456789-567890-678901-789012-890123",
-                "123456-234567-345678-456789-567890-678901-789012",
-                "123456-234567-345678-456789-567890-678901-789012-890123"
+                "001155-002310-003465-004620-005775-006930-008085-009240",
+                "001156-002310-003465-004620-005775-006930-008085-009240",
+                "001155-002310-003465-004620-005775-006930-008085-009240"
             ),
-            ["bitcoin"] = new("1" + new string('A', 25), "1" + new string('O', 25), "1" + new string('A', 25)),
-            ["aeon"] = new("Wms" + new string('A', 94), "WmS" + new string('A', 94), "Wms" + new string('A', 94)),
-            ["bytecoin"] = new("2A" + new string('A', 93), "2O" + new string('A', 93), "2A" + new string('A', 93)),
-            ["dashcoin"] = new("D" + new string('A', 94), "d" + new string('A', 94), "D" + new string('A', 94)),
-            ["dashcoin2"] = new("X" + new string('A', 33), "x" + new string('A', 33), "X" + new string('A', 33)),
-            ["fantomcoin"] = new("6" + new string('A', 94), "6" + new string('O', 94), "6" + new string('A', 94)),
-            ["monero"] = new("8" + new string('A', 94), "4O" + new string('A', 93), "8" + new string('A', 94)),
-            ["sumokoin"] = new("Sumoo" + new string('A', 94), "sumoo" + new string('A', 94), "Sumoo" + new string('A', 94)),
+            ["bitcoin"] = new(
+                "1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
+                "1BoatSLRHtKNngkdXEeobR76b53LETtpyU",
+                "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"
+            ),
+            ["bitcoin_segwit"] = new(
+                "BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4",
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t5",
+                "BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4"
+            ),
+            ["tron"] = new(
+                "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+                "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj61",
+                "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+            ),
+            ["solana"] = new(
+                "11111111111111111111111111111111",
+                new string('1', 31),
+                "11111111111111111111111111111111"
+            ),
+            ["xrp"] = new(
+                "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+                "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyT1",
+                "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+            ),
+            ["dogecoin"] = new(
+                "D5ERdEN1gsouFSs7zsq7VYJxyWP6dP28H1",
+                "D5ERdEN1gsouFSs7zsq7VYJxyWP6dP28H2",
+                "D5ERdEN1gsouFSs7zsq7VYJxyWP6dP28H1"
+            ),
+            ["zcash"] = new(
+                "t1Hxw6JqWMnhDK5jRCieg5bFHM2qt7UtQvu",
+                "t1Hxw6JqWMnhDK5jRCieg5bFHM2qt7UtQv1",
+                "t1Hxw6JqWMnhDK5jRCieg5bFHM2qt7UtQvu"
+            ),
+            ["cardano"] = new(
+                "addr1vx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzers66hrl8",
+                "addr1vx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzers66hrl1",
+                "addr1vx2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzers66hrl8"
+            ),
+            ["stellar"] = new(
+                "GCM5WPR4DDR24FSAX5LIEM4J7AI3KOWJYANSXEPKYXCSZOTAYXE75AFN",
+                "GCM5WPR4DDR24FSAX5LIEM4J7AI3KOWJYANSXEPKYXCSZOTAYXE75AFA",
+                "GCM5WPR4DDR24FSAX5LIEM4J7AI3KOWJYANSXEPKYXCSZOTAYXE75AFN"
+            ),
+            ["bitcoin_cash"] = new(
+                "bitcoincash:qp3wjpa3tjlj042z2wv7hahsldgwhwy0rq9sywjpyy",
+                "bitcoincash:qp3wjpa3tjlj042z2wv7hahsldgwhwy0rq9sywjpyq",
+                "bitcoincash:qp3wjpa3tjlj042z2wv7hahsldgwhwy0rq9sywjpyy"
+            ),
+            ["ton"] = new(
+                "EQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPrHF",
+                "EQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPrHA",
+                "EQDKbjIcfM6ezt8KjKJJLshZJJSqX7XOA4ff-W72r5gqPrHF"
+            ),
+            ["litecoin"] = new(
+                "LKKHMBjCU89fyFNgSRprDoD8Jb25N8uWvd",
+                "LKKHMBjCU89fyFNgSRprDoD8Jb25N8uWv1",
+                "LKKHMBjCU89fyFNgSRprDoD8Jb25N8uWvd"
+            ),
+            ["avalanche"] = new(
+                "X-avax1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc52qphlp",
+                "X-avax1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc52qphlq",
+                "X-avax1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc52qphlp"
+            ),
+            ["move_address"] = new(
+                "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "0x0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef",
+                "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            ),
+            ["near"] = new("alice.sub.near", "alice..sub.near", "alice.sub.near"),
+            ["bittensor"] = new(
+                "5DfhGyQdFobKM8NsWvEeAKk5EQQgYe9AydgJ7rMB6E1EqRzV",
+                "5DfhGyQdFobKM8NsWvEeAKk5EQQgYe9AydgJ7rMB6E1EqRz1",
+                "5DfhGyQdFobKM8NsWvEeAKk5EQQgYe9AydgJ7rMB6E1EqRzV"
+            ),
+            ["hedera"] = new("0.0.123-vfmkw", "0.0.123-abcde", "0.0.123-vfmkw"),
+            ["canton_party"] = new(
+                "Alice::1220f2fe29866fd6a0009ecc8a64ccdc09f1958bd0f801166baaee469d1251b2eb72",
+                "Alice::1320f2fe29866fd6a0009ecc8a64ccdc09f1958bd0f801166baaee469d1251b2eb72",
+                "Alice::1220f2fe29866fd6a0009ecc8a64ccdc09f1958bd0f801166baaee469d1251b2eb72"
+            ),
+            ["provenance_scope"] = new(
+                "scope1qzge0zaztu65tx5x5llv5xc9ztsqxlkwel",
+                "scope1qzge0zaztu65tx5x5llv5xc9ztsqxlkw1",
+                "scope1qzge0zaztu65tx5x5llv5xc9ztsqxlkwel"
+            ),
+            ["aeon"] = new(
+                "WmsSWgtT1JPg5e3cK41hKXSHVpKW7e47bjgiKmWZkYrhSS5LhRemNyqayaSBtAQ6517eo5PtH9wxHVmM78JDZSUu2W8PqRiNs",
+                "WmsSWgtT1JPg5e3cK41hKXSHVpKW7e47bjgiKmWZkYrhSS5LhRemNyqayaSBtAQ6517eo5PtH9wxHVmM78JDZSUu2W8PqRiN1",
+                "WmsSWgtT1JPg5e3cK41hKXSHVpKW7e47bjgiKmWZkYrhSS5LhRemNyqayaSBtAQ6517eo5PtH9wxHVmM78JDZSUu2W8PqRiNs"
+            ),
+            ["bytecoin"] = new(
+                "2AaF4qEmER6dNeM6dfiBFL7kqund3HYGvMBF3ttsNd9SfzgYB6L7ep1Yg1osYJzLdaKAYSLVh6e6jKnAuzj3bw1oGyd1x7Z",
+                "2AaF4qEmER6dNeM6dfiBFL7kqund3HYGvMBF3ttsNd9SfzgYB6L7ep1Yg1osYJzLdaKAYSLVh6e6jKnAuzj3bw1oGyd1x71",
+                "2AaF4qEmER6dNeM6dfiBFL7kqund3HYGvMBF3ttsNd9SfzgYB6L7ep1Yg1osYJzLdaKAYSLVh6e6jKnAuzj3bw1oGyd1x7Z"
+            ),
+            ["dashcoin"] = new(
+                "D3XeV6X3otr2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8EmnBXn",
+                "D3XeV6X3otr2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8EmnBX1",
+                "D3XeV6X3otr2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8EmnBXn"
+            ),
+            ["dashcoin2"] = new(
+                "Xgtyuk76vhuFW2iT7UAiHgNdWXCf3J34wh",
+                "Xgtyuk76vhuFW2iT7UAiHgNdWXCf3J34wi",
+                "Xgtyuk76vhuFW2iT7UAiHgNdWXCf3J34wh"
+            ),
+            ["fantomcoin"] = new(
+                "6gt5xRQJhjC2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8KzEdBp",
+                "6gt5xRQJhjC2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8KzEdB1",
+                "6gt5xRQJhjC2LxFSMtsQ5k3gsHPkECmXt52nKM8ZY8z26NhMJWtsWSA7icPFuECstJ94XRDHZYFLSAQSTAftscna8KzEdBp"
+            ),
+            ["monero"] = new(
+                "4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge",
+                "4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rg1",
+                "4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge"
+            ),
+            ["sumokoin"] = new(
+                "Sumoo72D2v7KEGvfPzGH5qC5VHGnLmafaAhoMooPwRALNwm2oSyK3myTaFefvyg5bviMbBXUFWN8McswTRowHNYXfo34VD9oWr7",
+                "Sumoo72D2v7KEGvfPzGH5qC5VHGnLmafaAhoMooPwRALNwm2oSyK3myTaFefvyg5bviMbBXUFWN8McswTRowHNYXfo34VD9oWr1",
+                "Sumoo72D2v7KEGvfPzGH5qC5VHGnLmafaAhoMooPwRALNwm2oSyK3myTaFefvyg5bviMbBXUFWN8McswTRowHNYXfo34VD9oWr7"
+            ),
             ["cve"] = new("CVE-2026-1234", "CVE-2026-123", "CVE-2026-1234"),
             ["pem_private_key"] = new(
                 "-----BEGIN PRIVATE KEY-----",
@@ -86,13 +200,13 @@ internal static class PatternWitnessCatalog
                 "-----BEGIN PRIVATE KEY-----"
             ),
             ["onion_v3"] = new(
-                new string('a', 56) + ".onion",
-                new string('a', 55) + ".onion",
-                new string('a', 56) + ".onion"
+                "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion",
+                "qg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion",
+                "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"
             ),
             ["ethereum"] = new(
                 "0x5e97870f263700f46aa00d967821199b9bc5a120",
-                "0x5e97870f263700f46aa00d967821199b9bc5a12",
+                "0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
                 "0x5e97870f263700f46aa00d967821199b9bc5a120"
             ),
             ["sha256"] = new(new string('a', 64), new string('a', 63), new string('a', 64)),
