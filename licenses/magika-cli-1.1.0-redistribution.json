@@ -1,0 +1,330 @@
+{
+  "schemaVersion": 1,
+  "component": "magika-cli",
+  "version": "1.1.0",
+  "target": "x86_64-pc-windows-msvc",
+  "sourceTag": "cli/v1.1.0",
+  "sourceCommit": "5e2f437fb7b7452368c8c1fa9354858f5487a5c4",
+  "runtimeInventory": {
+    "path": "magika-cli-1.1.0-win-x64.tsv",
+    "bytes": 10067,
+    "sha256": "9ff2978dc999d15f077bd3f911f8e0ea62c913fe2e0fdf455b26f80a92bff0dd",
+    "packageCount": 70,
+    "registryPackageCount": 68
+  },
+  "runtimeNotices": {
+    "path": "magika-cli-1.1.0-THIRD-PARTY-NOTICES.txt",
+    "bytes": 775825,
+    "sha256": "0be21297725d9b56428220b512718808f7d25eaf1aec945aefa44276d84375a0",
+    "packageCount": 70,
+    "registryArchiveCount": 68
+  },
+  "compiler": {
+    "name": "Rust",
+    "version": "1.94.1",
+    "releaseDate": "2026-03-26",
+    "commit": "e408947bfd200af42db322daf0fadfe7e26d3bd1",
+    "embeddedMarker": "/rustc/e408947bfd200af42db322daf0fadfe7e26d3bd1/library"
+  },
+  "nativeComponents": {
+    "onnxRuntime": {
+      "version": "1.24.2",
+      "linkMode": "static",
+      "marker": "1.24.2",
+      "staticLibraryBytes": 305821070,
+      "staticLibrarySha256": "acfc5068a56212d0a47a9dffd0b17ec6f83f96cc576154d6b6bbd729b20cc357"
+    },
+    "directML": {
+      "version": "1.15.4",
+      "deployment": "app-local",
+      "importName": "DirectML.dll",
+      "bytes": 18527776,
+      "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"
+    },
+    "eigen": {
+      "commit": "1d8b82b0740839c0de7f1242a3585e3390ff5f33",
+      "license": "MPL-2.0",
+      "onnxRuntimeDependencySha1": "05b19b49e6fbb91246be711d801160528c135e34"
+    }
+  },
+  "downloadArtifacts": [
+    {
+      "id": "magika-release",
+      "destination": "upstream/magika-cli-x86_64-pc-windows-msvc.zip",
+      "url": "https://github.com/google/magika/releases/download/cli/v1.1.0/magika-cli-x86_64-pc-windows-msvc.zip",
+      "bytes": 10076032,
+      "sha256": "d4de347c53e2d25f9663780c93fdf26d156284c64d6a5ec4bcdb829f9994f6f3",
+      "ship": false
+    },
+    {
+      "id": "magika-license",
+      "destination": "licenses/magika-cli-1.1.0/Magika-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/google/magika/5e2f437fb7b7452368c8c1fa9354858f5487a5c4/LICENSE",
+      "bytes": 11357,
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "ship": true
+    },
+    {
+      "id": "magika-source",
+      "destination": "sources/magika-5e2f437fb7b7452368c8c1fa9354858f5487a5c4.zip",
+      "url": "https://codeload.github.com/google/magika/zip/5e2f437fb7b7452368c8c1fa9354858f5487a5c4",
+      "bytes": 84532977,
+      "sha256": "54983bcea9c11499aee7162ed11989167918b37b69adce67a4891f2fd3e1d7a0",
+      "ship": false
+    },
+    {
+      "id": "onnxruntime-source",
+      "destination": "sources/onnxruntime-058787ceead760166e3c50a0a4cba8a833a6f53f.zip",
+      "url": "https://codeload.github.com/microsoft/onnxruntime/zip/058787ceead760166e3c50a0a4cba8a833a6f53f",
+      "bytes": 290207139,
+      "sha256": "4bd806b559bf9c91fefbf59d74d21dc9299c5779beab8861623675d57430e044",
+      "ship": false
+    },
+    {
+      "id": "onnxruntime-license",
+      "destination": "licenses/magika-cli-1.1.0/ONNXRuntime-1.24.2-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/058787ceead760166e3c50a0a4cba8a833a6f53f/LICENSE",
+      "bytes": 1073,
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+      "ship": true
+    },
+    {
+      "id": "onnxruntime-notices",
+      "destination": "licenses/magika-cli-1.1.0/ONNXRuntime-1.24.2-ThirdPartyNotices.txt",
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/058787ceead760166e3c50a0a4cba8a833a6f53f/ThirdPartyNotices.txt",
+      "bytes": 325054,
+      "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2",
+      "ship": true
+    },
+    {
+      "id": "eigen-source",
+      "destination": "sources/magika-cli-1.1.0/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip",
+      "url": "https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip",
+      "bytes": 4075744,
+      "sha1": "05b19b49e6fbb91246be711d801160528c135e34",
+      "sha256": "6a60d76351f97132669daeeb721d6bf14b008101883ad2d687a3201c5c461eb0",
+      "ship": true
+    },
+    {
+      "id": "colored-license",
+      "destination": "licenses/magika-cli-1.1.0/colored-3.0.0-MPL-2.0.txt",
+      "url": "https://raw.githubusercontent.com/mackwic/colored/95b2de80ba35b6d2be2f876a746d27da58a73945/LICENSE",
+      "bytes": 16726,
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+      "ship": true
+    },
+    {
+      "id": "colored-source",
+      "destination": "sources/magika-cli-1.1.0/colored-3.0.0.crate",
+      "url": "https://static.crates.io/crates/colored/colored-3.0.0.crate",
+      "bytes": 34497,
+      "sha256": "fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e",
+      "ship": true
+    },
+    {
+      "id": "ort-static-archive",
+      "destination": "upstream/ort-rs-1.24.2-x86_64-pc-windows-msvc.tar.lzma2",
+      "url": "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-pc-windows-msvc.tar.lzma2",
+      "bytes": 29445945,
+      "sha256": "b685bfc8d336e0ba95c066a7a982c03aa6dedd528a492eb99ca4ccb7f3af9e7a",
+      "ship": false
+    },
+    {
+      "id": "directml-nuget",
+      "destination": "upstream/microsoft.ai.directml.1.15.4.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg",
+      "bytes": 202292617,
+      "sha256": "4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9",
+      "ship": false
+    },
+    {
+      "id": "rust-channel-manifest",
+      "destination": "licenses/magika-cli-1.1.0/provenance/channel-rust-1.94.1.toml",
+      "url": "https://static.rust-lang.org/dist/channel-rust-1.94.1.toml",
+      "bytes": 845032,
+      "sha256": "cc2f04dfc883549d683c8cc2a9393f523a3dfbd931f5d5eaef00303cca64a60d",
+      "ship": true
+    },
+    {
+      "id": "rust-source",
+      "destination": "sources/rust-src-1.94.1.tar.xz",
+      "url": "https://static.rust-lang.org/dist/2026-03-26/rust-src-1.94.1.tar.xz",
+      "bytes": 3751284,
+      "sha256": "cb3756156fe6d2d6cedad327c94ad3721b612c4cd20dfb226d7543250788b66c",
+      "ship": false
+    },
+    {
+      "id": "rustc-archive",
+      "destination": "upstream/rustc-1.94.1-x86_64-pc-windows-msvc.tar.xz",
+      "url": "https://static.rust-lang.org/dist/2026-03-26/rustc-1.94.1-x86_64-pc-windows-msvc.tar.xz",
+      "bytes": 69612784,
+      "sha256": "73b4e8e6dce2440e1922b8a56c88fb2e49cc32c67a38afcbf88967b9abd70d43",
+      "ship": false
+    }
+  ],
+  "derivedArtifacts": [
+    {
+      "id": "magika-executable",
+      "destination": "tools/magika/magika.exe",
+      "containerId": "magika-release",
+      "entry": "magika.exe",
+      "bytes": 24358400,
+      "sha256": "3631dab2f57ec42b6646ce141397671132707cd7e7633f4511fe47171efe69eb"
+    },
+    {
+      "id": "directml-runtime",
+      "destination": "tools/magika/DirectML.dll",
+      "containerId": "directml-nuget",
+      "entry": "bin/x64-win/DirectML.dll",
+      "bytes": 18527776,
+      "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"
+    },
+    {
+      "id": "directml-license",
+      "destination": "licenses/magika-cli-1.1.0/DirectML-1.15.4-LICENSE.txt",
+      "containerId": "directml-nuget",
+      "entry": "LICENSE.txt",
+      "bytes": 10439,
+      "sha256": "a05138e3a085ff60a44881eedfa58dccb03ecc1d7b1f6ae888418e8c2fec4b8d"
+    },
+    {
+      "id": "directml-code-license",
+      "destination": "licenses/magika-cli-1.1.0/DirectML-1.15.4-LICENSE-CODE.txt",
+      "containerId": "directml-nuget",
+      "entry": "LICENSE-CODE.txt",
+      "bytes": 1093,
+      "sha256": "903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c"
+    },
+    {
+      "id": "directml-notices",
+      "destination": "licenses/magika-cli-1.1.0/DirectML-1.15.4-ThirdPartyNotices.txt",
+      "containerId": "directml-nuget",
+      "entry": "ThirdPartyNotices.txt",
+      "bytes": 4577,
+      "sha256": "2c95795c13ff48a58b6ed916f37901c23d964b5d9d601af422f17ad2172e7950"
+    },
+    {
+      "id": "eigen-mpl-license",
+      "destination": "licenses/magika-cli-1.1.0/Eigen-1d8b82b-COPYING.MPL2",
+      "containerId": "eigen-source",
+      "entry": "eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33/COPYING.MPL2",
+      "bytes": 16727,
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172"
+    },
+    {
+      "id": "rust-library-notice",
+      "destination": "licenses/magika-cli-1.1.0/Rust-1.94.1-COPYRIGHT-library.html",
+      "containerId": "rustc-archive",
+      "entry": "rustc-1.94.1-x86_64-pc-windows-msvc/rustc/share/doc/rust/COPYRIGHT-library.html",
+      "bytes": 425661,
+      "sha256": "af70aaabed1b73e872f14f9130db37e09f3f4d73a5f7c598b9173697a5d2729f"
+    },
+    {
+      "id": "magika-cargo-manifest",
+      "destination": "licenses/magika-cli-1.1.0/provenance/Magika-Cargo.toml",
+      "containerId": "magika-source",
+      "entry": "magika-5e2f437fb7b7452368c8c1fa9354858f5487a5c4/rust/cli/Cargo.toml",
+      "bytes": 966,
+      "sha256": "049290817fd4255efa01ff80cadcd724cd517728bcb845fe0747a6da04b43102"
+    },
+    {
+      "id": "magika-cargo-lock",
+      "destination": "licenses/magika-cli-1.1.0/provenance/Magika-Cargo.lock",
+      "containerId": "magika-source",
+      "entry": "magika-5e2f437fb7b7452368c8c1fa9354858f5487a5c4/rust/cli/Cargo.lock",
+      "bytes": 35141,
+      "sha256": "6aed136fe7d903f13a2cd8e64ee28632246e8788044631f3aabadf238e13962e"
+    },
+    {
+      "id": "onnxruntime-version",
+      "destination": "licenses/magika-cli-1.1.0/provenance/ONNXRuntime-VERSION_NUMBER",
+      "containerId": "onnxruntime-source",
+      "entry": "onnxruntime-058787ceead760166e3c50a0a4cba8a833a6f53f/VERSION_NUMBER",
+      "bytes": 7,
+      "sha256": "32060e9461395f8bd2b74d95efac19a1d021f3fff70c4d6f10510330d8e6355a"
+    },
+    {
+      "id": "onnxruntime-dependencies",
+      "destination": "licenses/magika-cli-1.1.0/provenance/ONNXRuntime-cmake-deps.txt",
+      "containerId": "onnxruntime-source",
+      "entry": "onnxruntime-058787ceead760166e3c50a0a4cba8a833a6f53f/cmake/deps.txt",
+      "bytes": 7000,
+      "sha256": "a913db05c4e9965f9725aec7a5b9b10b071d13496e567283e81737ebe91ff027"
+    }
+  ],
+  "repositoryArtifacts": [
+    {
+      "source": "licenses/magika-cli-1.1.0-SOURCE-AVAILABILITY.md",
+      "destination": "licenses/magika-cli-1.1.0/SOURCE-AVAILABILITY.md",
+      "bytes": 1568,
+      "sha256": "4204461eda47bf36077f9720380481a44d766a5004b17f4f843f3dea4731439c"
+    },
+    {
+      "source": "licenses/magika-cli-1.1.0-win-x64.tsv",
+      "destination": "licenses/magika-cli-1.1.0/magika-cli-1.1.0-win-x64.tsv",
+      "bytes": 10067,
+      "sha256": "9ff2978dc999d15f077bd3f911f8e0ea62c913fe2e0fdf455b26f80a92bff0dd"
+    },
+    {
+      "source": "licenses/magika-cli-1.1.0-THIRD-PARTY-NOTICES.txt",
+      "destination": "licenses/magika-cli-1.1.0/THIRD-PARTY-NOTICES.txt",
+      "bytes": 775825,
+      "sha256": "0be21297725d9b56428220b512718808f7d25eaf1aec945aefa44276d84375a0"
+    }
+  ],
+  "reviewedContainerEntries": {
+    "magika-source": [
+      {
+        "entry": "magika-5e2f437fb7b7452368c8c1fa9354858f5487a5c4/LICENSE",
+        "bytes": 11357,
+        "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+      },
+      {
+        "entry": "magika-5e2f437fb7b7452368c8c1fa9354858f5487a5c4/rust/cli/Cargo.toml",
+        "bytes": 966,
+        "sha256": "049290817fd4255efa01ff80cadcd724cd517728bcb845fe0747a6da04b43102"
+      },
+      {
+        "entry": "magika-5e2f437fb7b7452368c8c1fa9354858f5487a5c4/rust/cli/Cargo.lock",
+        "bytes": 35141,
+        "sha256": "6aed136fe7d903f13a2cd8e64ee28632246e8788044631f3aabadf238e13962e"
+      }
+    ],
+    "onnxruntime-source": [
+      {
+        "entry": "onnxruntime-058787ceead760166e3c50a0a4cba8a833a6f53f/VERSION_NUMBER",
+        "bytes": 7,
+        "sha256": "32060e9461395f8bd2b74d95efac19a1d021f3fff70c4d6f10510330d8e6355a"
+      },
+      {
+        "entry": "onnxruntime-058787ceead760166e3c50a0a4cba8a833a6f53f/LICENSE",
+        "bytes": 1073,
+        "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+      },
+      {
+        "entry": "onnxruntime-058787ceead760166e3c50a0a4cba8a833a6f53f/ThirdPartyNotices.txt",
+        "bytes": 325054,
+        "sha256": "0e07b95f3a8d6230037707c5c4a2b554d12c4cb67369669ac255635528ffcee2"
+      },
+      {
+        "entry": "onnxruntime-058787ceead760166e3c50a0a4cba8a833a6f53f/cmake/deps.txt",
+        "bytes": 7000,
+        "sha256": "a913db05c4e9965f9725aec7a5b9b10b071d13496e567283e81737ebe91ff027"
+      }
+    ]
+  },
+  "mplSourceAvailability": [
+    {
+      "component": "colored",
+      "version": "3.0.0",
+      "license": "MPL-2.0",
+      "source": "sources/magika-cli-1.1.0/colored-3.0.0.crate"
+    },
+    {
+      "component": "Eigen",
+      "version": "1d8b82b0740839c0de7f1242a3585e3390ff5f33",
+      "license": "MPL-2.0",
+      "source": "sources/magika-cli-1.1.0/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip"
+    }
+  ]
+}

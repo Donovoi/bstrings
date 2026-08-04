@@ -1,0 +1,71 @@
+package	version	checksum_sha256	archive_bytes	declared_license	repository
+anstream	0.6.21	43d5b281e737544384e969a5ccad3f1cdd24b48086a0fc1b2a5262a26b8f4f4a	29516	MIT OR Apache-2.0	https://github.com/rust-cli/anstyle.git
+anstyle	1.0.13	5192cca8006f1fd4f7237516f40fa183bb07f8fbdfedaa0036de5ea9b0b45e78	17651	MIT OR Apache-2.0	https://github.com/rust-cli/anstyle.git
+anstyle-parse	0.2.7	4e7644824f0aa2c7b9384579234ef10eb7efb6a0deb83f9630a49594dd9c15c2	21707	MIT OR Apache-2.0	https://github.com/rust-cli/anstyle.git
+anstyle-query	1.1.4	9e231f6134f61b71076a3eab506c379d4f36122f2af15a9ff04415ea4c3339e2	10192	MIT OR Apache-2.0	https://github.com/rust-cli/anstyle.git
+anstyle-wincon	3.0.10	3e0633414522a32ffaac8ac6cc8f748e090c5717661fddeea04219e2344f5f2a	12558	MIT OR Apache-2.0	https://github.com/rust-cli/anstyle.git
+anyhow	1.0.100	a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61	54059	MIT OR Apache-2.0	https://github.com/dtolnay/anyhow
+async-channel	2.5.0	924ed96dd52d1b75e9c1a3e6275715fd320f5f9439fb5a4a11fa51f4221158d2	18624	Apache-2.0 OR MIT	https://github.com/smol-rs/async-channel
+bytes	1.11.1	1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33	78584	MIT	https://github.com/tokio-rs/bytes
+cfg-if	1.0.3	2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9	8719	MIT OR Apache-2.0	https://github.com/rust-lang/cfg-if
+clap	4.5.48	e2134bb3ea021b78629caa971416385309e0131b351b25e01dc16fb54e1b5fae	61935	MIT OR Apache-2.0	https://github.com/clap-rs/clap
+clap_builder	4.5.48	c2ba64afa3c0a6df7fa517765e31314e983f51dda798ffba27b988194fb65dc9	170133	MIT OR Apache-2.0	https://github.com/clap-rs/clap
+clap_derive	4.5.47	bbfd7eae0b0f1a6e63d4b13c9c478de77c2eb546fba158ad50b4203dc24b9f9c	33550	MIT OR Apache-2.0	https://github.com/clap-rs/clap
+clap_lex	0.7.5	b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675	13469	MIT OR Apache-2.0	https://github.com/clap-rs/clap
+colorchoice	1.0.4	b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75	8196	MIT OR Apache-2.0	https://github.com/rust-cli/anstyle.git
+colored	3.0.0	fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e	34497	MPL-2.0	https://github.com/mackwic/colored
+concurrent-queue	2.5.0	4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973	22654	Apache-2.0 OR MIT	https://github.com/smol-rs/concurrent-queue
+crossbeam-utils	0.8.21	d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28	42691	MIT OR Apache-2.0	https://github.com/crossbeam-rs/crossbeam
+event-listener	5.4.1	e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab	43782	Apache-2.0 OR MIT	https://github.com/smol-rs/event-listener
+event-listener-strategy	0.5.4	8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93	16179	Apache-2.0 OR MIT	https://github.com/smol-rs/event-listener-strategy
+futures-core	0.3.31	05f29059c0c2090612e8d742178b0580d2dc940c837851ad723096f87af6663e	14318	MIT OR Apache-2.0	https://github.com/rust-lang/futures-rs
+heck	0.5.0	2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea	11517	MIT OR Apache-2.0	https://github.com/withoutboats/heck
+is_terminal_polyfill	1.70.1	7943c866cc5cd64cbc25b2e01621d07fa8eb2a1a23160ee81ce38704e97b8ecf	7492	MIT OR Apache-2.0	https://github.com/polyfill-rs/is_terminal_polyfill
+itoa	1.0.15	4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c	11231	MIT OR Apache-2.0	https://github.com/dtolnay/itoa
+lock_api	0.4.14	224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965	29249	MIT OR Apache-2.0	https://github.com/Amanieu/parking_lot
+magika	1.1.0	source-commit:5e2f437fb7b7452368c8c1fa9354858f5487a5c4		Apache-2.0	https://github.com/google/magika
+magika-cli	1.1.0	source-commit:5e2f437fb7b7452368c8c1fa9354858f5487a5c4		Apache-2.0	https://github.com/google/magika
+matrixmultiply	0.3.10	a06de3016e9fae57a36fd14dba131fccf49f74b40b7fbdb472f96e361ec71a08	58170	MIT/Apache-2.0	https://github.com/bluss/matrixmultiply/
+memchr	2.7.6	f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273	97616	Unlicense OR MIT	https://github.com/BurntSushi/memchr
+mio	1.0.4	78bed444cc8a2160f01cbcf811ef18cac863ad68ae8ca62092e8db51d51c761c	104212	MIT	https://github.com/tokio-rs/mio
+ndarray	0.17.1	0c7c9125e8f6f10c9da3aad044cc918cf8784fa34de857b1aa68038eb05a50a9	316954	MIT OR Apache-2.0	https://github.com/rust-ndarray/ndarray
+num_cpus	1.17.0	91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b	15874	MIT OR Apache-2.0	https://github.com/seanmonstar/num_cpus
+num-complex	0.4.6	73f88a1307638156682bada9d7604135552957b7818057dcef22705b4d509495	30352	MIT OR Apache-2.0	https://github.com/rust-num/num-complex
+num-integer	0.1.46	7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f	22331	MIT OR Apache-2.0	https://github.com/rust-num/num-integer
+num-traits	0.2.19	071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841	51631	MIT OR Apache-2.0	https://github.com/rust-num/num-traits
+once_cell	1.21.3	42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d	34534	MIT OR Apache-2.0	https://github.com/matklad/once_cell
+once_cell_polyfill	1.70.1	a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad	7510	MIT OR Apache-2.0	https://github.com/polyfill-rs/once_cell_polyfill
+ort	2.0.0-rc.12	d7de3af33d24a745ffb8fab904b13478438d1cd52868e6f17735ef6e1f8bf133	149216	MIT OR Apache-2.0	https://github.com/pykeio/ort
+ort-sys	2.0.0-rc.12	d7b497d21a8b6fbb4b5a544f8fadb77e801a09ae0add9e411d31c6f89e3c1e90	55131	MIT OR Apache-2.0	https://github.com/pykeio/ort
+parking	2.2.1	f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba	10685	Apache-2.0 OR MIT	https://github.com/smol-rs/parking
+parking_lot	0.12.5	93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a	46735	MIT OR Apache-2.0	https://github.com/Amanieu/parking_lot
+parking_lot_core	0.9.12	2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1	34110	MIT OR Apache-2.0	https://github.com/Amanieu/parking_lot
+pin-project-lite	0.2.16	3b3cff922bd51709b605d9ead9aa71031d81447142d828eb4a6eba76fe619f9b	30504	Apache-2.0 OR MIT	https://github.com/taiki-e/pin-project-lite
+proc-macro2	1.0.101	89ae43fd86e4158d6db51ad8e2b80f313af9cc74f5c0e03ccb87de09998732de	53886	MIT OR Apache-2.0	https://github.com/dtolnay/proc-macro2
+quote	1.0.41	ce25767e7b499d1b604768e7cde645d14cc8584231ea6b295e9c9eb22c02e1d1	31408	MIT OR Apache-2.0	https://github.com/dtolnay/quote
+rawpointer	0.2.1	60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3	7490	MIT/Apache-2.0	https://github.com/bluss/rawpointer/
+ryu	1.0.20	28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f	48738	Apache-2.0 OR BSL-1.0	https://github.com/dtolnay/ryu
+scopeguard	1.2.0	94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49	11619	MIT OR Apache-2.0	https://github.com/bluss/scopeguard
+serde	1.0.228	9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e	83652	MIT OR Apache-2.0	https://github.com/serde-rs/serde
+serde_core	1.0.228	41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad	63111	MIT OR Apache-2.0	https://github.com/serde-rs/serde
+serde_derive	1.0.228	d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79	59605	MIT OR Apache-2.0	https://github.com/serde-rs/serde
+serde_json	1.0.145	402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c	155748	MIT OR Apache-2.0	https://github.com/serde-rs/json
+smallvec	1.15.1	67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03	38116	MIT OR Apache-2.0	https://github.com/servo/rust-smallvec
+socket2	0.6.0	233504af464074f9d066d7b5416c5f9b894a5862a6506e306f7b816cdd6f1807	57974	MIT OR Apache-2.0	https://github.com/rust-lang/socket2
+strsim	0.11.1	7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f	14266	MIT	https://github.com/rapidfuzz/strsim-rs
+syn	2.0.106	ede7c438028d4436d71104916910f5bb611972c5cfd7f89b8300a8186e6fada6	301514	MIT OR Apache-2.0	https://github.com/dtolnay/syn
+thiserror	1.0.69	b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52	22198	MIT OR Apache-2.0	https://github.com/dtolnay/thiserror
+thiserror-impl	1.0.69	4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1	18365	MIT OR Apache-2.0	https://github.com/dtolnay/thiserror
+tokio	1.47.1	89e49afdadebb872d3145a5638b59eb0691ea23e46ca484037cfab3b76b95038	829790	MIT	https://github.com/tokio-rs/tokio
+tokio-macros	2.5.0	6e06d43f1345a3bcd39f6a56dbb7dcab2ba47e68e8ac134855e7e2bdbaf8cab8	12617	MIT	https://github.com/tokio-rs/tokio
+tracing	0.1.41	784e0ac535deb450455cbfa28a6f0df145ea1bb7ae51b821cf5e7927fdcfbdd0	82448	MIT	https://github.com/tokio-rs/tracing
+tracing-core	0.1.34	b9d12581f227e93f094d3af2ae690a574abb8a2b9b7a96e7cfe9647b2b617678	63760	MIT	https://github.com/tokio-rs/tracing
+unicode-ident	1.0.19	f63a545481291138910575129486daeaf8ac54aee4387fe7906919f7830c7d9d	47480	(MIT OR Apache-2.0) AND Unicode-3.0	https://github.com/dtolnay/unicode-ident
+utf8parse	0.2.2	06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821	13499	Apache-2.0 OR MIT	https://github.com/alacritty/vte
+windows_x86_64_msvc	0.52.6	589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec	832564	MIT OR Apache-2.0	https://github.com/microsoft/windows-rs
+windows_x86_64_msvc	0.53.0	271414315aff87387382ec3d271b52d7ae78726f5d44ac98b4f4030c91880486	834400	MIT OR Apache-2.0	https://github.com/microsoft/windows-rs
+windows-link	0.2.0	45e46c0661abb7180e7b9c281db115305d49ca1709ab8242adf09666d2173c65	6170	MIT OR Apache-2.0	https://github.com/microsoft/windows-rs
+windows-sys	0.59.0	1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b	2387323	MIT OR Apache-2.0	https://github.com/microsoft/windows-rs
+windows-sys	0.60.2	f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb	2518479	MIT OR Apache-2.0	https://github.com/microsoft/windows-rs
+windows-targets	0.52.6	9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973	6403	MIT OR Apache-2.0	https://github.com/microsoft/windows-rs
+windows-targets	0.53.4	2d42b7b7f66d2a06854650af09cfdf8713e427a439c97ad65a6375318033ac4b	7161	MIT OR Apache-2.0	https://github.com/microsoft/windows-rs

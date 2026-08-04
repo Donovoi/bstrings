@@ -36,19 +36,32 @@ dotnet build bstrings.sln -c Release --no-restore
 dotnet test bstrings.sln -c Release --no-build
 ```
 
-The GitHub workflow also publishes and packages the self-contained Windows x64
-build. Create a release tag only from a commit whose full `master` workflow has
-passed.
+The workflow additionally checks Rust formatting/lints/tests, Python
+lint/compilation/tests, PowerShell syntax, third-party inventories, the
+self-contained publish, and the integrated offline smoke. A manual dispatch or
+release tag also builds the complete CPU/Q4 archive, revalidates its warmed
+cache without network fallback, enforces the archive-size/checksum boundary,
+extracts the exact ZIP, verifies its manifest, and runs the CPU translation and
+FLOSS recovery smokes. The exact procedure is in
+[offline release maintenance](docs/offline-release-maintenance.md). Create a
+release tag only from a commit whose full `master` workflow has passed.
 
 ## Create a release
 
-Use a `v`-prefixed tag that matches the project version:
+Use exactly `v<MAJOR.MINOR.PATCH>`, with no suffix, and make it match the one
+`Version` value in `bstrings/bstrings.csproj`:
 
 ```powershell
 git tag v1.9.0
 git push origin v1.9.0
 ```
 
-Pull requests and ordinary pushes build a temporary artifact for validation.
-Only a pushed `v*` tag creates a GitHub release. The release contains the
-self-contained, single-file Windows x64 zip produced by the same workflow.
+The workflow rejects a mismatched tag before installing build toolchains or
+starting the multi-gigabyte release path. Pull requests and ordinary pushes
+build the temporary core artifact. A manual workflow dispatch also produces a
+reviewable complete offline artifact without creating a release. Only an exact
+matching pushed tag creates a GitHub release with all three Windows assets:
+
+- `bstrings-win-x64.zip`;
+- `bstrings-win-x64-offline-cpu.zip`; and
+- `bstrings-win-x64-offline-cpu.zip.sha256`.

@@ -1,17 +1,19 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFrameworks>net9.0</TargetFrameworks>
+    <TargetFrameworks>net10.0</TargetFrameworks>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <AssemblyTitle>bstrings</AssemblyTitle>
     <Company>Eric Zimmerman</Company>
-    <LangVersion>12</LangVersion>
+    <LangVersion>13</LangVersion>
     <Product>bstrings</Product>
     <Description>Extract strings with parallel CPU, CUDA, hybrid CPU/GPU, and optional RAPIDS-assisted regex processing</Description>
     <Copyright>Eric Zimmerman</Copyright>
     <Version>1.9.0</Version>
+    <RuntimeFrameworkVersion>10.0.10</RuntimeFrameworkVersion>
     <IsPackable>false</IsPackable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(PublishSingleFile)' == 'true'">true</IncludeNativeLibrariesForSelfExtract>
     <RustEngineLibrary Condition="$([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)..\native\bstrings_core\target\release\bstrings_core.dll</RustEngineLibrary>
     <RustEngineLibrary Condition="$([MSBuild]::IsOSPlatform('Linux'))">$(MSBuildThisFileDirectory)..\native\bstrings_core\target\release\libbstrings_core.so</RustEngineLibrary>
     <RustEngineLibrary Condition="$([MSBuild]::IsOSPlatform('OSX'))">$(MSBuildThisFileDirectory)..\native\bstrings_core\target\release\libbstrings_core.dylib</RustEngineLibrary>
@@ -21,11 +23,24 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ILGPU" Version="1.5.3" />
-    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.10" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Find Again256.ico" />
     <None Include="$(RustEngineLibrary)" Link="%(Filename)%(Extension)" Condition="Exists('$(RustEngineLibrary)')" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\LICENSE.md" Link="LICENSE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\CORE_RELEASE_README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\licenses\Apache-2.0.txt" Link="licenses\Apache-2.0.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\licenses\MIT.txt" Link="licenses\MIT.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\licenses\Unicode-3.0.txt" Link="licenses\Unicode-3.0.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\licenses\bstrings-core-win-x64.tsv" Link="licenses\bstrings-core-win-x64.tsv" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\licenses\bstrings-managed-win-x64.json" Link="licenses\bstrings-managed-win-x64.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(ReleaseNoticeSourceDirectory)\licenses\DeviceIOControlLib-0.1.6-LICENSE.txt" Link="licenses\DeviceIOControlLib-0.1.6-LICENSE.txt" Condition="'$(RuntimeIdentifier)' == 'win-x64'" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(ReleaseNoticeSourceDirectory)\licenses\ILGPU-1.5.3-LICENSE.txt" Link="licenses\ILGPU-1.5.3-LICENSE.txt" Condition="'$(RuntimeIdentifier)' == 'win-x64'" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(ReleaseNoticeSourceDirectory)\licenses\ILGPU-1.5.3-LICENSE-3RD-PARTY.txt" Link="licenses\ILGPU-1.5.3-LICENSE-3RD-PARTY.txt" Condition="'$(RuntimeIdentifier)' == 'win-x64'" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(ReleaseNoticeSourceDirectory)\licenses\dotnet-runtime-win-x64-10.0.10-LICENSE.TXT" Link="licenses\dotnet-runtime-win-x64-10.0.10-LICENSE.TXT" Condition="'$(RuntimeIdentifier)' == 'win-x64'" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(ReleaseNoticeSourceDirectory)\licenses\dotnet-runtime-win-x64-10.0.10-THIRD-PARTY-NOTICES.TXT" Link="licenses\dotnet-runtime-win-x64-10.0.10-THIRD-PARTY-NOTICES.TXT" Condition="'$(RuntimeIdentifier)' == 'win-x64'" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(ReleaseNoticeSourceDirectory)\licenses\Rust-1.95.0-COPYRIGHT-library.html" Link="licenses\Rust-1.95.0-COPYRIGHT-library.html" Condition="'$(RuntimeIdentifier)' == 'win-x64'" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="DiscUtils.Ntfs" Version="0.16.13" />
@@ -34,4 +49,11 @@
     <PackageReference Include="RawDiskLib" Version="0.3.0" />
     <PackageReference Include="System.CommandLine" Version="2.0.10" />
   </ItemGroup>
+  <Target Name="RequireWindowsReleaseNotices" BeforeTargets="ComputeFilesToPublish" Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <Error Condition="'$(ReleaseNoticeSourceDirectory)' == ''" Text="A win-x64 publish requires ReleaseNoticeSourceDirectory from tools/licenses/Stage-ManagedThirdPartyNotices.ps1." />
+    <Error Condition="!Exists('$(ReleaseNoticeSourceDirectory)\licenses\DeviceIOControlLib-0.1.6-LICENSE.txt')" Text="The byte-pinned DeviceIOControlLib license is missing from ReleaseNoticeSourceDirectory." />
+    <Error Condition="!Exists('$(ReleaseNoticeSourceDirectory)\licenses\ILGPU-1.5.3-LICENSE.txt') Or !Exists('$(ReleaseNoticeSourceDirectory)\licenses\ILGPU-1.5.3-LICENSE-3RD-PARTY.txt')" Text="The byte-pinned ILGPU notices are missing from ReleaseNoticeSourceDirectory." />
+    <Error Condition="!Exists('$(ReleaseNoticeSourceDirectory)\licenses\dotnet-runtime-win-x64-10.0.10-LICENSE.TXT') Or !Exists('$(ReleaseNoticeSourceDirectory)\licenses\dotnet-runtime-win-x64-10.0.10-THIRD-PARTY-NOTICES.TXT')" Text="The byte-pinned .NET 10.0.10 runtime notices are missing from ReleaseNoticeSourceDirectory." />
+    <Error Condition="!Exists('$(ReleaseNoticeSourceDirectory)\licenses\Rust-1.95.0-COPYRIGHT-library.html')" Text="The byte-pinned Rust 1.95.0 standard-library attribution is missing from ReleaseNoticeSourceDirectory." />
+  </Target>
 </Project>

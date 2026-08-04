@@ -1,0 +1,1 @@
+{"schemaVersion":1,"recordType":"string","recordId":"llama-smoke-parent","text":"La clave pertenece a analyst@example.com y este mensaje contiene palabras escritas claramente en espanol para verificar la traduccion local.","sourceFile":"synthetic-smoke.txt","location":{"kind":"file_offset","value":"0x0"},"origin":{"extractor":"bstrings","version":"smoke","kind":"static"}}

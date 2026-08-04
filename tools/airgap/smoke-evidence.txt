@@ -1,0 +1,1 @@
+La clave pertenece a analyst@example.com y este mensaje contiene palabras escritas claramente en espanol para verificar la traduccion local.

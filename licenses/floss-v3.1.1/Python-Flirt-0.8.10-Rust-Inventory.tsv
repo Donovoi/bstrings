@@ -1,0 +1,66 @@
+evidence	package	version	declared_license	authors	repository
+conservative current manifest resolution; not the historical binary-exact closure	adler32	1.2.0	Zlib	Remi Rampin <remirampin@gmail.com>	https://github.com/remram44/adler32-rs
+conservative current manifest resolution; not the historical binary-exact closure	aho-corasick	1.1.5	Unlicense OR MIT	Andrew Gallant <jamslam@gmail.com>	https://github.com/BurntSushi/aho-corasick
+conservative current manifest resolution; not the historical binary-exact closure	anyhow	1.0.104	MIT OR Apache-2.0	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/anyhow
+conservative current manifest resolution; not the historical binary-exact closure	atty	0.2.14	MIT	softprops <d.tangren@gmail.com>	https://github.com/softprops/atty
+conservative current manifest resolution; not the historical binary-exact closure	backtrace	0.3.76	MIT OR Apache-2.0	The Rust Project Developers	https://github.com/rust-lang/backtrace-rs
+conservative current manifest resolution; not the historical binary-exact closure	better-panic	0.3.0	MIT	Armin Ronacher <armin.ronacher@active-4.com>; Joel Höner <athre0z@zyantific.com>	https://github.com/mitsuhiko/better-panic
+conservative current manifest resolution; not the historical binary-exact closure	bitflags	1.3.2	MIT/Apache-2.0	The Rust Project Developers	https://github.com/bitflags/bitflags
+conservative current manifest resolution; not the historical binary-exact closure	bitvec	1.1.1	MIT		https://github.com/bitvecto-rs/bitvec
+conservative current manifest resolution; not the historical binary-exact closure	cfg-if	1.0.4	MIT OR Apache-2.0	Alex Crichton <alex@alexcrichton.com>	https://github.com/rust-lang/cfg-if
+conservative current manifest resolution; not the historical binary-exact closure	chrono	0.4.45	MIT OR Apache-2.0		https://github.com/chronotope/chrono
+conservative current manifest resolution; not the historical binary-exact closure	clap	3.2.25	MIT OR Apache-2.0		https://github.com/clap-rs/clap
+conservative current manifest resolution; not the historical binary-exact closure	clap_lex	0.2.4	MIT OR Apache-2.0		https://github.com/clap-rs/clap/tree/master/clap_lex
+conservative current manifest resolution; not the historical binary-exact closure	console	0.15.11	MIT	Armin Ronacher <armin.ronacher@active-4.com>	https://github.com/console-rs/console
+conservative current manifest resolution; not the historical binary-exact closure	encode_unicode	1.0.0	Apache-2.0 OR MIT	Torbjørn Birch Moltu <t.b.moltu@lyse.net>	https://github.com/tormol/encode_unicode
+conservative current manifest resolution; not the historical binary-exact closure	fern	0.6.2	MIT	David Ross <daboross@daboross.net>	https://github.com/daboross/fern
+conservative current manifest resolution; not the historical binary-exact closure	funty	2.0.0	MIT	myrrlyn <self@myrrlyn.dev>	https://github.com/myrrlyn/funty
+conservative current manifest resolution; not the historical binary-exact closure	hashbrown	0.12.3	MIT OR Apache-2.0	Amanieu d'Antras <amanieu@gmail.com>	https://github.com/rust-lang/hashbrown
+conservative current manifest resolution; not the historical binary-exact closure	indexmap	1.9.3	Apache-2.0 OR MIT		https://github.com/bluss/indexmap
+conservative current manifest resolution; not the historical binary-exact closure	indoc	1.0.9	MIT OR Apache-2.0	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/indoc
+conservative current manifest resolution; not the historical binary-exact closure	inflate	0.4.5	MIT	nwin <nwin@users.noreply.github.com>	https://github.com/PistonDevelopers/inflate.git
+conservative current manifest resolution; not the historical binary-exact closure	lancelot-flirt	0.8.10	Apache-2.0	Willi Ballenthin <william.ballenthin@mandiant.com>	https://github.com/williballenthin/lancelot
+conservative current manifest resolution; not the historical binary-exact closure	libc	0.2.189	MIT OR Apache-2.0		https://github.com/rust-lang/libc
+conservative current manifest resolution; not the historical binary-exact closure	lock_api	0.4.14	MIT OR Apache-2.0	Amanieu d'Antras <amanieu@gmail.com>	https://github.com/Amanieu/parking_lot
+conservative current manifest resolution; not the historical binary-exact closure	log	0.4.33	MIT OR Apache-2.0	The Rust Project Developers	https://github.com/rust-lang/log
+conservative current manifest resolution; not the historical binary-exact closure	memchr	2.8.3	Unlicense OR MIT	Andrew Gallant <jamslam@gmail.com>; bluss	https://github.com/BurntSushi/memchr
+conservative current manifest resolution; not the historical binary-exact closure	memoffset	0.6.5	MIT	Gilad Naaman <gilad.naaman@gmail.com>	https://github.com/Gilnaa/memoffset
+conservative current manifest resolution; not the historical binary-exact closure	minimal-lexical	0.2.1	MIT/Apache-2.0	Alex Huszagh <ahuszagh@gmail.com>	https://github.com/Alexhuszagh/minimal-lexical
+conservative current manifest resolution; not the historical binary-exact closure	nom	7.1.3	MIT	contact@geoffroycouprie.com	https://github.com/Geal/nom
+conservative current manifest resolution; not the historical binary-exact closure	num-traits	0.2.19	MIT OR Apache-2.0	The Rust Project Developers	https://github.com/rust-num/num-traits
+conservative current manifest resolution; not the historical binary-exact closure	once_cell	1.21.4	MIT OR Apache-2.0	Aleksey Kladov <aleksey.kladov@gmail.com>	https://github.com/matklad/once_cell
+conservative current manifest resolution; not the historical binary-exact closure	os_str_bytes	6.6.1	MIT OR Apache-2.0	dylni	https://github.com/dylni/os_str_bytes
+conservative current manifest resolution; not the historical binary-exact closure	parking_lot	0.12.5	MIT OR Apache-2.0	Amanieu d'Antras <amanieu@gmail.com>	https://github.com/Amanieu/parking_lot
+conservative current manifest resolution; not the historical binary-exact closure	parking_lot_core	0.9.12	MIT OR Apache-2.0	Amanieu d'Antras <amanieu@gmail.com>	https://github.com/Amanieu/parking_lot
+conservative current manifest resolution; not the historical binary-exact closure	proc-macro2	1.0.107	MIT OR Apache-2.0	David Tolnay <dtolnay@gmail.com>; Alex Crichton <alex@alexcrichton.com>	https://github.com/dtolnay/proc-macro2
+conservative current manifest resolution; not the historical binary-exact closure	pyo3	0.17.3	Apache-2.0	PyO3 Project and Contributors <https://github.com/PyO3>	https://github.com/pyo3/pyo3
+conservative current manifest resolution; not the historical binary-exact closure	pyo3-ffi	0.17.3	Apache-2.0	PyO3 Project and Contributors <https://github.com/PyO3>	https://github.com/pyo3/pyo3
+conservative current manifest resolution; not the historical binary-exact closure	pyo3-macros	0.17.3	Apache-2.0	PyO3 Project and Contributors <https://github.com/PyO3>	https://github.com/pyo3/pyo3
+conservative current manifest resolution; not the historical binary-exact closure	pyo3-macros-backend	0.17.3	Apache-2.0	PyO3 Project and Contributors <https://github.com/PyO3>	https://github.com/pyo3/pyo3
+conservative current manifest resolution; not the historical binary-exact closure	python-flirt	0.8.10	Apache-2.0	William Ballenthin <william.ballenthin@fireeye.com>	https://github.com/williballenthin/lancelot/tree/master/pyflirt
+conservative current manifest resolution; not the historical binary-exact closure	quote	1.0.47	MIT OR Apache-2.0	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/quote
+conservative current manifest resolution; not the historical binary-exact closure	radium	0.7.0	MIT	Nika Layzell <nika@thelayzells.com>; myrrlyn <self@myrrlyn.dev>	https://github.com/bitvecto-rs/radium
+conservative current manifest resolution; not the historical binary-exact closure	regex	1.13.1	MIT OR Apache-2.0	The Rust Project Developers; Andrew Gallant <jamslam@gmail.com>	https://github.com/rust-lang/regex
+conservative current manifest resolution; not the historical binary-exact closure	regex-automata	0.4.17	MIT OR Apache-2.0	The Rust Project Developers; Andrew Gallant <jamslam@gmail.com>	https://github.com/rust-lang/regex
+conservative current manifest resolution; not the historical binary-exact closure	regex-syntax	0.8.11	MIT OR Apache-2.0	The Rust Project Developers; Andrew Gallant <jamslam@gmail.com>	https://github.com/rust-lang/regex
+conservative current manifest resolution; not the historical binary-exact closure	rustc-demangle	0.1.28	MIT/Apache-2.0	Alex Crichton <alex@alexcrichton.com>	https://github.com/rust-lang/rustc-demangle
+conservative current manifest resolution; not the historical binary-exact closure	scopeguard	1.2.0	MIT OR Apache-2.0	bluss	https://github.com/bluss/scopeguard
+conservative current manifest resolution; not the historical binary-exact closure	smallvec	1.15.2	MIT OR Apache-2.0	The Servo Project Developers	https://github.com/servo/rust-smallvec
+conservative current manifest resolution; not the historical binary-exact closure	strsim	0.10.0	MIT	Danny Guo <danny@dannyguo.com>	https://github.com/dguo/strsim-rs
+conservative current manifest resolution; not the historical binary-exact closure	syn	1.0.109	MIT OR Apache-2.0	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/syn
+conservative current manifest resolution; not the historical binary-exact closure	syn	2.0.119	MIT OR Apache-2.0	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/syn
+conservative current manifest resolution; not the historical binary-exact closure	tap	1.0.1	MIT	Elliott Linder <elliott.darfink@gmail.com>; myrrlyn <self@myrrlyn.dev>	https://github.com/myrrlyn/tap
+conservative current manifest resolution; not the historical binary-exact closure	termcolor	1.4.1	Unlicense OR MIT	Andrew Gallant <jamslam@gmail.com>	https://github.com/BurntSushi/termcolor
+conservative current manifest resolution; not the historical binary-exact closure	textwrap	0.16.2	MIT	Martin Geisler <martin@geisler.net>	https://github.com/mgeisler/textwrap
+conservative current manifest resolution; not the historical binary-exact closure	thiserror	1.0.69	MIT OR Apache-2.0	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/thiserror
+conservative current manifest resolution; not the historical binary-exact closure	thiserror-impl	1.0.69	MIT OR Apache-2.0	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/thiserror
+conservative current manifest resolution; not the historical binary-exact closure	unicode-ident	1.0.24	(MIT OR Apache-2.0) AND Unicode-3.0	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/unicode-ident
+conservative current manifest resolution; not the historical binary-exact closure	unindent	0.1.11	MIT OR Apache-2.0	David Tolnay <dtolnay@gmail.com>	https://github.com/dtolnay/indoc
+conservative current manifest resolution; not the historical binary-exact closure	winapi	0.3.9	MIT/Apache-2.0	Peter Atashian <retep998@gmail.com>	https://github.com/retep998/winapi-rs
+conservative current manifest resolution; not the historical binary-exact closure	winapi-util	0.1.11	Unlicense OR MIT	Andrew Gallant <jamslam@gmail.com>	https://github.com/BurntSushi/winapi-util
+conservative current manifest resolution; not the historical binary-exact closure	windows_x86_64_msvc	0.52.6	MIT OR Apache-2.0	Microsoft	https://github.com/microsoft/windows-rs
+conservative current manifest resolution; not the historical binary-exact closure	windows-link	0.2.1	MIT OR Apache-2.0		https://github.com/microsoft/windows-rs
+conservative current manifest resolution; not the historical binary-exact closure	windows-sys	0.59.0	MIT OR Apache-2.0	Microsoft	https://github.com/microsoft/windows-rs
+conservative current manifest resolution; not the historical binary-exact closure	windows-sys	0.61.2	MIT OR Apache-2.0		https://github.com/microsoft/windows-rs
+conservative current manifest resolution; not the historical binary-exact closure	windows-targets	0.52.6	MIT OR Apache-2.0	Microsoft	https://github.com/microsoft/windows-rs
+conservative current manifest resolution; not the historical binary-exact closure	wyz	0.5.1	MIT	myrrlyn <self@myrrlyn.dev>	https://github.com/myrrlyn/wyz

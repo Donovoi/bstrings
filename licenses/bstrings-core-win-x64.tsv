@@ -1,0 +1,116 @@
+package	version	declared_license	selected_license	authors	repository
+aho-corasick	1.1.5	Unlicense OR MIT	MIT	Andrew Gallant	https://github.com/BurntSushi/aho-corasick
+cfg-if	1.0.4	MIT OR Apache-2.0	Apache-2.0	Alex Crichton	https://github.com/rust-lang/cfg-if
+counter	0.7.1	MIT	MIT	Peter Goodspeed-Niklaus	https://github.com/coriolinus/counter-rs
+crossbeam-deque	0.8.7	MIT OR Apache-2.0	Apache-2.0		https://github.com/crossbeam-rs/crossbeam
+crossbeam-epoch	0.9.20	MIT OR Apache-2.0	Apache-2.0		https://github.com/crossbeam-rs/crossbeam
+crossbeam-utils	0.8.22	MIT OR Apache-2.0	Apache-2.0		https://github.com/crossbeam-rs/crossbeam
+dashmap	6.2.1	MIT	MIT	Acrimon	https://github.com/xacrimon/dashmap
+either	1.17.0	MIT OR Apache-2.0	Apache-2.0		https://github.com/rayon-rs/either
+fastrand	2.5.0	Apache-2.0 OR MIT	Apache-2.0	Stjepan Glavina	https://github.com/smol-rs/fastrand
+fst	0.4.7	Unlicense/MIT	MIT	Andrew Gallant	https://github.com/BurntSushi/fst
+hashbrown	0.14.5	MIT OR Apache-2.0	Apache-2.0	Amanieu d'Antras	https://github.com/rust-lang/hashbrown
+heck	0.5.0	MIT OR Apache-2.0	Apache-2.0		https://github.com/withoutboats/heck
+include_dir_macros	0.7.4	MIT	MIT	Michael Bryan	https://github.com/Michael-F-Bryan/include_dir
+include_dir	0.7.4	MIT	MIT	Michael Bryan	https://github.com/Michael-F-Bryan/include_dir
+itertools	0.14.0	MIT OR Apache-2.0	Apache-2.0	bluss	https://github.com/rust-itertools/itertools
+lingua-afrikaans-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-albanian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-arabic-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-armenian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-azerbaijani-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-basque-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-belarusian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-bengali-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-bokmal-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-bosnian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-bulgarian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-catalan-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-chinese-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-croatian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-czech-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-danish-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-dutch-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-english-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-esperanto-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-estonian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-finnish-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-french-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-ganda-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-georgian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-german-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-greek-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-gujarati-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-hebrew-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-hindi-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-hungarian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-icelandic-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-indonesian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-irish-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-italian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-japanese-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-kazakh-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-korean-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-latin-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-latvian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-lithuanian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-macedonian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-malay-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-maori-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-marathi-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-mongolian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-nynorsk-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-persian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-polish-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-portuguese-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-punjabi-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-romanian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-russian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-serbian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-shona-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-slovak-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-slovene-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-somali-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-sotho-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-spanish-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-swahili-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-swedish-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-tagalog-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-tamil-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-telugu-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-thai-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-tsonga-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-tswana-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-turkish-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-ukrainian-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-urdu-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-vietnamese-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-welsh-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-xhosa-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-yoruba-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua-zulu-language-model	1.3.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lingua	1.8.0	Apache-2.0	Apache-2.0	Peter M. Stahl	https://github.com/pemistahl/lingua-rs
+lock_api	0.4.14	MIT OR Apache-2.0	Apache-2.0	Amanieu d'Antras	https://github.com/Amanieu/parking_lot
+maplit	1.0.2	MIT/Apache-2.0	Apache-2.0	bluss	https://github.com/bluss/maplit
+memchr	2.8.3	Unlicense OR MIT	MIT	Andrew Gallant; bluss	https://github.com/BurntSushi/memchr
+num-traits	0.2.19	MIT OR Apache-2.0	Apache-2.0	The Rust Project Developers	https://github.com/rust-num/num-traits
+once_cell	1.21.4	MIT OR Apache-2.0	Apache-2.0	Aleksey Kladov	https://github.com/matklad/once_cell
+parking_lot_core	0.9.12	MIT OR Apache-2.0	Apache-2.0	Amanieu d'Antras	https://github.com/Amanieu/parking_lot
+proc-macro2	1.0.107	MIT OR Apache-2.0	Apache-2.0	David Tolnay; Alex Crichton	https://github.com/dtolnay/proc-macro2
+quote	1.0.47	MIT OR Apache-2.0	Apache-2.0	David Tolnay	https://github.com/dtolnay/quote
+rayon-core	1.13.0	MIT OR Apache-2.0	Apache-2.0		https://github.com/rayon-rs/rayon
+rayon	1.12.0	MIT OR Apache-2.0	Apache-2.0		https://github.com/rayon-rs/rayon
+regex-automata	0.4.16	MIT OR Apache-2.0	Apache-2.0	The Rust Project Developers; Andrew Gallant	https://github.com/rust-lang/regex
+regex-syntax	0.8.11	MIT OR Apache-2.0	Apache-2.0	The Rust Project Developers; Andrew Gallant	https://github.com/rust-lang/regex
+regex	1.13.1	MIT OR Apache-2.0	Apache-2.0	The Rust Project Developers; Andrew Gallant	https://github.com/rust-lang/regex
+scopeguard	1.2.0	MIT OR Apache-2.0	Apache-2.0	bluss	https://github.com/bluss/scopeguard
+serde_core	1.0.229	MIT OR Apache-2.0	Apache-2.0	Erick Tryzelaar; David Tolnay	https://github.com/serde-rs/serde
+serde_derive	1.0.229	MIT OR Apache-2.0	Apache-2.0	Erick Tryzelaar; David Tolnay	https://github.com/serde-rs/serde
+serde	1.0.229	MIT OR Apache-2.0	Apache-2.0	Erick Tryzelaar; David Tolnay	https://github.com/serde-rs/serde
+smallvec	1.15.2	MIT OR Apache-2.0	Apache-2.0	The Servo Project Developers	https://github.com/servo/rust-smallvec
+strum_macros	0.27.2	MIT	MIT	Peter Glotfelty	https://github.com/Peternator7/strum
+strum	0.27.2	MIT	MIT	Peter Glotfelty	https://github.com/Peternator7/strum
+syn	2.0.119	MIT OR Apache-2.0	Apache-2.0	David Tolnay	https://github.com/dtolnay/syn
+syn	3.0.3	MIT OR Apache-2.0	Apache-2.0	David Tolnay	https://github.com/dtolnay/syn
+unicode-ident	1.0.24	(MIT OR Apache-2.0) AND Unicode-3.0	Apache-2.0 AND Unicode-3.0	David Tolnay	https://github.com/dtolnay/unicode-ident
+windows-link	0.2.1	MIT OR Apache-2.0	Apache-2.0		https://github.com/microsoft/windows-rs

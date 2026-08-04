@@ -1,5 +1,45 @@
 # Scale benchmark
 
+This is developer and research documentation. Examiners do not need these
+harnesses or comparison tools for a normal investigation; the normal complete
+workflow is:
+
+```powershell
+bstrings.exe analyze -f evidence.raw --full -o results
+```
+
+The PowerShell and build commands below reproduce synthetic performance and
+correctness gates. They are not the evidence-analysis interface.
+
+## FLOSS JSON normalization safety gate
+
+A local synthetic probe generated 300,000 valid FLOSS records in a 19.635 MiB
+document. The disk-backed parser completed strict indexing/validation in 4.844
+seconds (4.05 MiB/s) and full one-item-at-a-time replay in 7.765 seconds (2.53
+MiB/s). This was a bounded-memory regression probe, not a universal FLOSS speed
+claim or a maintained cross-tool ranking. The checked-in Python tests are the
+repeatable gate for 64 KiB reads, lazy item replay, fixed category order,
+malformed/truncated input rejection, and temporary-file cleanup.
+
+The parser's document memory is bounded, but exact per-file duplicate
+suppression still retains one record ID for every unique normalized record from
+that file. Treat that set as the next memory-scaling target for unusually
+prolific binaries.
+
+## Prerequisites and comparison tools
+
+Acquire tools only from their official projects, pin the exact version used,
+and record hashes alongside a result set.
+
+| Dependency | Official source | Used for |
+| --- | --- | --- |
+| .NET 10 SDK | [Microsoft .NET 10 download](https://dotnet.microsoft.com/download/dotnet/10.0) | Corpus generators and managed benchmark harnesses |
+| Current bstrings | [Donovoi/bstrings releases](https://github.com/Donovoi/bstrings/releases) or a local Release build | Candidate under test |
+| Original bstrings | [Eric Zimmerman/bstrings](https://github.com/EricZimmerman/bstrings) | Upstream comparison |
+| ripgrep | [Official ripgrep releases](https://github.com/BurntSushi/ripgrep/releases) | Raw-byte PCRE2 comparison; the reviewed result used 15.1.0 |
+| bulk_extractor | [Official bulk_extractor releases](https://github.com/simsong/bulk_extractor/releases) | Feature-scanner comparison |
+| Rust and Cargo | [Official Rust installation](https://www.rust-lang.org/tools/install/) | Optional native ASCII-engine benchmark |
+
 This benchmark compares Donovoi/bstrings, original bstrings, ripgrep, and
 bulk_extractor without using case data. It has two parts:
 

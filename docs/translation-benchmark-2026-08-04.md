@@ -1,13 +1,20 @@
 # Offline translation selection gate — 2026-08-04
 
+This is a developer/research reproduction record. Examiners normally use the
+integrated `bstrings.exe analyze -d carved-files --full -o results` workflow;
+they do not need to invoke Python or the benchmark runner. A raw image must be
+mounted or carved first when filesystem or embedded-executable coverage is
+required; bstrings does not imply that coverage from `--full`.
+
 ## Decision
 
 Use Hy-MT2-1.8B Q8 through llama.cpp for languages Hy-MT2 officially supports.
 On the reviewed laptop it produced better aggregate translations than the
 existing MADLAD-400-3B-MT path, preserved every tested evidence identifier,
 and was 13.1 times faster. Use Q4_K_M when speed or memory matters more than
-the last 1–2 chrF++ points. Keep MADLAD as a fallback for languages outside
-Hy-MT2's much smaller language set.
+the last 1–2 chrF++ points. Keep MADLAD as an advanced adapter and benchmark
+fallback for languages outside Hy-MT2's much smaller language set. The
+integrated `bstrings.exe analyze` workflow does not expose MADLAD selection.
 
 This is a selection gate for `bstrings`, not a claim that one model is best in
 every domain or on every machine.
@@ -44,10 +51,12 @@ not be described as byte-deterministic under continuous batching.
 - CPU: Intel Core Ultra 9 185H
 - RAM: 64 GB
 - GPU: NVIDIA GeForce RTX 4060 Laptop GPU, 8,188 MiB VRAM
-- llama.cpp: release `b10243`, commit `563dec81c`, CUDA 12.4 build
-- Transformers: `4.57.6`
-- PyTorch: `2.13.0+cpu`
-- WMT24++ revision: `fd7405c06494bc66a57b25f55d217a72f96e60dc`
+- [llama.cpp](https://github.com/ggml-org/llama.cpp/releases): release
+  `b10243`, commit `563dec81c`, CUDA 12.4 build
+- [Transformers](https://huggingface.co/docs/transformers/installation): `4.57.6`
+- [PyTorch](https://pytorch.org/get-started/locally/): `2.13.0+cpu`
+- [WMT24++](https://huggingface.co/datasets/google/wmt24pp) revision:
+  `fd7405c06494bc66a57b25f55d217a72f96e60dc`
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
@@ -182,7 +191,8 @@ free speed-up.
   have broad coverage but use CC-BY-NC-4.0 model licenses. They fail the
   deployable-default gate for this open-source tool.
 - [MADLAD-400](https://huggingface.co/google/madlad400-3b-mt) remains valuable
-  because its 419-language coverage is far broader than Hy-MT2's.
+  as an advanced adapter and benchmark fallback because its 419-language
+  coverage is far broader than Hy-MT2's; it is not an integrated CLI engine.
 
 Primary research sources are the
 [Hy-MT2 report](https://arxiv.org/abs/2605.22064),
@@ -191,6 +201,12 @@ Primary research sources are the
 
 ## Reproduce the gate
 
+This advanced reproduction requires [Python](https://www.python.org/downloads/),
+[uv](https://docs.astral.sh/uv/getting-started/installation/), the
+[`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli),
+[SacreBLEU](https://github.com/mjpost/sacrebleu), a pinned
+[llama.cpp release](https://github.com/ggml-org/llama.cpp/releases), and the
+[Hy-MT2 GGUF model](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF).
 Install the benchmark-only dependency and download the same WMT24++ revision.
 The benchmark runner never downloads a model. It can own a short-lived,
 loopback-only llama.cpp server so the benchmark exercises the same scheduler as
@@ -198,6 +214,11 @@ the production adapter.
 
 ```powershell
 uv pip install "sacrebleu>=2.5,<3"
+
+hf download google/wmt24pp `
+  --repo-type dataset `
+  --revision fd7405c06494bc66a57b25f55d217a72f96e60dc `
+  --local-dir C:\bench\wmt24pp
 
 python tools\enrichment\benchmark_translation.py `
   --engine llama-cpp `

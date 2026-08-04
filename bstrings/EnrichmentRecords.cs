@@ -29,7 +29,25 @@ internal sealed record EnrichmentTransform
     public string? ModelSha256 { get; init; }
     public string? SourceLanguage { get; init; }
     public string? TargetLanguage { get; init; }
+    public string? Outcome { get; init; }
 }
+
+internal sealed record TranslationValidationRequirements(
+    string Engine,
+    string TargetLanguage,
+    string Model,
+    string Revision,
+    string ModelSha256
+);
+
+internal sealed record TranslationLineageIdentity(
+    string SourceFile,
+    string LocationKind,
+    string LocationValue,
+    string OriginExtractor,
+    string? OriginVersion,
+    string OriginKind
+);
 
 internal sealed record EnrichmentStringRecord
 {

@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 1,
+  "profile": "windows-x64-cpu-q4",
+  "description": "Pinned, redistributable inputs for the complete bstrings Windows x64 CPU/Q4 offline bundle.",
+  "runtimeDlls": [
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll"
+  ],
+  "runtimePolicy": {
+    "source": "Licensed Visual Studio Build Tools x64 Microsoft.VC14x.CRT redist directory",
+    "deployment": "app-local",
+    "discovery": "vswhere latest installation with Microsoft.VisualStudio.Component.VC.Redist.14.Latest"
+  },
+  "components": {
+    "python": {
+      "version": "3.14.6",
+      "archiveType": "zip",
+      "fileName": "python-3.14.6-embed-amd64.zip",
+      "url": "https://www.python.org/ftp/python/3.14.6/python-3.14.6-embed-amd64.zip",
+      "bytes": 12570832,
+      "sha256": "df901e84a896ff1ee720ad03377e0c8d8c2244fda79808aeeaff6316df1cb75c",
+      "executable": "python.exe",
+      "license": {
+        "source": "archive",
+        "path": "LICENSE.txt"
+      }
+    },
+    "magika": {
+      "version": "1.1.0",
+      "archiveType": "zip",
+      "fileName": "magika-cli-x86_64-pc-windows-msvc.zip",
+      "url": "https://github.com/google/magika/releases/download/cli/v1.1.0/magika-cli-x86_64-pc-windows-msvc.zip",
+      "bytes": 10076032,
+      "sha256": "d4de347c53e2d25f9663780c93fdf26d156284c64d6a5ec4bcdb829f9994f6f3",
+      "executable": "magika.exe",
+      "license": {
+        "source": "download",
+        "fileName": "LICENSE-magika.txt",
+        "url": "https://raw.githubusercontent.com/google/magika/cli/v1.1.0/LICENSE",
+        "bytes": 11357,
+        "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+      },
+      "redistribution": {
+        "inventoryPath": "licenses/magika-cli-1.1.0-redistribution.json",
+        "inventoryBytes": 13181,
+        "inventorySha256": "c57d65e32a2b161d8acbdfd5417160fbdb311672f34b423e2ab63681030142e9",
+        "stageScript": "tools/licenses/Stage-MagikaRedistribution.ps1",
+        "verifyScript": "tools/licenses/Verify-MagikaRedistribution.ps1",
+        "runtimeExecutable": "tools/magika/magika.exe",
+        "runtimeDependency": "tools/magika/DirectML.dll",
+        "stagedFiles": 22,
+        "stagedBytes": 49497911
+      }
+    },
+    "floss": {
+      "version": "3.1.1",
+      "archiveType": "zip",
+      "fileName": "floss-v3.1.1-windows.zip",
+      "url": "https://github.com/mandiant/flare-floss/releases/download/v3.1.1/floss-v3.1.1-windows.zip",
+      "bytes": 31580022,
+      "sha256": "6c71089b8c629c69424b042769f1565f71adc6cd24b2f8d3713c96fa7fdac2fb",
+      "executable": "floss.exe",
+      "license": {
+        "source": "download",
+        "fileName": "LICENSE-floss.txt",
+        "url": "https://raw.githubusercontent.com/mandiant/flare-floss/v3.1.1/LICENSE.txt",
+        "bytes": 11349,
+        "sha256": "787008a875d16021fa995a81553a98e481b938ece1f2e8a1910daf8dffaf1300"
+      },
+      "redistribution": {
+        "inventoryPath": "licenses/floss-v3.1.1-win-x64.json",
+        "inventoryBytes": 26448,
+        "inventorySha256": "da77275afdd87180fd473b28b9718594c9f96753b08a4b2bb6672dba4bd9a4dc",
+        "stageScript": "tools/licenses/Stage-FlossThirdPartyNotices.ps1",
+        "verifyScript": "tools/licenses/Verify-FlossThirdPartyNotices.ps1",
+        "stagedFiles": 18,
+        "stagedBytes": 2045571
+      }
+    },
+    "llamaCpp": {
+      "version": "b10248",
+      "archiveType": "source-zip",
+      "fileName": "llama.cpp-e8e06f78e253a98a739b8ae4c6b661b357249ce4.zip",
+      "url": "https://codeload.github.com/ggml-org/llama.cpp/zip/e8e06f78e253a98a739b8ae4c6b661b357249ce4",
+      "bytes": 38366655,
+      "sha256": "aaa8f87c8f12b5ff34738cd652c73bd9eb70f38e3ffbdea2e3b31cfabaed041d",
+      "sourceTag": "b10248",
+      "sourceCommit": "e8e06f78e253a98a739b8ae4c6b661b357249ce4",
+      "sourceRoot": "llama.cpp-e8e06f78e253a98a739b8ae4c6b661b357249ce4",
+      "executable": "llama-server.exe",
+      "build": {
+        "configuration": "Release",
+        "target": "llama-server",
+        "architecture": "x64",
+        "generatorFamily": "Visual Studio",
+        "flags": [
+          "BUILD_SHARED_LIBS=ON",
+          "GGML_BACKEND_DL=ON",
+          "GGML_CCACHE=OFF",
+          "GGML_CPU_ALL_VARIANTS=ON",
+          "GGML_CPU_KLEIDIAI=OFF",
+          "GGML_NATIVE=OFF",
+          "GGML_OPENMP=OFF",
+          "GGML_RPC=OFF",
+          "LLAMA_BUILD_APP=OFF",
+          "LLAMA_BUILD_BORINGSSL=OFF",
+          "LLAMA_BUILD_COMMON=ON",
+          "LLAMA_BUILD_EXAMPLES=OFF",
+          "LLAMA_BUILD_LIBRESSL=OFF",
+          "LLAMA_BUILD_SERVER=ON",
+          "LLAMA_BUILD_TESTS=OFF",
+          "LLAMA_BUILD_TOOLS=ON",
+          "LLAMA_BUILD_UI=OFF",
+          "LLAMA_LLGUIDANCE=OFF",
+          "LLAMA_OPENSSL=OFF",
+          "LLAMA_SUBPROCESS=OFF",
+          "LLAMA_USE_PREBUILT_UI=OFF",
+          "MTMD_VIDEO=OFF"
+        ],
+        "requiredCpuBackends": [
+          "ggml-cpu-x64.dll",
+          "ggml-cpu-sse42.dll",
+          "ggml-cpu-sandybridge.dll",
+          "ggml-cpu-haswell.dll",
+          "ggml-cpu-skylakex.dll",
+          "ggml-cpu-cannonlake.dll",
+          "ggml-cpu-cascadelake.dll",
+          "ggml-cpu-icelake.dll",
+          "ggml-cpu-alderlake.dll"
+        ],
+        "allowedSystemImports": [
+          "ADVAPI32.dll",
+          "KERNEL32.dll",
+          "SHELL32.dll",
+          "WS2_32.dll"
+        ],
+        "allowedSystemImportPatterns": [
+          "^api-ms-win-crt-[a-z0-9-]+\\.dll$"
+        ]
+      },
+      "license": {
+        "source": "archive",
+        "sourcePath": "LICENSE",
+        "path": "notices/llama.cpp/LICENSE-llama.cpp.txt",
+        "fileName": "LICENSE-llama.cpp.txt",
+        "bytes": 1078,
+        "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      "notices": [
+        {
+          "sourcePath": "licenses/LICENSE-jsonhpp",
+          "path": "notices/llama.cpp/LICENSE-jsonhpp.txt",
+          "bytes": 1075,
+          "sha256": "c0d068392ea65358b798b8c165103560f06e9e3b38c4ab4e2d8810a7b931af86"
+        },
+        {
+          "sourcePath": "vendor/cpp-httplib/LICENSE",
+          "path": "notices/llama.cpp/LICENSE-cpp-httplib.txt",
+          "bytes": 1075,
+          "sha256": "4b45cbe16d7b71b89ae6127e26e0d90a029198ca5e958ad8e3d0b8bbed364d8b"
+        },
+        {
+          "sourcePath": "vendor/nlohmann/json.hpp",
+          "path": "notices/llama.cpp/SOURCE-nlohmann-json.hpp",
+          "bytes": 953436,
+          "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63"
+        },
+        {
+          "sourcePath": "common/base64.hpp",
+          "path": "notices/llama.cpp/SOURCE-base64.hpp",
+          "bytes": 12878,
+          "sha256": "57f595aa0a206c4dec9a84b90a3416028a242da4dd8f219afc0859a6ccb7efe7"
+        },
+        {
+          "sourcePath": "vendor/miniaudio/miniaudio.h",
+          "path": "notices/llama.cpp/SOURCE-miniaudio.h",
+          "bytes": 4108168,
+          "sha256": "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89"
+        },
+        {
+          "sourcePath": "vendor/stb/stb_image.h",
+          "path": "notices/llama.cpp/SOURCE-stb_image.h",
+          "bytes": 283010,
+          "sha256": "594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3"
+        },
+        {
+          "sourcePath": "ggml/src/ggml-cpu/llamafile/sgemm.cpp",
+          "path": "notices/llama.cpp/SOURCE-llamafile-sgemm.cpp",
+          "bytes": 162829,
+          "sha256": "e226380b05393302ba91b38d22718d9521700ee2cb7943f83ad316a7a9dcd597"
+        },
+        {
+          "sourcePath": "ggml/src/ggml-cpu/ops.cpp",
+          "path": "notices/llama.cpp/SOURCE-ggml-cpu-ops.cpp",
+          "bytes": 411225,
+          "sha256": "dd7265a7402515002d4679f18d5d1d423456e87f256f7cc11af3bbb4148bf773"
+        },
+        {
+          "sourcePath": "src/llama-vocab.cpp",
+          "path": "notices/llama.cpp/SOURCE-llama-vocab.cpp",
+          "bytes": 179518,
+          "sha256": "548640948f28c739802d9c5f6c9b209f0dbfb4d925832c9436d9b971a57f66bb"
+        }
+      ]
+    },
+    "translationModel": {
+      "version": "Q4_K_M",
+      "archiveType": "file",
+      "fileName": "Hy-MT2-1.8B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/Hy-MT2-1.8B-Q4_K_M.gguf?download=true",
+      "bytes": 1133080448,
+      "sha256": "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699",
+      "modelId": "tencent/Hy-MT2-1.8B-GGUF",
+      "revision": "1cd5208700acedef4ef93019b6cfc148b8522d45",
+      "license": {
+        "source": "download",
+        "fileName": "LICENSE-Hy-MT2.txt",
+        "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/LICENSE.txt?download=true",
+        "bytes": 11639,
+        "sha256": "a1d52d448f81c584a47c583e19dfab2d3851c7c84431b07baee093c1113ed114"
+      }
+    }
+  }
+}

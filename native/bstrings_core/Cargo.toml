@@ -7,6 +7,9 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[dependencies]
+lingua = "1.8.0"
+
 [profile.release]
 codegen-units = 1
 lto = "thin"

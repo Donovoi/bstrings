@@ -1,0 +1,1246 @@
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Win32.SafeHandles;
+
+namespace bstrings;
+
+internal delegate bool LanguageDetectorAvailability(out string? error);
+
+internal static class AnalysisOrchestrator
+{
+    private const uint FileReadAttributes = 0x80;
+    private const uint FileShareRead = 0x1;
+    private const uint FileShareWrite = 0x2;
+    private const uint FileShareDelete = 0x4;
+    private const uint OpenExisting = 3;
+    private const uint FileFlagBackupSemantics = 0x02000000;
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.KebabCaseLower) },
+    };
+
+    internal static async Task RunAsync(
+        AnalysisOptions options,
+        CancellationToken cancellationToken = default,
+        LanguageDetectorAvailability? verifyLanguageDetector = null,
+        string? executingExecutablePath = null,
+        Func<string, CancellationToken, Task>? afterInputInventoryCreated = null
+    )
+    {
+        ValidateOptions(options);
+        ValidateInputSource(options);
+        var outputDirectory = Path.GetFullPath(options.OutputDirectory);
+        ValidateOutputLocation(options, outputDirectory);
+
+        AnalysisToolchain? toolchain = null;
+        var needsExternalToolchain =
+            options.RecoveryMode != ExecutableRecoveryMode.Off
+            || options.TranslationMode is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All;
+        var hasImplicitBundle = AnalysisToolchainLocator.HasImplicitBundleConfiguration();
+        if (
+            needsExternalToolchain
+            || !string.IsNullOrWhiteSpace(options.BundleRoot)
+            || options.Airgap
+            || hasImplicitBundle
+        )
+        {
+            toolchain = AnalysisToolchainLocator.Locate(
+                options.BundleRoot,
+                options.Airgap,
+                requireRecovery: options.RecoveryMode != ExecutableRecoveryMode.Off,
+                requireTranslation: options.TranslationMode
+                    is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All,
+                executingExecutablePath: executingExecutablePath
+            );
+        }
+        if (toolchain is not null)
+        {
+            ValidateOutputOutsideBundle(outputDirectory, toolchain.BundleRoot);
+        }
+        var bundleIntegrity = toolchain?.BundleIntegrity;
+        verifyLanguageDetector ??= LanguageDetectionCore.TryVerifyAvailability;
+        if (
+            options.TranslationMode
+                is TranslationWorkflowMode.Auto or TranslationWorkflowMode.DetectOnly
+            && !verifyLanguageDetector(out var detectorError)
+        )
+        {
+            throw new InvalidOperationException(
+                "Offline language detection was requested but its bundled native engine is unavailable: "
+                    + detectorError
+            );
+        }
+        TranslationValidationRequirements? translationRequirements = null;
+        if (options.TranslationMode is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All)
+        {
+            Console.Error.WriteLine("Preflight: verifying the bundled translation model...");
+            VerifyTranslationModel(toolchain!);
+            translationRequirements = new TranslationValidationRequirements(
+                "llama.cpp",
+                options.TranslationTarget,
+                toolchain!.TranslationModelId!,
+                toolchain.TranslationModelRevision!,
+                toolchain.TranslationModelSha256!
+            );
+        }
+
+        PrepareOutputDirectory(outputDirectory);
+        var logsDirectory = Path.Combine(outputDirectory, "logs");
+        Directory.CreateDirectory(logsDirectory);
+        var incompleteMarker = Path.Combine(outputDirectory, ".incomplete");
+        await File.WriteAllTextAsync(
+            incompleteMarker,
+            $"bstrings analysis is incomplete; processing started {DateTimeOffset.UtcNow:O}.{Environment.NewLine}",
+            new UTF8Encoding(false),
+            cancellationToken
+        );
+
+        var started = DateTimeOffset.UtcNow;
+        var stageSeconds = new Dictionary<string, double>(StringComparer.Ordinal);
+        var runPath = Path.Combine(outputDirectory, "run.json");
+        var summaryPath = Path.Combine(outputDirectory, "summary.json");
+        var inventoryPath = Path.Combine(outputDirectory, "input-files.txt");
+        var inputManifestPath = Path.Combine(outputDirectory, "input-manifest.jsonl");
+        long inputFileCount = 0;
+        InputManifestInfo? inputManifest = null;
+        long completedMatchCount = 0;
+        long completedStringCount = 0;
+
+        try
+        {
+            var nativePath = Path.Combine(outputDirectory, "native-strings.jsonl");
+            var recoveredPath = Path.Combine(outputDirectory, "recovered-strings.jsonl");
+            var rawPath = Path.Combine(outputDirectory, "raw-strings.jsonl");
+            var candidatesPath = Path.Combine(outputDirectory, "translation-candidates.jsonl");
+            var assessmentsPath = Path.Combine(outputDirectory, "language-assessments.jsonl");
+            var translationsPath = Path.Combine(outputDirectory, "translated-strings.jsonl");
+            var enrichedPath = Path.Combine(outputDirectory, "enriched-strings.jsonl");
+            var matchesPath = Path.Combine(outputDirectory, "regex-matches.jsonl");
+
+            await RunStageAsync(
+                "input inventory",
+                stageSeconds,
+                async () =>
+                {
+                    inputManifest = await InputEvidenceManifest.CreateAsync(
+                        inventoryPath,
+                        inputManifestPath,
+                        EnumerateInputFiles(options),
+                        cancellationToken
+                    );
+                    inputFileCount = inputManifest.FileCount;
+                }
+            );
+            if (afterInputInventoryCreated is not null)
+            {
+                await afterInputInventoryCreated(inventoryPath, cancellationToken);
+            }
+            await WriteRunAsync(
+                runPath,
+                "incomplete",
+                started,
+                null,
+                options,
+                inputManifest,
+                bundleIntegrity,
+                null,
+                cancellationToken
+            );
+
+            if (needsExternalToolchain)
+            {
+                await RunStageAsync(
+                    "bundled tool preflight",
+                    stageSeconds,
+                    () => RunToolchainPreflightAsync(
+                        options,
+                        toolchain!,
+                        outputDirectory,
+                        logsDirectory,
+                        cancellationToken
+                    )
+                );
+            }
+
+            FileStream? nativeInventoryLease = null;
+            await RunStageAsync(
+                "pre-native input inventory verification",
+                stageSeconds,
+                async () =>
+                    nativeInventoryLease = await InputEvidenceManifest
+                        .AcquireVerifiedInventoryLeaseAsync(
+                            inventoryPath,
+                            inputManifest!,
+                            cancellationToken
+                        )
+            );
+            try
+            {
+                await RunStageAsync(
+                    "native extraction",
+                    stageSeconds,
+                    () =>
+                        RunNativeExtractionAsync(
+                            options,
+                            inventoryPath,
+                            nativePath,
+                            outputDirectory,
+                            logsDirectory,
+                            cancellationToken
+                        )
+                );
+            }
+            finally
+            {
+                if (nativeInventoryLease is not null)
+                {
+                    await nativeInventoryLease.DisposeAsync();
+                }
+            }
+            await RunStageAsync(
+                "post-native input verification",
+                stageSeconds,
+                async () =>
+                {
+                    await InputEvidenceManifest.VerifyInventoryAsync(
+                        inventoryPath,
+                        inputManifest!,
+                        cancellationToken
+                    );
+                    await InputEvidenceManifest.VerifyAsync(
+                        inputManifestPath,
+                        inputManifest!,
+                        cancellationToken
+                    );
+                }
+            );
+
+            if (options.RecoveryMode == ExecutableRecoveryMode.Off)
+            {
+                await CreateEmptyFileAtomicAsync(recoveredPath, cancellationToken);
+            }
+            else
+            {
+                FileStream? recoveryInventoryLease = null;
+                await RunStageAsync(
+                    "pre-recovery input inventory verification",
+                    stageSeconds,
+                    async () =>
+                        recoveryInventoryLease = await InputEvidenceManifest
+                            .AcquireVerifiedInventoryLeaseAsync(
+                                inventoryPath,
+                                inputManifest!,
+                                cancellationToken
+                            )
+                );
+                try
+                {
+                    await RunStageAsync(
+                        "Magika and FLOSS recovery",
+                        stageSeconds,
+                        () => RunRecoveryAsync(
+                            options,
+                            toolchain!,
+                            inventoryPath,
+                            recoveredPath,
+                            outputDirectory,
+                            logsDirectory,
+                            cancellationToken
+                        )
+                    );
+                }
+                finally
+                {
+                    if (recoveryInventoryLease is not null)
+                    {
+                        await recoveryInventoryLease.DisposeAsync();
+                    }
+                }
+                await RunStageAsync(
+                    "post-recovery input verification",
+                    stageSeconds,
+                    async () =>
+                    {
+                        await InputEvidenceManifest.VerifyInventoryAsync(
+                            inventoryPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
+                        await InputEvidenceManifest.VerifyAsync(
+                            inputManifestPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
+                    }
+                );
+            }
+
+            EnrichmentMergeStats rawMerge = default;
+            await RunStageAsync(
+                "raw record merge",
+                stageSeconds,
+                async () =>
+                    rawMerge = await EnrichmentMergeCore.ConcatenateAsync(
+                        [nativePath, recoveredPath],
+                        rawPath,
+                        cancellationToken
+                    )
+            );
+
+            LanguageTriageStats? triage = null;
+            long translationCandidateCount = 0;
+            if (
+                options.TranslationMode
+                is TranslationWorkflowMode.Auto
+                    or TranslationWorkflowMode.DetectOnly
+            )
+            {
+                await RunStageAsync(
+                    "offline language triage",
+                    stageSeconds,
+                    async () =>
+                        triage = await LanguageTriageCore.ProcessAsync(
+                            rawPath,
+                            candidatesPath,
+                            assessmentsPath,
+                            new LanguageTriageOptions(
+                                options.TranslationTarget,
+                                options.LanguageDetectionMode,
+                                options.TranslationPolicy,
+                                options.LanguageConfidence,
+                                options.LanguageMargin,
+                                options.TranslationMinimumCharacters,
+                                options.TranslationMaximumCharacters,
+                                BatchSize: 2048,
+                                MaxDegreeOfParallelism: Math.Max(1, Environment.ProcessorCount)
+                            ),
+                            cancellationToken
+                        )
+                );
+                translationCandidateCount = triage!.Value.TranslationCandidates;
+            }
+            else
+            {
+                await CreateEmptyFileAtomicAsync(assessmentsPath, cancellationToken);
+                if (options.TranslationMode == TranslationWorkflowMode.All)
+                {
+                    TranslationCandidateStats allCandidates = default;
+                    await RunStageAsync(
+                        "translation eligibility filtering",
+                        stageSeconds,
+                        async () =>
+                            allCandidates = await TranslationCandidateCore.FilterEligibleAsync(
+                                rawPath,
+                                candidatesPath,
+                                options.TranslationMinimumCharacters,
+                                options.TranslationMaximumCharacters,
+                                cancellationToken
+                            )
+                    );
+                    translationCandidateCount = allCandidates.CandidateRecords;
+                }
+                else
+                {
+                    await CreateEmptyFileAtomicAsync(candidatesPath, cancellationToken);
+                }
+            }
+
+            if (
+                options.TranslationMode
+                is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
+                && translationCandidateCount > 0
+            )
+            {
+                await RunStageAsync(
+                    "offline translation",
+                    stageSeconds,
+                    () => RunTranslationAsync(
+                        options,
+                        toolchain!,
+                        candidatesPath,
+                        translationsPath,
+                        outputDirectory,
+                        logsDirectory,
+                        cancellationToken
+                    )
+                );
+            }
+            else
+            {
+                await CreateEmptyFileAtomicAsync(translationsPath, cancellationToken);
+            }
+
+            if (
+                options.TranslationMode
+                is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
+            )
+            {
+                await RunStageAsync(
+                    "translation provenance validation",
+                    stageSeconds,
+                    () =>
+                        TranslationCompletionCore.ValidateAsync(
+                            candidatesPath,
+                            translationsPath,
+                            outputDirectory,
+                            translationCandidateCount,
+                            translationRequirements!,
+                            cancellationToken
+                        )
+                );
+            }
+
+            EnrichmentMergeStats enrichedMerge = default;
+            await RunStageAsync(
+                "enriched record merge",
+                stageSeconds,
+                async () =>
+                    enrichedMerge = await EnrichmentMergeCore.ConcatenateAsync(
+                        [rawPath, translationsPath],
+                        enrichedPath,
+                        cancellationToken
+                    )
+            );
+
+            var patterns = Program.ResolveAnalysisPatterns(
+                options.PatternSelection,
+                options.RegexFilePath
+            );
+            EnrichmentPipelineStats matches = default;
+            await RunStageAsync(
+                "pattern matching",
+                stageSeconds,
+                async () =>
+                    matches = await EnrichmentRegexPipelineCore.ProcessAsync(
+                        enrichedPath,
+                        matchesPath,
+                        patterns,
+                        cancellationToken: cancellationToken,
+                        trustedParentFirstInput: true,
+                        translationRequirements: translationRequirements
+                    )
+            );
+
+            var completed = DateTimeOffset.UtcNow;
+            var summary = new
+            {
+                schemaVersion = 1,
+                status = "complete",
+                startedUtc = started,
+                completedUtc = completed,
+                durationSeconds = (completed - started).TotalSeconds,
+                inputFiles = inputFileCount,
+                inputIdentity = new
+                {
+                    inventory = inputManifest!.InventoryFile,
+                    inventorySha256 = inputManifest.InventorySha256,
+                    manifest = inputManifest.ManifestFile,
+                    manifestSha256 = inputManifest.ManifestSha256,
+                    contentHashAlgorithm = inputManifest.ContentHashAlgorithm,
+                },
+                bundleIntegrity,
+                nativeStrings = rawMerge.InputRecords.Count > 0 ? rawMerge.InputRecords[0] : 0,
+                recoveredStrings = rawMerge.InputRecords.Count > 1 ? rawMerge.InputRecords[1] : 0,
+                rawStrings = rawMerge.OutputRecords,
+                translationCandidates = translationCandidateCount,
+                language = triage is null
+                    ? null
+                    : new
+                    {
+                        detector = "lingua-rs 1.8.0",
+                        effectiveProfile = triage.Value.EffectiveMode.ToString().ToLowerInvariant(),
+                        targetLanguage = options.TranslationTarget,
+                        policy = options.TranslationPolicy,
+                        targetLanguageRecords = triage.Value.TargetLanguageRecords,
+                        translationCandidates = triage.Value.TranslationCandidates,
+                        ambiguousRecords = triage.Value.AmbiguousRecords,
+                        nonLinguisticRecords = triage.Value.NonLinguisticRecords,
+                        detectorFailures = triage.Value.DetectorFailures,
+                    },
+                translatedStrings = enrichedMerge.InputRecords.Count > 1
+                    ? enrichedMerge.InputRecords[1]
+                    : 0,
+                enrichedStrings = enrichedMerge.OutputRecords,
+                regexPatterns = patterns.Count,
+                regexMatches = matches.MatchRecords,
+                stageSeconds,
+            };
+            await WriteJsonAtomicAsync(
+                summaryPath,
+                summary,
+                cancellationToken
+            );
+            await WriteRunAsync(
+                runPath,
+                "complete",
+                started,
+                completed,
+                options,
+                inputManifest,
+                bundleIntegrity,
+                null,
+                cancellationToken
+            );
+            File.Delete(incompleteMarker);
+            completedMatchCount = matches.MatchRecords;
+            completedStringCount = enrichedMerge.OutputRecords;
+        }
+        catch (Exception ex)
+        {
+            EnsureIncompleteMarker(incompleteMarker, started, ex.Message);
+            DeleteTemporaryFile(summaryPath);
+            try
+            {
+                await WriteRunAsync(
+                    runPath,
+                    "failed",
+                    started,
+                    DateTimeOffset.UtcNow,
+                    options,
+                    inputManifest,
+                    bundleIntegrity,
+                    ex.Message,
+                    CancellationToken.None
+                );
+            }
+            catch (Exception writeError) when (
+                writeError is IOException or UnauthorizedAccessException or JsonException
+            )
+            {
+                Console.Error.WriteLine($"Could not update run.json after failure: {writeError.Message}");
+            }
+            throw;
+        }
+
+        Console.Error.WriteLine(
+            $"Analysis complete: {completedMatchCount:N0} matches from "
+                + $"{completedStringCount:N0} provenance-preserving strings."
+        );
+        Console.Error.WriteLine($"Results: {outputDirectory}");
+    }
+
+    private static async Task RunNativeExtractionAsync(
+        AnalysisOptions options,
+        string inventoryPath,
+        string outputPath,
+        string workingDirectory,
+        string logsDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var invocation = CurrentExecutableInvocation();
+        var arguments = new List<string>(invocation.PrefixArguments);
+        arguments.Add("--paths-from");
+        arguments.Add(inventoryPath);
+        arguments.Add("-o");
+        arguments.Add(outputPath);
+        arguments.Add("-m");
+        arguments.Add(options.MinimumStringLength.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("-x");
+        arguments.Add(options.MaximumStringLength.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("--processor");
+        arguments.Add(options.Processor);
+        arguments.Add("--cpu-engine");
+        arguments.Add(options.CpuEngine);
+        arguments.Add("--emit-enrichment-jsonl");
+        arguments.Add("-q");
+        arguments.Add("-s");
+
+        await ChildProcessRunner.RunAsync(
+            invocation.Executable,
+            arguments,
+            workingDirectory,
+            Path.Combine(logsDirectory, "native.stdout.log"),
+            Path.Combine(logsDirectory, "native.stderr.log"),
+            cancellationToken: cancellationToken
+        );
+        if (!File.Exists(outputPath))
+        {
+            throw new InvalidDataException("Native extraction completed without its JSONL output.");
+        }
+        ValidateNativeOutputCompletion(outputPath);
+    }
+
+    internal static void ValidateNativeOutputCompletion(string outputPath)
+    {
+        var incompletePath = Path.GetFullPath(outputPath) + ".incomplete";
+        if (File.Exists(incompletePath))
+        {
+            throw new InvalidDataException(
+                $"Native extraction left its incomplete marker '{incompletePath}'."
+            );
+        }
+    }
+
+    private static async Task RunToolchainPreflightAsync(
+        AnalysisOptions options,
+        AnalysisToolchain toolchain,
+        string workingDirectory,
+        string logsDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        await ChildProcessRunner.RunAsync(
+            toolchain.PythonExecutable,
+            ["-I", "-B", toolchain.EnrichmentAdapter, "--help"],
+            workingDirectory,
+            Path.Combine(logsDirectory, "adapter-preflight.stdout.log"),
+            Path.Combine(logsDirectory, "adapter-preflight.stderr.log"),
+            OfflineEnvironment(),
+            cancellationToken
+        );
+        if (options.RecoveryMode != ExecutableRecoveryMode.Off)
+        {
+            await ChildProcessRunner.RunAsync(
+                toolchain.MagikaExecutable!,
+                ["--version"],
+                workingDirectory,
+                Path.Combine(logsDirectory, "magika-preflight.stdout.log"),
+                Path.Combine(logsDirectory, "magika-preflight.stderr.log"),
+                OfflineEnvironment(),
+                cancellationToken
+            );
+            await ChildProcessRunner.RunAsync(
+                toolchain.FlossExecutable!,
+                ["--version"],
+                workingDirectory,
+                Path.Combine(logsDirectory, "floss-preflight.stdout.log"),
+                Path.Combine(logsDirectory, "floss-preflight.stderr.log"),
+                OfflineEnvironment(),
+                cancellationToken
+            );
+        }
+        if (
+            options.TranslationMode
+            is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
+        )
+        {
+            await ChildProcessRunner.RunAsync(
+                toolchain.LlamaServer!,
+                ["--version"],
+                workingDirectory,
+                Path.Combine(logsDirectory, "llama-preflight.stdout.log"),
+                Path.Combine(logsDirectory, "llama-preflight.stderr.log"),
+                OfflineEnvironment(),
+                cancellationToken
+            );
+        }
+    }
+
+    private static async Task RunRecoveryAsync(
+        AnalysisOptions options,
+        AnalysisToolchain toolchain,
+        string inventoryPath,
+        string outputPath,
+        string workingDirectory,
+        string logsDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var arguments = PythonPrefix(toolchain);
+        arguments.Add("--airgap");
+        arguments.Add("--bounded-integrated-mode");
+        arguments.Add("--paths-from");
+        arguments.Add(inventoryPath);
+        arguments.Add("-o");
+        arguments.Add(outputPath);
+        arguments.Add("--magika");
+        arguments.Add(toolchain.MagikaExecutable!);
+        arguments.Add("--floss");
+        arguments.Add(toolchain.FlossExecutable!);
+        arguments.Add("--minimum-length");
+        arguments.Add(options.MinimumStringLength.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (options.RecoveryMode == ExecutableRecoveryMode.Force)
+        {
+            arguments.Add("--force-floss");
+        }
+        await ChildProcessRunner.RunAsync(
+            toolchain.PythonExecutable,
+            arguments,
+            workingDirectory,
+            Path.Combine(logsDirectory, "recovery.stdout.log"),
+            Path.Combine(logsDirectory, "recovery.stderr.log"),
+            OfflineEnvironment(),
+            cancellationToken
+        );
+    }
+
+    private static async Task RunTranslationAsync(
+        AnalysisOptions options,
+        AnalysisToolchain toolchain,
+        string inputPath,
+        string outputPath,
+        string workingDirectory,
+        string logsDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var arguments = PythonPrefix(toolchain);
+        arguments.Add("--airgap");
+        arguments.Add("--bounded-integrated-mode");
+        arguments.Add("--input-jsonl");
+        arguments.Add(inputPath);
+        arguments.Add("-o");
+        arguments.Add(outputPath);
+        arguments.Add("--translate");
+        arguments.Add("--translations-only");
+        arguments.Add("--translation-engine");
+        arguments.Add("llama-cpp");
+        arguments.Add("--translation-model-path");
+        arguments.Add(toolchain.TranslationModelPath!);
+        arguments.Add("--translation-model-id");
+        arguments.Add(toolchain.TranslationModelId!);
+        arguments.Add("--translation-revision");
+        arguments.Add(toolchain.TranslationModelRevision!);
+        arguments.Add("--translation-model-sha256");
+        arguments.Add(toolchain.TranslationModelSha256!);
+        arguments.Add("--llama-server");
+        arguments.Add(toolchain.LlamaServer!);
+        arguments.Add("--translation-target");
+        arguments.Add(options.TranslationTarget);
+        arguments.Add("--translation-device");
+        arguments.Add(options.TranslationDevice);
+        arguments.Add("--translation-parallelism");
+        arguments.Add(options.TranslationParallelism.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("--translation-threads");
+        arguments.Add(options.TranslationThreads.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("--translation-gpu-layers");
+        arguments.Add(options.TranslationGpuLayers.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("--translation-min-characters");
+        arguments.Add(options.TranslationMinimumCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("--translation-max-characters");
+        arguments.Add(options.TranslationMaximumCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        await ChildProcessRunner.RunAsync(
+            toolchain.PythonExecutable,
+            arguments,
+            workingDirectory,
+            Path.Combine(logsDirectory, "translation.stdout.log"),
+            Path.Combine(logsDirectory, "translation.stderr.log"),
+            OfflineEnvironment(),
+            cancellationToken
+        );
+    }
+
+    private static List<string> PythonPrefix(AnalysisToolchain toolchain) =>
+        ["-I", "-B", toolchain.EnrichmentAdapter];
+
+    private static IReadOnlyDictionary<string, string?> OfflineEnvironment() =>
+        new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["HF_HUB_OFFLINE"] = "1",
+            ["TRANSFORMERS_OFFLINE"] = "1",
+            ["HF_DATASETS_OFFLINE"] = "1",
+            ["TOKENIZERS_PARALLELISM"] = "false",
+            ["NO_PROXY"] = "127.0.0.1,localhost",
+        };
+
+    private static (string Executable, IReadOnlyList<string> PrefixArguments) CurrentExecutableInvocation()
+    {
+        var processPath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(processPath))
+        {
+            throw new InvalidOperationException("The current bstrings executable path is unavailable.");
+        }
+        var executableName = Path.GetFileNameWithoutExtension(processPath);
+        if (string.Equals(executableName, "dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            var assemblyName = typeof(AnalysisOrchestrator).Assembly.GetName().Name;
+            if (string.IsNullOrWhiteSpace(assemblyName))
+            {
+                throw new InvalidOperationException("The bstrings assembly name is unavailable.");
+            }
+            var assemblyPath = Path.Combine(AppContext.BaseDirectory, assemblyName + ".dll");
+            if (!File.Exists(assemblyPath))
+            {
+                throw new FileNotFoundException(
+                    "The framework-dependent bstrings assembly is unavailable.",
+                    assemblyPath
+                );
+            }
+            return (processPath, [assemblyPath]);
+        }
+        return (processPath, Array.Empty<string>());
+    }
+
+    private static void ValidateInputSource(AnalysisOptions options)
+    {
+        var hasFile = !string.IsNullOrWhiteSpace(options.FilePath);
+        var hasDirectory = !string.IsNullOrWhiteSpace(options.DirectoryPath);
+        if (hasFile == hasDirectory)
+        {
+            throw new ArgumentException("Specify exactly one evidence file (-f) or directory (-d).");
+        }
+        if (hasFile && !File.Exists(options.FilePath))
+        {
+            throw new FileNotFoundException("The evidence file was not found.", options.FilePath);
+        }
+        if (hasDirectory && !Directory.Exists(options.DirectoryPath))
+        {
+            throw new DirectoryNotFoundException(
+                $"The evidence directory was not found: '{options.DirectoryPath}'."
+            );
+        }
+    }
+
+    private static void ValidateOptions(AnalysisOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.OutputDirectory))
+        {
+            throw new ArgumentException("A results directory is required with -o.");
+        }
+        AnalysisCli.ValidateStringLengthBounds(
+            options.MinimumStringLength,
+            options.MaximumStringLength
+        );
+        if (
+            options.TranslationMinimumCharacters < 1
+            || options.TranslationMaximumCharacters < options.TranslationMinimumCharacters
+        )
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "Invalid translation character bounds.");
+        }
+        if (options.TranslationParallelism < 0 || options.TranslationThreads < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "Translation parallelism and thread counts cannot be negative.");
+        }
+        if (options.TranslationGpuLayers < -1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "Translation GPU layers must be -1 or non-negative.");
+        }
+        var device = options.TranslationDevice.Trim().ToLowerInvariant();
+        if (device is not ("auto" or "cpu" or "cuda" or "hybrid"))
+        {
+            throw new ArgumentException("Translation device must be auto, cpu, cuda, or hybrid.");
+        }
+        if (device == "hybrid" && options.TranslationGpuLayers <= 0)
+        {
+            throw new ArgumentException("Hybrid translation requires --translation-gpu-layers above zero.");
+        }
+        if (device != "hybrid" && options.TranslationGpuLayers > 0)
+        {
+            throw new ArgumentException("Exact positive GPU layers require --translation-device hybrid.");
+        }
+        if (
+            !LanguageDetectionCore.TryNormalizeTargetLanguage(
+                options.TranslationTarget,
+                out _,
+                out var targetError
+            )
+        )
+        {
+            throw new ArgumentException(targetError);
+        }
+        if (!File.Exists(options.RegexFilePath) && !string.IsNullOrWhiteSpace(options.RegexFilePath))
+        {
+            throw new FileNotFoundException("The regex file was not found.", options.RegexFilePath);
+        }
+    }
+
+    private static void ValidateOutputLocation(AnalysisOptions options, string outputDirectory)
+    {
+        EnsureNoReparsePoints(outputDirectory, "results path");
+        if (!string.IsNullOrWhiteSpace(options.DirectoryPath))
+        {
+            EnsureNoReparsePoints(Path.GetFullPath(options.DirectoryPath), "evidence directory");
+            var inputDirectory = CanonicalPathForContainment(options.DirectoryPath);
+            var output = CanonicalPathForContainment(outputDirectory);
+            if (
+                string.Equals(inputDirectory, output, StringComparison.OrdinalIgnoreCase)
+                || output.StartsWith(inputDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                throw new ArgumentException("The results directory cannot be inside the evidence directory.");
+            }
+        }
+        else
+        {
+            EnsureNoReparsePoints(Path.GetFullPath(options.FilePath!), "evidence file");
+        }
+    }
+
+    private static void ValidateOutputOutsideBundle(
+        string outputDirectory,
+        string bundleRoot
+    )
+    {
+        var canonicalOutput = CanonicalPathForContainment(outputDirectory);
+        var canonicalBundle = CanonicalPathForContainment(bundleRoot);
+        if (
+            string.Equals(canonicalOutput, canonicalBundle, StringComparison.OrdinalIgnoreCase)
+            || canonicalOutput.StartsWith(
+                canonicalBundle + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            throw new ArgumentException(
+                "The results directory cannot be equal to or inside the verified bundle directory."
+            );
+        }
+    }
+
+    private static string CanonicalPathForContainment(string path)
+    {
+        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        if (!OperatingSystem.IsWindows())
+        {
+            return fullPath;
+        }
+
+        var missingSegments = new Stack<string>();
+        var existing = fullPath;
+        while (!Directory.Exists(existing))
+        {
+            if (File.Exists(existing))
+            {
+                throw new IOException(
+                    $"A directory path resolves through a regular file: '{fullPath}'."
+                );
+            }
+            var parent = Directory.GetParent(existing)?.FullName;
+            if (string.IsNullOrEmpty(parent) || string.Equals(parent, existing, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new DirectoryNotFoundException(
+                    $"No existing directory ancestor could be resolved for '{fullPath}'."
+                );
+            }
+            var segment = Path.GetFileName(existing);
+            if (string.IsNullOrEmpty(segment))
+            {
+                throw new InvalidDataException(
+                    $"A non-canonical directory path cannot be compared safely: '{fullPath}'."
+                );
+            }
+            missingSegments.Push(segment);
+            existing = parent;
+        }
+
+        var canonical = FinalWindowsPath(existing);
+        while (missingSegments.Count != 0)
+        {
+            canonical = Path.Combine(canonical, missingSegments.Pop());
+        }
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(canonical));
+    }
+
+    private static string FinalWindowsPath(string existingDirectory)
+    {
+        using var handle = CreateFileW(
+            existingDirectory,
+            FileReadAttributes,
+            FileShareRead | FileShareWrite | FileShareDelete,
+            IntPtr.Zero,
+            OpenExisting,
+            FileFlagBackupSemantics,
+            IntPtr.Zero
+        );
+        if (handle.IsInvalid)
+        {
+            throw new Win32Exception(
+                Marshal.GetLastPInvokeError(),
+                $"Could not resolve the final directory path for '{existingDirectory}'."
+            );
+        }
+
+        var capacity = 512;
+        while (true)
+        {
+            var buffer = new StringBuilder(capacity);
+            var length = GetFinalPathNameByHandleW(handle, buffer, (uint)buffer.Capacity, 0);
+            if (length == 0)
+            {
+                throw new Win32Exception(
+                    Marshal.GetLastPInvokeError(),
+                    $"Could not resolve the final directory path for '{existingDirectory}'."
+                );
+            }
+            if (length < buffer.Capacity)
+            {
+                var resolved = buffer.ToString();
+                if (resolved.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+                {
+                    return @"\\" + resolved[8..];
+                }
+                if (resolved.StartsWith(@"\\?\", StringComparison.Ordinal))
+                {
+                    return resolved[4..];
+                }
+                return resolved;
+            }
+            capacity = checked((int)length + 1);
+        }
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string fileName,
+        uint desiredAccess,
+        uint shareMode,
+        IntPtr securityAttributes,
+        uint creationDisposition,
+        uint flagsAndAttributes,
+        IntPtr templateFile
+    );
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetFinalPathNameByHandleW(
+        SafeFileHandle file,
+        StringBuilder filePath,
+        uint filePathLength,
+        uint flags
+    );
+
+    private static void PrepareOutputDirectory(string outputDirectory)
+    {
+        if (Directory.Exists(outputDirectory))
+        {
+            if (Directory.EnumerateFileSystemEntries(outputDirectory).Any())
+            {
+                throw new IOException(
+                    $"Results directory must be new or empty; refusing to overwrite '{outputDirectory}'."
+                );
+            }
+        }
+        else
+        {
+            Directory.CreateDirectory(outputDirectory);
+        }
+        EnsureNoReparsePoints(outputDirectory, "results path");
+    }
+
+    internal static void EnsureNoReparsePoints(
+        string path,
+        string description,
+        Func<string, bool>? fileExists = null,
+        Func<string, bool>? directoryExists = null,
+        Func<string, FileAttributes>? getAttributes = null
+    )
+    {
+        fileExists ??= File.Exists;
+        directoryExists ??= Directory.Exists;
+        getAttributes ??= File.GetAttributes;
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(fullPath);
+        if (string.IsNullOrEmpty(root))
+        {
+            throw new ArgumentException($"The {description} has no filesystem root: '{path}'.");
+        }
+
+        var current = root;
+        var relative = fullPath[root.Length..];
+        foreach (
+            var segment in relative.Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries
+            )
+        )
+        {
+            current = Path.Combine(current, segment);
+            if (!fileExists(current) && !directoryExists(current))
+            {
+                break;
+            }
+            if ((getAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new ArgumentException(
+                    $"The {description} traverses the reparse point '{current}'. "
+                        + "Use a direct physical path so evidence containment can be enforced."
+                );
+            }
+        }
+    }
+
+    private static void VerifyTranslationModel(AnalysisToolchain toolchain)
+    {
+        using var stream = new FileStream(
+            toolchain.TranslationModelPath!,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            4 * 1024 * 1024,
+            FileOptions.SequentialScan
+        );
+        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        if (!string.Equals(actual, toolchain.TranslationModelSha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Translation model SHA-256 mismatch for '{toolchain.TranslationModelPath}'. "
+                    + $"Expected {toolchain.TranslationModelSha256}, found {actual}."
+            );
+        }
+    }
+
+    private static IEnumerable<string> EnumerateInputFiles(AnalysisOptions options)
+    {
+        if (!string.IsNullOrWhiteSpace(options.FilePath))
+        {
+            yield return Path.GetFullPath(options.FilePath);
+            yield break;
+        }
+
+        var enumerationOptions = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = false,
+            ReturnSpecialDirectories = false,
+            AttributesToSkip = FileAttributes.ReparsePoint,
+            MatchType = MatchType.Simple,
+        };
+        var directory = Path.GetFullPath(options.DirectoryPath!);
+        var mask = string.IsNullOrWhiteSpace(options.Mask) ? "*" : options.Mask;
+        foreach (var input in Directory.EnumerateFiles(directory, mask, enumerationOptions))
+        {
+            yield return input;
+        }
+    }
+
+    private static async Task CreateEmptyFileAtomicAsync(
+        string path,
+        CancellationToken cancellationToken
+    )
+    {
+        var temporaryPath = path + ".partial." + Guid.NewGuid().ToString("N");
+        try
+        {
+            await File.WriteAllTextAsync(
+                temporaryPath,
+                string.Empty,
+                new UTF8Encoding(false),
+                cancellationToken
+            );
+            File.Move(temporaryPath, path, overwrite: true);
+            temporaryPath = string.Empty;
+        }
+        finally
+        {
+            if (temporaryPath.Length > 0)
+            {
+                DeleteTemporaryFile(temporaryPath);
+            }
+        }
+    }
+
+    private static async Task RunStageAsync(
+        string name,
+        IDictionary<string, double> timings,
+        Func<Task> action
+    )
+    {
+        Console.Error.WriteLine($"Stage: {name}...");
+        var started = Stopwatch.GetTimestamp();
+        await action();
+        var elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
+        timings[name] = elapsed;
+        Console.Error.WriteLine($"Stage complete: {name} ({elapsed:N2} s)");
+    }
+
+    private static async Task WriteRunAsync(
+        string path,
+        string status,
+        DateTimeOffset started,
+        DateTimeOffset? completed,
+        AnalysisOptions options,
+        InputManifestInfo? inputManifest,
+        BundleIntegrity? bundleIntegrity,
+        string? error,
+        CancellationToken cancellationToken
+    )
+    {
+        var record = new
+        {
+            schemaVersion = 1,
+            status,
+            startedUtc = started,
+            completedUtc = completed,
+            bstringsVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3),
+            input = new
+            {
+                fileCount = inputManifest?.FileCount ?? 0,
+                inventory = inputManifest?.InventoryFile ?? "input-files.txt",
+                inventorySha256 = inputManifest?.InventorySha256,
+                manifest = inputManifest?.ManifestFile,
+                manifestSha256 = inputManifest?.ManifestSha256,
+                contentHashAlgorithm = inputManifest?.ContentHashAlgorithm,
+            },
+            bundleIntegrity,
+            options,
+            error,
+        };
+        await WriteJsonAtomicAsync(path, record, cancellationToken);
+    }
+
+    private static async Task WriteJsonAtomicAsync<T>(
+        string path,
+        T value,
+        CancellationToken cancellationToken
+    )
+    {
+        var temporaryPath = path + ".partial." + Guid.NewGuid().ToString("N");
+        try
+        {
+            await File.WriteAllTextAsync(
+                temporaryPath,
+                JsonSerializer.Serialize(value, JsonOptions) + Environment.NewLine,
+                new UTF8Encoding(false),
+                cancellationToken
+            );
+            File.Move(temporaryPath, path, overwrite: true);
+            temporaryPath = string.Empty;
+        }
+        finally
+        {
+            if (temporaryPath.Length > 0)
+            {
+                DeleteTemporaryFile(temporaryPath);
+            }
+        }
+    }
+
+    private static void DeleteTemporaryFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private static void EnsureIncompleteMarker(
+        string path,
+        DateTimeOffset started,
+        string error
+    )
+    {
+        try
+        {
+            File.WriteAllText(
+                path,
+                $"bstrings analysis is incomplete; processing started {started:O}. "
+                    + $"Failure: {error}{Environment.NewLine}",
+                new UTF8Encoding(false)
+            );
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+}
