@@ -272,14 +272,24 @@ function Expand-ExactTarEntry(
     [string]$StagingRoot,
     [string]$Name
 ) {
-    $tar = Get-Command tar.exe -CommandType Application -ErrorAction Stop
+    $tar = @(
+        Get-Command tar.exe -CommandType Application -ErrorAction Stop |
+            Select-Object -First 1
+    )
+    if ($tar.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$tar[0].Source)) {
+        throw 'Could not resolve one tar.exe application from PATH.'
+    }
+    $tarPath = [IO.Path]::GetFullPath([string]$tar[0].Source)
+    if (-not [IO.File]::Exists($tarPath)) {
+        throw "Resolved tar.exe application does not exist: $tarPath"
+    }
     $temporaryRoot = Resolve-ContainedPath `
         $StagingRoot `
         ('.extract-' + [Guid]::NewGuid().ToString('N')) `
         "$Name temporary extraction root"
     [IO.Directory]::CreateDirectory($temporaryRoot) | Out-Null
     try {
-        $output = @(& $tar.Source -xf $ArchivePath -C $temporaryRoot -- $EntryName 2>&1)
+        $output = @(& $tarPath -xf $ArchivePath -C $temporaryRoot -- $EntryName 2>&1)
         if ($LASTEXITCODE -ne 0) {
             throw "$Name extraction failed: $($output -join [Environment]::NewLine)"
         }
