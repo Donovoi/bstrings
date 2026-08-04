@@ -1,197 +1,210 @@
 # Air-gapped deployment
 
-`bstrings` can run without an internet connection, package manager, model hub,
-or system Python installation. Build the bundle on a connected staging machine,
-transfer the finished directory on approved media, verify it inside the
-air-gapped environment, and run only the included launchers.
+The checked `bstrings-win-x64-offline-cpu.zip` is the normal deployment for
+a disconnected Windows x64 workstation. It carries every application
+dependency needed by the CPU workflow. The examiner extracts one archive and
+uses the root `bstrings.exe`; they do not install or invoke Python, .NET,
+Magika, FLOSS, llama.cpp, a model hub, or a package manager.
 
-The full bundle may be many gigabytes. Size is deliberately not optimized away:
-the model weights, CUDA runtime files, standalone tools, portable Python, and
-optional broad-language or RAPIDS environments are copied in full.
+The conservative supported baseline for this release profile is Windows 11
+x64 24H2 or newer, following Microsoft's [.NET supported-Windows
+table](https://learn.microsoft.com/en-us/dotnet/core/install/windows).
+Magika carries DirectML 1.15.4 application-local, but that runtime still uses
+the operating system's D3D12/DXGI graphics interfaces; Microsoft's [DirectML
+version history](https://learn.microsoft.com/en-us/windows/ai/directml/dml-version-history)
+does not make an older or unsupported Windows image a supported target.
 
-## Offline invariant
+## Deploy the published CPU bundle
 
-The air-gap path has these properties:
+On a connected transfer workstation:
 
-- the core Windows executable is a self-contained .NET publish;
-- the enrichment adapter uses a bundled Python runtime and standard library;
-- Magika, FLOSS, llama.cpp, CUDA runtime libraries, and model weights are local;
-- model and package-manager offline variables are forced for every launcher;
-- Python audit hooks reject DNS and socket connections outside loopback;
-- llama.cpp may use `127.0.0.1` only, between the adapter and its private server;
-- RAPIDS never installs Python, Conda, or packages and can use only the bundled
-  environment named by `BSTRINGS_RAPIDS_PYTHON`;
-- every regular file is covered by a strict SHA-256 manifest, with unexpected,
-  missing, linked, resized, or modified files rejected; and
-- the translated record records `"airgap": true` in its execution provenance.
+1. Until a matching version tag publishes the archive, run the [Windows build
+   workflow](https://github.com/Donovoi/bstrings/actions/workflows/dotnet-desktop.yml)
+   manually and download the `bstrings-win-x64-offline-cpu` artifact, which
+   contains the ZIP and adjacent `.sha256`. A future matching tag publishes the
+   same checked files on [bstrings releases](https://github.com/Donovoi/bstrings/releases).
+2. Apply the organization's approved download, malware-scanning, media, and
+   chain-of-custody procedure.
+3. Copy both files to the approved transfer media. Do not modify the archive.
 
-URLs stored in pattern documentation are passive source references. The core
-scanner never dereferences them.
+Inside the disconnected environment, extract the complete archive into a new
+directory. Do not move `bstrings.exe` away from its adjacent `runtime`, `tools`,
+`models`, `licenses`, configuration, and manifest files.
 
-## 1. Prepare local inputs on a connected staging machine
-
-Acquire and verify every dependency before entering the secure environment.
-Keep each tool's license and notice files in the directory supplied to the
-builder; the builder copies whole directories rather than individual binaries.
-
-Required inputs are:
-
-1. A self-contained `win-x64` bstrings publish directory.
-2. An extracted official CPython Windows embeddable distribution. Python
-   documents this as a minimal, isolated runtime intended to be shipped inside
-   another application.
-3. A local Magika CLI directory. Google's current CLI is written in Rust and
-   can be staged with `cargo install --locked magika-cli`.
-4. The standalone Windows FLOSS release directory.
-5. A complete llama.cpp Windows release directory, including its CUDA runtime
-   DLLs when GPU translation is required.
-6. A pinned Hy-MT2 GGUF directory containing the selected model and its license.
-
-The bundle test used file `python-3.14.6-embed-amd64.zip` from the official
-[Python 3.14.6 release](https://www.python.org/downloads/release/python-3146/),
-SHA-256
-`DF901E84A896FF1EE720AD03377E0C8D8C2244FDA79808AEEAFF6316DF1CB75C`.
-Use the official `embed` archive, not the similarly named compatibility
-archive. The builder requires exactly one `python*._pth` file with `import
-site` disabled and probes the isolated standard library before copying.
-
-The tested Q8 model inputs remain:
-
-- model ID: `tencent/Hy-MT2-1.8B-GGUF`
-- revision: `1cd5208700acedef4ef93019b6cfc148b8522d45`
-- file: `Hy-MT2-1.8B-Q8_0.gguf`
-- SHA-256: `5C3FE0B1408A5CEB0143184EF247B11B579C525F4B02B060E6C851BB76FEF1A4`
-
-The builder recalculates the hash and writes the actual value into bundle
-configuration; it does not trust the filename.
-
-Publish the core first:
+From that directory, use only the bundled executable:
 
 ```powershell
-cargo build --manifest-path native\bstrings_core\Cargo.toml --release --locked
-
-dotnet publish bstrings\bstrings.csproj `
-  -c Release `
-  -f net9.0 `
-  -r win-x64 `
-  --self-contained true `
-  --no-restore `
-  -o C:\staging\bstrings-publish `
-  -p:PublishSingleFile=true `
-  -p:IncludeNativeLibrariesForSelfExtract=true `
-  -p:DebugType=None `
-  -p:DebugSymbols=false
+.\bstrings.exe bundle verify
+.\bstrings.exe analyze -d D:\evidence\carved-files --full -o D:\results\evidence
 ```
 
-Then assemble the bundle entirely from local paths:
+`bundle verify` rejects a missing, extra, linked, resized, or SHA-256-mismatched
+file before analysis. `analyze --full` then coordinates extraction, executable
+string recovery, language assessment, local CPU translation, pattern matching,
+and final reporting. A requested stage fails rather than being silently
+omitted.
+
+`--full` means every bstrings stage; it does not mean full forensic parsing of
+a disk or memory image. bstrings does not mount filesystems or carve embedded
+PEs. Mount or carve a raw image with an appropriate forensic tool before using
+the directory workflow above. A raw image can instead be passed to the direct
+extract/search interface for byte strings and patterns, but FLOSS receives a
+PE only when that complete PE is supplied as a file.
+
+The external `.sha256` is useful for detecting transfer corruption when it is
+compared through an independently trusted procedure. Neither that checksum nor
+the manifest inside the same archive authenticates the publisher by itself: an
+attacker able to replace both data and checksums can make them agree. Release
+signing and independently anchored provenance are described under
+[hardening boundaries](#release-hardening-boundaries).
+
+## What is bundled
+
+The release profile is `windows-x64-cpu-q4` and includes:
+
+- the self-contained Windows x64 .NET application and native Rust scanner;
+- the isolated official CPython embeddable runtime;
+- the standalone Windows Magika tool with its application-local DirectML
+  runtime, and the standalone FLOSS tool;
+- a Windows x64 CPU llama.cpp runtime built from the lock-pinned source commit
+  with OpenMP and network-fetched build inputs disabled;
+- pinned Hy-MT2-1.8B Q4_K_M GGUF weights;
+- the four required x64 Visual C++ runtime DLL names, deployed application-local
+  beside the root scanner and each bundled native CLI from a licensed Visual
+  Studio redistributable directory;
+- the enrichment adapter, offline guards, smoke evidence, documentation,
+  dependency inventories, notices, required corresponding source, and
+  licenses; and
+- a strict manifest governing the exact allowed regular-file set.
+
+Downloaded offline components, their source URLs, byte lengths, SHA-256 values,
+executable paths, model revision, and license inputs are frozen in
+`tools/airgap/offline-components.lock.json`. Published bstrings/.NET/Rust bytes
+and the licensed release-selected Visual C++ runtime bytes are instead captured
+by `airgap-config.json` and the finished strict manifest. The release builder
+and archive verification reject any mismatch from those recorded bytes.
+
+The bundle does not install services, drivers, Python packages, or global
+runtimes. llama.cpp is started only as a private loopback child process with
+its `--offline` guard. Offline model variables are forced and the adapter
+rejects non-loopback sockets. `runtime/llama/llama-build-provenance.json`
+records its pinned source, compiler, build flags, runtime hashes, and PE import
+closure; the corresponding byte-exact notices are under `licenses/llama.cpp`.
+Magika's 70-package runtime closure, app-local DirectML dependency, notices,
+and required source are governed by
+`licenses/magika-cli-1.1.0-redistribution.json`. FLOSS's embedded Python,
+PyInstaller, native-runtime, Python-package, and Rust dependency closures are
+governed by `licenses/floss-v3.1.1-win-x64.json`. The complete-bundle verifier
+invokes both component verifiers, so a missing dependency, notice, source file,
+or unexpected component-owned file fails before analysis.
+
+These files are private application-local payloads, not prerequisites. The
+examiner does not install DirectML, ONNX Runtime, Python packages, FLOSS, or
+Magika separately. Detailed redistribution records are in
+[Magika CLI redistribution](magika-cli-redistribution.md) and
+[FLOSS standalone redistribution](floss-standalone-redistribution.md).
+
+## Why the release carries Q4
+
+GitHub requires every individual release asset to be smaller than 2 GiB.
+[GitHub documents that release limit](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases#about-releases).
+The Q8 model alone is 1,908,528,192 bytes; after adding the application,
+portable runtimes, FLOSS, Magika, llama.cpp, notices, and ZIP overhead, a
+complete Q8 archive cannot fit below the release ceiling. Q4_K_M is
+1,133,080,448 bytes and leaves enough room for the complete CPU toolchain.
+
+The bounded translation gate measured Q4 at 1.8554 strings/s and Q8 at 1.2885
+strings/s on the reviewed CUDA laptop. Both preserved 22/22 forensic
+identifiers; Q4 scored 58.4248 versus 59.7396 WMT chrF++, and 86.3056 versus
+87.5297 forensic chrF++. Those results support Q4 as the downloadable default,
+not as a universal quality ranking. See the
+[translation benchmark](translation-benchmark-2026-08-04.md) for the corpus,
+hardware, pins, and limitations.
+
+A maintainer may still produce a local Q8 bundle for approved media where the
+GitHub per-asset limit does not apply. That is a separate custom build and must
+be fully rehashed and re-tested; replacing the model inside a published bundle
+invalidates its manifest.
+
+## Administrator acceptance
+
+Run `.\bstrings.exe bundle verify` after every transfer and before evidence work.
+For stronger administrator acceptance, run the bundled verifier's complete
+smoke on each target workstation image after the root executable passes:
 
 ```powershell
-.\tools\airgap\Build-AirgapBundle.ps1 `
-  -OutputDirectory E:\transfer\bstrings-airgap `
-  -PublishedBstringsDirectory C:\staging\bstrings-publish `
-  -PythonDirectory C:\staging\python-embed-amd64 `
-  -MagikaDirectory C:\staging\magika `
-  -FlossDirectory C:\staging\floss-3.1.1 `
-  -LlamaDirectory C:\staging\llama-b10248-cuda12.4 `
-  -TranslationModelDirectory C:\staging\hy-mt2-q8 `
-  -TranslationModelRevision 1cd5208700acedef4ef93019b6cfc148b8522d45
-```
-
-The builder never downloads or installs anything. It refuses an existing output
-directory, validates every executable and model path before copying, leaves an
-`.incomplete` marker after failure, and verifies the finished manifest itself.
-
-To carry the broader MADLAD fallback or a working RAPIDS environment, add:
-
-```powershell
-  -MadladModelDirectory C:\staging\madlad400-3b-mt `
-  -RapidsPythonDirectory C:\staging\rapids-python
-```
-
-The full directories are copied. The connected machine is the only place where
-`pip`, `uv`, `hf`, Cargo, NuGet, or any other downloader should be used.
-
-## 2. Record transport integrity separately
-
-At completion the builder prints the SHA-256 of `airgap-manifest.json`. Record
-that value through a channel separate from the transfer media, or sign the
-manifest under the organization's normal software-transfer procedure. The
-inside-bundle manifest proves file integrity and completeness; it cannot prove
-its own authenticity if an attacker can replace both files and manifest.
-
-Do not add files to the bundle after manifest creation. The verifier rejects
-unexpected files as well as missing or changed ones.
-
-## 3. Verify inside the air gap
-
-Disconnect the validation VM or workstation at the operating-system or virtual
-switch level, transfer the directory, compare the separately recorded manifest
-hash, and run:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-cd D:\tools\bstrings-airgap
+.\bstrings.exe bundle verify
 .\Verify-AirgapBundle.ps1 -TranslationSmoke
 ```
 
-Verification performs four independent checks:
+The verifier runs two real `bstrings.exe analyze` examinations using only
+manifest-covered synthetic inputs. The translation path loads the exact CPU
+GGUF, requires complete output and air-gap provenance, and retains and matches
+`analyst@example.com`. The recovery path sends a reviewed benign PE through
+Magika and FLOSS, then requires the exact attributable decoded marker. It
+removes its temporary results after either success or failure.
 
-1. Every bundled file's size and SHA-256 must match the manifest, with no extra
-   files or links.
-2. The Python runtime must block a synthetic external DNS request while still
-   allowing loopback.
-3. The four bundled executables must answer local version probes.
-4. `-TranslationSmoke` hashes and loads the GGUF, starts llama.cpp on loopback,
-   translates a synthetic fixture on CPU, retains `analyst@example.com`, records
-   air-gap provenance, and removes its temporary output.
+This PowerShell verifier is an administrator acceptance tool, not the normal
+examiner interface. Evidence work still calls only `bstrings.exe`.
 
-Run the smoke at least once on every target hardware image. A bundle should not
-be accepted merely because its hashes match; local driver and runtime loading
-must also work.
-
-## 4. Use the bundled launchers
-
-Core extraction:
-
-```powershell
-.\Invoke-BstringsAirgap.ps1 `
-  -f D:\evidence\image.raw `
-  --processor auto `
-  --off `
-  -s `
-  -o D:\results\image-strings.txt
-```
-
-FLOSS recovery and local Hy-MT2 translation:
-
-```powershell
-.\Invoke-EnrichmentAirgap.ps1 `
-  --input-jsonl D:\results\enriched-strings.jsonl `
-  --translate `
-  --translation-device auto `
-  -o D:\results\enriched-translated.jsonl
-```
-
-The enrichment launcher supplies all executable, model, revision, and hash
-arguments from `airgap-config.json`; the operator supplies only case inputs and
-policy choices. For a bundled MADLAD snapshot, explicitly override the engine,
-model directory, ID, revision, and weights hash with the values recorded in the
-configuration.
+Release CI performs both complete smokes after extracting the finished ZIP,
+with offline environment flags and dead external proxies. That is valuable
+regression coverage, but it is not equivalent to an independently prepared
+clean VM with its virtual NIC disabled. Perform the disconnected-machine test
+under the organization's acceptance procedure before approving a workstation
+image.
 
 ## Operational boundaries
 
-- NVIDIA drivers are host-level software. Stage and approve an offline driver
-  installer separately, or use CPU mode.
-- The portable Hy-MT2 path needs no third-party Python packages. MADLAD and
-  RAPIDS require their complete prebuilt local Python environments.
-- The Python guard controls the adapter process. The strongest acceptance test
-  is still the complete bundle running in a VM whose virtual NIC is disconnected.
-- Updating any executable, model, configuration, or documentation invalidates
-  the manifest. Rebuild and re-verify the bundle rather than editing it in place.
+- No GPU is needed by the published CPU bundle. GPU acceleration requires a
+  separately prepared runtime profile plus a compatible host driver. A display
+  or compute driver is hardware and operating-system software and is not
+  bundled by bstrings.
+- The CPU profile avoids CUDA redistributables and their additional driver and
+  licensing constraints.
+- The app-local DirectML runtime removes a separate DirectML package install;
+  Windows D3D12/DXGI remain operating-system components.
+- Endpoint security, WDAC, AppLocker, or organizational policy may block a
+  bundled upstream executable even when its hash matches. Approve the recorded
+  file hashes through the local control process.
+- Model and language detection remain probabilistic. Consequential translated
+  matches must be checked against the original parent string and surrounding
+  evidence.
+- Editing any executable, model, configuration, documentation, notice, or
+  license invalidates the strict manifest. Rebuild the bundle instead of
+  patching it in place.
 
-Primary upstream references are Python's
+## Maintainers and custom bundles
+
+Connected acquisition, the pinned component lock, release automation, custom
+Q8 staging, archive-size enforcement, and the current signing/clean-VM
+boundaries are documented in
+[offline release maintenance](offline-release-maintenance.md). The normal
+examiner does not need those tools or instructions.
+
+Primary upstream references: the official Python
 [embeddable-package documentation](https://docs.python.org/3/using/windows.html#the-embeddable-package),
-Google's [Magika CLI documentation](https://github.com/google/magika#command-line-tool),
-Mandiant's [standalone FLOSS release guidance](https://github.com/mandiant/flare-floss),
-Hugging Face's [offline-mode guidance](https://huggingface.co/docs/transformers/installation#offline-mode),
-and llama.cpp's [installation documentation](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md).
+[Magika CLI](https://github.com/google/magika#command-line-tool), standalone
+[FLOSS releases](https://github.com/mandiant/flare-floss/releases),
+[llama.cpp source repository](https://github.com/ggml-org/llama.cpp), and the
+[Hy-MT2 GGUF repository](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF).
+
+## Release hardening boundaries
+
+The current checksum and manifest provide exact-byte integrity checks. Do not
+describe them as code signing or publisher authentication unless the release
+actually adds and verifies those controls.
+
+Before making that stronger claim, Authenticode-sign and RFC 3161 timestamp the
+published executables, verify a detached signed manifest against an
+independently trusted signer, and publish through an immutable release process.
+Microsoft documents
+[Authenticode timestamping](https://learn.microsoft.com/en-us/windows/win32/seccrypto/time-stamping-authenticode-signatures),
+and GitHub documents
+[immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
+
+Likewise, CI archive extraction and full-path smoke testing do not establish
+that every supported clean Windows image is dependency-free. A pristine,
+standard-user Windows x64 VM with no separately installed .NET, Python, VC
+runtime, package manager, or development tool remains the acceptance boundary
+until that matrix has been run and recorded.

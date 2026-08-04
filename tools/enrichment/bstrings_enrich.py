@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import codecs
 import hashlib
 import ipaddress
 import json
@@ -28,6 +29,12 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
 SCHEMA_VERSION = 1
+MAX_PATH_LIST_LINE_CHARACTERS = 32 * 1024
+MAX_JSONL_LINE_CHARACTERS = 16 * 1024 * 1024
+MAX_FLOSS_JSON_ITEM_BYTES = MAX_JSONL_LINE_CHARACTERS
+MAX_JSON_DEPTH = 256
+JSON_READ_CHUNK_BYTES = 64 * 1024
+JSON_STRING_SPECIAL = re.compile(rb'[\x00-\x1f"\\]')
 DEFAULT_MODEL_ID = "google/madlad400-3b-mt"
 DEFAULT_LLAMA_MODEL_ID = "tencent/Hy-MT2-1.8B-GGUF"
 LANGUAGE_NAMES = {
@@ -70,12 +77,41 @@ LANGUAGE_NAMES = {
     "zh": "Chinese",
     "zh-hant": "Traditional Chinese",
 }
-FLOSS_CATEGORIES = (
+FLOSS_STRING_CATEGORIES = (
+    "static_strings",
     "language_strings",
+    "language_strings_missed",
     "stack_strings",
     "tight_strings",
     "decoded_strings",
 )
+FLOSS_STRING_CATEGORY_SET = frozenset(FLOSS_STRING_CATEGORIES)
+FLOSS_STATIC_CATEGORIES = frozenset(
+    ("static_strings", "language_strings", "language_strings_missed")
+)
+FLOSS_STACK_CATEGORIES = frozenset(("stack_strings", "tight_strings"))
+FLOSS_ROOT_KEYS = frozenset(("analysis", "metadata", "strings"))
+FLOSS_STRING_ENCODINGS = frozenset(("ASCII", "UTF-16LE", "UTF-8"))
+FLOSS_ADDRESS_TYPES = frozenset(("STACK", "GLOBAL", "HEAP"))
+FLOSS_STATIC_ITEM_FIELDS = frozenset(("string", "offset", "encoding"))
+FLOSS_STACK_ITEM_FIELDS = frozenset(
+    (
+        "function",
+        "string",
+        "encoding",
+        "program_counter",
+        "stack_pointer",
+        "original_stack_pointer",
+        "offset",
+        "frame_offset",
+    )
+)
+FLOSS_DECODED_ITEM_FIELDS = frozenset(
+    ("address", "address_type", "string", "encoding", "decoded_at", "decoding_routine")
+)
+UINT64_MAX = (1 << 64) - 1
+INT64_MIN = -(1 << 63)
+INT64_MAX = (1 << 63) - 1
 PROTECTED_IDENTIFIER_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
@@ -375,26 +411,626 @@ def run_floss(
     minimum_length: int,
     timeout_seconds: int,
     input_format: str = "auto",
-) -> dict[str, Any]:
+) -> FlossJsonDocument:
     command = [floss, "-j", "-n", str(minimum_length)]
     if input_format != "auto":
         command.extend(["--format", input_format])
     command.extend(["--only", "static", "stack", "tight", "decoded", "--", str(path)])
-    result = run_checked(command, timeout_seconds)
+    # Ownership transfers to FlossJsonDocument on success and its close() owns cleanup.
+    stdout_file = tempfile.TemporaryFile(mode="w+b")  # noqa: SIM115
     try:
-        payload = json.loads(result.stdout)
+        with tempfile.TemporaryFile(mode="w+b") as stderr_file:
+            result = subprocess.run(
+                command,
+                check=False,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=timeout_seconds,
+            )
+            if result.returncode != 0:
+                detail = _file_tail(stderr_file) or _file_tail(stdout_file)
+                raise EnrichmentError(
+                    f"FLOSS failed with exit code {result.returncode} for '{path}': "
+                    + (detail or "no diagnostic output")
+                )
+            stdout_file.seek(0)
+            try:
+                document = FlossJsonDocument(stdout_file)
+            except (_JsonSyntaxError, OSError) as exc:
+                raise EnrichmentError(f"FLOSS returned invalid JSON for '{path}': {exc}") from exc
+            return document
+    except subprocess.TimeoutExpired as exc:
+        raise EnrichmentError(f"FLOSS timed out after {timeout_seconds}s for '{path}'") from exc
+    except OSError as exc:
+        raise EnrichmentError(f"Could not run FLOSS for '{path}': {exc}") from exc
+    finally:
+        if "document" not in locals():
+            stdout_file.close()
+
+
+def _file_tail(handle: Any, maximum_bytes: int = 64 * 1024) -> str:
+    handle.flush()
+    length = handle.seek(0, os.SEEK_END)
+    handle.seek(max(0, length - maximum_bytes))
+    return handle.read(maximum_bytes).decode("utf-8", errors="replace").strip()
+
+
+class _JsonSyntaxError(ValueError):
+    """A strict JSON syntax or safety error with a byte location."""
+
+
+@dataclass(frozen=True)
+class _JsonValueSpan:
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class _JsonArraySpan(_JsonValueSpan):
+    count: int
+
+
+class _BoundedJsonReader:
+    """Strict, seekable JSON scanner whose memory is independent of document size."""
+
+    _whitespace = frozenset(b" \t\r\n")
+    _value_delimiters = frozenset(b" \t\r\n,]}")
+    _hexadecimal = frozenset(b"0123456789abcdefABCDEF")
+
+    def __init__(self, handle: Any, start: int = 0) -> None:
+        handle.seek(start)
+        self._handle = handle
+        self._buffer = bytearray()
+        self._cursor = 0
+        self._buffer_offset = start
+        self._eof = False
+        self._capture: bytearray | None = None
+        self._capture_limit = 0
+
+    @property
+    def position(self) -> int:
+        return self._buffer_offset + self._cursor
+
+    def _fill(self) -> bool:
+        if self._cursor < len(self._buffer):
+            return True
+        self._buffer_offset += self._cursor
+        self._buffer.clear()
+        self._cursor = 0
+        if self._eof:
+            return False
+        chunk = self._handle.read(JSON_READ_CHUNK_BYTES)
+        if not chunk:
+            self._eof = True
+            return False
+        self._buffer.extend(chunk)
+        return True
+
+    def peek(self) -> int | None:
+        return self._buffer[self._cursor] if self._fill() else None
+
+    def take(self) -> int:
+        value = self.peek()
+        if value is None:
+            self.fail("Unexpected end of JSON")
+        assert value is not None
+        self._cursor += 1
+        if self._capture is not None:
+            self._capture.append(value)
+            if len(self._capture) > self._capture_limit:
+                self.fail(
+                    f"FLOSS JSON item exceeds the {MAX_FLOSS_JSON_ITEM_BYTES}-byte safety limit"
+                )
+        return value
+
+    def fail(self, message: str) -> None:
+        raise _JsonSyntaxError(f"{message} at byte {self.position}")
+
+    def expect(self, expected: int) -> None:
+        actual = self.take()
+        if actual != expected:
+            self.fail(f"Expected {chr(expected)!r}, found {chr(actual)!r}")
+
+    def skip_whitespace(self) -> None:
+        while self.peek() in self._whitespace:
+            self.take()
+
+    def read_string(self) -> str:
+        token = bytearray()
+        self._scan_string(token)
+        try:
+            value = json.loads(token.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            self.fail(f"Invalid JSON string: {exc}")
+        if not isinstance(value, str):
+            self.fail("JSON object key is not a string")
+        return value
+
+    def _scan_string(self, token: bytearray | None = None) -> None:
+        start = self.position
+
+        def consume() -> int:
+            value = self.take()
+            if token is not None:
+                token.append(value)
+            if self.position - start > MAX_FLOSS_JSON_ITEM_BYTES:
+                self.fail(f"JSON string exceeds the {MAX_FLOSS_JSON_ITEM_BYTES}-byte safety limit")
+            return value
+
+        if consume() != ord('"'):
+            self.fail("Expected a JSON string")
+        while True:
+            if not self._fill():
+                self.fail("Unexpected end of JSON string")
+            match = JSON_STRING_SPECIAL.search(self._buffer, self._cursor)
+            run_end = len(self._buffer) if match is None else match.start()
+            if run_end > self._cursor:
+                if token is not None:
+                    token.extend(self._buffer[self._cursor : run_end])
+                if self._capture is not None:
+                    self._capture.extend(self._buffer[self._cursor : run_end])
+                    if len(self._capture) > self._capture_limit:
+                        self.fail(
+                            "FLOSS JSON item exceeds the "
+                            f"{MAX_FLOSS_JSON_ITEM_BYTES}-byte safety limit"
+                        )
+                self._cursor = run_end
+                if self.position - start > MAX_FLOSS_JSON_ITEM_BYTES:
+                    self.fail(
+                        f"JSON string exceeds the {MAX_FLOSS_JSON_ITEM_BYTES}-byte safety limit"
+                    )
+            if match is None:
+                continue
+            value = consume()
+            if value == ord('"'):
+                return
+            if value < 0x20:
+                self.fail("Unescaped control byte in JSON string")
+            if value != ord("\\"):
+                continue
+            escaped = consume()
+            if escaped in b'"\\/bfnrt':
+                continue
+            if escaped != ord("u"):
+                self.fail("Invalid JSON string escape")
+            for _ in range(4):
+                if consume() not in self._hexadecimal:
+                    self.fail("Invalid JSON Unicode escape")
+
+    def skip_value(self, depth: int = 0) -> None:
+        if depth > MAX_JSON_DEPTH:
+            self.fail(f"JSON nesting exceeds the {MAX_JSON_DEPTH}-level safety limit")
+        value = self.peek()
+        if value is None:
+            self.fail("Expected a JSON value")
+        if value == ord('"'):
+            self._scan_string()
+        elif value == ord("{"):
+            self._skip_object(depth + 1)
+        elif value == ord("["):
+            self._skip_array(depth + 1)
+        elif value == ord("t"):
+            self._skip_literal(b"true")
+        elif value == ord("f"):
+            self._skip_literal(b"false")
+        elif value == ord("n"):
+            self._skip_literal(b"null")
+        elif value == ord("-") or ord("0") <= value <= ord("9"):
+            self._skip_number()
+        else:
+            self.fail("Expected a JSON value")
+
+    def _skip_object(self, depth: int) -> None:
+        self.expect(ord("{"))
+        self.skip_whitespace()
+        if self.peek() == ord("}"):
+            self.take()
+            return
+        while True:
+            if self.peek() != ord('"'):
+                self.fail("Expected a JSON object key")
+            self._scan_string()
+            self.skip_whitespace()
+            self.expect(ord(":"))
+            self.skip_whitespace()
+            self.skip_value(depth)
+            self.skip_whitespace()
+            delimiter = self.take()
+            if delimiter == ord("}"):
+                return
+            if delimiter != ord(","):
+                self.fail("Expected ',' or '}' in JSON object")
+            self.skip_whitespace()
+
+    def _skip_array(self, depth: int) -> None:
+        self.expect(ord("["))
+        self.skip_whitespace()
+        if self.peek() == ord("]"):
+            self.take()
+            return
+        while True:
+            self.skip_value(depth)
+            self.skip_whitespace()
+            delimiter = self.take()
+            if delimiter == ord("]"):
+                return
+            if delimiter != ord(","):
+                self.fail("Expected ',' or ']' in JSON array")
+            self.skip_whitespace()
+
+    def _skip_literal(self, literal: bytes) -> None:
+        for expected in literal:
+            if self.take() != expected:
+                self.fail(f"Invalid JSON literal; expected {literal.decode('ascii')}")
+        if self.peek() is not None and self.peek() not in self._value_delimiters:
+            self.fail("Invalid character after JSON literal")
+
+    def _skip_number(self) -> None:
+        if self.peek() == ord("-"):
+            self.take()
+        value = self.peek()
+        if value == ord("0"):
+            self.take()
+            if self.peek() is not None and ord("0") <= self.peek() <= ord("9"):
+                self.fail("Leading zero in JSON number")
+        elif value is not None and ord("1") <= value <= ord("9"):
+            while self.peek() is not None and ord("0") <= self.peek() <= ord("9"):
+                self.take()
+        else:
+            self.fail("Invalid JSON number")
+        if self.peek() == ord("."):
+            self.take()
+            if self.peek() is None or not ord("0") <= self.peek() <= ord("9"):
+                self.fail("JSON fraction has no digits")
+            while self.peek() is not None and ord("0") <= self.peek() <= ord("9"):
+                self.take()
+        if self.peek() in {ord("e"), ord("E")}:
+            self.take()
+            if self.peek() in {ord("+"), ord("-")}:
+                self.take()
+            if self.peek() is None or not ord("0") <= self.peek() <= ord("9"):
+                self.fail("JSON exponent has no digits")
+            while self.peek() is not None and ord("0") <= self.peek() <= ord("9"):
+                self.take()
+        if self.peek() is not None and self.peek() not in self._value_delimiters:
+            self.fail("Invalid character after JSON number")
+
+    def capture_value(self, maximum_bytes: int) -> bytearray:
+        if self._capture is not None:
+            raise RuntimeError("Nested JSON capture is not supported")
+        self._capture = bytearray()
+        self._capture_limit = maximum_bytes
+        try:
+            self.skip_value()
+            return self._capture
+        finally:
+            self._capture = None
+            self._capture_limit = 0
+
+
+def _validate_utf8(handle: Any) -> None:
+    handle.seek(0)
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+    try:
+        while chunk := handle.read(JSON_READ_CHUNK_BYTES):
+            decoder.decode(chunk)
+        decoder.decode(b"", final=True)
+    except UnicodeDecodeError as exc:
+        raise _JsonSyntaxError(f"FLOSS JSON is not UTF-8 at byte {exc.start}") from exc
+
+
+def _index_json_array(reader: _BoundedJsonReader) -> _JsonArraySpan:
+    start = reader.position
+    reader.expect(ord("["))
+    reader.skip_whitespace()
+    count = 0
+    if reader.peek() == ord("]"):
+        reader.take()
+        return _JsonArraySpan(start, reader.position, count)
+    while True:
+        item_start = reader.position
+        reader.skip_value()
+        if reader.position - item_start > MAX_FLOSS_JSON_ITEM_BYTES:
+            reader.fail(
+                f"FLOSS JSON item exceeds the {MAX_FLOSS_JSON_ITEM_BYTES}-byte safety limit"
+            )
+        count += 1
+        reader.skip_whitespace()
+        delimiter = reader.take()
+        if delimiter == ord("]"):
+            return _JsonArraySpan(start, reader.position, count)
+        if delimiter != ord(","):
+            reader.fail("Expected ',' or ']' in FLOSS string array")
+        reader.skip_whitespace()
+
+
+def _index_floss_strings(reader: _BoundedJsonReader) -> dict[str, _JsonArraySpan]:
+    indexed: dict[str, _JsonArraySpan] = {}
+    reader.expect(ord("{"))
+    reader.skip_whitespace()
+    if reader.peek() == ord("}"):
+        reader.take()
+    else:
+        while True:
+            key = reader.read_string()
+            if key not in FLOSS_STRING_CATEGORY_SET:
+                reader.fail(f"Unknown FLOSS v3.1.1 strings category {key!r}")
+            if key in indexed:
+                reader.fail(f"Duplicate FLOSS strings category {key!r}")
+            reader.skip_whitespace()
+            reader.expect(ord(":"))
+            reader.skip_whitespace()
+            if reader.peek() != ord("["):
+                reader.fail(f"FLOSS strings.{key} must be an array")
+            indexed[key] = _index_json_array(reader)
+            reader.skip_whitespace()
+            delimiter = reader.take()
+            if delimiter == ord("}"):
+                break
+            if delimiter != ord(","):
+                reader.fail("Expected ',' or '}' in FLOSS strings object")
+            reader.skip_whitespace()
+    missing = FLOSS_STRING_CATEGORY_SET.difference(indexed)
+    if missing:
+        reader.fail(
+            "FLOSS v3.1.1 strings object is missing required categories: "
+            + ", ".join(sorted(missing))
+        )
+    return indexed
+
+
+def _index_floss_document(
+    handle: Any,
+) -> tuple[_JsonValueSpan | None, dict[str, _JsonArraySpan]]:
+    _validate_utf8(handle)
+    reader = _BoundedJsonReader(handle)
+    reader.skip_whitespace()
+    if reader.peek() != ord("{"):
+        reader.fail("FLOSS JSON root must be an object")
+    reader.take()
+    reader.skip_whitespace()
+    metadata_span: _JsonValueSpan | None = None
+    strings_index: dict[str, _JsonArraySpan] | None = None
+    seen_root_keys: set[str] = set()
+    if reader.peek() != ord("}"):
+        while True:
+            key = reader.read_string()
+            if key not in FLOSS_ROOT_KEYS:
+                reader.fail(f"Unknown FLOSS v3.1.1 root key {key!r}")
+            if key in seen_root_keys:
+                reader.fail(f"Duplicate FLOSS root key {key!r}")
+            seen_root_keys.add(key)
+            reader.skip_whitespace()
+            reader.expect(ord(":"))
+            reader.skip_whitespace()
+            value_start = reader.position
+            if key == "strings" and reader.peek() == ord("{"):
+                strings_index = _index_floss_strings(reader)
+            else:
+                reader.skip_value()
+                if key == "strings":
+                    strings_index = None
+            value_end = reader.position
+            if key == "metadata":
+                if value_end - value_start > MAX_FLOSS_JSON_ITEM_BYTES:
+                    reader.fail(
+                        f"FLOSS metadata exceeds the {MAX_FLOSS_JSON_ITEM_BYTES}-byte safety limit"
+                    )
+                metadata_span = _JsonValueSpan(value_start, value_end)
+            reader.skip_whitespace()
+            delimiter = reader.take()
+            if delimiter == ord("}"):
+                break
+            if delimiter != ord(","):
+                reader.fail("Expected ',' or '}' in FLOSS JSON root")
+            reader.skip_whitespace()
+    else:
+        reader.take()
+    reader.skip_whitespace()
+    if reader.peek() is not None:
+        reader.fail("Trailing data after FLOSS JSON document")
+    if strings_index is None:
+        reader.fail("FLOSS JSON has no strings object")
+    if metadata_span is None:
+        reader.fail("FLOSS JSON has no metadata object")
+    return metadata_span, strings_index
+
+
+def _reject_duplicate_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise _JsonSyntaxError(f"Duplicate JSON object key {key!r}")
+        value[key] = item
+    return value
+
+
+def _decode_json_value(handle: Any, span: _JsonValueSpan) -> Any:
+    reader = _BoundedJsonReader(handle, span.start)
+    raw = reader.capture_value(MAX_FLOSS_JSON_ITEM_BYTES)
+    if reader.position != span.end:
+        reader.fail("Indexed FLOSS JSON value changed during replay")
+    try:
+        return json.loads(raw, object_pairs_hook=_reject_duplicate_object_pairs)
     except json.JSONDecodeError as exc:
-        raise EnrichmentError(f"FLOSS returned invalid JSON for '{path}': {exc}") from exc
-    if not isinstance(payload, dict) or not isinstance(payload.get("strings"), dict):
-        raise EnrichmentError(f"FLOSS JSON for '{path}' has no strings object")
-    return payload
+        raise _JsonSyntaxError(f"Could not decode indexed FLOSS JSON value: {exc}") from exc
+
+
+def _require_integer(item: dict[str, Any], field: str, location: str) -> int:
+    value = item[field]
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise EnrichmentError(f"{location}.{field} must be an integer")
+    return value
+
+
+def _require_u64(item: dict[str, Any], field: str, location: str) -> None:
+    value = _require_integer(item, field, location)
+    if not 0 <= value <= UINT64_MAX:
+        raise EnrichmentError(f"{location}.{field} must be an unsigned 64-bit integer")
+
+
+def _require_i64(item: dict[str, Any], field: str, location: str) -> None:
+    value = _require_integer(item, field, location)
+    if not INT64_MIN <= value <= INT64_MAX:
+        raise EnrichmentError(f"{location}.{field} must be a signed 64-bit integer")
+
+
+def _validate_floss_item(category: str, item: dict[str, Any], index: int) -> None:
+    location = f"FLOSS strings.{category}[{index}]"
+    expected_fields = (
+        FLOSS_STATIC_ITEM_FIELDS
+        if category in FLOSS_STATIC_CATEGORIES
+        else FLOSS_STACK_ITEM_FIELDS
+        if category in FLOSS_STACK_CATEGORIES
+        else FLOSS_DECODED_ITEM_FIELDS
+    )
+    actual_fields = frozenset(item)
+    missing = expected_fields.difference(actual_fields)
+    unknown = actual_fields.difference(expected_fields)
+    if missing:
+        raise EnrichmentError(
+            f"{location} is missing required fields: {', '.join(sorted(missing))}"
+        )
+    if unknown:
+        raise EnrichmentError(f"{location} has unknown fields: {', '.join(sorted(unknown))}")
+
+    text = item["string"]
+    if not isinstance(text, str):
+        raise EnrichmentError(f"{location}.string must be a string")
+    encoding = item["encoding"]
+    if encoding not in FLOSS_STRING_ENCODINGS:
+        raise EnrichmentError(
+            f"{location}.encoding must be one of: {', '.join(sorted(FLOSS_STRING_ENCODINGS))}"
+        )
+
+    if category in FLOSS_STATIC_CATEGORIES:
+        _require_u64(item, "offset", location)
+    elif category in FLOSS_STACK_CATEGORIES:
+        for field in (
+            "function",
+            "program_counter",
+            "stack_pointer",
+            "original_stack_pointer",
+        ):
+            _require_u64(item, field, location)
+        for field in ("offset", "frame_offset"):
+            _require_i64(item, field, location)
+    else:
+        for field in ("address", "decoded_at", "decoding_routine"):
+            _require_u64(item, field, location)
+        address_type = item["address_type"]
+        if address_type not in FLOSS_ADDRESS_TYPES:
+            raise EnrichmentError(
+                f"{location}.address_type must be one of: " + ", ".join(sorted(FLOSS_ADDRESS_TYPES))
+            )
+
+
+class FlossJsonDocument:
+    """Disk-backed, validated FLOSS JSON with one-record-at-a-time replay."""
+
+    def __init__(self, handle: Any) -> None:
+        self._handle = handle
+        self._closed = False
+        try:
+            metadata_span, self._strings = _index_floss_document(handle)
+            assert metadata_span is not None
+            metadata = _decode_json_value(handle, metadata_span)
+            if not isinstance(metadata, dict):
+                raise _JsonSyntaxError("FLOSS metadata must be an object")
+            missing_metadata = {"language", "imagebase"}.difference(metadata)
+            if missing_metadata:
+                raise _JsonSyntaxError(
+                    "FLOSS metadata is missing required fields: "
+                    + ", ".join(sorted(missing_metadata))
+                )
+            language = metadata["language"]
+            imagebase = metadata["imagebase"]
+            if not isinstance(language, str):
+                raise _JsonSyntaxError("FLOSS metadata.language must be a string")
+            if (
+                not isinstance(imagebase, int)
+                or isinstance(imagebase, bool)
+                or not 0 <= imagebase <= UINT64_MAX
+            ):
+                raise _JsonSyntaxError(
+                    "FLOSS metadata.imagebase must be an unsigned 64-bit integer"
+                )
+            self.metadata = {"language": language, "imagebase": imagebase}
+        except BaseException:
+            self.close()
+            raise
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def iter_string_category(self, category: str) -> Iterable[dict[str, Any]]:
+        if self._closed:
+            raise EnrichmentError("FLOSS JSON document is closed")
+        span = self._strings.get(category)
+        if span is None:
+            return
+        reader = _BoundedJsonReader(self._handle, span.start)
+        reader.expect(ord("["))
+        reader.skip_whitespace()
+        emitted = 0
+        if reader.peek() == ord("]"):
+            reader.take()
+        else:
+            while True:
+                raw = reader.capture_value(MAX_FLOSS_JSON_ITEM_BYTES)
+                try:
+                    item = json.loads(
+                        raw,
+                        object_pairs_hook=_reject_duplicate_object_pairs,
+                    )
+                except (UnicodeError, json.JSONDecodeError, _JsonSyntaxError) as exc:
+                    raise EnrichmentError(
+                        f"Could not decode FLOSS strings.{category}[{emitted}]: {exc}"
+                    ) from exc
+                if not isinstance(item, dict):
+                    raise EnrichmentError(f"FLOSS strings.{category}[{emitted}] must be an object")
+                _validate_floss_item(category, item, emitted)
+                emitted += 1
+                yield item
+                reader.skip_whitespace()
+                delimiter = reader.take()
+                if delimiter == ord("]"):
+                    break
+                if delimiter != ord(","):
+                    reader.fail("Expected ',' or ']' in FLOSS string array replay")
+                reader.skip_whitespace()
+        if emitted != span.count or reader.position != span.end:
+            raise EnrichmentError(
+                f"FLOSS strings.{category} changed during replay "
+                f"({emitted} of {span.count} indexed items)"
+            )
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._handle.close()
+
+    def __enter__(self) -> FlossJsonDocument:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        with suppress(Exception):
+            self.close()
 
 
 def common_attributes(
     classification: Classification,
-    floss_payload: dict[str, Any],
+    floss_payload: dict[str, Any] | FlossJsonDocument,
 ) -> dict[str, Any]:
-    metadata = floss_payload.get("metadata") or {}
+    metadata = (
+        floss_payload.metadata
+        if isinstance(floss_payload, FlossJsonDocument)
+        else floss_payload.get("metadata") or {}
+    )
     return {
         "magikaLabel": classification.label,
         "magikaScore": classification.score,
@@ -427,31 +1063,70 @@ def make_string_record(
     return with_record_id(record)
 
 
-def normalize_floss(
-    payload: dict[str, Any],
+def iter_normalized_floss(
+    payload: dict[str, Any] | FlossJsonDocument,
     source_path: Path,
     classification: Classification,
     floss_version: str,
     include_static: bool = False,
-) -> list[dict[str, Any]]:
-    strings = payload["strings"]
-    source_file = str(source_path.resolve())
-    shared = common_attributes(classification, payload)
-    records: list[dict[str, Any]] = []
+) -> Iterable[dict[str, Any]]:
+    """Yield normalized FLOSS records without duplicating its monolithic JSON payload."""
+    document = payload if isinstance(payload, FlossJsonDocument) else None
+    strings = None if document is not None else payload["strings"]
+    if document is None:
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            raise EnrichmentError("FLOSS metadata must be an object")
+        if "language" not in metadata or not isinstance(metadata["language"], str):
+            raise EnrichmentError("FLOSS metadata.language must be a string")
+        if "imagebase" not in metadata:
+            raise EnrichmentError("FLOSS metadata is missing required field: imagebase")
+        _require_u64(metadata, "imagebase", "FLOSS metadata")
+        if not isinstance(strings, dict):
+            raise EnrichmentError("FLOSS strings must be an object")
+        categories = frozenset(strings)
+        missing = FLOSS_STRING_CATEGORY_SET.difference(categories)
+        unknown = categories.difference(FLOSS_STRING_CATEGORY_SET)
+        if missing:
+            raise EnrichmentError(
+                "FLOSS v3.1.1 strings object is missing required categories: "
+                + ", ".join(sorted(missing))
+            )
+        if unknown:
+            raise EnrichmentError(
+                "FLOSS v3.1.1 strings object has unknown categories: " + ", ".join(sorted(unknown))
+            )
 
-    static_categories = ["language_strings"]
-    if include_static:
-        static_categories.insert(0, "static_strings")
-        static_categories.append("language_strings_missed")
-    for category in static_categories:
-        kind = {
-            "static_strings": "static",
-            "language_strings": "language",
-            "language_strings_missed": "language-missed",
-        }[category]
-        for item in strings.get(category, []):
-            records.append(
-                make_string_record(
+    def category_items(category: str) -> Iterable[dict[str, Any]]:
+        if document is not None:
+            yield from document.iter_string_category(category)
+            return
+        assert isinstance(strings, dict)
+        items = strings[category]
+        if not isinstance(items, list):
+            raise EnrichmentError(f"FLOSS strings.{category} must be an array")
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise EnrichmentError(f"FLOSS strings.{category}[{index}] must be an object")
+            _validate_floss_item(category, item, index)
+            yield item
+
+    try:
+        source_file = str(source_path.resolve())
+        shared = common_attributes(classification, payload)
+
+        static_categories = ["language_strings"]
+        if include_static:
+            static_categories.insert(0, "static_strings")
+            static_categories.append("language_strings_missed")
+        for category in static_categories:
+            kind = {
+                "static_strings": "static",
+                "language_strings": "language",
+                "language_strings_missed": "language-missed",
+            }[category]
+            for item in category_items(category):
+                yield make_string_record(
                     text=str(item["string"]),
                     source_file=source_file,
                     extractor_version=floss_version,
@@ -460,12 +1135,10 @@ def normalize_floss(
                     location_value=item["offset"],
                     attributes={**shared, "encoding": item.get("encoding")},
                 )
-            )
 
-    for category, kind in (("stack_strings", "stack"), ("tight_strings", "tight")):
-        for item in strings.get(category, []):
-            records.append(
-                make_string_record(
+        for category, kind in (("stack_strings", "stack"), ("tight_strings", "tight")):
+            for item in category_items(category):
+                yield make_string_record(
                     text=str(item["string"]),
                     source_file=source_file,
                     extractor_version=floss_version,
@@ -482,11 +1155,9 @@ def normalize_floss(
                         "frameOffset": item.get("frame_offset"),
                     },
                 )
-            )
 
-    for item in strings.get("decoded_strings", []):
-        records.append(
-            make_string_record(
+        for item in category_items("decoded_strings"):
+            yield make_string_record(
                 text=str(item["string"]),
                 source_file=source_file,
                 extractor_version=floss_version,
@@ -501,9 +1172,28 @@ def normalize_floss(
                     "decodingRoutine": item.get("decoding_routine"),
                 },
             )
-        )
+    finally:
+        if document is not None:
+            document.close()
 
-    return records
+
+def normalize_floss(
+    payload: dict[str, Any] | FlossJsonDocument,
+    source_path: Path,
+    classification: Classification,
+    floss_version: str,
+    include_static: bool = False,
+) -> list[dict[str, Any]]:
+    """Materialize normalized FLOSS records for small callers and compatibility."""
+    return list(
+        iter_normalized_floss(
+            payload,
+            source_path,
+            classification,
+            floss_version,
+            include_static,
+        )
+    )
 
 
 def should_translate(text: str, minimum_characters: int, maximum_characters: int) -> bool:
@@ -562,10 +1252,10 @@ def add_translations(
     execution_metadata = getattr(translator, "execution_metadata", None)
     for parent in candidates:
         source_text = str(parent["text"])
-        translated_text = translations_by_text[source_text]
+        translated_text = translations_by_text[source_text].strip()
+        if not translated_text:
+            raise EnrichmentError("Translation engine returned an empty translation")
         validate_identifier_retention(source_text, translated_text)
-        if translated_text == source_text:
-            continue
         derived = {
             key: value
             for key, value in parent.items()
@@ -580,6 +1270,7 @@ def add_translations(
             "modelSha256": translator.model_sha256,
             "sourceLanguage": "auto",
             "targetLanguage": target_language,
+            "outcome": "unchanged" if translated_text == source_text else "translated",
         }
         if execution_metadata:
             transform["execution"] = dict(execution_metadata)
@@ -591,6 +1282,11 @@ def add_translations(
             }
         )
         translated_records.append(with_record_id(derived))
+    if len(translated_records) != len(candidates):
+        raise EnrichmentError(
+            "Translation outcome cardinality mismatch: "
+            f"expected {len(candidates)}, produced {len(translated_records)}"
+        )
     return translated_records
 
 
@@ -625,6 +1321,55 @@ def read_normalized_jsonl(path: Path) -> Iterable[dict[str, Any]]:
             yield record
 
 
+def read_paths_from(path: Path) -> Iterable[Path]:
+    """Yield literal UTF-8 path-list entries without materializing the inventory."""
+    try:
+        input_handle = path.open("r", encoding="utf-8-sig")
+    except OSError as exc:
+        raise EnrichmentError(f"Could not open path list '{path}': {exc}") from exc
+
+    try:
+        with input_handle:
+            line_number = 0
+            while True:
+                line = input_handle.readline(MAX_PATH_LIST_LINE_CHARACTERS + 2)
+                if line == "":
+                    break
+                line_number += 1
+                value = line.rstrip("\r\n")
+                if len(value) > MAX_PATH_LIST_LINE_CHARACTERS:
+                    raise EnrichmentError(
+                        f"Path list line {line_number} exceeds the "
+                        f"{MAX_PATH_LIST_LINE_CHARACTERS}-character safety limit"
+                    )
+                if not value.strip():
+                    continue
+                if "\x00" in value:
+                    raise EnrichmentError(f"Path list line {line_number} contains a NUL byte")
+                yield Path(value)
+    except UnicodeError as exc:
+        raise EnrichmentError(f"Path list '{path}' is not valid UTF-8: {exc}") from exc
+    except OSError as exc:
+        raise EnrichmentError(f"Could not read path list '{path}': {exc}") from exc
+
+
+def iter_extraction_paths(
+    positional_paths: Sequence[Path], paths_from: Path | None
+) -> Iterable[Path]:
+    """Select the validated extraction input while keeping file lists streaming."""
+    if positional_paths and paths_from is not None:
+        raise EnrichmentError("Positional paths cannot be combined with --paths-from")
+    if paths_from is not None:
+        found_path = False
+        for path in read_paths_from(paths_from):
+            found_path = True
+            yield path
+        if not found_path:
+            raise EnrichmentError(f"Path list '{paths_from}' contains no usable paths")
+    else:
+        yield from positional_paths
+
+
 def translate_normalized_records(
     records: Iterable[dict[str, Any]],
     translator: Translator,
@@ -634,6 +1379,7 @@ def translate_normalized_records(
     maximum_characters: int,
     window_size: int | None = None,
     cache: TranslationCache | None = None,
+    include_parents: bool = True,
 ) -> Iterable[dict[str, Any]]:
     pending: list[dict[str, Any]] = []
     effective_window_size = window_size or batch_size
@@ -652,7 +1398,8 @@ def translate_normalized_records(
         return translated
 
     for record in records:
-        yield record
+        if include_parents:
+            yield record
         if record.get("transform") is None and should_translate(
             str(record["text"]), minimum_characters, maximum_characters
         ):
@@ -801,15 +1548,73 @@ class MadladTranslator:
             prompts,
             return_tensors="pt",
             padding=True,
-            truncation=True,
-            max_length=self._max_input_tokens,
-        ).to(self._device)
+            truncation=False,
+        )
+        attention_mask = encoded.get("attention_mask")
+        if attention_mask is None or len(attention_mask) != len(texts):
+            raise EnrichmentError(
+                "MADLAD tokenizer did not return one attention mask per source; "
+                "input completeness cannot be proven"
+            )
+        for index, row in enumerate(attention_mask):
+            token_count = row.sum() if hasattr(row, "sum") else sum(row)
+            if hasattr(token_count, "item"):
+                token_count = token_count.item()
+            if not isinstance(token_count, int) or isinstance(token_count, bool):
+                raise EnrichmentError(
+                    f"MADLAD tokenizer returned an invalid token count for row {index}"
+                )
+            if token_count > self._max_input_tokens:
+                raise EnrichmentError(
+                    f"MADLAD source row {index} requires {token_count} tokens, exceeding the "
+                    f"{self._max_input_tokens}-token input safety limit; source was not truncated"
+                )
+        encoded = encoded.to(self._device)
         with self._torch.inference_mode():
             generated = self._model.generate(
                 **encoded,
                 max_new_tokens=self._max_new_tokens,
+                return_dict_in_generate=True,
             )
-        return self._tokenizer.batch_decode(generated, skip_special_tokens=True)
+        sequences = getattr(generated, "sequences", generated)
+        generation_config = getattr(self._model, "generation_config", None)
+        eos_token_id = getattr(generation_config, "eos_token_id", None)
+        if eos_token_id is None:
+            eos_token_id = getattr(self._tokenizer, "eos_token_id", None)
+        if hasattr(eos_token_id, "tolist"):
+            eos_token_id = eos_token_id.tolist()
+        if isinstance(eos_token_id, int) and not isinstance(eos_token_id, bool):
+            eos_token_ids = {eos_token_id}
+        elif isinstance(eos_token_id, (list, tuple, set)):
+            eos_token_ids = {
+                value
+                for value in eos_token_id
+                if isinstance(value, int) and not isinstance(value, bool)
+            }
+        else:
+            eos_token_ids = set()
+        if not eos_token_ids:
+            raise EnrichmentError(
+                "MADLAD completion cannot be proven because no EOS token ID is configured"
+            )
+        for index, sequence in enumerate(sequences):
+            token_ids = sequence.tolist() if hasattr(sequence, "tolist") else list(sequence)
+            if not any(token_id in eos_token_ids for token_id in token_ids):
+                raise EnrichmentError(
+                    f"MADLAD translation row {index} reached the {self._max_new_tokens}-token "
+                    "generation bound without EOS"
+                )
+        decoded = self._tokenizer.batch_decode(sequences, skip_special_tokens=True)
+        if len(decoded) != len(texts):
+            raise EnrichmentError(
+                f"MADLAD returned {len(decoded)} rows for a batch of {len(texts)}"
+            )
+        translations: list[str] = []
+        for index, value in enumerate(decoded):
+            if not isinstance(value, str) or not value.strip():
+                raise EnrichmentError(f"MADLAD returned an empty translation for row {index}")
+            translations.append(value.strip())
+        return translations
 
 
 def llama_translation_prompt(text: str, target_language: str) -> str:
@@ -850,6 +1655,7 @@ def build_llama_server_command(
         "127.0.0.1",
         "--port",
         str(port),
+        "--offline",
         "--jinja",
         "--reasoning",
         "off",
@@ -978,6 +1784,7 @@ class LlamaCppTranslator:
         self.model_id = model_id
         self.revision = revision
         self.model_sha256 = actual_model_sha256
+        self._max_input_tokens = max_input_tokens
         self._max_new_tokens = max_new_tokens
         self._request_timeout_seconds = request_timeout_seconds
         self._health_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -1057,27 +1864,10 @@ class LlamaCppTranslator:
             self._thread_state.opener = opener
         return opener
 
-    def _translate_one(self, text: str, target_language: str) -> str:
-        payload = json.dumps(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": llama_translation_prompt(text, target_language),
-                    }
-                ],
-                "temperature": 0,
-                "top_p": 1,
-                "top_k": 1,
-                "seed": 1,
-                "max_tokens": self._max_new_tokens,
-                "stream": False,
-                "cache_prompt": not self._strict_determinism,
-            }
-        ).encode("utf-8")
+    def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
-            f"http://127.0.0.1:{self._port}/v1/chat/completions",
-            data=payload,
+            f"http://127.0.0.1:{self._port}{path}",
+            data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -1086,7 +1876,86 @@ class LlamaCppTranslator:
                 request, timeout=self._request_timeout_seconds
             ) as response:
                 body = json.load(response)
-            content = body["choices"][0]["message"]["content"]
+        except (
+            OSError,
+            TimeoutError,
+            urllib.error.URLError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise EnrichmentError(f"llama.cpp request to {path} failed: {exc}") from exc
+        if not isinstance(body, dict):
+            raise EnrichmentError(f"llama.cpp request to {path} returned a non-object response")
+        return body
+
+    def _validated_prompt_token_count(self, messages: list[dict[str, str]]) -> int:
+        template_body = self._post_json("/apply-template", {"messages": messages})
+        prompt = template_body.get("prompt")
+        if not isinstance(prompt, str) or not prompt:
+            raise EnrichmentError("llama.cpp /apply-template returned an empty prompt")
+        token_body = self._post_json(
+            "/tokenize",
+            {
+                "content": prompt,
+                # Chat completions tokenizes the rendered prompt with special tokens enabled.
+                # Match that path exactly so both the safety limit and usage proof include BOS.
+                "add_special": True,
+                "parse_special": True,
+                "with_pieces": False,
+            },
+        )
+        tokens = token_body.get("tokens")
+        if not isinstance(tokens, list) or any(
+            not isinstance(token, int) or isinstance(token, bool) for token in tokens
+        ):
+            raise EnrichmentError("llama.cpp /tokenize returned invalid token IDs")
+        token_count = len(tokens)
+        if token_count == 0:
+            raise EnrichmentError("llama.cpp /tokenize returned no prompt tokens")
+        if token_count > self._max_input_tokens:
+            raise EnrichmentError(
+                f"llama.cpp prompt requires {token_count} tokens, exceeding the "
+                f"{self._max_input_tokens}-token input safety limit; source was not truncated"
+            )
+        return token_count
+
+    def _translate_one(self, text: str, target_language: str) -> str:
+        messages = [
+            {
+                "role": "user",
+                "content": llama_translation_prompt(text, target_language),
+            }
+        ]
+        expected_prompt_tokens = self._validated_prompt_token_count(messages)
+        try:
+            body = self._post_json(
+                "/v1/chat/completions",
+                {
+                    "messages": messages,
+                    "temperature": 0,
+                    "top_p": 1,
+                    "top_k": 1,
+                    "seed": 1,
+                    "max_tokens": self._max_new_tokens,
+                    "n": 1,
+                    "stream": False,
+                    "cache_prompt": not self._strict_determinism,
+                },
+            )
+            choices = body.get("choices")
+            if not isinstance(choices, list) or len(choices) != 1:
+                raise EnrichmentError(
+                    "llama.cpp translation response must contain exactly one choice"
+                )
+            choice = choices[0]
+            if not isinstance(choice, dict):
+                raise EnrichmentError("llama.cpp translation choice is not an object")
+            finish_reason = choice.get("finish_reason")
+            if finish_reason != "stop":
+                raise EnrichmentError(
+                    "llama.cpp returned a non-terminal translation finish_reason: "
+                    f"{finish_reason!r}"
+                )
+            content = choice["message"]["content"]
         except (
             OSError,
             TimeoutError,
@@ -1097,6 +1966,18 @@ class LlamaCppTranslator:
             TypeError,
         ) as exc:
             raise EnrichmentError(f"llama.cpp translation request failed: {exc}") from exc
+        usage = body.get("usage")
+        observed_prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+        if (
+            not isinstance(observed_prompt_tokens, int)
+            or isinstance(observed_prompt_tokens, bool)
+            or observed_prompt_tokens != expected_prompt_tokens
+        ):
+            raise EnrichmentError(
+                "llama.cpp could not prove complete prompt acceptance: "
+                f"expected {expected_prompt_tokens} prompt tokens, response reported "
+                f"{observed_prompt_tokens!r}"
+            )
         if not isinstance(content, str) or not content.strip():
             raise EnrichmentError("llama.cpp returned an empty translation")
         return content.strip()
@@ -1142,6 +2023,30 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         help=(
             "Translate an existing normalized string JSONL stream instead of invoking Magika/FLOSS"
+        ),
+    )
+    parser.add_argument(
+        "--paths-from",
+        type=Path,
+        help=(
+            "Read extracted/carved file paths one per line from a UTF-8 file; "
+            "cannot be combined with positional paths or --input-jsonl"
+        ),
+    )
+    parser.add_argument(
+        "--translations-only",
+        action="store_true",
+        help=(
+            "Write only derived translation children; intended for the integrated bstrings.exe "
+            "workflow, which publishes the unchanged parents separately"
+        ),
+    )
+    parser.add_argument(
+        "--bounded-integrated-mode",
+        action="store_true",
+        help=(
+            "Trust unique parent IDs supplied by bstrings.exe and use only bounded per-file "
+            "deduplication; intended for the integrated large-dataset workflow"
         ),
     )
     parser.add_argument("-o", "--output", required=True, type=Path, help="Output enrichment JSONL")
@@ -1246,8 +2151,19 @@ def selected_translation_engine(args: argparse.Namespace) -> str:
 
 
 def validate_arguments(args: argparse.Namespace) -> None:
-    if bool(args.paths) == bool(args.input_jsonl):
-        raise EnrichmentError("Supply carved file paths or --input-jsonl, but not both")
+    input_source_count = sum(
+        (bool(args.paths), args.paths_from is not None, args.input_jsonl is not None)
+    )
+    if input_source_count != 1:
+        raise EnrichmentError(
+            "Supply positional carved file paths, --paths-from, or --input-jsonl; "
+            "these input modes cannot be combined"
+        )
+    if args.paths_from is not None:
+        if not args.paths_from.is_file():
+            raise EnrichmentError(f"Path list was not found: {args.paths_from}")
+        if args.paths_from.resolve() == args.output.resolve():
+            raise EnrichmentError("--paths-from and --output must be different paths")
     if args.input_jsonl is not None:
         if not args.input_jsonl.is_file():
             raise EnrichmentError(f"Normalized JSONL input was not found: {args.input_jsonl}")
@@ -1255,6 +2171,8 @@ def validate_arguments(args: argparse.Namespace) -> None:
             raise EnrichmentError("--input-jsonl and --output must be different paths")
         if not args.translate:
             raise EnrichmentError("--input-jsonl requires --translate")
+    elif args.translations_only:
+        raise EnrichmentError("--translations-only requires --input-jsonl")
     if args.minimum_length < 3:
         raise EnrichmentError("--minimum-length must be at least 3")
     if args.magika_timeout <= 0 or args.floss_timeout <= 0:
@@ -1348,10 +2266,18 @@ def write_jsonl_atomic(output_path: Path, records: Iterable[dict[str, Any]]) -> 
         prefix=output_path.name + ".partial.", dir=output_path.parent
     )
     count = 0
+    iterator = iter(records)
     try:
         with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as output:
-            for record in records:
-                output.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+            for record in iterator:
+                line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+                if len(line) > MAX_JSONL_LINE_CHARACTERS:
+                    record_id = str(record.get("recordId") or "<unknown>")
+                    raise EnrichmentError(
+                        f"Enrichment record '{record_id}' exceeds the "
+                        f"{MAX_JSONL_LINE_CHARACTERS}-character JSONL safety limit"
+                    )
+                output.write(line)
                 output.write("\n")
                 count += 1
             output.flush()
@@ -1361,6 +2287,10 @@ def write_jsonl_atomic(output_path: Path, records: Iterable[dict[str, Any]]) -> 
         with suppress(FileNotFoundError):
             os.unlink(temporary_name)
         raise
+    finally:
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()
     return count
 
 
@@ -1449,9 +2379,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.translation_max_characters,
                     translation_window_size,
                     translation_cache,
+                    include_parents=not args.translations_only,
                 )
                 return
-            for raw_path in args.paths:
+            for raw_path in iter_extraction_paths(args.paths, args.paths_from):
                 path = raw_path.resolve()
                 if not path.is_file():
                     raise EnrichmentError(f"Input file was not found: {raw_path}")
@@ -1475,17 +2406,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.floss_timeout,
                     args.floss_format,
                 )
-                records = normalize_floss(
+                records: Iterable[dict[str, Any]] = iter_normalized_floss(
                     payload,
                     path,
                     classification,
                     floss_version,
                     include_static=args.include_floss_static,
                 )
-                yield from records
+                if args.bounded_integrated_mode:
+                    records = iter_unique_records(records)
+                if translator is None:
+                    yield from records
+                    processed += 1
+                    continue
+
+                # Combined recovery/translation retains the historical parent-first
+                # ordering. It needs one replayable list, but no second normalized or
+                # deduplicated copy. The usual integrated recovery-only path stays
+                # record-streaming above.
+                replayable_records = list(records)
+                del payload
+                yield from replayable_records
                 if translator is not None:
                     translated_records = add_translations(
-                        records,
+                        replayable_records,
                         translator,
                         args.translation_target,
                         args.translation_batch_size,
@@ -1498,7 +2442,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         def count_unique_records() -> Iterable[dict[str, Any]]:
             nonlocal translated
-            for record in iter_unique_records(generate_records()):
+            generated = generate_records()
+            published = (
+                generated if args.bounded_integrated_mode else iter_unique_records(generated)
+            )
+            for record in published:
                 if (record.get("transform") or {}).get("kind") == "translation":
                     translated += 1
                 yield record

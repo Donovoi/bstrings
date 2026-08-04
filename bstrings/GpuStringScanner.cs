@@ -527,7 +527,9 @@ internal sealed class GpuStringScanner : IDisposable
             results.Add(
                 new ExtractedStringHit(
                     encoding.GetString(data.Slice(hit.Start, hit.Length)),
-                    fileOffset + hit.Start
+                    fileOffset + hit.Start,
+                    hit.Length,
+                    $"code-page-{codePage}"
                 )
             );
         }
@@ -551,7 +553,9 @@ internal sealed class GpuStringScanner : IDisposable
             results.Add(
                 new ExtractedStringHit(
                     Encoding.Unicode.GetString(data.Slice(hit.Start, hit.Length * 2)),
-                    fileOffset + hit.Start
+                    fileOffset + hit.Start,
+                    hit.Length * 2,
+                    "utf-16le"
                 )
             );
         }

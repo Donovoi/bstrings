@@ -171,7 +171,7 @@ have accepted two regressions.
 ## Reproduction and falsification
 
 The generators and commands are documented in
-[`benchmarks/README.md`](../benchmarks/README.md). Raw run directories are not
+[`benchmarks/README.md`](https://github.com/Donovoi/bstrings/blob/master/benchmarks/README.md). Raw run directories are not
 committed. The checked-in code contains only generic generators, harnesses,
 tests, and synthetic aggregate results.
 

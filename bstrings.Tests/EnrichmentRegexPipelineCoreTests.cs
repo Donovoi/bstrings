@@ -175,6 +175,69 @@ public sealed class EnrichmentRegexPipelineCoreTests
         Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.partial.*"));
     }
 
+    [Fact]
+    public async Task ProcessAsync_TrustedStreamRejectsMissingParentAndPreservesOldOutput()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("invalid.jsonl");
+        var outputPath = scope.PathFor("matches.jsonl");
+        await File.WriteAllTextAsync(outputPath, "previous-result", cancellationToken);
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                CreateRecord("raw-1", "ordinary text", parentRecordId: null),
+                CreateRecord("translation-1", "owner@example.com", "missing-parent"),
+            ],
+            cancellationToken
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                outputPath,
+                [("email", BuiltInPatternCatalog.Patterns["email"])],
+                cancellationToken: cancellationToken,
+                trustedParentFirstInput: true
+            )
+        );
+
+        Assert.Contains("does not exist", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("previous-result", await File.ReadAllTextAsync(outputPath, cancellationToken));
+        Assert.Empty(Directory.GetDirectories(scope.DirectoryPath, ".bstrings-provenance.*"));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TrustedStreamRejectsDuplicateRecordIds()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("invalid.jsonl");
+        var outputPath = scope.PathFor("matches.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                CreateRecord("duplicate", "first ordinary text", parentRecordId: null),
+                CreateRecord("duplicate", "second ordinary text", parentRecordId: null),
+            ],
+            cancellationToken
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                outputPath,
+                [("email", BuiltInPatternCatalog.Patterns["email"])],
+                cancellationToken: cancellationToken,
+                trustedParentFirstInput: true
+            )
+        );
+
+        Assert.Contains("repeats recordId", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(outputPath));
+        Assert.Empty(Directory.GetDirectories(scope.DirectoryPath, ".bstrings-provenance.*"));
+    }
+
     [Theory]
     [InlineData("{\"schemaVersion\":2,\"recordType\":\"string\",\"recordId\":\"x\",\"text\":\"a@b.com\",\"sourceFile\":\"x\",\"location\":{\"kind\":\"file_offset\",\"value\":\"0x0\"},\"origin\":{\"extractor\":\"floss\",\"kind\":\"static\"}}", "schema version")]
     [InlineData("{\"schemaVersion\":1,\"recordType\":\"string\",\"recordId\":\"x\",\"sourceFile\":\"x\",\"location\":{\"kind\":\"file_offset\",\"value\":\"0x0\"},\"origin\":{\"extractor\":\"floss\",\"kind\":\"static\"}}", "usable text")]
@@ -197,6 +260,52 @@ public sealed class EnrichmentRegexPipelineCoreTests
         );
 
         Assert.Contains(expectedMessage, error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string CreateRecord(
+        string recordId,
+        string text,
+        string? parentRecordId
+    )
+    {
+        if (parentRecordId is null)
+        {
+            return JsonSerializer.Serialize(
+                new
+                {
+                    schemaVersion = 1,
+                    recordType = "string",
+                    recordId,
+                    text,
+                    sourceFile = "sample.exe",
+                    location = new { kind = "file_offset", value = "0x10" },
+                    origin = new { extractor = "bstrings", version = "test", kind = "static" },
+                }
+            );
+        }
+        return JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion = 1,
+                recordType = "string",
+                recordId,
+                text,
+                sourceFile = "sample.exe",
+                location = new { kind = "file_offset", value = "0x10" },
+                origin = new { extractor = "bstrings", version = "test", kind = "static" },
+                parentRecordId,
+                transform = new
+                {
+                    kind = "translation",
+                    engine = "test",
+                    engineVersion = "1",
+                    model = "synthetic",
+                    revision = "test",
+                    modelSha256 = new string('a', 64),
+                    targetLanguage = "en",
+                },
+            }
+        );
     }
 
     private sealed class TemporaryDirectory : IDisposable

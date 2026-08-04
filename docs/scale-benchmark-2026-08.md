@@ -39,7 +39,7 @@ Times are medians for the repeated tiers. IQR is the interquartile range. The
 | 100 GiB | bulk_extractor | 1 | 319.339 s | n/a | 320.7 MiB/s | 7.57x |
 
 The machine-readable aggregate is
-[`benchmarks/results/scale-2026-08.csv`](../benchmarks/results/scale-2026-08.csv).
+[`benchmarks/results/scale-2026-08.csv`](https://github.com/Donovoi/bstrings/blob/master/benchmarks/results/scale-2026-08.csv).
 
 ## Why this corpus
 
@@ -98,7 +98,7 @@ Every run had to satisfy all of these gates:
 6. corpus SHA-256 equal to the manifest before measurement.
 
 The harness rotated tool order at repeated tiers and retained each output. The
-exact commands are in [`benchmarks/Invoke-ScaleBenchmark.ps1`](../benchmarks/Invoke-ScaleBenchmark.ps1).
+exact commands are in [`benchmarks/Invoke-ScaleBenchmark.ps1`](https://github.com/Donovoi/bstrings/blob/master/benchmarks/Invoke-ScaleBenchmark.ps1).
 
 The upstream comparison used commit
 `553c1efc29bfb051841fa78e48f5a7a657bf5ae7`. Its benchmark-only build gives an

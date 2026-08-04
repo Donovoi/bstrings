@@ -698,7 +698,9 @@ internal static class SearchCore
             results.Add(
                 new ExtractedStringHit(
                     Encoding.Unicode.GetString(data.Slice(hit.Start, hit.Length)),
-                    hit.FileOffset + hit.Start
+                    hit.FileOffset + hit.Start,
+                    hit.Length,
+                    "utf-16le"
                 )
             );
         }
@@ -783,7 +785,9 @@ internal static class SearchCore
             results.Add(
                 new ExtractedStringHit(
                     encoding.GetString(data.Slice(start, length)),
-                    hits.FileOffset + start
+                    hits.FileOffset + start,
+                    length,
+                    $"code-page-{codePage}"
                 )
             );
         }
@@ -848,7 +852,9 @@ internal static class SearchCore
                 results.Add(
                     new ExtractedStringHit(
                         encoding.GetString(data.Slice(hit.Start, hit.Length)),
-                        hit.FileOffset + hit.Start
+                        hit.FileOffset + hit.Start,
+                        hit.Length,
+                        $"code-page-{codePage}"
                     )
                 );
             }

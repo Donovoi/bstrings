@@ -1,12 +1,27 @@
+use lingua::{LanguageDetector, LanguageDetectorBuilder};
 use std::slice;
+use std::str;
+use std::sync::OnceLock;
 
-const ABI_VERSION: u32 = 2;
+const ABI_VERSION: u32 = 3;
+
+static HIGH_ACCURACY_LANGUAGE_DETECTOR: OnceLock<LanguageDetector> = OnceLock::new();
+static LOW_ACCURACY_LANGUAGE_DETECTOR: OnceLock<LanguageDetector> = OnceLock::new();
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BstringsHit {
     pub start: u32,
     pub length: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BstringsLanguageResult {
+    pub language_code: [u8; 8],
+    pub confidence: f64,
+    pub target_confidence: f64,
+    pub second_confidence: f64,
 }
 
 #[unsafe(no_mangle)]
@@ -18,6 +33,87 @@ pub extern "C" fn bstrings_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn bstrings_ascii_kernel() -> u32 {
     selected_ascii_kernel()
+}
+
+/// Detects the most likely language and returns normalized confidence values.
+///
+/// Status 0 means success, 2 means that no language could be identified, and 1
+/// means that one or more arguments were invalid. `language_code` contains a
+/// lower-case ISO 639-1 code followed by zero bytes.
+///
+/// # Safety
+///
+/// `text` must address `text_length` readable UTF-8 bytes unless the length is
+/// zero. `output` must point to one writable `BstringsLanguageResult`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bstrings_detect_language(
+    text: *const u8,
+    text_length: usize,
+    target_language: *const u8,
+    target_language_length: usize,
+    low_accuracy: i32,
+    output: *mut BstringsLanguageResult,
+) -> i32 {
+    if output.is_null()
+        || (text.is_null() && text_length != 0)
+        || target_language.is_null()
+        || target_language_length == 0
+    {
+        return 1;
+    }
+
+    let bytes = if text_length == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(text, text_length) }
+    };
+    let Ok(value) = str::from_utf8(bytes) else {
+        return 1;
+    };
+    if value.trim().is_empty() {
+        return 2;
+    }
+    let target_bytes = unsafe { slice::from_raw_parts(target_language, target_language_length) };
+    let Ok(target_code) = str::from_utf8(target_bytes) else {
+        return 1;
+    };
+    let target_code = target_code.trim().to_lowercase();
+
+    let detector = if low_accuracy != 0 {
+        LOW_ACCURACY_LANGUAGE_DETECTOR.get_or_init(|| {
+            LanguageDetectorBuilder::from_all_spoken_languages()
+                .with_low_accuracy_mode()
+                .build()
+        })
+    } else {
+        HIGH_ACCURACY_LANGUAGE_DETECTOR
+            .get_or_init(|| LanguageDetectorBuilder::from_all_spoken_languages().build())
+    };
+    let confidence_values = detector.compute_language_confidence_values(value);
+    let Some(&(language, confidence)) = confidence_values.first() else {
+        return 2;
+    };
+
+    let mut result = BstringsLanguageResult {
+        language_code: [0; 8],
+        confidence,
+        target_confidence: confidence_values
+            .iter()
+            .find_map(|(candidate, probability)| {
+                (candidate.iso_code_639_1().to_string().to_lowercase() == target_code)
+                    .then_some(*probability)
+            })
+            .unwrap_or(0.0),
+        second_confidence: confidence_values.get(1).map_or(0.0, |value| value.1),
+    };
+    let code = language.iso_code_639_1().to_string().to_lowercase();
+    let code_bytes = code.as_bytes();
+    let copy_length = code_bytes.len().min(result.language_code.len() - 1);
+    result.language_code[..copy_length].copy_from_slice(&code_bytes[..copy_length]);
+    unsafe {
+        output.write(result);
+    }
+    0
 }
 
 /// Finds inclusive-range byte runs in a caller-owned buffer.
@@ -365,6 +461,51 @@ fn add_hit<S: HitSink>(start: usize, end: usize, min_length: i32, max_length: i3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_ffi_distinguishes_target_and_non_target_text() {
+        let target = b"fr";
+        let french = "Cette phrase contient des informations importantes qui doivent rester disponibles pour une analyse forensique complete.";
+        let english = "This sentence contains important information that must remain available for a complete forensic examination.";
+        let mut french_result = BstringsLanguageResult {
+            language_code: [0; 8],
+            confidence: 0.0,
+            target_confidence: 0.0,
+            second_confidence: 0.0,
+        };
+        let mut english_result = french_result;
+
+        let french_status = unsafe {
+            bstrings_detect_language(
+                french.as_ptr(),
+                french.len(),
+                target.as_ptr(),
+                target.len(),
+                0,
+                &mut french_result,
+            )
+        };
+        let english_status = unsafe {
+            bstrings_detect_language(
+                english.as_ptr(),
+                english.len(),
+                target.as_ptr(),
+                target.len(),
+                0,
+                &mut english_result,
+            )
+        };
+
+        assert_eq!(french_status, 0);
+        assert_eq!(&french_result.language_code[..2], b"fr");
+        assert_eq!(french_result.confidence, french_result.target_confidence);
+        assert!(french_result.confidence >= french_result.second_confidence);
+
+        assert_eq!(english_status, 0);
+        assert_eq!(&english_result.language_code[..2], b"en");
+        assert!(english_result.confidence > english_result.target_confidence);
+        assert!(english_result.confidence >= english_result.second_confidence);
+    }
 
     #[test]
     fn finds_offsets_ranges_and_truncated_runs() {

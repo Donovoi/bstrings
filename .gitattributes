@@ -3,6 +3,18 @@
 ###############################################################################
 * text=auto
 
+# These reviewed license texts are hashed byte-for-byte by release verification.
+licenses/Apache-2.0.txt -text whitespace=-trailing-space
+licenses/MIT.txt -text whitespace=-trailing-space
+licenses/Unicode-3.0.txt -text whitespace=-trailing-space
+licenses/magika-cli-1.1.0-redistribution.json -text whitespace=-trailing-space
+licenses/magika-cli-1.1.0-SOURCE-AVAILABILITY.md -text whitespace=-trailing-space
+licenses/magika-cli-1.1.0-THIRD-PARTY-NOTICES.txt -text whitespace=-trailing-space
+licenses/magika-cli-1.1.0-win-x64.tsv -text whitespace=-trailing-space
+licenses/floss-v3.1.1-win-x64.json -text whitespace=-trailing-space
+licenses/floss-v3.1.1/** -text whitespace=-trailing-space
+
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

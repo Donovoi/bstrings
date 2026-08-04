@@ -18,15 +18,38 @@ env:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 180
 
     steps:
       - name: Check out source
         uses: actions/checkout@v7
 
-      - name: Install .NET 9 SDK
+      - name: Require an exact project-version release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$project = Get-Content -LiteralPath 'bstrings/bstrings.csproj' -Raw
+          $versions = @($project.Project.PropertyGroup.Version | ForEach-Object {
+            [string]$_
+          } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+          if ($versions.Count -ne 1) {
+            throw "Expected exactly one project Version, found $($versions.Count)."
+          }
+          $expectedTag = 'v' + $versions[0]
+          if ($env:GITHUB_REF_NAME -cne $expectedTag) {
+            throw "Release tag '$env:GITHUB_REF_NAME' must exactly match project version '$expectedTag'."
+          }
+
+      - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 9.0.x
+          dotnet-version: 10.0.x
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -46,8 +69,79 @@ jobs:
       - name: Build Rust engine
         run: cargo build --manifest-path native/bstrings_core/Cargo.toml --release --locked
 
+      - name: Fetch complete locked Rust notice graph
+        run: cargo fetch --manifest-path native/bstrings_core/Cargo.toml --locked
+
+      - name: Verify Rust third-party notices
+        shell: pwsh
+        run: ./tools/licenses/Verify-RustThirdPartyNotices.ps1
+
+      - name: Install Python lint tool
+        run: python -m pip install --disable-pip-version-check ruff==0.14.14
+
+      - name: Lint and compile Python tools
+        shell: pwsh
+        run: |
+          python -m ruff check `
+            --config tools/enrichment/pyproject.toml `
+            --extend-per-file-ignores tools/airgap/verify_network_guard.py:E402 `
+            tools/enrichment `
+            tools/airgap
+          if ($LASTEXITCODE -ne 0) {
+            throw "Ruff failed with exit code $LASTEXITCODE."
+          }
+
+          $pythonFiles = @(
+            Get-ChildItem tools/enrichment, tools/airgap -Recurse -File -Filter '*.py' |
+              Select-Object -ExpandProperty FullName
+          )
+          python -m py_compile @pythonFiles
+          if ($LASTEXITCODE -ne 0) {
+            throw "py_compile failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Test Python tools
+        run: python -m unittest discover -s tools/enrichment/tests -v
+
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failed = $false
+          foreach ($script in Get-ChildItem tools -Recurse -File -Filter '*.ps1') {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $script.FullName,
+              [ref]$tokens,
+              [ref]$parseErrors
+            ) | Out-Null
+            foreach ($parseError in @($parseErrors)) {
+              Write-Host "::error file=$($script.FullName)::$($parseError.Message)"
+              $failed = $true
+            }
+          }
+          if ($failed) {
+            throw 'PowerShell syntax validation failed.'
+          }
+
+      - name: Test Magika cache-only fail-closed guard
+        shell: pwsh
+        run: ./tools/licenses/Test-MagikaCacheOnlyGuard.ps1
+
       - name: Restore
-        run: dotnet restore bstrings.sln --verbosity minimal
+        run: dotnet restore bstrings.sln --runtime win-x64 --verbosity minimal
+
+      - name: Stage and verify managed release notices
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $noticeSource = Join-Path $env:RUNNER_TEMP 'bstrings-release-notices'
+          ./tools/licenses/Stage-ManagedThirdPartyNotices.ps1 `
+            -DestinationDirectory $noticeSource `
+            -DownloadCacheDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-release-notice-cache')
+          ./tools/licenses/Verify-ManagedThirdPartyNotices.ps1 `
+            -NoticeSourceDirectory $noticeSource
 
       - name: Build
         run: dotnet build bstrings.sln --configuration Release --no-restore --verbosity minimal
@@ -56,23 +150,155 @@ jobs:
         run: dotnet test bstrings.sln --configuration Release --no-build --collect:"XPlat Code Coverage" --verbosity normal
 
       - name: Publish Windows x64 single-file build
-        run: >
-          dotnet publish bstrings/bstrings.csproj
-          --configuration Release
-          --runtime win-x64
-          --self-contained true
-          --output publish/win-x64
-          --framework net9.0
-          -p:PublishSingleFile=true
-          -p:IncludeNativeLibrariesForSelfExtract=true
-          -p:DebugType=None
-          -p:DebugSymbols=false
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $noticeSource = Join-Path $env:RUNNER_TEMP 'bstrings-release-notices'
+          dotnet publish bstrings/bstrings.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --output publish/win-x64 `
+            --framework net10.0 `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:TreatWarningsAsErrors=true `
+            -p:DebugType=None `
+            -p:DebugSymbols=false `
+            "-p:ReleaseNoticeSourceDirectory=$noticeSource"
+
+      - name: Verify published managed and runtime notices
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/licenses/Verify-ManagedThirdPartyNotices.ps1 `
+            -NoticeSourceDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-release-notices') `
+            -PublishedDirectory publish/win-x64
+
+      - name: Stage licensed Visual C++ runtime beside bstrings
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $staged = @(
+            ./tools/airgap/Stage-VisualCppRuntime.ps1 `
+              -DestinationDirectory publish/win-x64
+          )
+          if ($staged.Count -ne 1 -or @($staged[0].files).Count -ne 4) {
+            throw 'Visual C++ runtime staging did not verify all four required DLL names and selected bytes.'
+          }
+          foreach ($runtimeFile in $staged[0].files) {
+            $path = Join-Path 'publish/win-x64' ([string]$runtimeFile.name)
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne [string]$runtimeFile.sha256) {
+              throw "Published Visual C++ runtime hash mismatch: $path"
+            }
+          }
+
+      - name: Validate complete offline component lock
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dryRunOutput = Join-Path $env:RUNNER_TEMP 'bstrings-offline-dry-run'
+          ./tools/airgap/Build-CompleteOfflineBundle.ps1 `
+            -PublishedBstringsDirectory publish/win-x64 `
+            -OutputDirectory $dryRunOutput `
+            -DryRun
+          if (Test-Path -LiteralPath $dryRunOutput) {
+            throw 'Offline bundle dry run unexpectedly created its output directory.'
+          }
+
+      - name: Smoke published integrated analysis offline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $smokeRoot = Join-Path $env:RUNNER_TEMP 'bstrings-published-smoke'
+          $inputPath = Join-Path $smokeRoot 'spanish-evidence.txt'
+          $resultsPath = Join-Path $smokeRoot 'results'
+          [IO.Directory]::CreateDirectory($smokeRoot) | Out-Null
+          [IO.File]::WriteAllText(
+            $inputPath,
+            'La clave pertenece a analyst@example.com y este mensaje contiene palabras escritas claramente en espanol para verificar la deteccion automatica.',
+            [Text.UTF8Encoding]::new($false)
+          )
+
+          $env:HF_DATASETS_OFFLINE = '1'
+          $env:HF_HUB_OFFLINE = '1'
+          $env:TRANSFORMERS_OFFLINE = '1'
+          $env:NO_PROXY = '127.0.0.1,localhost,::1'
+          $env:HTTP_PROXY = 'http://127.0.0.1:9'
+          $env:HTTPS_PROXY = 'http://127.0.0.1:9'
+          $env:ALL_PROXY = 'http://127.0.0.1:9'
+
+          $originalPath = [Environment]::GetEnvironmentVariable('PATH', 'Process')
+          try {
+            $publishRoot = [IO.Path]::GetFullPath((Join-Path $PWD 'publish/win-x64'))
+            [Environment]::SetEnvironmentVariable(
+              'PATH',
+              "$publishRoot$([IO.Path]::PathSeparator)$(Join-Path $env:SystemRoot 'System32')",
+              'Process'
+            )
+            & 'publish/win-x64/bstrings.exe' analyze `
+              -f $inputPath `
+              --translation detect-only `
+              --language-detection accurate `
+              --recover-executable-strings off `
+              --processor cpu `
+              --cpu-engine rust `
+              --maximum-length 4096 `
+              --translation-max-characters 512 `
+              --lr email `
+              -o $resultsPath
+            if ($LASTEXITCODE -ne 0) {
+              throw "Published bstrings analyze smoke failed with exit code $LASTEXITCODE."
+            }
+          }
+          finally {
+            [Environment]::SetEnvironmentVariable('PATH', $originalPath, 'Process')
+          }
+
+          $run = Get-Content -LiteralPath (Join-Path $resultsPath 'run.json') -Raw |
+            ConvertFrom-Json
+          $summary = Get-Content -LiteralPath (Join-Path $resultsPath 'summary.json') -Raw |
+            ConvertFrom-Json
+          if ($run.status -ne 'complete' -or $summary.status -ne 'complete') {
+            throw 'Published analysis did not produce complete run and summary records.'
+          }
+          if (
+            $summary.translationCandidates -lt 1 -or
+            $summary.translatedStrings -ne 0 -or
+            $summary.regexMatches -lt 1
+          ) {
+            throw 'Published detect-only smoke did not assess non-English text and match its retained email.'
+          }
+          $markers = @(Get-ChildItem -LiteralPath $resultsPath -Recurse -Force | Where-Object {
+            $_.Name -eq '.incomplete' -or $_.Name.EndsWith('.incomplete', [StringComparison]::Ordinal)
+          })
+          if ($markers.Count -ne 0) {
+            throw "Published analysis left incomplete markers: $($markers.FullName -join ', ')"
+          }
+          $manifestPath = Join-Path $resultsPath $summary.inputIdentity.manifest
+          $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if (
+            $manifestHash -ne $summary.inputIdentity.manifestSha256 -or
+            $manifestHash -ne $run.input.manifestSha256
+          ) {
+            throw 'Published analysis manifest identity does not match run.json and summary.json.'
+          }
 
       - name: Package release
         shell: pwsh
         run: |
           $packagePath = Join-Path $PWD "bstrings-win-x64.zip"
           Compress-Archive -Path "publish/win-x64/*" -DestinationPath $packagePath -Force
+          $verifyRoot = Join-Path $env:RUNNER_TEMP 'bstrings-core-archive-verification'
+          if (Test-Path -LiteralPath $verifyRoot) {
+            throw "Core archive verification directory already exists: $verifyRoot"
+          }
+          [IO.Compression.ZipFile]::ExtractToDirectory($packagePath, $verifyRoot)
+          ./tools/licenses/Verify-ManagedThirdPartyNotices.ps1 `
+            -PublishedDirectory $verifyRoot
+          ./tools/airgap/Verify-MarkdownLinks.ps1 `
+            -BundleDirectory $verifyRoot
           Get-FileHash -Algorithm SHA256 $packagePath
 
       - name: Upload release package
@@ -83,6 +309,135 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Restore pinned offline component cache
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}\bstrings-offline\downloads
+          key: bstrings-offline-${{ runner.os }}-${{ hashFiles('tools/airgap/offline-components.lock.json') }}
+
+      - name: Build complete offline CPU bundle
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 90
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/airgap/Build-CompleteOfflineBundle.ps1 `
+            -PublishedBstringsDirectory publish/win-x64 `
+            -OutputDirectory publish/offline `
+            -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline')
+
+      - name: Revalidate the warmed offline cache without network fallback
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $validationOutput = Join-Path $env:RUNNER_TEMP 'bstrings-offline-cache-validation-output'
+          ./tools/airgap/Build-CompleteOfflineBundle.ps1 `
+            -PublishedBstringsDirectory publish/win-x64 `
+            -OutputDirectory $validationOutput `
+            -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline') `
+            -ValidateOnly
+          if (Test-Path -LiteralPath $validationOutput) {
+            throw 'Cache-only offline validation unexpectedly created bundle output.'
+          }
+
+      - name: Package and verify exact offline CPU archive
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 75
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleRoot = [IO.Path]::GetFullPath((Join-Path $PWD 'publish/offline'))
+          $archive = [IO.Path]::GetFullPath((Join-Path $PWD 'bstrings-win-x64-offline-cpu.zip'))
+          $checksum = $archive + '.sha256'
+          if (-not [IO.File]::Exists((Join-Path $bundleRoot 'bstrings.exe'))) {
+            throw 'Complete offline bundle does not have bstrings.exe at its root.'
+          }
+          if ([IO.File]::Exists($archive)) {
+            throw "Offline release archive already exists: $archive"
+          }
+
+          ./tools/licenses/Verify-MagikaRedistribution.ps1 `
+            -BundleDirectory $bundleRoot
+          ./tools/licenses/Verify-FlossThirdPartyNotices.ps1 `
+            -FlossExecutable (Join-Path $bundleRoot 'tools/floss/floss.exe') `
+            -StagedDirectory $bundleRoot
+
+          [IO.Compression.ZipFile]::CreateFromDirectory(
+            $bundleRoot,
+            $archive,
+            [IO.Compression.CompressionLevel]::NoCompression,
+            $false
+          )
+          $archiveItem = Get-Item -LiteralPath $archive
+          if ($archiveItem.Length -ge 2000000000) {
+            throw "Offline release archive is $($archiveItem.Length) bytes; it must be below 2,000,000,000 bytes."
+          }
+          $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText(
+            $checksum,
+            "$archiveHash  $($archiveItem.Name)`n",
+            [Text.UTF8Encoding]::new($false)
+          )
+
+          $recordedHash = ((Get-Content -LiteralPath $checksum -Raw).Trim() -split '\s+')[0]
+          $verifiedHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($recordedHash -ne $verifiedHash) {
+            throw 'The emitted offline archive checksum does not match the exact archive bytes.'
+          }
+
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'bstrings-offline-archive-verification'
+          if (Test-Path -LiteralPath $extractRoot) {
+            throw "Offline archive verification directory already exists: $extractRoot"
+          }
+          [IO.Compression.ZipFile]::ExtractToDirectory($archive, $extractRoot)
+          $bstrings = Join-Path $extractRoot 'bstrings.exe'
+          if (-not [IO.File]::Exists($bstrings)) {
+            throw 'Extracted archive does not have bstrings.exe at its root.'
+          }
+
+          & $bstrings bundle verify --bundle-root $extractRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Root bstrings.exe bundle verification failed with exit code $LASTEXITCODE."
+          }
+
+          ./tools/licenses/Verify-ManagedThirdPartyNotices.ps1 `
+            -PublishedDirectory $extractRoot `
+            -CompleteBundle
+
+          $env:HF_DATASETS_OFFLINE = '1'
+          $env:HF_HUB_OFFLINE = '1'
+          $env:TRANSFORMERS_OFFLINE = '1'
+          $env:NO_PROXY = '127.0.0.1,localhost,::1'
+          $env:HTTP_PROXY = 'http://127.0.0.1:9'
+          $env:HTTPS_PROXY = 'http://127.0.0.1:9'
+          $env:ALL_PROXY = 'http://127.0.0.1:9'
+
+          Push-Location $extractRoot
+          try {
+            & (Join-Path $extractRoot 'Verify-AirgapBundle.ps1') -TranslationSmoke
+            if ($LASTEXITCODE -ne 0) {
+              throw "Extracted offline full smoke failed with exit code $LASTEXITCODE."
+            }
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Upload complete offline CPU package
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: bstrings-win-x64-offline-cpu
+          path: |
+            bstrings-win-x64-offline-cpu.zip
+            bstrings-win-x64-offline-cpu.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
@@ -91,13 +446,23 @@ jobs:
       contents: write
 
     steps:
-      - name: Download release package
+      - name: Download core release package
         uses: actions/download-artifact@v8
         with:
           name: bstrings-win-x64
+          path: release-assets
+
+      - name: Download complete offline CPU package
+        uses: actions/download-artifact@v8
+        with:
+          name: bstrings-win-x64-offline-cpu
+          path: release-assets
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
-          files: bstrings-win-x64.zip
+          files: |
+            release-assets/bstrings-win-x64.zip
+            release-assets/bstrings-win-x64-offline-cpu.zip
+            release-assets/bstrings-win-x64-offline-cpu.zip.sha256
           generate_release_notes: true

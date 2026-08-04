@@ -1,0 +1,43 @@
+MIT License
+
+Copyright notices for the packages selected under the MIT License:
+
+Copyright (c) 2015 Andrew Gallant
+  aho-corasick 1.1.5, fst 0.4.7, and memchr 2.8.3
+Copyright (c) 2019 Acrimon
+  dashmap 6.2.1
+Copyright (c) 2017 Michael Bryan
+  include_dir 0.7.4 and include_dir_macros 0.7.4
+Copyright (c) 2019 Peter Glotfelty
+  strum 0.27.2 and strum_macros 0.27.2
+
+The counter 0.7.1 crate declares MIT and attributes Peter Goodspeed-Niklaus as
+its author, but its published crate does not contain a separate copyright line.
+
+Copyright notices for managed packages selected under the MIT License:
+
+Copyright (c) 2008-2011 Kenneth Bell
+Copyright (c) 2014 Quamotion
+  DiscUtils.Core 0.16.13, DiscUtils.Ntfs 0.16.13, and DiscUtils.Streams 0.16.13
+Copyright (c) 2016 Michael Bisbjerg
+  DeviceIOControlLib 0.1.6 and RawDiskLib 0.3.0
+Copyright (c) .NET Foundation and Contributors
+  System.CommandLine 2.0.10
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -1,0 +1,611 @@
+{
+  "schemaVersion": 1,
+  "profile": "floss-v3.1.1-windows-x64-offline",
+  "generatedFrom": "byte-pinned upstream executable plus exact package/source audits",
+  "product": {
+    "name": "FLARE FLOSS",
+    "version": "3.1.1",
+    "commandVersion": "floss.exe v3.1.1-0-g3cd3ee6",
+    "upstreamRepository": "https://github.com/mandiant/flare-floss",
+    "upstreamTag": "v3.1.1",
+    "upstreamCommit": "3cd3ee6a74992d98e91463c2658d9af446504821",
+    "licenseExpression": "Apache-2.0",
+    "licenseAsset": "floss-v3.1.1/FLOSS-Apache-2.0.txt"
+  },
+  "executable": {
+    "fileName": "floss.exe",
+    "bytes": 31866819,
+    "sha256": "3a208ab834b4791e81592d66e91a7f07b3458504484d87c44ed32bc7384df7ef",
+    "authenticodeStatus": "NotSigned",
+    "pyInstallerVersion": "6.8.0",
+    "pythonVersion": "3.8.10"
+  },
+  "upstreamReleaseArchive": {
+    "url": "https://github.com/mandiant/flare-floss/releases/download/v3.1.1/floss-v3.1.1-windows.zip",
+    "bytes": 31580022,
+    "sha256": "6c71089b8c629c69424b042769f1565f71adc6cd24b2f8d3713c96fa7fdac2fb"
+  },
+  "embeddedPython": {
+    "distribution": "CPython 3.8.10 embeddable package for Windows x64",
+    "sourceUrl": "https://www.python.org/ftp/python/3.8.10/python-3.8.10-embed-amd64.zip",
+    "sourceBytes": 8211403,
+    "sourceSha256": "abbe314e9b41603dde0a823b76f5bbbe17b3de3e5ac4ef06b759da5466711271",
+    "python38DllBytes": 4211376,
+    "python38DllSha256": "2f3e368f5bcc1dda5e951682008a509751e6395f7328fd0f02c4e1a11f67c128",
+    "licenseAsset": "floss-v3.1.1/Python-3.8.10-LICENSE.txt"
+  },
+  "pyInstaller": {
+    "version": "6.8.0",
+    "sourceArtifact": "pyinstaller-6.8.0.tar.gz",
+    "sourceBytes": 4161521,
+    "sourceSha256": "3f4b6520f4423fe19bcc2fd63ab7238851ae2bdcbc98f25bc5d2f97cc62012e9",
+    "noticeAssets": [
+      "floss-v3.1.1/PyInstaller-6.8.0-COPYING.txt",
+      "floss-v3.1.1/PyInstaller-6.8.0-bootloader-zlib-LICENSE.txt",
+      "floss-v3.1.1/PyInstaller-6.8.0-bootloader-waflib-LICENSE.txt"
+    ]
+  },
+  "pythonRuntimePackages": [
+    {
+      "name": "annotated-types",
+      "version": "0.7.0",
+      "licenseExpression": "MIT",
+      "artifact": "annotated_types-0.7.0-py3-none-any.whl",
+      "artifactBytes": 13643,
+      "artifactSha256": "1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "binary2strings",
+      "version": "0.1.13",
+      "licenseExpression": "MIT",
+      "artifact": "binary2strings-0.1.13.tar.gz",
+      "artifactBytes": 59217,
+      "artifactSha256": "c6395fc97c4d908b36e08f5a558a79d371a843a8b308e21a0e2b489591877620",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "licenseExpression": "BSD-3-Clause",
+      "artifact": "colorama-0.4.6-py2.py3-none-any.whl",
+      "artifactBytes": 25335,
+      "artifactSha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "cxxfilt",
+      "version": "0.3.0",
+      "licenseExpression": "BSD",
+      "artifact": "cxxfilt-0.3.0-py2.py3-none-any.whl",
+      "artifactBytes": 4649,
+      "artifactSha256": "774e85a8d0157775ed43276d89397d924b104135762d86b3a95f81f203094e07",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "funcy",
+      "version": "2.0",
+      "licenseExpression": "BSD",
+      "artifact": "funcy-2.0-py2.py3-none-any.whl",
+      "artifactBytes": 30891,
+      "artifactSha256": "53df23c8bb1651b12f095df764bfb057935d49537a56de211b098f4c79614bb0",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "halo",
+      "version": "0.0.31",
+      "licenseExpression": "MIT",
+      "artifact": "halo-0.0.31.tar.gz",
+      "artifactBytes": 11666,
+      "artifactSha256": "7b67a3521ee91d53b7152d4ee3452811e1d2a6321975137762eb3d70063cc9d6",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "intervaltree",
+      "version": "3.1.0",
+      "licenseExpression": "Apache-2.0",
+      "artifact": "intervaltree-3.1.0.tar.gz",
+      "artifactBytes": 32861,
+      "artifactSha256": "902b1b88936918f9b2a19e0e5eb7ccb430ae45cde4f39ea4b36932920d33952d",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "log-symbols",
+      "version": "0.0.14",
+      "licenseExpression": "MIT",
+      "artifact": "log_symbols-0.0.14-py3-none-any.whl",
+      "artifactBytes": 3081,
+      "artifactSha256": "4952106ff8b605ab7d5081dd2c7e6ca7374584eff7086f499c06edd1ce56dcca",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "markdown-it-py",
+      "version": "3.0.0",
+      "licenseExpression": "MIT",
+      "artifact": "markdown_it_py-3.0.0-py3-none-any.whl",
+      "artifactBytes": 87528,
+      "artifactSha256": "355216845c60bd96232cd8d8c40e8f9765cc86f46880e43a8fd22dc1a1a8cab1",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "mdurl",
+      "version": "0.1.2",
+      "licenseExpression": "MIT",
+      "artifact": "mdurl-0.1.2-py3-none-any.whl",
+      "artifactBytes": 9979,
+      "artifactSha256": "84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "msgpack",
+      "version": "1.0.8",
+      "licenseExpression": "Apache-2.0",
+      "artifact": "msgpack-1.0.8-cp38-cp38-win_amd64.whl",
+      "artifactBytes": 75332,
+      "artifactSha256": "f3709997b228685fe53e8c433e2df9f0cdb5f4542bd5114ed17ac3c0129b0480",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "networkx",
+      "version": "3.1",
+      "licenseExpression": "BSD-3-Clause",
+      "artifact": "networkx-3.1-py3-none-any.whl",
+      "artifactBytes": 2072251,
+      "artifactSha256": "4f33f68cb2afcf86f28a45f43efc27a9386b535d567d2127f8f61d51dec58d36",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "pefile",
+      "version": "2023.2.7",
+      "licenseExpression": "MIT",
+      "artifact": "pefile-2023.2.7-py3-none-any.whl",
+      "artifactBytes": 71791,
+      "artifactSha256": "da185cd2af68c08a6cd4481f7325ed600a88f6a813bad9dea07ab3ef73d8d8d6",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "pyasn1-modules",
+      "version": "0.3.0",
+      "licenseExpression": "BSD",
+      "artifact": "pyasn1_modules-0.3.0-py2.py3-none-any.whl",
+      "artifactBytes": 181306,
+      "artifactSha256": "d3ccd6ed470d9ffbc716be08bd90efbd44d0734bc9303818f7336070984a162d",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "pycparser",
+      "version": "2.22",
+      "licenseExpression": "BSD-3-Clause",
+      "artifact": "pycparser-2.22-py3-none-any.whl",
+      "artifactBytes": 117552,
+      "artifactSha256": "c3702b6d3dd8c7abc1afa565d7e63d53a1d0bd86cdc24edd75470f4de499cfcc",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "pydantic-core",
+      "version": "2.23.3",
+      "licenseExpression": "MIT",
+      "artifact": "pydantic_core-2.23.3-cp38-none-win_amd64.whl",
+      "artifactBytes": 1921490,
+      "artifactSha256": "13dd45ba2561603681a2676ca56006d6dee94493f03d5cadc055d2055615c3ea",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "pydantic",
+      "version": "2.9.1",
+      "licenseExpression": "MIT",
+      "artifact": "pydantic-2.9.1-py3-none-any.whl",
+      "artifactBytes": 434363,
+      "artifactSha256": "7aff4db5fdf3cf573d4b3c30926a510a10e19a0774d38fc4967f78beb6deb612",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "pygments",
+      "version": "2.18.0",
+      "licenseExpression": "BSD-2-Clause",
+      "artifact": "pygments-2.18.0-py3-none-any.whl",
+      "artifactBytes": 1205513,
+      "artifactSha256": "b8e6aca0523f3ab76fee51799c488e38782ac06eafcf95e7ba832985c8e7b13a",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "python-flirt",
+      "version": "0.8.10",
+      "licenseExpression": "Apache-2.0",
+      "artifact": "python_flirt-0.8.10-cp38-none-win_amd64.whl",
+      "artifactBytes": 205061,
+      "artifactSha256": "2f4cebbf3cba105f5f0db64a030109c966f4aecb29f94c7ac6e4594f3d4b3c63",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "rich",
+      "version": "13.7.1",
+      "licenseExpression": "MIT",
+      "artifact": "rich-13.7.1-py3-none-any.whl",
+      "artifactBytes": 240681,
+      "artifactSha256": "4edbae314f59eb482f54e9e30bf00d33350aaa94f4bfcd4e9e3110e64d0d7222",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "six",
+      "version": "1.16.0",
+      "licenseExpression": "MIT",
+      "artifact": "six-1.16.0-py2.py3-none-any.whl",
+      "artifactBytes": 11053,
+      "artifactSha256": "8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "sortedcontainers",
+      "version": "2.4.0",
+      "licenseExpression": "Apache-2.0",
+      "artifact": "sortedcontainers-2.4.0-py2.py3-none-any.whl",
+      "artifactBytes": 29575,
+      "artifactSha256": "a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "spinners",
+      "version": "0.0.24",
+      "licenseExpression": "MIT",
+      "artifact": "spinners-0.0.24-py3-none-any.whl",
+      "artifactBytes": 5499,
+      "artifactSha256": "2fa30d0b72c9650ad12bbe031c9943b8d441e41b4f5602b0ec977a19f3290e98",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "tabulate",
+      "version": "0.9.0",
+      "licenseExpression": "MIT",
+      "artifact": "tabulate-0.9.0-py3-none-any.whl",
+      "artifactBytes": 35252,
+      "artifactSha256": "024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "termcolor",
+      "version": "2.4.0",
+      "licenseExpression": "MIT",
+      "artifact": "termcolor-2.4.0-py3-none-any.whl",
+      "artifactBytes": 7719,
+      "artifactSha256": "9297c0df9c99445c2412e832e882a7884038a25617c60cea2ad69488d4040d63",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "tqdm",
+      "version": "4.66.4",
+      "licenseExpression": "MPL-2.0 AND MIT",
+      "artifact": "tqdm-4.66.4-py3-none-any.whl",
+      "artifactBytes": 78275,
+      "artifactSha256": "b75ca56b413b030bc3f00af51fd2c1a1a5eac6a0c1cca83cbb37a5c52abce644",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "typing_extensions",
+      "version": "4.12.2",
+      "licenseExpression": "PSF-2.0",
+      "artifact": "typing_extensions-4.12.2-py3-none-any.whl",
+      "artifactBytes": 37438,
+      "artifactSha256": "04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "viv-utils",
+      "version": "0.7.11",
+      "licenseExpression": "Apache-2.0",
+      "artifact": "viv_utils-0.7.11-py2.py3-none-any.whl",
+      "artifactBytes": 35983,
+      "artifactSha256": "ab44c428315e014a52dbbaab6862876dd0cd2c930a138a1655c1c5be7270d81b",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    },
+    {
+      "name": "vivisect",
+      "version": "1.2.1",
+      "licenseExpression": "Apache-2.0",
+      "artifact": "vivisect-1.2.1-py3-none-any.whl",
+      "artifactBytes": 4403816,
+      "artifactSha256": "62eb383013318efcd42f2565e4ab5323ebb1fb6b2e8e9e7e432bd126743eccda",
+      "includedInExecutable": true,
+      "evidence": "recursive PyInstaller PYZ/native inventory plus exact upstream build pins",
+      "noticeAsset": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt"
+    }
+  ],
+  "buildOnlyPackages": [
+    {
+      "name": "click",
+      "version": "8.1.7",
+      "licenseExpression": "BSD-3-Clause",
+      "artifact": "click-8.1.7-py3-none-any.whl",
+      "artifactBytes": 97941,
+      "artifactSha256": "ae74fb96c20a0277a1d615f1e4d73c8414f5a98db8b799a7931d1582f3390c28",
+      "includedInExecutable": false,
+      "evidence": "upstream build pin; package root absent from recursive PyInstaller PYZ inventory"
+    },
+    {
+      "name": "dncil",
+      "version": "1.0.2",
+      "licenseExpression": "UNKNOWN",
+      "artifact": "dncil-1.0.2-py3-none-any.whl",
+      "artifactBytes": 27010,
+      "artifactSha256": "69d389e9b850fa9afa2e37ca252b01476379991eee88fd33ab76f924d36dd68d",
+      "includedInExecutable": false,
+      "evidence": "upstream build pin; package root absent from recursive PyInstaller PYZ inventory"
+    },
+    {
+      "name": "pyasn1",
+      "version": "0.5.1",
+      "licenseExpression": "BSD-2-Clause",
+      "artifact": "pyasn1-0.5.1-py2.py3-none-any.whl",
+      "artifactBytes": 84930,
+      "artifactSha256": "4439847c58d40b1d0a573d07e3856e95333f1976294494c325775aeca506eb58",
+      "includedInExecutable": false,
+      "evidence": "upstream build pin; package root absent from recursive PyInstaller PYZ inventory"
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.1",
+      "licenseExpression": "MIT",
+      "artifact": "PyYAML-6.0.1-cp38-cp38-win_amd64.whl",
+      "artifactBytes": 157350,
+      "artifactSha256": "1e2722cc9fbb45d9b87631ac70924c11d3a401b2d7f410cc0e3bbf249f2dca62",
+      "includedInExecutable": false,
+      "evidence": "upstream build pin; package root absent from recursive PyInstaller PYZ inventory"
+    }
+  ],
+  "nativeRuntime": {
+    "inventoryAsset": "floss-v3.1.1/FLOSS-Embedded-Native-Runtime.tsv",
+    "entryCount": 67,
+    "microsoftRuntimeNotice": "floss-v3.1.1/Microsoft-Embedded-Runtime-Notice.md",
+    "provenanceStatus": "p2-limited: 40 Microsoft-resource runtime files are Eclipse-signed; preserve upstream executable unchanged",
+    "notableFingerprints": [
+      {
+        "name": "base_library.zip",
+        "bytes": 843910,
+        "sha256": "25b9e038ab3ccaafba554e90d5b6198a34e064d5c332a89ffc960fba278deb8a"
+      },
+      {
+        "name": "libcrypto-1_1.dll",
+        "bytes": 3406016,
+        "sha256": "296426e7ce11bc3d1cfa9f2aeb42f60c974da4af3b3efbeb0ba40e92e5299fdf"
+      },
+      {
+        "name": "libssl-1_1.dll",
+        "bytes": 690368,
+        "sha256": "fddd0da02dcd41786e9aa04ba17ba391ce39dae6b1f54cfa1e2bb55bc753fce9"
+      },
+      {
+        "name": "libffi-7.dll",
+        "bytes": 32792,
+        "sha256": "f60dd9f2fcbd495674dfc1555effb710eb081fc7d4cae5fa58c438ab50405081"
+      },
+      {
+        "name": "binary2strings.cp38-win_amd64.pyd",
+        "bytes": 376832,
+        "sha256": "c8f87d2de53c4146ce708052064e0cf73d6e56336af225fd83dccac05b6526ab"
+      },
+      {
+        "name": "flirt\\flirt.cp38-win_amd64.pyd",
+        "bytes": 424960,
+        "sha256": "f38e6f975b358feaee3aeae97f063824673098d39b174e934f89add061aa43ce"
+      },
+      {
+        "name": "msgpack\\_cmsgpack.cp38-win_amd64.pyd",
+        "bytes": 134656,
+        "sha256": "31bbfe73562f4815174ba7ef860088545d411cd4b667cc7594a3f322ea9e8b81"
+      },
+      {
+        "name": "pydantic_core\\_pydantic_core.cp38-win_amd64.pyd",
+        "bytes": 5046272,
+        "sha256": "28cd4b7ad94650c7d547d4281a986e2cd61cac9a077f0d0ef5d8a05e6aad490c"
+      }
+    ]
+  },
+  "rustClosures": [
+    {
+      "component": "pydantic-core",
+      "version": "2.23.3",
+      "evidenceStatus": "exact locked x86_64-pc-windows-msvc normal dependency closure",
+      "dependencyCount": 92,
+      "sourceArtifact": "pydantic_core-2.23.3.tar.gz",
+      "sourceBytes": 402277,
+      "sourceSha256": "3cb0f65d8b4121c1b015c60104a685feb929a29d7cf204387c7f2688c7974690",
+      "rustcCommit": "eeb90cda1969383f56a2637cbd3037bdf598841c",
+      "inventoryAsset": "floss-v3.1.1/Pydantic-Core-2.23.3-Rust-Inventory.tsv",
+      "noticeAsset": "floss-v3.1.1/Pydantic-Core-2.23.3-Rust-Third-Party-Notices.txt"
+    },
+    {
+      "component": "python-flirt",
+      "version": "0.8.10",
+      "evidenceStatus": "p2-limited: upstream tag has no Cargo.lock; current manifest-family resolution is conservative, not binary-exact",
+      "conservativeDependencyCount": 65,
+      "wheelBytes": 205061,
+      "wheelSha256": "2f4cebbf3cba105f5f0db64a030109c966f4aecb29f94c7ac6e4594f3d4b3c63",
+      "upstreamTagCommit": "2eed707fe1b76a681672a5731467dd92d43e18ff",
+      "upstreamSourceArchiveUrl": "https://github.com/williballenthin/lancelot/archive/2eed707fe1b76a681672a5731467dd92d43e18ff.zip",
+      "upstreamSourceArchiveBytes": 16580247,
+      "upstreamSourceArchiveSha256": "16a982bed08ca9076880b21ed6b75cb40b6d7884bba9554272631e41198876b1",
+      "rustcCommit": "2d24fe591f30386d6d5fc2bb941c78d7266bf10f",
+      "exactBinaryMarkers": [
+        "pyo3 0.17.3",
+        "nom 7.1.3",
+        "inflate 0.4.5",
+        "adler32 1.2.0",
+        "anyhow 1.0.80",
+        "parking_lot_core 0.9.9",
+        "smallvec 1.13.1"
+      ],
+      "inventoryAsset": "floss-v3.1.1/Python-Flirt-0.8.10-Rust-Inventory.tsv",
+      "noticeAsset": "floss-v3.1.1/Python-Flirt-0.8.10-Rust-Third-Party-Notices.txt"
+    }
+  ],
+  "sourceObligations": [
+    {
+      "component": "tqdm",
+      "version": "4.66.4",
+      "licenseExpression": "MPL-2.0 AND MIT",
+      "asset": "floss-v3.1.1/sources/tqdm-4.66.4.tar.gz",
+      "bytes": 169392,
+      "sha256": "e4d936c9de8727928f3be6079590e97d9abfe8d39a590be678eb5919ffc186bb"
+    }
+  ],
+  "assets": [
+    {
+      "path": "floss-v3.1.1/FLOSS-Apache-2.0.txt",
+      "bytes": 11349,
+      "sha256": "787008a875d16021fa995a81553a98e481b938ece1f2e8a1910daf8dffaf1300",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/FLOSS-Embedded-Native-Runtime.tsv",
+      "bytes": 19707,
+      "sha256": "9ededd2e04f393537746868ddec8183d5bd52d27a42e359eadc343bc38a2a322",
+      "purpose": "reviewed dependency/native inventory"
+    },
+    {
+      "path": "floss-v3.1.1/FLOSS-Python-Third-Party-Notices.txt",
+      "bytes": 98981,
+      "sha256": "e49bf1db1a5b5f0a517ecd236e03f7462d89e7d4f7807b894e94bd72902f3bbe",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/Microsoft-Embedded-Runtime-Notice.md",
+      "bytes": 3965,
+      "sha256": "4064837f642eb5a2ca4f5243ad7ec13712a230a68146790685cb489bb160c35b",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/Microsoft-Visual-Studio-Community-2017-License.docx",
+      "bytes": 40556,
+      "sha256": "c01c815bc7142b2c0e30cb2a53a981436408b7b21ca8a84b02dd54b1d43ffbd4",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/Microsoft-Visual-Studio-Community-2019-License.docx",
+      "bytes": 43685,
+      "sha256": "3dc17ec1490b436a97816aa4b06cc08eac9e37933a2813dbfa1886eaf23bde08",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/Microsoft-Visual-Studio-Community-2022-License.docx",
+      "bytes": 62859,
+      "sha256": "41a207b10c8ab91d0d2f10a854715f73dca54509581692d2fe179aa3ffcb8540",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/Pydantic-Core-2.23.3-Rust-Inventory.tsv",
+      "bytes": 15822,
+      "sha256": "c26c213d2d852b42641e45f80f45d98ea93e69b2d0d928b4db3f782fc82ab065",
+      "purpose": "reviewed dependency/native inventory"
+    },
+    {
+      "path": "floss-v3.1.1/Pydantic-Core-2.23.3-Rust-Third-Party-Notices.txt",
+      "bytes": 837881,
+      "sha256": "8a8a01de6c8aa289f58834d6544e0cfde1464957f71db4be0e79d97c25266834",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/PyInstaller-6.8.0-bootloader-waflib-LICENSE.txt",
+      "bytes": 1338,
+      "sha256": "f1a08e9a6ef535799105fca437e0fb38dc64acb0f224b115ab38fdc458cede53",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/PyInstaller-6.8.0-bootloader-zlib-LICENSE.txt",
+      "bytes": 1002,
+      "sha256": "0f854f426019c475697e17f1b0fa638270f6e700bc756d9bfe50d17268bd3281",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/PyInstaller-6.8.0-COPYING.txt",
+      "bytes": 32138,
+      "sha256": "dcf75fdb959db1e3b41c0f8505069d2ece781b5ec6b3d0a4d30975cfc6580245",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/Python-3.8.10-LICENSE.txt",
+      "bytes": 32628,
+      "sha256": "f830ec5b33c5ce41bf667d7fb4e395c5ee6fe20a108baebc99be565f0ef0907d",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/Python-Flirt-0.8.10-Rust-Inventory.tsv",
+      "bytes": 12076,
+      "sha256": "17423af8e2c39d9d45cbb9a5737afdf469cfd86a86b0093d59c21b8249f0fce9",
+      "purpose": "reviewed dependency/native inventory"
+    },
+    {
+      "path": "floss-v3.1.1/Python-Flirt-0.8.10-Rust-Third-Party-Notices.txt",
+      "bytes": 614635,
+      "sha256": "9de5284afa080b7797c6e01b79f6c342113d81a071381f5a98faca9d886f1046",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/Rust-stdlib-COPYRIGHT.txt",
+      "bytes": 21109,
+      "sha256": "bd0581fef622b3d8b25836cf70feb7e1a7a6171ea9e440b46dfda74c46a0ed0d",
+      "purpose": "license, notice, or provenance evidence"
+    },
+    {
+      "path": "floss-v3.1.1/sources/tqdm-4.66.4.tar.gz",
+      "bytes": 169392,
+      "sha256": "e4d936c9de8727928f3be6079590e97d9abfe8d39a590be678eb5919ffc186bb",
+      "purpose": "MPL-2.0 corresponding source snapshot"
+    }
+  ]
+}

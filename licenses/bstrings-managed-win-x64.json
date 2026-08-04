@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 1,
+  "targetFramework": "net10.0",
+  "runtimeIdentifier": "win-x64",
+  "packages": [
+    {
+      "id": "DeviceIOControlLib",
+      "version": "0.1.6",
+      "packagePath": "deviceiocontrollib/0.1.6",
+      "projectAssetsSha512": "AyXXSUUOlhjl66S0vH5yGx064VLKhg37NM3xsIlaNamjw9PZFLc7NPk2t30MUpL7+nBgL1SrgZuflQJFDn76nQ==",
+      "nupkgSha256": "217a7dd1e842fa180e60b86b5218b610a3c7fdab5377c2239bb6ee30abbb4c8b",
+      "licenseType": "url",
+      "license": "https://github.com/lordmike/deviceiocontrollib/blob/master/LICENSE.txt",
+      "authors": "LordMike",
+      "copyright": "",
+      "repositoryType": "git",
+      "repositoryUrl": "https://github.com/lordmike/deviceiocontrollib",
+      "repositoryCommit": "",
+      "projectUrl": "https://github.com/lordmike/deviceiocontrollib",
+      "noticeFiles": [
+        "licenses/DeviceIOControlLib-0.1.6-LICENSE.txt"
+      ]
+    },
+    {
+      "id": "DiscUtils.Core",
+      "version": "0.16.13",
+      "packagePath": "discutils.core/0.16.13",
+      "projectAssetsSha512": "TU/Ns5RMa3060K7AsSDqG94/H7eaWaz1XoYuCUur40Mg+t0/ubtKqxCffkoiB1e/cFMGvHL0evFoY6uDL9Ocmw==",
+      "nupkgSha256": "10c97c55cd6704e88f1b48a51cbc1aaff507d8916e98f119d67b2dd38f5eb7e0",
+      "licenseType": "expression",
+      "license": "MIT",
+      "authors": "Kenneth Bell,Quamotion,LordMike",
+      "copyright": "",
+      "repositoryType": "git",
+      "repositoryUrl": "https://github.com/DiscUtils/DiscUtils",
+      "repositoryCommit": "59d7cadab839c6d8dfcf52f8be5efe6d2ced190f",
+      "projectUrl": "https://github.com/DiscUtils/DiscUtils",
+      "noticeFiles": [
+        "licenses/MIT.txt"
+      ]
+    },
+    {
+      "id": "DiscUtils.Ntfs",
+      "version": "0.16.13",
+      "packagePath": "discutils.ntfs/0.16.13",
+      "projectAssetsSha512": "K7e2KJ7TjDI566SXBnLBfmRPWDqMjb/0T6UMdY+BzyWfiQJVpBQ0BMO89kuvknbz17zTSi1TDLiT9GOOJEpUCg==",
+      "nupkgSha256": "bf02826334cf8564b5ba7d7b34028e335d065295250636adfaca714ef2211430",
+      "licenseType": "expression",
+      "license": "MIT",
+      "authors": "Kenneth Bell,LordMike",
+      "copyright": "",
+      "repositoryType": "git",
+      "repositoryUrl": "https://github.com/DiscUtils/DiscUtils",
+      "repositoryCommit": "59d7cadab839c6d8dfcf52f8be5efe6d2ced190f",
+      "projectUrl": "https://github.com/DiscUtils/DiscUtils",
+      "noticeFiles": [
+        "licenses/MIT.txt"
+      ]
+    },
+    {
+      "id": "DiscUtils.Streams",
+      "version": "0.16.13",
+      "packagePath": "discutils.streams/0.16.13",
+      "projectAssetsSha512": "BSrywAX2mmvt6j00u6VQYQLtxc6jDniK2aP4p0q20bbTGXImtW4N26eUZYKfkW9aj6XLaqISFgtWfssKURixeA==",
+      "nupkgSha256": "0d27ad1c0e7a33f18b83471784c8cb264f063d16b94c089e69749b396adf9f0f",
+      "licenseType": "expression",
+      "license": "MIT",
+      "authors": "Kenneth Bell,LordMike,Bianco Veigel",
+      "copyright": "",
+      "repositoryType": "git",
+      "repositoryUrl": "https://github.com/DiscUtils/DiscUtils",
+      "repositoryCommit": "59d7cadab839c6d8dfcf52f8be5efe6d2ced190f",
+      "projectUrl": "https://github.com/DiscUtils/DiscUtils",
+      "noticeFiles": [
+        "licenses/MIT.txt"
+      ]
+    },
+    {
+      "id": "ILGPU",
+      "version": "1.5.3",
+      "packagePath": "ilgpu/1.5.3",
+      "projectAssetsSha512": "VhAfQqnp/qTcQla5zcBPQIoUJox8T1EuZLuKrynFFE1BQvOOUCksiCb9IQAJa2MSJf6QDi5YIoG45K0I+GWcgg==",
+      "nupkgSha256": "6f9df49005c861c5b31083e7ba58656f19abb85b45b86b175ade5a7b5beba35d",
+      "licenseType": "file",
+      "license": "LICENSE.txt",
+      "authors": "Marcel Koester",
+      "copyright": "Copyright (c) 2016-2025 ILGPU Project. All rights reserved.",
+      "repositoryType": "git",
+      "repositoryUrl": "https://github.com/m4rs-mt/ILGPU",
+      "repositoryCommit": "2efd942cf020da83c32278a6666d57c1d8505077",
+      "projectUrl": "http://www.ilgpu.net/",
+      "noticeFiles": [
+        "licenses/ILGPU-1.5.3-LICENSE.txt",
+        "licenses/ILGPU-1.5.3-LICENSE-3RD-PARTY.txt"
+      ]
+    },
+    {
+      "id": "RawDiskLib",
+      "version": "0.3.0",
+      "packagePath": "rawdisklib/0.3.0",
+      "projectAssetsSha512": "J0uuw5Q0qqJyOf+pPHKq5KRcoXIx4sexI5qHN3xSZ4IZ2h4ITWhanpjvhX8Dv0avzo+MYb4iW5nobk7gnmPimQ==",
+      "nupkgSha256": "d6e73f04177e7b367112ed666030ca53c8a7ca8fdcf16462785cec064c97a367",
+      "licenseType": "expression",
+      "license": "MIT",
+      "authors": "LordMike",
+      "copyright": "Michael Bisbjerg 2026",
+      "repositoryType": "git",
+      "repositoryUrl": "https://github.com/LordMike/RawDiskLib",
+      "repositoryCommit": "b0d7a913ab55ec92909137d5c324a6de36fa174e",
+      "projectUrl": "https://github.com/LordMike/RawDiskLib",
+      "noticeFiles": [
+        "licenses/MIT.txt"
+      ]
+    },
+    {
+      "id": "Serilog.Sinks.Console",
+      "version": "6.1.1",
+      "packagePath": "serilog.sinks.console/6.1.1",
+      "projectAssetsSha512": "8jbqgjUyZlfCuSTaJk6lOca465OndqOz3KZP6Cryt/IqZYybyBu7GP0fE/AXBzrrQB3EBmQntBFAvMVz1COvAA==",
+      "nupkgSha256": "09f220e14b38912310027eab536aec01e136da0e8ca45899761a195b24a965e6",
+      "licenseType": "expression",
+      "license": "Apache-2.0",
+      "authors": "Serilog Contributors",
+      "copyright": "",
+      "repositoryType": "git",
+      "repositoryUrl": "https://github.com/serilog/serilog-sinks-console",
+      "repositoryCommit": "b3cb1f042f5636161b831fa8816d70d865a5eec4",
+      "projectUrl": "https://github.com/serilog/serilog-sinks-console",
+      "noticeFiles": [
+        "licenses/Apache-2.0.txt"
+      ]
+    },
+    {
+      "id": "Serilog",
+      "version": "4.4.0",
+      "packagePath": "serilog/4.4.0",
+      "projectAssetsSha512": "ZC6Le3rr4TVJJjS4KsQAesxeF1EhW9qcZmmG7eP5Y2G3+gTGkJEUXkq4+tZNPtyp05I0wWOxnIjwtxFweJsObw==",
+      "nupkgSha256": "b4fe17d3a4e170354be975ed60885d272c67e2e2fd8cb2f4b370d13ba1cd424f",
+      "licenseType": "expression",
+      "license": "Apache-2.0",
+      "authors": "Serilog Contributors",
+      "copyright": "Copyright © Serilog Contributors",
+      "repositoryType": "git",
+      "repositoryUrl": "https://github.com/serilog/serilog",
+      "repositoryCommit": "497f80fda4f9e8f98b9c13ba34b1f0530f8c4449",
+      "projectUrl": "https://serilog.net/",
+      "noticeFiles": [
+        "licenses/Apache-2.0.txt"
+      ]
+    },
+    {
+      "id": "System.CommandLine",
+      "version": "2.0.10",
+      "packagePath": "system.commandline/2.0.10",
+      "projectAssetsSha512": "6i1D6/U3i1f/PiXTt9pDvbJwdXEe0F2DZPup6BHzeIu5yPk/lkFzgtrJnPbj54JWUh8Y9vJeKG/TZIT6MkF8TA==",
+      "nupkgSha256": "8a58c35e21a3b40fb0f642c72edc914a6ebb56f4674ca89049f3d44cdb760541",
+      "licenseType": "expression",
+      "license": "MIT",
+      "authors": "Microsoft",
+      "copyright": "© Microsoft Corporation. All rights reserved.",
+      "repositoryType": "git",
+      "repositoryUrl": "https://github.com/dotnet/dotnet",
+      "repositoryCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+      "projectUrl": "https://github.com/dotnet/command-line-api",
+      "noticeFiles": [
+        "licenses/MIT.txt"
+      ]
+    }
+  ],
+  "runtimePack": {
+    "id": "Microsoft.NETCore.App.Runtime.win-x64",
+    "version": "10.0.10",
+    "packagePath": "microsoft.netcore.app.runtime.win-x64/10.0.10",
+    "projectAssetsSha512": "d/6m2bwNP35/bBDmtNPb0GBLwlK0eyM8/Qb7zEtIFJDgjAo960bROUlB6XcuLM4VmfA8hklOgGDU98nUg6xDwA==",
+    "nupkgSha256": "56899c9057d6981ab9f237d6489e469af043668ab34cfb4199b55f92702b06bb",
+    "licenseType": "expression",
+    "license": "MIT",
+    "authors": "Microsoft",
+    "copyright": "© Microsoft Corporation. All rights reserved.",
+    "repositoryType": "git",
+    "repositoryUrl": "https://github.com/dotnet/dotnet",
+    "repositoryCommit": "f7d90799ce4ef09a0bb257852a57248d2a8fb8dd",
+    "projectUrl": "https://dot.net/",
+    "noticeFiles": [
+      "licenses/dotnet-runtime-win-x64-10.0.10-LICENSE.TXT",
+      "licenses/dotnet-runtime-win-x64-10.0.10-THIRD-PARTY-NOTICES.TXT"
+    ]
+  },
+  "releaseNoticeSources": [
+    {
+      "sourceType": "download",
+      "source": "https://raw.githubusercontent.com/LordMike/DeviceIOControlLib/v0.1.6/LICENSE.txt",
+      "destination": "licenses/DeviceIOControlLib-0.1.6-LICENSE.txt",
+      "bytes": 1072,
+      "sha256": "936c3bc75630c609dcff2494de1a19e16eb2b3434ec975f6bfd830b45aa8bf2c"
+    },
+    {
+      "sourceType": "nuget-package",
+      "packageId": "ILGPU",
+      "source": "LICENSE.txt",
+      "destination": "licenses/ILGPU-1.5.3-LICENSE.txt",
+      "bytes": 1922,
+      "sha256": "0fdc0c048cc3de590d0045b1a7383eccbf3d6319dc112520b9ca98f371bef5f7"
+    },
+    {
+      "sourceType": "nuget-package",
+      "packageId": "ILGPU",
+      "source": "LICENSE-3RD-PARTY.txt",
+      "destination": "licenses/ILGPU-1.5.3-LICENSE-3RD-PARTY.txt",
+      "bytes": 2427,
+      "sha256": "0d30ad9d6dfc5cdfe6df92f6a8d8e738afe7729410e3088831153f581f375b39"
+    },
+    {
+      "sourceType": "runtime-pack",
+      "source": "LICENSE.TXT",
+      "destination": "licenses/dotnet-runtime-win-x64-10.0.10-LICENSE.TXT",
+      "bytes": 1139,
+      "sha256": "d7a68596ab69b06f51ca278a6545148e4269a9381c26d597c13df5d88e08cf5b"
+    },
+    {
+      "sourceType": "runtime-pack",
+      "source": "THIRD-PARTY-NOTICES.TXT",
+      "destination": "licenses/dotnet-runtime-win-x64-10.0.10-THIRD-PARTY-NOTICES.TXT",
+      "bytes": 78041,
+      "sha256": "6d15e10a101c6bfff2ab4429ed061bf76c456fc4b23ad6b03e0d0f8377148a21"
+    },
+    {
+      "sourceType": "rust-sysroot",
+      "rustVersion": "1.95.0",
+      "source": "share/doc/rust/COPYRIGHT-library.html",
+      "destination": "licenses/Rust-1.95.0-COPYRIGHT-library.html",
+      "bytes": 425661,
+      "sha256": "90567e2718bf7fd65a71a3a43c5596488e80e5f51ed02bfea6fec54458b5f3d1"
+    }
+  ],
+  "repositoryNoticeFiles": [
+    {
+      "path": "licenses/Apache-2.0.txt",
+      "bytes": 11358,
+      "sha256": "c95bae1d1ce0235ecccd3560b772ec1efb97f348a79f0fbe0a634f0c2ccefe2c"
+    },
+    {
+      "path": "licenses/MIT.txt",
+      "bytes": 1926,
+      "sha256": "2cb8004be6235d503daf41a32acdce780299e8879085fc9fc164f9d0fed7287a"
+    }
+  ]
+}

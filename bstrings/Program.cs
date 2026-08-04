@@ -45,6 +45,8 @@ public static partial class Program
     private static readonly string Footer =
         @"Examples:"
         + "\r\n\t "
+        + @"bstrings.exe analyze -d ""C:\evidence\carved-files"" --full -o ""C:\results\carved"""
+        + "\r\n\t "
         + @"bstrings.exe -f ""C:\evidence\image.bin"""
         + "\r\n\t "
         + @"bstrings.exe -d ""C:\evidence"" --mask ""*.bin"" -s -o ""C:\results\all.txt"""
@@ -57,6 +59,8 @@ public static partial class Program
         + "\r\n\t "
         + @"bstrings.exe --enrich-jsonl ""C:\results\enriched.jsonl"" --lr all -o ""C:\results\matches.jsonl"""
         + "\r\n"
+        + "\r\nUse 'bstrings.exe analyze --help' for the one-command recovery, language, translation, and matching workflow."
+        + "\r\nUse 'bstrings.exe bundle verify' to verify every file in a complete offline bundle."
         + "\r\n--processor controls string extraction. --use-rapids is a separate, optional regex prefilter."
         + "\r\n--enrich-jsonl processes provenance-preserving external string records without rescanning file bytes.";
 
@@ -416,6 +420,32 @@ public static partial class Program
 
         SetupPatterns();
 
+        if (args.Length > 0 && string.Equals(args[0], "analyze", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                return await AnalysisCli.RunAsync(args.Skip(1).ToArray());
+            }
+            finally
+            {
+                bstrings.Rapids.RapidsProcessor.Shutdown();
+                Log.CloseAndFlush();
+            }
+        }
+
+        if (args.Length > 0 && string.Equals(args[0], "bundle", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                return await BundleCli.RunAsync(args.Skip(1).ToArray());
+            }
+            finally
+            {
+                bstrings.Rapids.RapidsProcessor.Shutdown();
+                Log.CloseAndFlush();
+            }
+        }
+
         var fOpt = new Option<string>("-f")
         {
             Description = "File to search. Either this or -d is required",
@@ -565,6 +595,17 @@ public static partial class Program
             Description =
                 "Apply --lr/--fr patterns to provenance-preserving enrichment JSONL instead of extracting file bytes",
         };
+        var emitEnrichmentJsonlOpt = new Option<bool>("--emit-enrichment-jsonl")
+        {
+            Description =
+                "Write native extracted strings as provenance-preserving JSONL for an integrated analysis workflow",
+            DefaultValueFactory = _ => false,
+        };
+        var pathsFromOpt = new Option<string>("--paths-from")
+        {
+            Description = "Read the exact input-file inventory from a UTF-8 line-delimited file",
+            Hidden = true,
+        };
 
         _rootCommand = new RootCommand
         {
@@ -599,6 +640,8 @@ public static partial class Program
             useRapidsOpt,
             forceRapidsOpt,
             enrichJsonlOpt,
+            emitEnrichmentJsonlOpt,
+            pathsFromOpt,
         };
 
         _rootCommand.Description = Header + "\r\n\r\n" + Footer;
@@ -635,7 +678,9 @@ public static partial class Program
                     result.GetValue(cpuEngineOpt),
                     result.GetValue(useRapidsOpt),
                     result.GetValue(forceRapidsOpt),
-                    result.GetValue(enrichJsonlOpt)
+                    result.GetValue(enrichJsonlOpt),
+                    result.GetValue(emitEnrichmentJsonlOpt),
+                    result.GetValue(pathsFromOpt)
                 )
         );
 
@@ -649,6 +694,59 @@ public static partial class Program
             bstrings.Rapids.RapidsProcessor.Shutdown();
             Log.CloseAndFlush();
         }
+    }
+
+    internal static IReadOnlyList<string> ReadInputInventory(string inventoryPath)
+    {
+        var inventoryFullPath = Path.GetFullPath(inventoryPath);
+        var files = new List<string>();
+        try
+        {
+            using var stream = new FileStream(
+                inventoryFullPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read
+            );
+            using var reader = new StreamReader(
+                stream,
+                new UTF8Encoding(
+                    encoderShouldEmitUTF8Identifier: false,
+                    throwOnInvalidBytes: true
+                ),
+                detectEncodingFromByteOrderMarks: false
+            );
+            while (reader.ReadLine() is { } line)
+            {
+                if (
+                    string.IsNullOrWhiteSpace(line)
+                    || line.Length > 32_767
+                    || line.IndexOfAny(['\r', '\n', '\0']) >= 0
+                    || !Path.IsPathFullyQualified(line)
+                )
+                {
+                    throw new InvalidDataException(
+                        $"Input inventory '{inventoryPath}' contains an invalid absolute path entry."
+                    );
+                }
+                var fullPath = Path.GetFullPath(line);
+                if (!string.Equals(fullPath, line, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        $"Input inventory '{inventoryPath}' contains a non-canonical path entry."
+                    );
+                }
+                files.Add(fullPath);
+            }
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new InvalidDataException(
+                $"Input inventory '{inventoryPath}' is not valid UTF-8.",
+                ex
+            );
+        }
+        return files;
     }
 
     private static async Task DoWork(
@@ -682,7 +780,9 @@ public static partial class Program
         string cpuEngine,
         bool useRapids, // use NVIDIA RAPIDS for GPU-accelerated regex processing
         bool forceRapids, // deprecated compatibility flag
-        string enrichJsonl // normalized external-extractor/translation records
+        string enrichJsonl, // normalized external-extractor/translation records
+        bool emitEnrichmentJsonl,
+        string pathsFrom // exact integrated-workflow input inventory
     )
     { // Set the global debug flag
         _debug = debug;
@@ -721,6 +821,39 @@ public static partial class Program
             }
             await ProcessEnrichmentJsonlAsync(enrichJsonl, o, lr, fr, q);
             return;
+        }
+
+        if (emitEnrichmentJsonl)
+        {
+            if (string.IsNullOrWhiteSpace(o))
+            {
+                Console.Error.WriteLine("--emit-enrichment-jsonl requires -o <output.jsonl>.");
+                _actionFailed = true;
+                return;
+            }
+            if (
+                !string.IsNullOrWhiteSpace(ls)
+                || !string.IsNullOrWhiteSpace(lr)
+                || !string.IsNullOrWhiteSpace(fs)
+                || !string.IsNullOrWhiteSpace(fr)
+            )
+            {
+                Console.Error.WriteLine(
+                    "--emit-enrichment-jsonl cannot be combined with search filters; match the resulting records in the integrated workflow."
+                );
+                _actionFailed = true;
+                return;
+            }
+            if (useRapids || forceRapids || sa || sl)
+            {
+                Console.Error.WriteLine(
+                    "--emit-enrichment-jsonl cannot be combined with RAPIDS or result sorting."
+                );
+                _actionFailed = true;
+                return;
+            }
+
+            off = true;
         }
 
         if (!ProcessingBackendCore.TryParseMode(processor, out var requestedMode, out var modeError))
@@ -823,95 +956,118 @@ public static partial class Program
         }
 
         // ########################### EDITED ###########################
-        var files = new List<string>(); // This is the main list of files to process
-        var inputResolution = InputResolutionCore.ResolveExplicitInputs(
-            f,
-            d,
-            mask,
-            File.Exists,
-            Directory.Exists,
-            (directoryPath, searchMask) =>
-                Directory.EnumerateFiles(
-                    directoryPath,
-                    searchMask,
-                    SearchOption.AllDirectories
-                ),
-            Path.GetFullPath
-        );
-
-        if (inputResolution.Status == InputResolutionStatus.Success)
+        IReadOnlyList<string> files;
+        var inventoryBackedInputs = !string.IsNullOrWhiteSpace(pathsFrom);
+        if (inventoryBackedInputs)
         {
-            files.AddRange(inputResolution.Files);
-        }
-        else if (inputResolution.Status == InputResolutionStatus.NoFilesFound)
-        {
-            if (!q)
+            if (!string.IsNullOrWhiteSpace(f) || !string.IsNullOrWhiteSpace(d))
             {
-                Log.Information("{Message}", inputResolution.Message);
+                Console.Error.WriteLine("--paths-from cannot be combined with -f or -d.");
+                _actionFailed = true;
+                return;
             }
-
-            return;
-        }
-        else if (inputResolution.Status == InputResolutionStatus.Error)
-        {
-            if (inputResolution.Exception is not null)
+            if (!File.Exists(pathsFrom))
             {
-                Log.Error(inputResolution.Exception, "{Message}", inputResolution.Message);
+                Console.Error.WriteLine($"Input inventory was not found: '{pathsFrom}'.");
+                _actionFailed = true;
+                return;
             }
-            else
-            {
-                Log.Error("{Message}", inputResolution.Message);
-            }
-
-            return;
+            files = ReadInputInventory(pathsFrom);
         }
-        else if (Console.IsInputRedirected)
+        else
         {
-            Log.Information("No -f or -d specified; attempting to read from stdin...");
-
-            var redirectedInputResolution = InputResolutionCore.CaptureRedirectedInput(
-                Console.OpenStandardInput,
-                Path.GetTempFileName,
-                path => new FileStream(path, FileMode.Create, FileAccess.Write),
-                path => new FileInfo(path).Length,
-                File.Delete,
+            var resolvedFiles = new List<string>();
+            var inputResolution = InputResolutionCore.ResolveExplicitInputs(
+                f,
+                d,
+                mask,
+                File.Exists,
+                Directory.Exists,
+                (directoryPath, searchMask) =>
+                    Directory.EnumerateFiles(
+                        directoryPath,
+                        searchMask,
+                        SearchOption.AllDirectories
+                    ),
                 Path.GetFullPath
             );
 
-            if (redirectedInputResolution.Status == InputResolutionStatus.Success)
+            if (inputResolution.Status == InputResolutionStatus.Success)
             {
-                files.AddRange(redirectedInputResolution.Files);
+                resolvedFiles.AddRange(inputResolution.Files);
             }
-            else if (
-                redirectedInputResolution.Status == InputResolutionStatus.EmptyRedirectedInput
-            )
+            else if (inputResolution.Status == InputResolutionStatus.NoFilesFound)
             {
-                Log.Warning("{Message}", redirectedInputResolution.Message);
-                return;
-            }
-            else
-            {
-                if (redirectedInputResolution.Exception is not null)
+                if (!q)
                 {
-                    Log.Error(
-                        redirectedInputResolution.Exception,
-                        "{Message}",
-                        redirectedInputResolution.Message
-                    );
-                }
-                else
-                {
-                    Log.Error("{Message}", redirectedInputResolution.Message);
+                    Log.Information("{Message}", inputResolution.Message);
                 }
 
                 return;
             }
-        }
-        else // No -f, no -d, and no piped input
-        {
-            await _rootCommand.Parse(["--help"]).InvokeAsync();
-            Log.Warning("{Message}", inputResolution.Message);
-            return;
+            else if (inputResolution.Status == InputResolutionStatus.Error)
+            {
+                if (inputResolution.Exception is not null)
+                {
+                    Log.Error(inputResolution.Exception, "{Message}", inputResolution.Message);
+                }
+                else
+                {
+                    Log.Error("{Message}", inputResolution.Message);
+                }
+
+                return;
+            }
+            else if (Console.IsInputRedirected)
+            {
+                Log.Information("No -f or -d specified; attempting to read from stdin...");
+
+                var redirectedInputResolution = InputResolutionCore.CaptureRedirectedInput(
+                    Console.OpenStandardInput,
+                    Path.GetTempFileName,
+                    path => new FileStream(path, FileMode.Create, FileAccess.Write),
+                    path => new FileInfo(path).Length,
+                    File.Delete,
+                    Path.GetFullPath
+                );
+
+                if (redirectedInputResolution.Status == InputResolutionStatus.Success)
+                {
+                    resolvedFiles.AddRange(redirectedInputResolution.Files);
+                }
+                else if (
+                    redirectedInputResolution.Status == InputResolutionStatus.EmptyRedirectedInput
+                )
+                {
+                    Log.Warning("{Message}", redirectedInputResolution.Message);
+                    return;
+                }
+                else
+                {
+                    if (redirectedInputResolution.Exception is not null)
+                    {
+                        Log.Error(
+                            redirectedInputResolution.Exception,
+                            "{Message}",
+                            redirectedInputResolution.Message
+                        );
+                    }
+                    else
+                    {
+                        Log.Error("{Message}", redirectedInputResolution.Message);
+                    }
+
+                    return;
+                }
+            }
+            else
+            {
+                await _rootCommand.Parse(["--help"]).InvokeAsync();
+                Log.Warning("{Message}", inputResolution.Message);
+                return;
+            }
+
+            files = resolvedFiles;
         }
 
         if (!q)
@@ -990,11 +1146,28 @@ public static partial class Program
         }
 
         await using var outputCompletion = new OutputCompletionScope(sw, outputIncompleteMarker);
-        var largestInputBytes = files
-            .Where(File.Exists)
-            .Select(path => new FileInfo(path).Length)
-            .DefaultIfEmpty(0)
-            .Max();
+        long fileCount = 0;
+        long largestInputBytes = 0;
+        foreach (var candidate in files)
+        {
+            fileCount++;
+            if (!File.Exists(candidate))
+            {
+                if (inventoryBackedInputs)
+                {
+                    throw new FileNotFoundException(
+                        "An evidence file from the fixed input inventory is no longer available.",
+                        candidate
+                    );
+                }
+                continue;
+            }
+            largestInputBytes = Math.Max(largestInputBytes, new FileInfo(candidate).Length);
+        }
+        if (fileCount == 0)
+        {
+            throw new InvalidDataException("The input inventory contains no evidence files.");
+        }
 
         ProcessingBackendSession processingBackend;
         try
@@ -1022,6 +1195,13 @@ public static partial class Program
         {
             if (File.Exists(currentFile) == false) // Use currentFile
             {
+                if (inventoryBackedInputs)
+                {
+                    throw new FileNotFoundException(
+                        "An evidence file from the fixed input inventory disappeared during extraction.",
+                        currentFile
+                    );
+                }
                 Log.Warning("'{CurrentFile}' does not exist! Skipping", currentFile); // Use currentFile
                 continue;
             }
@@ -1033,6 +1213,9 @@ public static partial class Program
             var rawResultsStreamed = false;
             var regexResultsStreamed = false;
             var withBoundaryHits = false;
+            var nativeRecordTransform = emitEnrichmentJsonl
+                ? new NativeEnrichmentRecordTransform(currentFile)
+                : null;
 
             // Parse multiple patterns from lr parameter
             var regexPatternsWithNames = ParseRegexPatternsWithNames(lr);
@@ -1085,7 +1268,12 @@ public static partial class Program
                 || !string.IsNullOrWhiteSpace(fr)
                 || regexPatterns.Count > 0;
             var canStreamRawResults =
-                sw is not null && o.Length > 0 && !requiresPostProcessing;
+                sw is not null
+                && o.Length > 0
+                && !requiresPostProcessing
+                && !emitEnrichmentJsonl;
+            var canStreamNativeRecords =
+                emitEnrichmentJsonl && sw is not null && o.Length > 0;
             StreamingRegexOutputCore streamingRegexOutput = null;
 
             if (canStreamRegexResults && isCsvOutput && !csvHeaderWritten)
@@ -1273,7 +1461,9 @@ public static partial class Program
                     if (sw != null && o.Length > 0)
                     {
                         StreamWriter outputWriter =
-                            canStreamRawResults || canStreamRegexResults ? sw : null;
+                            canStreamRawResults || canStreamRegexResults || canStreamNativeRecords
+                                ? sw
+                                : null;
                         await ProcessFileChunksConcurrentlyStreamingAsync(
                             mappedStream,
                             fileSizeBytes,
@@ -1290,7 +1480,7 @@ public static partial class Program
                             totalChunks,
                             progressTracker,
                             outputWriter,
-                            canStreamRegexResults ? null : hits,
+                            canStreamRegexResults || canStreamNativeRecords ? null : hits,
                             processingBackend,
                             processingMode,
                             canStreamRegexResults && !ro
@@ -1298,13 +1488,15 @@ public static partial class Program
                                     streamingRegexOutput!.TransformMainBatch
                                   )
                                 : literalBatchTransform,
-                            canStreamRegexResults && ro
+                            canStreamNativeRecords
+                                ? nativeRecordTransform!.TransformBatch
+                                : canStreamRegexResults && ro
                                 ? new Func<List<ExtractedStringHit>, List<string>>(
                                     streamingRegexOutput!.TransformStructuredBatch
                                   )
                                 : null
                         );
-                        rawResultsStreamed = canStreamRawResults;
+                        rawResultsStreamed = canStreamRawResults || canStreamNativeRecords;
                         regexResultsStreamed = canStreamRegexResults;
                     }
                     else
@@ -1350,7 +1542,9 @@ public static partial class Program
                     if (sw != null && o.Length > 0)
                     {
                         StreamWriter boundaryOutputWriter =
-                            canStreamRawResults || canStreamRegexResults ? sw : null;
+                            canStreamRawResults || canStreamRegexResults || canStreamNativeRecords
+                                ? sw
+                                : null;
                         var boundaryResults = await ProcessBoundaryChunksConcurrentlyStreamingAsync(
                             mappedStream,
                             fileSizeBytes,
@@ -1370,7 +1564,7 @@ public static partial class Program
                             ur,
                             q,
                             boundaryOutputWriter,
-                            canStreamRegexResults ? null : hits,
+                            canStreamRegexResults || canStreamNativeRecords ? null : hits,
                             processingBackend,
                             boundaryProcessingMode,
                             canStreamRegexResults && !ro
@@ -1378,7 +1572,15 @@ public static partial class Program
                                     streamingRegexOutput!.TransformBoundaryBatch
                                   )
                                 : literalBatchTransform,
-                            canStreamRegexResults && ro
+                            canStreamNativeRecords
+                                ? new Func<List<ExtractedStringHit>, List<string>>(
+                                    hits =>
+                                        nativeRecordTransform!.TransformBoundaryBatch(
+                                            hits,
+                                            chunkSizeBytes
+                                        )
+                                  )
+                                : canStreamRegexResults && ro
                                 ? new Func<List<ExtractedStringHit>, List<string>>(
                                     streamingRegexOutput!.TransformStructuredBatch
                                   )
@@ -1560,7 +1762,9 @@ public static partial class Program
             }
             else if (rawResultsStreamed && !hasPatternProcessing)
             {
-                counter = hits.Count;
+                counter = emitEnrichmentJsonl
+                    ? (int)Math.Min(nativeRecordTransform!.RecordCount, int.MaxValue)
+                    : hits.Count;
                 if (!q)
                 {
                     Log.Information(
@@ -1717,7 +1921,7 @@ public static partial class Program
             globalCounter += counter;
             globalHits += hits.Count;
             globalTimespan += _sw.Elapsed.TotalSeconds;
-            if (files.Count > 1)
+            if (fileCount > 1)
             {
                 Log.Information(
                     "-------------------------------------------------------------------------------------"
@@ -1733,7 +1937,7 @@ public static partial class Program
             );
         }
 
-        if (q || files.Count <= 1)
+        if (q || fileCount <= 1)
         {
             outputCompletion.MarkCompleted();
             Console.WriteLine();
@@ -1744,7 +1948,7 @@ public static partial class Program
         {
             Log.Information(
                 "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} string in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
-                files.Count,
+                fileCount,
                 globalCounter,
                 globalTimespan,
                 globalHits / globalTimespan
@@ -1754,7 +1958,7 @@ public static partial class Program
         {
             Log.Information(
                 "Total across {FilesCount:N0} files: Found {GlobalCounter:N0} strings in {GlobalTimespan:N3} seconds. Average strings/sec: {GlobalAve:N0}",
-                files.Count,
+                fileCount,
                 globalCounter,
                 globalTimespan,
                 globalHits / globalTimespan
@@ -3570,7 +3774,7 @@ public static partial class Program
     /// </summary>
     /// <param name="lr">The lr parameter value</param>
     /// <returns>List of resolved regex patterns</returns>
-    private static List<(string name, string pattern)> ParseRegexPatternsWithNames(string lr)
+    internal static List<(string name, string pattern)> ParseRegexPatternsWithNames(string lr)
     {
         return SearchCore.ParseRegexPatternsWithNames(
             lr,
@@ -3582,6 +3786,33 @@ public static partial class Program
     private static List<string> ParseRegexPatterns(string lr)
     {
         return SearchCore.ParseRegexPatterns(lr, RegExPatterns, BuiltInPatternCatalog.Groups);
+    }
+
+    internal static List<(string name, string pattern)> ResolveAnalysisPatterns(
+        string lr,
+        string regexFilePath
+    )
+    {
+        var patterns = ParseRegexPatternsWithNames(lr);
+        if (!string.IsNullOrWhiteSpace(regexFilePath))
+        {
+            var lineNumber = 0;
+            foreach (var line in File.ReadLines(regexFilePath))
+            {
+                lineNumber++;
+                var pattern = line.Trim();
+                if (pattern.Length == 0 || pattern.StartsWith('#'))
+                {
+                    continue;
+                }
+                patterns.Add(($"file:{lineNumber}", pattern));
+            }
+        }
+        if (patterns.Count == 0)
+        {
+            throw new ArgumentException("Analysis requires at least one --lr or --fr pattern.");
+        }
+        return patterns;
     }
 
     private static async Task ProcessEnrichmentJsonlAsync(

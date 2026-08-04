@@ -197,3 +197,6 @@ ModelManifest.xml
 # Python adapter caches
 __pycache__/
 *.py[cod]
+
+# Local benchmark, publish, and evidence-derived outputs
+/artifacts/

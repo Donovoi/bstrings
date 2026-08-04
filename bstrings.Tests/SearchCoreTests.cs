@@ -904,8 +904,14 @@ public class SearchCoreTests
             unicodeRange: "[\\u0020-\\u007E]"
         );
 
-        Assert.Equal([new ExtractedStringHit("Alpha", 0x101)], asciiResults);
-        Assert.Equal([new ExtractedStringHit("Beta", 0x200)], unicodeResults);
+        Assert.Equal(
+            [new ExtractedStringHit("Alpha", 0x101, 5, "code-page-1252")],
+            asciiResults
+        );
+        Assert.Equal(
+            [new ExtractedStringHit("Beta", 0x200, 8, "utf-16le")],
+            unicodeResults
+        );
     }
 
     [Fact]

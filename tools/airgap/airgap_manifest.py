@@ -46,12 +46,12 @@ def iter_bundle_files(root: Path, excluded: set[Path]) -> Iterable[Path]:
                 )
         for filename in files:
             candidate = current_path / filename
-            if candidate.resolve() in excluded:
-                continue
             if is_reparse_point(candidate):
                 raise ManifestError(
                     f"Bundle contains a file link or reparse point: {candidate}"
                 )
+            if candidate.absolute() in excluded:
+                continue
             if not candidate.is_file():
                 raise ManifestError(f"Bundle entry is not a regular file: {candidate}")
             yield candidate

@@ -1,18 +1,38 @@
 # Extractor and translation enrichment
 
-`bstrings` can now apply its regex catalog to strings recovered by other tools.
-The first adapter uses Magika to route extracted files, FLOSS to recover
-executable strings that ordinary byte scanning cannot see, and an optional
-offline translation pass to translate candidate text before matching it again.
-Hy-MT2 through llama.cpp is the recommended path for its supported languages;
-MADLAD-400 remains available when much wider language coverage matters more
-than speed.
+`bstrings` can apply its regex catalog to native strings and to strings
+recovered by [Magika](https://github.com/google/magika) and
+[FLOSS](https://github.com/mandiant/flare-floss). It can also assess whether
+text is likely to need translation, translate selected records with a local
+model, and match the translated children without losing their parent evidence
+records. [Hy-MT2](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF) through
+[llama.cpp](https://github.com/ggml-org/llama.cpp) is the recommended
+translation path for its supported languages;
+[MADLAD-400](https://huggingface.co/google/madlad400-3b-mt) remains available
+through the advanced adapter and benchmark path when much wider language
+coverage matters more than speed. The integrated `bstrings.exe analyze`
+workflow does not expose MADLAD as a selectable engine.
 
-This is intentionally a companion pipeline. Magika, FLOSS, Python, PyTorch,
-and model weights are not installed or loaded by the core `bstrings`
-executable. Large evidence images should still be scanned directly with
-`bstrings`; carved or filesystem-extracted files are the inputs to this
-adapter.
+## Normal workflow: one executable
+
+An examiner should normally invoke only `bstrings.exe`:
+
+```powershell
+bstrings.exe analyze -d carved-files --full -o results
+```
+
+`analyze --full` is the integrated workflow. It coordinates native extraction,
+the built-in pattern catalog, language triage, locally configured translation,
+and executable enrichment while retaining offsets and parent/child provenance.
+It uses local or bundled dependencies and model weights; it does not download
+tools or models during an examination.
+
+The Python commands later in this guide expose the adapter directly. They are
+for advanced integration, development, regression testing, or troubleshooting,
+not the normal examiner workflow. A raw disk or memory image can be scanned for
+native byte strings and patterns, but bstrings does not parse its filesystem or
+carve embedded executables. Mount or carve the image first when the executable
+recovery stages are required; FLOSS receives only complete supplied files.
 
 For an air-gapped workstation, use the reproducible bundle and launchers in
 [Air-gapped deployment](air-gapped-deployment.md). The bundle carries the
@@ -26,18 +46,66 @@ mode.
 | --- | --- | --- |
 | Magika | Classifies a complete extracted file and decides whether FLOSS is appropriate | It does not extract strings and should not be treated as a classifier for arbitrary disk blocks |
 | FLOSS | Recovers Go/Rust language strings plus stack, tight-loop, and decoded strings from supported executables | It does not replace filesystem parsing, carving, or normal byte-string extraction |
-| Hy-MT2 or MADLAD-400 | Produces an optional offline English child record from a recovered string | It does not prove that a translated identifier existed in the source bytes |
+| Hy-MT2 through llama.cpp | Produces an optional offline English child record in the integrated workflow | It does not prove that a translated identifier existed in the source bytes |
+| MADLAD-400 | Provides a broader-language fallback through the advanced adapter and benchmark path | It is not selectable by `bstrings.exe analyze` |
 | `bstrings --enrich-jsonl` | Applies the same built-in or custom regex semantics to every normalized record | It never rewrites or discards the parent evidence record |
+
+## How automatic language triage works
+
+Basic extraction does not require translation. The `analyze --full` workflow
+adds a local confidence-scored assessment so a large data set does not depend on the
+examiner already knowing which strings are important and non-English.
+
+The bundled [lingua-rs](https://github.com/pemistahl/lingua-rs) detector
+evaluates eligible records without a network request. It records the most
+likely language, its confidence, confidence for the requested target language,
+the next-best confidence, and the margin from the target. The triage stage then
+records one of these decisions:
+
+| Decision | Meaning |
+| --- | --- |
+| `target-language` | The record is already in the requested target language |
+| `translate` | The record is a non-target-language translation candidate |
+| `ambiguous` | The confidence or target-language margin does not clear the selected policy |
+| `non-linguistic` | The record is outside the configured length bounds or contains fewer than four letters |
+| `already-derived` | The record is already a translated child and is not translated again |
+| `detector-failed` | The detector could not make a reliable decision; high-recall policy retains it as a translation candidate |
+
+`adaptive` detection samples the workload and selects the accurate or faster
+profile. `high-recall` is appropriate when the cost of missing an important
+foreign-language sentence is greater than translating extra candidates;
+`balanced` and `high-precision` require the configured confidence and margin
+gates. Every assessment records the detector version, profile, thresholds,
+policy, confidence scores, and source record ID, so the selection can be reviewed
+without rerunning translation.
+
+Lingua's normalized confidence values are useful ranking and gating signals,
+not universally calibrated probabilities. Validate thresholds on representative
+case material, especially for short, mixed-language, or transliterated text.
 
 FLOSS is only selected automatically for Magika's `pebin` result. Known 32-
 or 64-bit shellcode can be forced with `--force-floss --floss-format sc32` or
 `sc64`. That override is explicit because treating arbitrary data as shellcode
 is expensive and produces weak provenance.
 
-## Install the optional tools
+## Advanced: install or replace optional tools manually
 
-Pin the adapter dependencies in a disposable environment or forensic VM. The
-versions validated for this integration were Magika Python package `1.0.3`
+The complete distribution or air-gap bundle should carry these dependencies for
+normal use. Use this section only to build a bundle, replace a pinned component,
+or reproduce the integration. Pin dependencies in a disposable environment or
+forensic VM and retain their license and hash records.
+
+| Component | Official acquisition or installation |
+| --- | --- |
+| Python | [CPython downloads](https://www.python.org/downloads/windows/); use the [embeddable package](https://docs.python.org/3/using/windows.html#the-embeddable-package) for a portable air-gap bundle |
+| uv | [Official uv installation guide](https://docs.astral.sh/uv/getting-started/installation/) |
+| Magika | [Google Magika CLI installation](https://github.com/google/magika#command-line-tool) |
+| FLOSS | [Mandiant FLOSS releases](https://github.com/mandiant/flare-floss/releases); the validated Windows build is [v3.1.1](https://github.com/mandiant/flare-floss/releases/tag/v3.1.1) |
+| llama.cpp | [Installation options](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md) and [release archives](https://github.com/ggml-org/llama.cpp/releases) |
+| Hugging Face CLI | [Official `hf` CLI guide](https://huggingface.co/docs/huggingface_hub/guides/cli) |
+| NVIDIA driver | [Official NVIDIA driver download](https://www.nvidia.com/Download/index.aspx); not needed for CPU-only translation |
+
+The versions validated for this integration were Magika Python package `1.0.3`
 (its bundled Rust CLI reports `magika 1.1.0 standard_v3_3`) and the FLOSS
 `3.1.1` Windows release.
 
@@ -45,7 +113,7 @@ versions validated for this integration were Magika Python package `1.0.3`
 uv venv --python 3.14 C:\forensic-tools\magika
 uv pip install --python C:\forensic-tools\magika\Scripts\python.exe magika==1.0.3
 
-# Download floss-v3.1.1-windows.zip from the official Mandiant release,
+# Download floss-v3.1.1-windows.zip from the linked official Mandiant release,
 # verify it, and extract floss.exe into C:\forensic-tools\floss.
 ```
 
@@ -55,9 +123,11 @@ release during this review had SHA-256
 Record and verify the hash of the asset you actually acquire; do not treat this
 note as a general software-signing mechanism.
 
-## Recover strings and run regexes
+## Advanced: run the adapter directly
 
-Run the adapter over files already extracted or carved from the evidence:
+The commands in this section deliberately expose the Python adapter. Use them
+only for advanced integration, development, or troubleshooting. Run the adapter
+over files already extracted or carved from the evidence:
 
 ```powershell
 python tools\enrichment\bstrings_enrich.py `
@@ -71,6 +141,29 @@ python tools\enrichment\bstrings_enrich.py `
 FLOSS static strings are omitted by default because native `bstrings` has
 already recovered most of them. Add `--include-floss-static` when a
 single-source FLOSS export is more useful than avoiding duplicates.
+
+### Large FLOSS results
+
+The adapter sends FLOSS standard output to a temporary disk file instead of
+loading its complete JSON document into memory. It validates UTF-8 and JSON in
+64 KiB reads, indexes the six supported string categories, and then decodes one
+item at a time in the established semantic order. An individual FLOSS item is
+limited to 16 MiB; a larger or malformed item fails the output transaction.
+The production normalization path closes the temporary file on success, error,
+or early cancellation.
+
+The reader pins the FLOSS 3.1.1 result shape. Duplicate JSON keys, missing or
+unknown string categories, missing required item fields, unsupported encoding
+or address-type values, and negative or overflowing address fields fail closed
+instead of silently replacing, omitting, or mislocating evidence.
+
+Exact duplicate suppression is intentionally scoped per input file so the same
+string at distinct evidence locations is retained. Its record-ID set grows with
+the number of unique records from that file, so unusually prolific binaries can
+still require substantial memory even though the FLOSS JSON itself remains
+disk-backed. The measured synthetic parser gate and future optimization notes
+belong in the benchmark record rather than being treated as a universal FLOSS
+throughput claim.
 
 Then apply any built-in or custom bstrings pattern:
 
@@ -92,7 +185,14 @@ regex has completed. A bad schema, missing parent, or regex timeout therefore
 leaves an existing result untouched. Console output cannot provide that
 rollback guarantee.
 
-## Offline translation
+## Advanced: direct offline translation
+
+The integrated `bstrings.exe analyze --full` workflow performs language triage
+before translation, so examiners do not need to know which records or files
+contain non-English text in advance. The direct commands below are retained for
+model validation, custom engine work, and troubleshooting. The integrated CLI
+uses Hy-MT2 through llama.cpp; selecting MADLAD requires this advanced adapter
+path.
 
 `--airgap` is stronger than merely loading an offline model. It forces the
 Hugging Face, Transformers, package-manager, and telemetry offline settings,
@@ -111,9 +211,12 @@ startup and records the exact model, revision, hash, llama.cpp version,
 CPU/CUDA path, GPU-layer policy, slot count, prompt-cache policy, and thread
 policy on every translated child.
 
-Download a pinned model revision and a pinned llama.cpp release before moving
-the examination environment offline. The model files are not bundled with
-`bstrings`:
+On a connected staging system, install the
+[`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli), download a
+pinned [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases), and
+download the pinned model revision before moving the examination environment
+offline. The source repository does not contain model weights; the complete
+distribution or air-gap bundle carries the locally staged files:
 
 ```powershell
 hf download tencent/Hy-MT2-1.8B-GGUF `
@@ -183,6 +286,14 @@ names, hyphenated or underscored identifiers, and placeholders. A missing or
 changed protected token aborts the output transaction. This is a conservative
 safety net; consequential findings still need comparison with the parent.
 
+Completion is also explicit. The integrated llama.cpp path must return exactly
+one terminal `stop` choice and report the same prompt-token count established by
+the local template and tokenizer endpoints. The advanced MADLAD adapter disables
+input truncation and requires an EOS token in every generated row. Empty or
+truncated output fails either transaction. Every successful eligible candidate
+produces one child; if the model returns the source unchanged, the child remains
+in the audit trail with `outcome: "unchanged"`.
+
 Useful overrides are:
 
 ```powershell
@@ -199,10 +310,15 @@ Useful overrides are:
 --translation-strict-determinism
 ```
 
-Hy-MT2 does not replace MADLAD everywhere. Its model card describes support
-for 33 languages (Hugging Face metadata currently exposes 36 language tags),
-whereas [MADLAD-400](https://huggingface.co/google/madlad400-3b-mt) exposes 419.
-Keep MADLAD as a fallback for languages outside Hy-MT2's supported set:
+Hy-MT2 does not replace MADLAD for every advanced use. Its model card describes
+support for 33 languages (Hugging Face metadata currently exposes 36 language
+tags), whereas [MADLAD-400](https://huggingface.co/google/madlad400-3b-mt)
+exposes 419. Keep MADLAD as an advanced adapter fallback for languages outside
+Hy-MT2's supported set; it cannot be selected by `bstrings.exe analyze`. This
+manual environment uses [uv](https://docs.astral.sh/uv/getting-started/installation/),
+[PyTorch](https://pytorch.org/get-started/locally/),
+[Transformers](https://huggingface.co/docs/transformers/installation), and
+[SentencePiece](https://github.com/google/sentencepiece):
 
 ```powershell
 uv pip install --python C:\forensic-tools\translate\Scripts\python.exe `
@@ -236,10 +352,11 @@ use CC-BY-NC-4.0. See the
 [full benchmark record](translation-benchmark-2026-08-04.md) for the research
 gate and measured comparison.
 
-Only strings containing letters and within the configured character limits
-are translated. Empty or unchanged translations are not emitted. Translation
-and regex matching remain separate steps so model policy, hardware choice,
-and regex policy stay independently auditable.
+Only strings containing letters and within the configured character limits are
+translated. Empty translations are rejected; unchanged successful translations
+are retained as auditable children. Translation and regex matching remain
+separate steps so model policy, hardware choice, and regex policy stay
+independently auditable.
 
 ## Provenance and interpretation
 
@@ -267,8 +384,9 @@ characters exist at that byte offset.
 ## Validation result
 
 The functional gate used Mandiant's open FLOSS test fixture
-`test-decode-in-place.exe` from `flare-floss-testfiles` commit
-`53e910192ea6f3f4c825370389393bdd9631580c`. The fixture SHA-256 was
+`test-decode-in-place.exe` from
+[`flare-floss-testfiles` commit `53e9101`](https://github.com/mandiant/flare-floss-testfiles/tree/53e910192ea6f3f4c825370389393bdd9631580c).
+The fixture SHA-256 was
 `378C3C25C7D844F51B29624EECCAE6626F3BDEA9D3EED5AB33E7F7162AC7329E`.
 
 - Magika classified it as `pebin` at `0.999` confidence.
@@ -340,7 +458,10 @@ strings/s. All four slice configurations produced the same quality scores and
 retained 22/22 identifiers. These small-slice speeds are hardware- and
 text-length-specific; they demonstrate path correctness, not universal rates.
 
-## Tests
+## Developer validation
+
+These commands exercise source-tree tests; they are not part of a normal
+examination:
 
 ```powershell
 dotnet test bstrings.Tests\bstrings.Tests.csproj --configuration Release

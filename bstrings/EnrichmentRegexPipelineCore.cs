@@ -16,6 +16,7 @@ internal static class EnrichmentRegexPipelineCore
 {
     internal const int CurrentSchemaVersion = 1;
     internal const int MaxJsonLineCharacters = 16 * 1024 * 1024;
+    internal const int MaxNativeTextCharacters = 2 * 1024 * 1024;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -29,7 +30,9 @@ internal static class EnrichmentRegexPipelineCore
         string? outputPath,
         IReadOnlyList<(string name, string pattern)> patterns,
         TextWriter? consoleOutput = null,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        bool trustedParentFirstInput = false,
+        TranslationValidationRequirements? translationRequirements = null
     )
     {
         if (string.IsNullOrWhiteSpace(inputPath))
@@ -91,7 +94,17 @@ internal static class EnrichmentRegexPipelineCore
         long inputRecords = 0;
         long translatedRecords = 0;
         long matchRecords = 0;
-        var seenRecordIds = new HashSet<string>(StringComparer.Ordinal);
+        var seenRecordIds = trustedParentFirstInput
+            ? null
+            : new HashSet<string>(StringComparer.Ordinal);
+        using var provenanceValidator = trustedParentFirstInput
+            ? new DiskBackedProvenanceValidator(
+                outputFullPath is null
+                    ? Path.GetTempPath()
+                    : Path.GetDirectoryName(outputFullPath)!
+            )
+            : null;
+        var translatedSectionStarted = false;
         try
         {
             using var reader = new StreamReader(
@@ -140,21 +153,56 @@ internal static class EnrichmentRegexPipelineCore
                 }
 
                 ValidateRecord(record, lineNumber);
-                if (IsTranslation(record) && !seenRecordIds.Contains(record.ParentRecordId!))
+                var isTranslation = IsTranslation(record);
+                if (
+                    seenRecordIds is not null
+                    && isTranslation
+                    && !seenRecordIds.Contains(record.ParentRecordId!)
+                )
                 {
                     throw new InvalidDataException(
                         $"Translated enrichment record at line {lineNumber:N0} references parentRecordId "
                             + $"'{record.ParentRecordId}', which has not appeared earlier in the stream."
                     );
                 }
-                if (!seenRecordIds.Add(record.RecordId))
+                if (seenRecordIds is not null && !seenRecordIds.Add(record.RecordId))
                 {
                     throw new InvalidDataException(
                         $"Enrichment JSONL line {lineNumber:N0} repeats recordId '{record.RecordId}'."
                     );
                 }
+                if (trustedParentFirstInput)
+                {
+                    if (isTranslation)
+                    {
+                        translatedSectionStarted = true;
+                        ValidateTranslationRequirements(
+                            record,
+                            translationRequirements,
+                            lineNumber
+                        );
+                        provenanceValidator!.AddTranslation(
+                            record.RecordId,
+                            record.ParentRecordId!,
+                            CreateLineageIdentity(record)
+                        );
+                    }
+                    else if (translatedSectionStarted)
+                    {
+                        throw new InvalidDataException(
+                            $"Enrichment JSONL line {lineNumber:N0} places an original record after translated children."
+                        );
+                    }
+                    else
+                    {
+                        provenanceValidator!.AddOriginal(
+                            record.RecordId,
+                            CreateLineageIdentity(record)
+                        );
+                    }
+                }
                 inputRecords++;
-                if (IsTranslation(record))
+                if (isTranslation)
                 {
                     translatedRecords++;
                 }
@@ -206,6 +254,7 @@ internal static class EnrichmentRegexPipelineCore
                 }
             }
 
+            provenanceValidator?.Validate(cancellationToken);
             await writer.FlushAsync(cancellationToken);
             if (ownedWriter is not null)
             {
@@ -256,7 +305,7 @@ internal static class EnrichmentRegexPipelineCore
         return compiled;
     }
 
-    private static void ValidateRecord(EnrichmentStringRecord record, long lineNumber)
+    internal static void ValidateRecord(EnrichmentStringRecord record, long lineNumber)
     {
         if (record.SchemaVersion != CurrentSchemaVersion)
         {
@@ -273,6 +322,13 @@ internal static class EnrichmentRegexPipelineCore
         if (string.IsNullOrWhiteSpace(record.RecordId))
         {
             throw new InvalidDataException($"Enrichment JSONL line {lineNumber:N0} has no recordId.");
+        }
+        if (record.RecordId.Length > DiskBackedProvenanceValidator.MaxIdentifierCharacters)
+        {
+            throw new InvalidDataException(
+                $"Enrichment JSONL line {lineNumber:N0} has a recordId longer than the "
+                    + $"{DiskBackedProvenanceValidator.MaxIdentifierCharacters:N0}-character safety limit."
+            );
         }
         if (string.IsNullOrEmpty(record.Text))
         {
@@ -315,6 +371,16 @@ internal static class EnrichmentRegexPipelineCore
             );
         }
         if (
+            record.ParentRecordId?.Length
+            > DiskBackedProvenanceValidator.MaxIdentifierCharacters
+        )
+        {
+            throw new InvalidDataException(
+                $"Enrichment JSONL line {lineNumber:N0} has a parentRecordId longer than the "
+                    + $"{DiskBackedProvenanceValidator.MaxIdentifierCharacters:N0}-character safety limit."
+            );
+        }
+        if (
             IsTranslation(record)
             && (
                 string.IsNullOrWhiteSpace(record.ParentRecordId)
@@ -333,8 +399,109 @@ internal static class EnrichmentRegexPipelineCore
         }
     }
 
-    private static bool IsTranslation(EnrichmentStringRecord record) =>
+    internal static bool IsTranslation(EnrichmentStringRecord record) =>
         string.Equals(record.Transform?.Kind, "translation", StringComparison.OrdinalIgnoreCase);
+
+    internal static TranslationLineageIdentity CreateLineageIdentity(
+        EnrichmentStringRecord record
+    ) =>
+        new(
+            record.SourceFile,
+            record.Location!.Kind,
+            record.Location.Value,
+            record.Origin!.Extractor,
+            record.Origin.Version,
+            record.Origin.Kind
+        );
+
+    internal static void ValidateTranslationRequirements(
+        EnrichmentStringRecord record,
+        TranslationValidationRequirements? requirements,
+        long lineNumber
+    )
+    {
+        if (requirements is null || !IsTranslation(record))
+        {
+            return;
+        }
+
+        var transform = record.Transform!;
+        if (transform.Outcome is not ("translated" or "unchanged"))
+        {
+            throw new InvalidDataException(
+                $"Translated enrichment record at line {lineNumber:N0} must record outcome "
+                    + "'translated' or 'unchanged'."
+            );
+        }
+        if (!string.Equals(transform.Engine, requirements.Engine, StringComparison.Ordinal))
+        {
+            throw TranslationSettingMismatch(
+                lineNumber,
+                "engine",
+                requirements.Engine,
+                transform.Engine
+            );
+        }
+        if (
+            !string.Equals(
+                transform.TargetLanguage,
+                requirements.TargetLanguage,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            throw TranslationSettingMismatch(
+                lineNumber,
+                "targetLanguage",
+                requirements.TargetLanguage,
+                transform.TargetLanguage
+            );
+        }
+        if (!string.Equals(transform.Model, requirements.Model, StringComparison.Ordinal))
+        {
+            throw TranslationSettingMismatch(
+                lineNumber,
+                "model",
+                requirements.Model,
+                transform.Model
+            );
+        }
+        if (!string.Equals(transform.Revision, requirements.Revision, StringComparison.Ordinal))
+        {
+            throw TranslationSettingMismatch(
+                lineNumber,
+                "revision",
+                requirements.Revision,
+                transform.Revision
+            );
+        }
+        if (
+            !string.Equals(
+                transform.ModelSha256,
+                requirements.ModelSha256,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            throw TranslationSettingMismatch(
+                lineNumber,
+                "modelSha256",
+                requirements.ModelSha256,
+                transform.ModelSha256
+            );
+        }
+    }
+
+    private static InvalidDataException TranslationSettingMismatch(
+        long lineNumber,
+        string field,
+        string expected,
+        string? actual
+    ) =>
+        new(
+            $"Translated enrichment record at line {lineNumber:N0} has {field} "
+                + $"'{actual ?? "<missing>"}', expected the verified setting '{expected}'."
+        );
 
     private static string GetEvidenceClass(EnrichmentStringRecord record)
     {

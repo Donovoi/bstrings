@@ -19,7 +19,7 @@ internal enum CpuStringEngineMode
 
 internal static unsafe class RustAsciiEngine
 {
-    private const uint ExpectedAbiVersion = 2;
+    private const uint ExpectedAbiVersion = 3;
     private const int InitialHitCapacityLimit = 1_048_576;
     private const string NativeLibraryName = "bstrings_core";
 

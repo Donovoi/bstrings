@@ -67,6 +67,20 @@ class AirgapManifestTests(unittest.TestCase):
             with self.assertRaisesRegex(ManifestError, "unsafe relative path"):
                 verify_manifest(root, manifest_path)
 
+    def test_manifest_alias_link_is_rejected_before_self_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "airgap-manifest.json"
+            manifest_path.write_text("{}", encoding="utf-8")
+            alias = root / "manifest-alias.json"
+            try:
+                alias.symlink_to(manifest_path)
+            except OSError as exc:
+                self.skipTest(f"symbolic links are unavailable: {exc}")
+
+            with self.assertRaisesRegex(ManifestError, "link or reparse point"):
+                create_manifest(root, manifest_path)
+
 
 if __name__ == "__main__":
     unittest.main()
