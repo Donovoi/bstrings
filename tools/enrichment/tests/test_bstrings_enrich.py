@@ -760,7 +760,10 @@ class EnrichmentTests(unittest.TestCase):
                 )
 
             self.assertEqual(0, exit_code)
-            self.assertEqual(inputs, [call.args[1] for call in run_floss_mock.call_args_list])
+            self.assertEqual(
+                [path.resolve() for path in inputs],
+                [call.args[1] for call in run_floss_mock.call_args_list],
+            )
             records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(6, len(records))
             self.assertEqual(
