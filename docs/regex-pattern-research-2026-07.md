@@ -14,7 +14,9 @@ The catalog now has one definition per built-in. Each definition records:
 - its description and primary source;
 - case, whitespace, and backtracking options;
 - an optional, separately reviewed cuDF superset; and
-- an optional capture to emit for patterns such as `urlUser`.
+- an optional capture to emit for patterns such as `urlUser`; and
+- an optional deterministic semantic validator for checks that regex cannot
+  establish safely.
 
 The review fixed several real false negatives and prefix-truncation bugs, added
 six useful patterns, and deliberately rejected several tempting but unreliable
@@ -30,8 +32,8 @@ A pattern belongs in the default catalog only when:
 2. it compiles with an explicit timeout and cannot match an empty string;
 3. it has positive, negative, boundary, and near-valid tests;
 4. it uses .NET's non-backtracking engine when its syntax allows it;
-5. its description is honest about checksums, identity, and other facts that
-   regex alone cannot establish;
+5. stable offline checksums, lengths, ranges, versions, and canonical encodings
+   are validated after the regex candidate stage where applicable;
 6. case and whitespace rules are local to that pattern; and
 7. it stays CPU-only unless its cuDF expression is demonstrably a superset of
    the .NET matches.
@@ -57,8 +59,8 @@ real match, so it is not acceptable.
 | `cve` | `CVE-YYYY-NNNN...` candidates with a 4-to-19-digit sequence | It recognizes the identifier shape, not whether a record exists | [CVE production schema](https://github.com/CVEProject/cve-schema/blob/main/schema/docs/CVE_Record_Format_bundled.json) |
 | `pem_private_key` | PKCS#8 `BEGIN PRIVATE KEY` and `BEGIN ENCRYPTED PRIVATE KEY` boundaries | It does not parse or validate the key body | [RFC 7468](https://www.rfc-editor.org/rfc/rfc7468) |
 | `named_pipe` | Standalone, quoted, and practical whitespace-delimited Windows pipe paths | Windows permits spaces in pipe names, so embedded command-line boundaries require an explicit policy | [Microsoft pipe names](https://learn.microsoft.com/windows/win32/ipc/pipe-names) |
-| `onion_v3` | 56-character Tor v3 `.onion` hostname candidates | Regex cannot verify the embedded checksum or version byte | [Tor onion-address encoding](https://spec.torproject.org/rend-spec/encoding-onion-addresses.html) |
-| `ethereum` | `0x` followed by a 20-byte hexadecimal address | It does not prove EIP-55 checksum casing, account existence, or ownership | [Ethereum accounts](https://ethereum.org/developers/docs/accounts/) |
+| `onion_v3` | 56-character Tor v3 `.onion` hostnames | The semantic stage verifies the version and checksum, not service existence, reachability, or ownership | [Tor onion-address encoding](https://spec.torproject.org/rend-spec/encoding-onion-addresses.html) |
+| `ethereum` | `0x` followed by a 20-byte hexadecimal address | Mixed case must pass EIP-55; no casing proves account existence, use, or ownership | [EIP-55](https://eips.ethereum.org/EIPS/eip-55) |
 | `sha256` | 64-character hexadecimal values shaped like SHA-256 output | Any unrelated 64-hex identifier has the same shape | [NIST FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final) |
 
 ## Useful fixes to older patterns
@@ -85,6 +87,14 @@ The review did more than add names to the catalog:
   password instead of printing a credential-bearing URL prefix.
 - Base64 no longer matches an empty string or common four-character noise.
 - Case-distinct custom patterns such as `secret` and `SECRET` are both kept.
+- Payment cards pass Luhn, Base58Check and CryptoNote wallet candidates pass
+  their offline checksum and network rules, and BitLocker recovery passwords
+  pass Microsoft's arithmetic checks.
+- Tor v3 version/checksum, mixed-case Ethereum EIP-55, SID field widths,
+  canonical Base64 pad bits, practical email length limits, and simple XML
+  well-formedness are enforced uniformly across output paths.
+- URI userinfo and full URI candidates reject malformed RFC 3986 percent
+  escapes; full URIs also reject malformed bracketed IPv6 and IPvFuture hosts.
 
 ## Patterns deliberately left out
 
@@ -170,6 +180,13 @@ The review machine did **not** have a working cuDF installation. Static syntax
 gates, superset witnesses, offset-prefixed rows, timeout behavior, fallback
 ordering, and .NET verification are tested. Exact live cuDF-to-CPU comparison
 is still hardware-gated and should not be described as completed.
+
+The 4 August follow-up added the semantic validation stage and expanded the
+suite to 281 tests. Its 33-pattern adversarial corpus returned every expected
+witness and rejected all 73,480 injected shape-correct semantic near-misses.
+Those results, the complete per-pattern policy, performance measurements, and
+the distinction between offline validity and live allocation are in the
+[pattern validity review](pattern-validity-review-2026-08.md).
 
 ## Research trail
 

@@ -347,14 +347,12 @@ internal sealed class StreamingRegexOutputCore
             throw new ArgumentOutOfRangeException(nameof(overlap));
         }
 
-        var outputGroup =
-            BuiltInPatternCatalog.TryGetDefinition(
+        var isBuiltIn = BuiltInPatternCatalog.TryGetDefinition(
                 patternName,
                 regex.ToString(),
                 out var definition
-            )
-                ? definition.OutputGroup
-                : null;
+            );
+        var outputGroup = isBuiltIn ? definition.OutputGroup : null;
 
         for (var primaryStart = 0; primaryStart < parsedHit.Data.Length; primaryStart += primaryWindowLength)
         {
@@ -385,6 +383,13 @@ internal sealed class StreamingRegexOutputCore
                     outputGroup is not null && match.Groups[outputGroup].Success
                         ? match.Groups[outputGroup].Value
                         : match.Value;
+                if (
+                    isBuiltIn
+                    && !BuiltInSemanticValidator.IsValid(definition, dataFound)
+                )
+                {
+                    continue;
+                }
                 yield return new RegexOutputRecord(
                     patternName,
                     dataFound,

@@ -33,9 +33,11 @@ The checked-in runner reports:
 - strings per second; and
 - each hypothesis in a separate JSONL record for review.
 
-Decoding was deterministic. Hy-MT2 used temperature 0, top-k 1, top-p 1, and
-seed 1. MADLAD used Transformers' greedy generation. A second full Q8 run
-produced zero hypothesis mismatches across all 72 cases.
+The original selection gate used one sequential request at a time. Hy-MT2 used
+temperature 0, top-k 1, top-p 1, and seed 1. MADLAD used Transformers' greedy
+generation. A second full Q8 run produced zero hypothesis mismatches across all
+72 cases. The later parallel gate below shows why greedy settings alone should
+not be described as byte-deterministic under continuous batching.
 
 ## Host and pinned inputs
 
@@ -86,6 +88,89 @@ selection gate but too few for broad language-quality claims.
 | tr_TR | 63.67 | 65.05 |
 | zh_CN | 56.40 | 53.83 |
 
+## Parallel scheduling optimization gate
+
+The scheduler was re-tested on the same laptop with llama.cpp release `b10248`,
+the same pinned Q8 model and WMT24++ revision, and the same 72 cases. The
+official CUDA 12.4 archive had SHA-256
+`A08EA218EA705C8961E82473044933B50AB4F82818FE974C556925FB5C150785`;
+the official CUDA runtime archive retained SHA-256
+`8C79A9B226DE4B3CACFD1F83D24F962D0773BE79F1E7B75C6AF4DED7E32AE1D6`.
+
+Translation time again excludes model hashing and startup. “Strict” means one
+slot with prompt-cache reuse disabled. Throughput mode uses shared-model slots,
+continuous batching, exact prompt-cache reuse, greedy top-1 decoding, and
+ordered result reconstruction.
+
+| Q8/CUDA schedule | Runs | WMT24++ chrF++ | Forensic chrF++ | Identifiers | Strings/s | Strict-relative speed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| One slot, strict | 1 | 59.6211 | 87.5297 | 22/22 | 1.293 | 1.00× |
+| Two slots | 2 | 59.6713–59.8486 | 87.5297 | 22/22 | 2.040–2.055 | 1.58–1.59× |
+| Four slots | 1 | 59.4696 | 87.5297 | 22/22 | 2.440 | 1.89× |
+
+Two slots are the automatic default for models up to 8 GiB. They raised
+throughput by roughly 58–59% without a measured quality reduction. Four slots
+remain an explicit override because the extra speed coincided with a 0.15
+chrF++ reduction against strict mode. The corpus is too small to treat either
+movement as a universal quality result, so the decision is conservative.
+
+Parallel scheduling was not byte-reproducible even with greedy decoding. The
+first two-slot run differed from strict on 11/72 WMT hypotheses; the repeated
+two-slot run also differed from strict on 11/72, and the two parallel runs
+differed from each other on 5/72. All differences were in the general WMT set:
+the 12 forensic hypotheses and all 22 identifiers were unchanged. Strict mode
+is therefore retained for regression gates and examinations where output
+repeatability outranks throughput.
+
+### CPU, hybrid, and adaptive paths
+
+A common 16-case slice—one row each for Arabic, German, Mexican Spanish, and
+Persian plus all 12 forensic fixtures—exercised every hardware mode.
+
+| Q8 path, two slots unless noted | chrF++ WMT / forensic | Identifiers | Strings/s | CPU-serial relative |
+| --- | ---: | ---: | ---: | ---: |
+| CPU, one slot | 38.5677 / 87.5297 | 22/22 | 0.919 | 1.00× |
+| CPU, two slots | 38.5677 / 87.5297 | 22/22 | 1.095 | 1.19× |
+| Hybrid, 12 GPU layers | 38.5677 / 87.5297 | 22/22 | 1.613 | 1.75× |
+| Adaptive CUDA | 38.5677 / 87.5297 | 22/22 | 6.217 | 6.76× |
+
+All hypotheses were identical across these four slice runs. The short slice is
+faster than the full corpus because its strings are shorter, so its absolute
+rate must not be compared directly with the 72-case table. It establishes that
+CPU-only, deliberate CPU+GPU, and adaptive GPU paths all function and preserve
+the checked quality signals on the reviewed hardware.
+
+### Optimizations accepted and rejected
+
+The implementation follows llama.cpp's documented
+[parallel slots and continuous batching](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md):
+one loaded model serves ordered concurrent requests, context is budgeted per
+slot, and `-ngl auto`, `all`, `0`, or an exact count selects adaptive, GPU,
+CPU, or hybrid execution. Exact repeated source strings are translated once,
+similar lengths are grouped in bounded windows, and a bounded LRU avoids work
+across later windows without collapsing parent provenance.
+
+The length and concurrency choices are also consistent with CTranslate2's
+[performance](https://opennmt.net/CTranslate2/performance.html) and
+[parallelism](https://opennmt.net/CTranslate2/parallel.html) guidance: favor
+inter-request concurrency for volume and batch similarly sized sequences. No
+CTranslate2 engine was added because it is not a drop-in runtime for the pinned
+GGUF model; changing runtime or converting weights needs its own quality gate.
+
+Transformers documents compilation, optimized attention, quantization,
+caching, parallelism, and continuous batching in its
+[inference optimization overview](https://huggingface.co/docs/transformers/main/en/optimization_overview).
+Those ideas informed the scheduler, but `torch.compile` was not added to the
+MADLAD fallback: its warm-up and shape sensitivity need a separate benchmark,
+and the validated fast path now uses llama.cpp.
+
+llama.cpp also documents
+[speculative decoding](https://github.com/ggml-org/llama.cpp/blob/master/docs/speculative.md).
+It was not enabled. A draft model or n-gram predictor changes resource use and
+potential scheduling behavior, and no forensic quality gate for that path was
+completed. This is the next falsifiable optimization candidate, not an assumed
+free speed-up.
+
 ## Other candidates
 
 - [TranslateGemma 4B](https://huggingface.co/google/translategemma-4b-it) is a
@@ -107,19 +192,23 @@ Primary research sources are the
 ## Reproduce the gate
 
 Install the benchmark-only dependency and download the same WMT24++ revision.
-The benchmark runner never downloads a model and accepts only a loopback
-OpenAI-compatible endpoint for the llama.cpp path.
+The benchmark runner never downloads a model. It can own a short-lived,
+loopback-only llama.cpp server so the benchmark exercises the same scheduler as
+the production adapter.
 
 ```powershell
 uv pip install "sacrebleu>=2.5,<3"
 
 python tools\enrichment\benchmark_translation.py `
-  --engine openai `
-  --endpoint http://127.0.0.1:18089 `
+  --engine llama-cpp `
+  --llama-server C:\forensic-tools\llama.cpp\llama-server.exe `
+  --model-path C:\forensic-models\hy-mt2-1.8b\Hy-MT2-1.8B-Q8_0.gguf `
   --model-id tencent/Hy-MT2-1.8B-GGUF `
   --model-revision 1cd5208700acedef4ef93019b6cfc148b8522d45 `
   --model-sha256 5C3FE0B1408A5CEB0143184EF247B11B579C525F4B02B060E6C851BB76FEF1A4 `
-  --runtime "llama.cpp b10243; CUDA; Q8_0" `
+  --runtime "llama.cpp b10248; CUDA 12.4; Q8_0" `
+  --device auto `
+  --parallelism 0 `
   --wmt-root C:\bench\wmt24pp `
   --wmt-per-locale 5 `
   --output C:\bench\results\hy-mt2-q8.json

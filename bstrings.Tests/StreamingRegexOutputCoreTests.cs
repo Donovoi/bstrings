@@ -28,6 +28,11 @@ public class StreamingRegexOutputCoreTests
                 BuiltInPatternCatalog.Patterns["b64"],
                 "bstrings separate QWxwaGExMjM="
             },
+            {
+                "cc",
+                BuiltInPatternCatalog.Patterns["cc"],
+                "valid 4111111111111111 invalid 4111111111111112"
+            },
             { "xml", BuiltInPatternCatalog.Patterns["xml"], "<item>value</item>" },
             { "custom", "[0-9]+", "1 22 333 4444 55555 666666" },
         };
@@ -372,6 +377,30 @@ public class StreamingRegexOutputCoreTests
             Assert.Equal(address, record.DataFound);
             Assert.Equal("0x500", record.Offset);
         });
+    }
+
+    [Fact]
+    public void BoundedRetry_AppliesSemanticValidationWithoutDroppingValidCandidates()
+    {
+        var definition = BuiltInPatternCatalog.ByName["cc"];
+        var regex = RegexOutputCore.GetOrCreateRegex(definition.Name, definition.Pattern);
+        const string valid = "4111111111111111";
+        const string invalid = "4111111111111112";
+        var data = new string('x', 15) + " " + valid + ";" + invalid;
+
+        var records = StreamingRegexOutputCore
+            .CreateBoundedRecords(
+                new ParsedHit(data, data, "0x500"),
+                definition.Name,
+                regex,
+                "input.bin",
+                overlap: 32,
+                primaryWindowLength: 16
+            )
+            .Select(record => record.DataFound)
+            .ToList();
+
+        Assert.Equal([valid], records);
     }
 
     [Fact]

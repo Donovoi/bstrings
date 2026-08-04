@@ -42,7 +42,7 @@ namespace bstrings.Rapids
 
                     var startInfo = new ProcessStartInfo
                     {
-                        FileName = "python",
+                        FileName = ResolvePythonExecutable(),
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,
                         UseShellExecute = false,
@@ -85,7 +85,7 @@ namespace bstrings.Rapids
                         {
                             Console.WriteLine($"[RAPIDS] Unavailable - {error.Trim()}");
                             Console.WriteLine(
-                                "[RAPIDS] Install NVIDIA RAPIDS cuDF for GPU acceleration: pip install cudf-cu12"
+                                "[RAPIDS] Point BSTRINGS_RAPIDS_PYTHON at a prepared local cuDF/cuPy runtime"
                             );
                             Console.WriteLine(
                                 "[RAPIDS] Install and validate RAPIDS separately before using --use-rapids"
@@ -116,6 +116,25 @@ namespace bstrings.Rapids
         /// Check if RAPIDS is available for enhanced processing
         /// </summary>
         public static bool IsAvailable => _rapidsAvailable;
+
+        internal static string ResolvePythonExecutable()
+        {
+            var configured = Environment.GetEnvironmentVariable("BSTRINGS_RAPIDS_PYTHON");
+            if (string.IsNullOrWhiteSpace(configured))
+            {
+                return "python";
+            }
+
+            var resolved = Path.GetFullPath(configured);
+            if (!File.Exists(resolved))
+            {
+                throw new FileNotFoundException(
+                    "BSTRINGS_RAPIDS_PYTHON does not point to a local Python executable.",
+                    resolved
+                );
+            }
+            return resolved;
+        }
 
         /// <summary>
         /// Process strings using an existing RAPIDS cuDF installation
@@ -173,7 +192,7 @@ namespace bstrings.Rapids
                 // Execute RAPIDS processing
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = "python",
+                    FileName = ResolvePythonExecutable(),
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -497,135 +516,6 @@ if __name__ == '__main__':
         }
 
         /// <summary>
-        /// Install RAPIDS environment in the background
-        /// </summary>
-#if LEGACY_UNSAFE_RAPIDS_INSTALLER
-        private static async Task InstallRapidsEnvironmentAsync()
-        {
-            try
-            {
-                Console.WriteLine();
-                Console.WriteLine(
-                    "[RAPIDS Installation] 🔧 Starting automatic RAPIDS installation..."
-                );
-
-                // Install Miniconda
-                await InstallMiniconda();
-
-                // Create RAPIDS environment
-                await CreateRapidsEnvironment();
-
-                Console.WriteLine("[RAPIDS Installation] ✅ Installation completed!");
-                Console.WriteLine(
-                    "[RAPIDS Installation] Please restart the application to use RAPIDS GPU acceleration."
-                );
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[RAPIDS Installation] ❌ Installation failed: {ex.Message}");
-                if (Program._debug)
-                {
-                    Console.WriteLine($"[RAPIDS Installation] Exception details: {ex}");
-                }
-            }
-        }
-
-        /// <summary>
-        /// Install Miniconda
-        /// </summary>
-        private static async Task InstallMiniconda()
-        {
-            try
-            {
-                Console.WriteLine("[RAPIDS Installation] 📦 Installing Miniconda...");
-
-                var installerPath = Path.Combine(Path.GetTempPath(), "miniconda.exe");
-
-                // Download Miniconda
-                var downloadProcess = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "powershell",
-                        Arguments =
-                            $"-Command \"Invoke-WebRequest -Uri 'https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe' -OutFile '{installerPath}'\"",
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                    },
-                };
-
-                downloadProcess.Start();
-                await downloadProcess.WaitForExitAsync();
-
-                if (File.Exists(installerPath))
-                {
-                    // Install Miniconda
-                    var installProcess = new Process
-                    {
-                        StartInfo = new ProcessStartInfo
-                        {
-                            FileName = installerPath,
-                            Arguments = "/S",
-                            UseShellExecute = false,
-                            CreateNoWindow = true,
-                        },
-                    };
-
-                    installProcess.Start();
-                    await installProcess.WaitForExitAsync();
-
-                    try
-                    {
-                        File.Delete(installerPath);
-                    }
-                    catch { }
-
-                    Console.WriteLine("[RAPIDS Installation] ✅ Miniconda installed");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(
-                    $"[RAPIDS Installation] ❌ Miniconda installation failed: {ex.Message}"
-                );
-            }
-        }
-        /// <summary>
-        /// Create RAPIDS conda environment
-        /// </summary>
-        private static async Task CreateRapidsEnvironment()
-        {
-            try
-            {
-                Console.WriteLine("[RAPIDS Installation] 🐍 Creating RAPIDS environment...");
-
-                var createEnvProcess = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "conda",
-                        Arguments =
-                            "create -n rapids-25.06 -c rapidsai -c conda-forge -c nvidia rapids=25.06 python=3.13 \"cuda-version>=12.0,<=12.8\" -y",
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                    },
-                };
-
-                createEnvProcess.Start();
-                await createEnvProcess.WaitForExitAsync();
-
-                Console.WriteLine("[RAPIDS Installation] ✅ RAPIDS environment created");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(
-                    $"[RAPIDS Installation] ❌ Environment creation failed: {ex.Message}"
-                );
-            }
-        }
-#endif
-
-        /// <summary>
         /// Cleanup RAPIDS resources
         /// </summary>
         public static void Shutdown()
@@ -786,7 +676,7 @@ if __name__ == '__main__':
                 }
 
                 var parsedHit = RegexOutputCore.ParseHit(result.DataFound, off);
-                if (!regex.IsMatch(parsedHit.Data))
+                if (!RegexOutputCore.IsMatch(result.PatternName, regex, parsedHit.Data))
                 {
                     continue;
                 }

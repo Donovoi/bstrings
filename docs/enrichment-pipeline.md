@@ -14,6 +14,12 @@ executable. Large evidence images should still be scanned directly with
 `bstrings`; carved or filesystem-extracted files are the inputs to this
 adapter.
 
+For an air-gapped workstation, use the reproducible bundle and launchers in
+[Air-gapped deployment](air-gapped-deployment.md). The bundle carries the
+runtime, tools, model, licences, configuration, and strict SHA-256 manifest;
+the enrichment launcher always enables the adapter's enforced `--airgap`
+mode.
+
 ## What each stage does
 
 | Stage | Role | What it does not do |
@@ -88,14 +94,22 @@ rollback guarantee.
 
 ## Offline translation
 
+`--airgap` is stronger than merely loading an offline model. It forces the
+Hugging Face, Transformers, package-manager, and telemetry offline settings,
+routes proxy variables to a closed loopback endpoint, and installs a Python
+audit hook that rejects non-loopback DNS and socket activity. The local
+llama.cpp connection on `127.0.0.1` remains allowed. Translated records state
+whether this enforced mode was active in `execution.airgap`.
+
 The current recommendation is the Apache-2.0
 [Hy-MT2-1.8B GGUF](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF), using Q8
 when translation quality is the priority and Q4_K_M when memory or speed is
 tighter. The adapter owns a short-lived llama.cpp server, binds it to
-`127.0.0.1`, disables the web UI and reasoning output, uses deterministic
+`127.0.0.1`, disables the web UI and reasoning output, uses greedy top-1
 decoding, and tears the server down before returning. It hashes the GGUF before
-startup and records the exact model, revision, hash, llama.cpp version, and
-actual CPU/CUDA path on every translated child.
+startup and records the exact model, revision, hash, llama.cpp version,
+CPU/CUDA path, GPU-layer policy, slot count, prompt-cache policy, and thread
+policy on every translated child.
 
 Download a pinned model revision and a pinned llama.cpp release before moving
 the examination environment offline. The model files are not bundled with
@@ -123,14 +137,67 @@ python tools\enrichment\bstrings_enrich.py `
   --translation-model-sha256 5C3FE0B1408A5CEB0143184EF247B11B579C525F4B02B060E6C851BB76FEF1A4 `
   --translation-device auto `
   --translation-target en `
+  --airgap `
   -o C:\case\results\other-normalized-strings-translated.jsonl
 ```
 
-`auto` uses CUDA when the supplied llama.cpp binary lists a CUDA device and
-otherwise uses CPU. `cuda` fails before examination if no CUDA device is
-visible; `cpu` forces zero GPU layers. The Q8 and Q4 CPU/GPU paths were both
-exercised during integration. The server executable itself is an explicit,
-local dependency so an examiner can pin and hash the build used in a case.
+`auto` uses llama.cpp's adaptive CUDA offload when the supplied binary lists a
+CUDA device and otherwise uses CPU. `cuda` requires a visible CUDA device and
+full layer offload. `cpu` forces zero GPU layers. `hybrid` requires an explicit
+positive `--translation-gpu-layers N` value, making a deliberate CPU+GPU split
+auditable rather than merely labeling an automatic decision as hybrid. The Q8
+and Q4 CPU/GPU paths were both exercised during integration. The server
+executable itself is an explicit, local dependency so an examiner can pin and
+hash the build used in a case.
+
+### Scheduling and repeatability
+
+The adapter starts one model server and shares it across ordered concurrent
+requests. llama.cpp continuous batching remains enabled for every schedule.
+`--translation-parallelism 0` chooses conservatively:
+
+- two slots for a CUDA-capable model no larger than 8 GiB;
+- one slot for a larger CUDA-capable model to avoid multiplying context and
+  cache pressure; or
+- two CPU slots on hosts with at least 12 logical processors, otherwise one.
+
+Each call uses no more workers than it has unique work. The stream is processed
+in bounded windows, exact source text is translated once, similar source
+lengths are grouped, and a bounded LRU reuses exact translations across later
+windows and files. Defaults are derived from batch size and slot count; override
+them with `--translation-window-size` and `--translation-cache-size` only after
+measuring a representative sample. Every distinct parent still receives its
+own translated child, so deduplication never collapses evidence provenance.
+
+Parallel greedy inference is not promised to be byte-deterministic. Different
+continuous-batching schedules can change floating-point accumulation enough to
+select a different token at a close decision. Use
+`--translation-strict-determinism` to force one slot and disable prompt-cache
+reuse. This is the maximum-repeatability path, not a claim that different
+drivers or hardware will always produce identical bytes.
+
+The normal gate is fail-closed for strongly structured evidence tokens. Before
+a child is written, exact retention is checked for emails, URLs, IP addresses,
+hashes, Windows and registry paths, CVEs, GUIDs, host/port values, common file
+names, hyphenated or underscored identifiers, and placeholders. A missing or
+changed protected token aborts the output transaction. This is a conservative
+safety net; consequential findings still need comparison with the parent.
+
+Useful overrides are:
+
+```powershell
+# Full NVIDIA GPU, two explicitly requested slots.
+--translation-device cuda --translation-parallelism 2
+
+# Deliberate CPU+GPU split for a model that cannot fit fully in VRAM.
+--translation-device hybrid --translation-gpu-layers 12
+
+# CPU only; zero keeps the hardware-aware slot and thread defaults.
+--translation-device cpu --translation-parallelism 0 --translation-threads 0
+
+# Most repeatable path for a report or regression gate.
+--translation-strict-determinism
+```
 
 Hy-MT2 does not replace MADLAD everywhere. Its model card describes support
 for 33 languages (Hugging Face metadata currently exposes 36 language tags),
@@ -256,6 +323,22 @@ These figures describe one laptop and a deliberately small selection gate;
 they are not universal model rankings. They are sufficient to choose the
 adapter's preferred path on the reviewed hardware, while the checked-in
 benchmark makes later model or runtime changes falsifiable.
+
+A second 2026-08-04 scheduler gate used llama.cpp `b10248` and the same pinned
+Q8 weights. On all 72 cases, strict one-slot CUDA scored 59.6211 WMT chrF++ at
+1.293 strings/s. Two-slot CUDA scored 59.6713 and 59.8486 across two runs at
+2.040 and 2.055 strings/s; both kept the forensic score at 87.5297 and retained
+22/22 identifiers. Four slots reached 2.440 strings/s but scored 59.4696, so it
+was not selected as the automatic default. The two two-slot runs differed on
+five general WMT hypotheses and zero forensic hypotheses, which is why strict
+mode exists.
+
+On an identical 16-case slice, CPU two-slot output was byte-identical to CPU
+one-slot output and improved from 0.919 to 1.095 strings/s. An explicit 12-layer
+hybrid split reached 1.613 strings/s, while adaptive CUDA reached 6.217
+strings/s. All four slice configurations produced the same quality scores and
+retained 22/22 identifiers. These small-slice speeds are hardware- and
+text-length-specific; they demonstrate path correctness, not universal rates.
 
 ## Tests
 

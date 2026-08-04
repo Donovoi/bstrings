@@ -69,6 +69,15 @@ internal static class RegexOutputCore
             {
                 foreach (var candidate in EnumerateBase64Candidates(parsedHit.Data))
                 {
+                    if (
+                        !BuiltInSemanticValidator.IsValid(
+                            definition,
+                            parsedHit.Data.AsSpan(candidate.Start, candidate.Length)
+                        )
+                    )
+                    {
+                        continue;
+                    }
                     yield return new RegexOutputRecord(
                         patternName,
                         parsedHit.Data.Substring(candidate.Start, candidate.Length),
@@ -85,7 +94,10 @@ internal static class RegexOutputCore
                 && string.Equals(definition.Name, "xml", StringComparison.OrdinalIgnoreCase)
             )
             {
-                if (IsSimpleXmlElementMatch(parsedHit.Data))
+                if (
+                    IsSimpleXmlElementMatch(parsedHit.Data)
+                    && BuiltInSemanticValidator.IsValid(definition, parsedHit.Data)
+                )
                 {
                     yield return new RegexOutputRecord(
                         patternName,
@@ -120,6 +132,10 @@ internal static class RegexOutputCore
                     )
                 )
                 {
+                    if (!BuiltInSemanticValidator.IsValid(definition, dataFound))
+                    {
+                        continue;
+                    }
                     yield return new RegexOutputRecord(
                         patternName,
                         dataFound,
@@ -135,10 +151,20 @@ internal static class RegexOutputCore
 
             foreach (Match match in matches)
             {
-                var dataFound =
-                    outputGroup is not null && match.Groups[outputGroup].Success
-                        ? match.Groups[outputGroup].Value
-                        : match.Value;
+                var group = outputGroup is not null ? match.Groups[outputGroup] : null;
+                var candidateStart = group is not null && group.Success ? group.Index : match.Index;
+                var candidateLength = group is not null && group.Success ? group.Length : match.Length;
+                if (
+                    isBuiltIn
+                    && !BuiltInSemanticValidator.IsValid(
+                        definition,
+                        parsedHit.Data.AsSpan(candidateStart, candidateLength)
+                    )
+                )
+                {
+                    continue;
+                }
+                var dataFound = parsedHit.Data.Substring(candidateStart, candidateLength);
                 yield return new RegexOutputRecord(
                     patternName,
                     dataFound,
@@ -241,6 +267,10 @@ internal static class RegexOutputCore
         {
             foreach (var candidate in EnumerateBase64Candidates(data))
             {
+                if (!BuiltInSemanticValidator.IsValid(definition, data.AsSpan(candidate.Start, candidate.Length)))
+                {
+                    continue;
+                }
                 AddCandidateRange(
                     inlineRanges,
                     ref overflowRanges,
@@ -254,7 +284,10 @@ internal static class RegexOutputCore
             && string.Equals(definition.Name, "xml", StringComparison.OrdinalIgnoreCase)
         )
         {
-            if (IsSimpleXmlElementMatch(data))
+            if (
+                IsSimpleXmlElementMatch(data)
+                && BuiltInSemanticValidator.IsValid(definition, data)
+            )
             {
                 AddCandidateRange(
                     inlineRanges,
@@ -282,14 +315,24 @@ internal static class RegexOutputCore
                     // The generated URL pattern has either a zero-width start anchor
                     // or one leading delimiter outside the URI capture.
                     var groupOffset = IsAsciiLetter(data[match.Index]) ? 0 : 1;
+                    var candidate = new CandidateRange(
+                        match.Index + groupOffset,
+                        match.Length - groupOffset
+                    );
+                    if (
+                        !BuiltInSemanticValidator.IsValid(
+                            definition,
+                            data.AsSpan(candidate.Start, candidate.Length)
+                        )
+                    )
+                    {
+                        continue;
+                    }
                     AddCandidateRange(
                         inlineRanges,
                         ref overflowRanges,
                         ref rangeCount,
-                        new CandidateRange(
-                            match.Index + groupOffset,
-                            match.Length - groupOffset
-                        )
+                        candidate
                     );
                 }
             }
@@ -301,7 +344,7 @@ internal static class RegexOutputCore
                 CollectMatchRanges(
                     data,
                     regex,
-                    definition.OutputGroup,
+                    definition,
                     inlineRanges,
                     ref overflowRanges,
                     ref rangeCount
@@ -313,7 +356,7 @@ internal static class RegexOutputCore
             CollectMatchRanges(
                 data,
                 regex,
-                definition?.OutputGroup,
+                definition,
                 inlineRanges,
                 ref overflowRanges,
                 ref rangeCount
@@ -345,16 +388,27 @@ internal static class RegexOutputCore
     private static void CollectMatchRanges(
         string data,
         Regex regex,
-        string outputGroup,
+        BuiltInPatternDefinition definition,
         Span<CandidateRange> inlineRanges,
         ref List<CandidateRange> overflowRanges,
         ref int rangeCount
     )
     {
+        var outputGroup = definition?.OutputGroup;
         if (outputGroup is null)
         {
             foreach (var match in regex.EnumerateMatches(data))
             {
+                if (
+                    definition is not null
+                    && !BuiltInSemanticValidator.IsValid(
+                        definition,
+                        data.AsSpan(match.Index, match.Length)
+                    )
+                )
+                {
+                    continue;
+                }
                 AddCandidateRange(
                     inlineRanges,
                     ref overflowRanges,
@@ -369,13 +423,25 @@ internal static class RegexOutputCore
         foreach (Match match in regex.Matches(data))
         {
             var group = match.Groups[outputGroup];
+            var candidate =
+                group.Success
+                    ? new CandidateRange(group.Index, group.Length)
+                    : new CandidateRange(match.Index, match.Length);
+            if (
+                definition is not null
+                && !BuiltInSemanticValidator.IsValid(
+                    definition,
+                    data.AsSpan(candidate.Start, candidate.Length)
+                )
+            )
+            {
+                continue;
+            }
             AddCandidateRange(
                 inlineRanges,
                 ref overflowRanges,
                 ref rangeCount,
-                group.Success
-                    ? new CandidateRange(group.Index, group.Length)
-                    : new CandidateRange(match.Index, match.Length)
+                candidate
             );
         }
     }
@@ -493,11 +559,70 @@ internal static class RegexOutputCore
         {
             if (string.Equals(definition.Name, "b64", StringComparison.OrdinalIgnoreCase))
             {
-                return EnumerateBase64Candidates(data).Any();
+                return EnumerateBase64Candidates(data)
+                    .Any(candidate =>
+                        BuiltInSemanticValidator.IsValid(
+                            definition,
+                            data.AsSpan(candidate.Start, candidate.Length)
+                        )
+                    );
             }
             if (string.Equals(definition.Name, "xml", StringComparison.OrdinalIgnoreCase))
             {
-                return IsSimpleXmlElementMatch(data);
+                return
+                    IsSimpleXmlElementMatch(data)
+                    && BuiltInSemanticValidator.IsValid(definition, data);
+            }
+            if (definition.Validation != BuiltInValidationKind.None)
+            {
+                if (
+                    definition.GeneratedShortInputLimit is int validatedInputLimit
+                    && data.Length <= validatedInputLimit
+                    && TryGetGeneratedShortInputRegex(
+                        definition,
+                        data,
+                        out var validatedInputRegex
+                    )
+                )
+                {
+                    try
+                    {
+                        foreach (var match in validatedInputRegex.EnumerateMatches(data))
+                        {
+                            var groupOffset = IsAsciiLetter(data[match.Index]) ? 0 : 1;
+                            if (
+                                BuiltInSemanticValidator.IsValid(
+                                    definition,
+                                    data.AsSpan(
+                                        match.Index + groupOffset,
+                                        match.Length - groupOffset
+                                    )
+                                )
+                            )
+                            {
+                                return true;
+                            }
+                        }
+                        return false;
+                    }
+                    catch (RegexMatchTimeoutException)
+                    {
+                        Interlocked.Increment(ref _shortInputFallbackCount);
+                    }
+                }
+                foreach (var match in regex.EnumerateMatches(data))
+                {
+                    if (
+                        BuiltInSemanticValidator.IsValid(
+                            definition,
+                            data.AsSpan(match.Index, match.Length)
+                        )
+                    )
+                    {
+                        return true;
+                    }
+                }
+                return false;
             }
             if (
                 definition.GeneratedShortInputLimit is int generatedShortInputLimit
@@ -543,7 +668,24 @@ internal static class RegexOutputCore
         {
             try
             {
-                return BuiltInGeneratedRegexes.Url3986ShortInput().IsMatch(data);
+                var definition = BuiltInPatternCatalog.ByName["url3986"];
+                foreach (var match in BuiltInGeneratedRegexes.Url3986ShortInput().EnumerateMatches(data))
+                {
+                    var groupOffset = IsAsciiLetter(data[match.Index]) ? 0 : 1;
+                    if (
+                        BuiltInSemanticValidator.IsValid(
+                            definition,
+                            data.AsSpan(
+                                match.Index + groupOffset,
+                                match.Length - groupOffset
+                            )
+                        )
+                    )
+                    {
+                        return true;
+                    }
+                }
+                return false;
             }
             catch (RegexMatchTimeoutException)
             {
@@ -551,7 +693,7 @@ internal static class RegexOutputCore
             }
         }
 
-        return fallbackRegex.IsMatch(data);
+        return IsMatch(patternName, fallbackRegex, data);
     }
 
     internal static bool TryGetGeneratedShortInputRegex(
