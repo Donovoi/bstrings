@@ -14,6 +14,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 SCHEMA_VERSION = 1
+MANIFEST_FILE_NAME = "airgap-manifest.json"
+INCOMPLETE_MARKER_NAME = ".incomplete"
+RESERVED_ROOT_PATHS = {MANIFEST_FILE_NAME.casefold(), INCOMPLETE_MARKER_NAME.casefold()}
 
 
 class ManifestError(RuntimeError):
@@ -47,9 +50,7 @@ def iter_bundle_files(root: Path, excluded: set[Path]) -> Iterable[Path]:
         for filename in files:
             candidate = current_path / filename
             if is_reparse_point(candidate):
-                raise ManifestError(
-                    f"Bundle contains a file link or reparse point: {candidate}"
-                )
+                raise ManifestError(f"Bundle contains a file link or reparse point: {candidate}")
             if candidate.absolute() in excluded:
                 continue
             if not candidate.is_file():
@@ -61,14 +62,30 @@ def normalized_relative_path(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
+def validate_incomplete_marker(root: Path, *, required: bool) -> Path:
+    marker = root / INCOMPLETE_MARKER_NAME
+    if not os.path.lexists(marker):
+        if required:
+            raise ManifestError(
+                "Builder-only incomplete-marker verification requires a root .incomplete file"
+            )
+        return marker
+    if is_reparse_point(marker) or not marker.is_file():
+        raise ManifestError("The root .incomplete marker must be a regular physical file")
+    return marker
+
+
 def create_manifest(root: Path, manifest_path: Path) -> dict[str, Any]:
     root = root.resolve(strict=True)
     manifest_path = manifest_path.resolve()
     if manifest_path.parent != root:
         raise ManifestError("The air-gap manifest must be written at the bundle root")
+    if manifest_path.name != MANIFEST_FILE_NAME:
+        raise ManifestError(f"The air-gap manifest must be named {MANIFEST_FILE_NAME}")
+    incomplete_marker = validate_incomplete_marker(root, required=False)
     entries = []
     for path in sorted(
-        iter_bundle_files(root, {manifest_path}),
+        iter_bundle_files(root, {manifest_path, incomplete_marker}),
         key=lambda item: normalized_relative_path(root, item),
     ):
         entries.append(
@@ -96,22 +113,34 @@ def validate_relative_path(value: object) -> str:
     if pure.is_absolute() or ".." in pure.parts or "\\" in value:
         raise ManifestError(f"Manifest contains an unsafe relative path: {value!r}")
     normalized = pure.as_posix()
-    if normalized != value or normalized in {".", "airgap-manifest.json"}:
+    if normalized != value or normalized == ".":
         raise ManifestError(f"Manifest contains a non-canonical path: {value!r}")
+    if normalized.casefold() in RESERVED_ROOT_PATHS:
+        raise ManifestError(f"Manifest contains a reserved root path: {value!r}")
     return normalized
 
 
-def verify_manifest(root: Path, manifest_path: Path) -> dict[str, int]:
+def verify_manifest(
+    root: Path,
+    manifest_path: Path,
+    *,
+    allow_incomplete_marker: bool = False,
+) -> dict[str, int]:
     root = root.resolve(strict=True)
     manifest_path = manifest_path.resolve(strict=True)
+    if manifest_path.parent != root or manifest_path.name != MANIFEST_FILE_NAME:
+        raise ManifestError(f"The air-gap manifest must be the root {MANIFEST_FILE_NAME} file")
+    incomplete_marker = validate_incomplete_marker(
+        root,
+        required=allow_incomplete_marker,
+    )
+    if os.path.lexists(incomplete_marker) and not allow_incomplete_marker:
+        raise ManifestError("Bundle has a lingering root .incomplete marker")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ManifestError(f"Could not read the air-gap manifest: {exc}") from exc
-    if (
-        not isinstance(manifest, dict)
-        or manifest.get("schemaVersion") != SCHEMA_VERSION
-    ):
+    if not isinstance(manifest, dict) or manifest.get("schemaVersion") != SCHEMA_VERSION:
         raise ManifestError("Unsupported or missing air-gap manifest schema")
     raw_entries = manifest.get("files")
     if not isinstance(raw_entries, list) or not raw_entries:
@@ -136,9 +165,11 @@ def verify_manifest(root: Path, manifest_path: Path) -> dict[str, int]:
             raise ManifestError(f"Manifest contains an invalid SHA-256 for {relative}")
         expected[relative] = (size, digest)
 
+    excluded = {manifest_path}
+    if allow_incomplete_marker:
+        excluded.add(incomplete_marker)
     actual_paths = {
-        normalized_relative_path(root, path): path
-        for path in iter_bundle_files(root, {manifest_path})
+        normalized_relative_path(root, path): path for path in iter_bundle_files(root, excluded)
     }
     missing = sorted(set(expected) - set(actual_paths))
     unexpected = sorted(set(actual_paths) - set(expected))
@@ -169,10 +200,17 @@ def verify_manifest(root: Path, manifest_path: Path) -> dict[str, int]:
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("create", "verify"):
-        child = subparsers.add_parser(command)
-        child.add_argument("--root", required=True, type=Path)
-        child.add_argument("--manifest", required=True, type=Path)
+    create = subparsers.add_parser("create")
+    create.add_argument("--root", required=True, type=Path)
+    create.add_argument("--manifest", required=True, type=Path)
+    verify = subparsers.add_parser("verify")
+    verify.add_argument("--root", required=True, type=Path)
+    verify.add_argument("--manifest", required=True, type=Path)
+    verify.add_argument(
+        "--allow-incomplete-marker",
+        action="store_true",
+        help="builder-only: verify while the reserved root .incomplete marker exists",
+    )
     return parser.parse_args()
 
 
@@ -187,7 +225,14 @@ def main() -> int:
                 "bytes": sum(entry["bytes"] for entry in manifest["files"]),
             }
         else:
-            result = {"status": "verified", **verify_manifest(args.root, args.manifest)}
+            result = {
+                "status": "verified",
+                **verify_manifest(
+                    args.root,
+                    args.manifest,
+                    allow_incomplete_marker=args.allow_incomplete_marker,
+                ),
+            }
         print(json.dumps(result, sort_keys=True))
         return 0
     except (ManifestError, OSError) as exc:

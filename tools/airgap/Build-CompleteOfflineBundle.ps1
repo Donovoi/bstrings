@@ -6,6 +6,9 @@ param(
     [string]$OutputDirectory,
     [string]$WorkingDirectory,
     [string]$ComponentLockPath,
+    [string]$OcrComponentLockPath,
+    [ValidateSet('quality', 'balanced', 'compact')]
+    [string]$TranslationProfile = 'quality',
     [string]$VisualCppRuntimeDirectory,
     [switch]$DryRun,
     [switch]$ValidateOnly,
@@ -23,6 +26,9 @@ if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) {
 }
 if ([string]::IsNullOrWhiteSpace($ComponentLockPath)) {
     $ComponentLockPath = Join-Path $PSScriptRoot 'offline-components.lock.json'
+}
+if ([string]::IsNullOrWhiteSpace($OcrComponentLockPath)) {
+    $OcrComponentLockPath = Join-Path $PSScriptRoot 'ocr-components.lock.json'
 }
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 
@@ -348,13 +354,33 @@ function Remove-ControlledStaging([string]$WorkingRoot, [string]$StagingRoot) {
 }
 
 $lockPath = Resolve-ExistingFile $ComponentLockPath 'Offline component lock'
+$ocrLockPath = Resolve-ExistingFile $OcrComponentLockPath 'OCR component lock'
 $publishedDirectory = Resolve-ExistingDirectory `
     $PublishedBstringsDirectory `
     'Published bstrings directory'
 $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
-if ($lock.schemaVersion -ne 1 -or $lock.profile -ne 'windows-x64-cpu-q4') {
+if ($lock.schemaVersion -ne 1 -or $lock.profile -ne 'windows-x64-offline-v2') {
     throw "Unsupported offline component lock schema or profile: $lockPath"
 }
+if ([string]$lock.defaultTranslationProfile -ne 'quality') {
+    throw 'The offline component lock must select quality as its default translation profile.'
+}
+$translationProfileNames = @($lock.translationProfiles.PSObject.Properties.Name)
+if ((@($translationProfileNames | Sort-Object) -join '|') -cne 'balanced|compact|quality') {
+    throw 'The offline component lock must define exactly quality, balanced, and compact translation profiles.'
+}
+$translationProfileSpecs = @{}
+foreach ($profileName in $translationProfileNames) {
+    $profileSpec = $lock.translationProfiles.$profileName
+    Assert-LockedFileSpec $profileSpec "$profileName translation profile"
+    Assert-LockedFileSpec $profileSpec.license "$profileName translation profile license"
+    $translationProfileSpecs[$profileName] = $profileSpec
+}
+$selectedTranslationModel = $lock.translationProfiles.$TranslationProfile
+if ($null -eq $selectedTranslationModel) {
+    throw "Translation profile is not present in the component lock: $TranslationProfile"
+}
+$lock.components.translationModel = $selectedTranslationModel
 $componentOrder = @('python', 'magika', 'floss', 'llamaCpp', 'translationModel')
 foreach ($componentName in $componentOrder) {
     $component = $lock.components.$componentName
@@ -528,6 +554,9 @@ $runtimeStager = Resolve-ExistingFile `
 $llamaBuilder = Resolve-ExistingFile `
     (Join-Path $PSScriptRoot 'Build-LlamaCpuRuntime.ps1') `
     'Pinned llama.cpp CPU runtime builder'
+$ocrBuilder = Resolve-ExistingFile `
+    (Join-Path $PSScriptRoot 'Build-OcrComponents.ps1') `
+    'Pinned offline OCR component builder'
 $runtimeInspectionParameters = @{
     ComponentLockPath = $lockPath
     InspectOnly = $true
@@ -554,6 +583,7 @@ $workingRoot = [IO.Path]::GetFullPath($WorkingDirectory).TrimEnd(
     [IO.Path]::AltDirectorySeparatorChar
 )
 $script:downloadsDirectory = Join-Path $workingRoot 'downloads'
+$ocrDownloadsDirectory = Join-Path $workingRoot 'ocr-downloads'
 $outputRoot = [IO.Path]::GetFullPath($OutputDirectory)
 if (-not $DryRun -and -not $ValidateOnly -and (Test-Path -LiteralPath $outputRoot)) {
     throw "OutputDirectory must not already exist: $outputRoot"
@@ -586,6 +616,11 @@ if ($DryRun) {
             Write-Host "  redistribution overlay: $($flossRedistribution.stagedBytes) bytes; inventory $($flossRedistribution.inventorySha256)"
         }
     }
+    & $ocrBuilder `
+        -DestinationDirectory ($outputRoot + '-ocr-dry-run') `
+        -DownloadCacheDirectory $ocrDownloadsDirectory `
+        -LockPath $ocrLockPath `
+        -DryRun
     Write-Host 'Dry run complete; no files were downloaded, extracted, or created.'
     return
 }
@@ -607,6 +642,7 @@ if (-not $ValidateOnly) {
 
 $downloadPaths = @{}
 $licensePaths = @{}
+$translationProfileLicensePaths = @{}
 try {
     foreach ($componentName in $componentOrder) {
         $component = $lock.components.$componentName
@@ -628,6 +664,16 @@ try {
                 (-not $ValidateOnly)
             $licensePaths[$componentName] = $licensePath
         }
+    }
+    foreach ($profileName in $translationProfileNames) {
+        $license = $translationProfileSpecs[$profileName].license
+        $licensePath = Join-Path $script:downloadsDirectory ([string]$license.fileName)
+        Get-VerifiedDownload `
+            $license `
+            $licensePath `
+            "$profileName translation profile license" `
+            (-not $ValidateOnly)
+        $translationProfileLicensePaths[$profileName] = $licensePath
     }
 }
 finally {
@@ -658,6 +704,11 @@ if ($ValidateOnly) {
         $null = New-VerifiedFlossRedistribution `
             -FlossExecutable $validationFlossExecutable `
             -DestinationDirectory $validationFlossOverlay
+        & $ocrBuilder `
+            -DestinationDirectory (Join-Path $validationRoot 'ocr-components-unused') `
+            -DownloadCacheDirectory $ocrDownloadsDirectory `
+            -LockPath $ocrLockPath `
+            -ValidateOnly
         Assert-NoReparsePoints $validationRoot 'Cache-only redistribution validation directory'
     }
     finally {
@@ -682,6 +733,7 @@ try {
         llamaSourceArchive = Join-Path $stagingRoot 'llama-source'
         llamaBuild = Join-Path $stagingRoot 'llama-build'
         translationModel = Join-Path $stagingRoot 'model'
+        ocr = Join-Path $stagingRoot 'ocr-components'
     }
     [IO.Directory]::CreateDirectory($staged.bstrings) | Out-Null
     foreach ($publishedItem in Get-ChildItem -LiteralPath $publishedDirectory -Force) {
@@ -763,6 +815,18 @@ try {
             -LiteralPath $licensePaths[$componentName] `
             -Destination (Join-Path $staged[$componentName] ([string]$license.fileName))
     }
+    $copiedProfileLicenses = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($profileName in $translationProfileNames) {
+        $licenseName = [string]$translationProfileSpecs[$profileName].license.fileName
+        if ($copiedProfileLicenses.Add($licenseName)) {
+            Copy-Item `
+                -LiteralPath $translationProfileLicensePaths[$profileName] `
+                -Destination (Join-Path $staged.translationModel $licenseName) `
+                -Force
+        }
+    }
 
     $null = New-VerifiedMagikaRedistribution `
         -DestinationDirectory $staged.magikaRedistribution
@@ -781,6 +845,11 @@ try {
         -FlossExecutable $flossExecutable `
         -DestinationDirectory $staged.flossRedistribution
 
+    & $ocrBuilder `
+        -DestinationDirectory $staged.ocr `
+        -DownloadCacheDirectory $ocrDownloadsDirectory `
+        -LockPath $ocrLockPath
+
     $runtimeStageResult = @(
         & $runtimeStager `
             -ComponentLockPath $lockPath `
@@ -790,14 +859,16 @@ try {
                 $staged.python,
                 $staged.magika,
                 $staged.floss,
-                $staged.llamaCpp
+                $staged.llamaCpp,
+                (Join-Path $staged.ocr 'runtime\ocr-cpu'),
+                (Join-Path $staged.ocr 'runtime\ocr-directml')
             )
     )
     if (
         $runtimeStageResult.Count -ne 1 -or
-        @($runtimeStageResult[0].destinations).Count -ne 5
+        @($runtimeStageResult[0].destinations).Count -ne 7
     ) {
-        throw 'Visual C++ runtime staging helper did not verify all five app-local destinations.'
+        throw 'Visual C++ runtime staging helper did not verify all seven app-local destinations.'
     }
     Assert-NoReparsePoints $stagingRoot 'Offline component staging directory'
 
@@ -813,9 +884,11 @@ try {
         -LlamaDirectory $staged.llamaCpp `
         -TranslationModelDirectory $staged.translationModel `
         -VisualCppRuntimeDirectory $resolvedVisualCppRuntime `
+        -OcrComponentsDirectory $staged.ocr `
         -TranslationModelRevision ([string]$lock.components.translationModel.revision) `
         -TranslationModelId ([string]$lock.components.translationModel.modelId) `
         -TranslationModel ([string]$lock.components.translationModel.fileName) `
+        -TranslationProfile $TranslationProfile `
         -ComponentLockPath $lockPath
     $completed = $true
 }
@@ -831,4 +904,4 @@ finally {
 if (-not $completed) {
     throw 'Complete offline bundle construction did not complete.'
 }
-Write-Host "Complete offline CPU/Q4 bundle is ready: $outputRoot"
+Write-Host "Complete offline $TranslationProfile bundle is ready: $outputRoot"

@@ -467,6 +467,10 @@ internal sealed class DiskBackedProvenanceValidator : IDisposable
         AppendIdentityComponent(builder, lineage.OriginExtractor);
         AppendIdentityComponent(builder, lineage.OriginVersion);
         AppendIdentityComponent(builder, lineage.OriginKind);
+        AppendIdentityComponent(builder, lineage.OriginModel);
+        AppendIdentityComponent(builder, lineage.OriginRevision);
+        AppendIdentityComponent(builder, lineage.OriginModelSha256);
+        AppendIdentityComponent(builder, lineage.OriginProvider);
         return builder.ToString();
     }
 

@@ -5,6 +5,7 @@ using System.CommandLine;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace bstrings;
@@ -17,9 +18,42 @@ internal static class BundleCli
         {
             Description = "Bundle directory; defaults to the directory containing bstrings.exe",
         };
-        var verifyCommand = new Command("verify") { bundleRootOption };
+        var allowIncompleteMarkerOption = new Option<bool>("--allow-incomplete-marker")
+        {
+            Description =
+                "Builder-only: verify all manifested bytes while the reserved root marker exists",
+        };
+        var verifyCommand = new Command("verify")
+        {
+            bundleRootOption,
+            allowIncompleteMarkerOption,
+        };
         verifyCommand.Description =
             "Verify the exact bundle file set, lengths, SHA-256 values, paths, and link safety.";
+
+        var acquireManifestOption = CreateManifestOption();
+        var acquireCacheOption = CreateCacheOption();
+        var acquireOutputOption = CreateOutputOption();
+        var acquireCommand = new Command("acquire")
+        {
+            acquireManifestOption,
+            acquireCacheOption,
+            acquireOutputOption,
+        };
+        acquireCommand.Description =
+            "Download verified split packs with resume support, then assemble a complete offline bundle.";
+
+        var assembleManifestOption = CreateManifestOption();
+        var assembleCacheOption = CreateCacheOption();
+        var assembleOutputOption = CreateOutputOption();
+        var assembleCommand = new Command("assemble")
+        {
+            assembleManifestOption,
+            assembleCacheOption,
+            assembleOutputOption,
+        };
+        assembleCommand.Description =
+            "Assemble already-cached verified packs into a new complete offline bundle.";
 
         var actionExitCode = 0;
         verifyCommand.SetAction(result =>
@@ -27,7 +61,10 @@ internal static class BundleCli
             try
             {
                 var root = result.GetValue(bundleRootOption) ?? AppContext.BaseDirectory;
-                var verification = BundleManifestVerifier.Verify(root);
+                var verification = BundleManifestVerifier.Verify(
+                    root,
+                    result.GetValue(allowIncompleteMarkerOption)
+                );
                 Console.WriteLine(
                     $"Bundle verification passed: {verification.FileCount:N0} files, "
                         + $"{verification.TotalBytes:N0} bytes."
@@ -48,11 +85,108 @@ internal static class BundleCli
             }
         });
 
-        var bundleCommand = new Command("bundle") { verifyCommand };
-        bundleCommand.Description = "Inspect and verify the complete offline bundle.";
+        async Task ExecutePackActionAsync(
+            Func<CancellationToken, Task<BundlePackInstallationResult>> action
+        )
+        {
+            using var cancellation = new CancellationTokenSource();
+            ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                cancellation.Cancel();
+            };
+            Console.CancelKeyPress += cancelHandler;
+            try
+            {
+                var result = await action(cancellation.Token);
+                Console.WriteLine(
+                    $"Bundle '{result.BundleIdentity}' assembled successfully: "
+                        + $"{result.FileCount:N0} files, {result.TotalBytes:N0} bytes."
+                );
+                Console.WriteLine($"Output: {result.OutputDirectory}");
+                Console.WriteLine($"Verified pack cache: {result.CacheDirectory}");
+            }
+            catch (OperationCanceledException)
+            {
+                Console.Error.WriteLine(
+                    "Bundle operation was cancelled; verified cached packs were preserved."
+                );
+                actionExitCode = 130;
+            }
+            catch (Exception ex) when (
+                ex is ArgumentException
+                    or DirectoryNotFoundException
+                    or FileNotFoundException
+                    or InvalidDataException
+                    or IOException
+                    or JsonException
+                    or UnauthorizedAccessException
+            )
+            {
+                Console.Error.WriteLine($"Bundle operation failed: {ex.Message}");
+                actionExitCode = 2;
+            }
+            finally
+            {
+                Console.CancelKeyPress -= cancelHandler;
+            }
+        }
+
+        acquireCommand.SetAction(async result =>
+            await ExecutePackActionAsync(cancellationToken =>
+                BundlePackInstaller.AcquireAndAssembleAsync(
+                    result.GetValue(acquireManifestOption),
+                    result.GetValue(acquireCacheOption),
+                    result.GetValue(acquireOutputOption)!,
+                    cancellationToken
+                )
+            )
+        );
+        assembleCommand.SetAction(async result =>
+            await ExecutePackActionAsync(cancellationToken =>
+                Task.FromResult(
+                    BundlePackInstaller.Assemble(
+                        result.GetValue(assembleManifestOption),
+                        result.GetValue(assembleCacheOption),
+                        result.GetValue(assembleOutputOption)!,
+                        cancellationToken
+                    )
+                )
+            )
+        );
+
+        var bundleCommand = new Command("bundle")
+        {
+            verifyCommand,
+            acquireCommand,
+            assembleCommand,
+        };
+        bundleCommand.Description =
+            "Acquire, assemble, inspect, and verify complete offline bundles through bstrings.exe.";
         var rootCommand = new RootCommand { bundleCommand };
         var invocationArguments = new[] { "bundle" }.Concat(args).ToArray();
         var parserExitCode = await rootCommand.Parse(invocationArguments).InvokeAsync();
         return actionExitCode != 0 ? actionExitCode : parserExitCode;
     }
+
+    private static Option<string?> CreateManifestOption() =>
+        new("--manifest")
+        {
+            Description =
+                $"Local split-pack trust manifest; defaults to adjacent {BundlePackInstaller.PackManifestFileName}",
+        };
+
+    private static Option<string?> CreateCacheOption() =>
+        new("--cache")
+        {
+            Description =
+                "Verified pack cache; defaults beside the trust manifest under bundle-pack-cache/<profile>",
+        };
+
+    private static Option<string> CreateOutputOption() =>
+        new("--output")
+        {
+            Description = "New output directory for the complete verified offline bundle",
+            Required = true,
+        };
 }

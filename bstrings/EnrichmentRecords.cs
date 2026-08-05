@@ -17,6 +17,10 @@ internal sealed record EnrichmentOrigin
     public string Extractor { get; init; } = string.Empty;
     public string? Version { get; init; }
     public string Kind { get; init; } = string.Empty;
+    public string? Model { get; init; }
+    public string? Revision { get; init; }
+    public string? ModelSha256 { get; init; }
+    public string? Provider { get; init; }
 }
 
 internal sealed record EnrichmentTransform
@@ -40,13 +44,33 @@ internal sealed record TranslationValidationRequirements(
     string ModelSha256
 );
 
+internal sealed record OcrValidationRequirements(
+    string Engine,
+    string EngineVersion,
+    string Model,
+    string Revision,
+    string ModelSha256,
+    string RuntimeSha256,
+    string DetectorSha256,
+    string RecognizerSha256,
+    string ClassifierSha256,
+    string DictionarySha256,
+    OcrWorkflowMode RequestedMode,
+    OcrProvider RequestedProvider,
+    int RequestedThreads
+);
+
 internal sealed record TranslationLineageIdentity(
     string SourceFile,
     string LocationKind,
     string LocationValue,
     string OriginExtractor,
     string? OriginVersion,
-    string OriginKind
+    string OriginKind,
+    string? OriginModel = null,
+    string? OriginRevision = null,
+    string? OriginModelSha256 = null,
+    string? OriginProvider = null
 );
 
 internal sealed record EnrichmentStringRecord

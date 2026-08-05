@@ -1,8 +1,10 @@
 # FLOSS v3.1.1 offline redistribution
 
-The Windows x64 offline bundle carries Mandiant FLARE FLOSS as its unchanged
-upstream `floss.exe`, together with a byte-pinned inventory, required notices,
-and the corresponding source snapshot required for the embedded MPL-2.0 code.
+The Windows x64 offline bundle carries
+[Mandiant FLARE FLOSS v3.1.1](https://github.com/mandiant/flare-floss/releases/tag/v3.1.1)
+as its unchanged upstream `floss.exe`, together with a byte-pinned inventory,
+required notices, and the corresponding source snapshot required for the
+embedded MPL-2.0 code.
 No Python installation, package download, or network connection is required at
 runtime.
 

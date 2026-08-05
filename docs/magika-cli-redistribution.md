@@ -1,6 +1,10 @@
 # Magika CLI in the offline bundle
 
-The complete offline bundle includes the reviewed Magika CLI 1.1.0 Windows x64 executable and its app-local DirectML 1.15.4 runtime. An end user does not install Magika, Python, ONNX Runtime, DirectML, Rust, or a model package separately, and normal analysis does not require network access.
+The complete offline bundle includes the reviewed
+[Magika CLI 1.1.0](https://github.com/google/magika/releases/tag/cli%2Fv1.1.0)
+Windows x64 executable and its app-local DirectML 1.15.4 runtime. An end user
+does not install Magika, Python, ONNX Runtime, DirectML, Rust, or a model
+package separately, and normal analysis does not require network access.
 
 The final overlay places the two runtime files together:
 

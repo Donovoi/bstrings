@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "profile": "windows-x64-ocr-cpu-directml-v1",
+  "componentLock": "tools/airgap/ocr-components.lock.json",
+  "noticePolicy": "Retain every license, notice, copying, copyright, and authors file shipped by each exact wheel; add the separately pinned notices for artifacts that omit their license text.",
+  "runtimeSets": {
+    "cpu": {
+      "python": "3.14.6",
+      "providers": [
+        "CPUExecutionProvider"
+      ]
+    },
+    "directml": {
+      "python": "3.14.5",
+      "providers": [
+        "DmlExecutionProvider",
+        "CPUExecutionProvider"
+      ]
+    }
+  },
+  "packages": [
+    { "id": "antlr4-python3-runtime", "name": "antlr4-python3-runtime", "version": "4.9.3", "declaredLicense": "BSD-3-Clause", "notice": "supplemental:ANTLR4-4.9.3-LICENSE.txt" },
+    { "id": "certifi", "name": "certifi", "version": "2026.7.22", "declaredLicense": "MPL-2.0", "notice": "artifact" },
+    { "id": "charset-normalizer", "name": "charset-normalizer", "version": "3.4.9", "declaredLicense": "MIT", "notice": "artifact" },
+    { "id": "colorama", "name": "colorama", "version": "0.4.6", "declaredLicense": "BSD-3-Clause", "notice": "artifact" },
+    { "id": "colorlog", "name": "colorlog", "version": "6.12.0", "declaredLicense": "MIT", "notice": "artifact" },
+    { "id": "flatbuffers", "name": "flatbuffers", "version": "25.12.19", "declaredLicense": "Apache-2.0", "notice": "supplemental:FlatBuffers-25.12.19-LICENSE.txt" },
+    { "id": "idna", "name": "idna", "version": "3.18", "declaredLicense": "BSD-3-Clause", "notice": "artifact" },
+    { "id": "numpy", "name": "numpy", "version": "2.5.1", "declaredLicense": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0", "notice": "artifact-complete-license-set" },
+    { "id": "omegaconf", "name": "omegaconf", "version": "2.3.1", "declaredLicense": "BSD-3-Clause", "notice": "artifact" },
+    { "id": "opencv-python", "name": "opencv-python", "version": "5.0.0.93", "declaredLicense": "Apache-2.0 AND dependency licenses", "notice": "artifact-complete-license-set" },
+    { "id": "packaging", "name": "packaging", "version": "26.3", "declaredLicense": "Apache-2.0 OR BSD-2-Clause", "notice": "artifact-complete-license-set" },
+    { "id": "pillow", "name": "pillow", "version": "12.3.0", "declaredLicense": "MIT-CMU", "notice": "artifact" },
+    { "id": "protobuf", "name": "protobuf", "version": "7.35.1", "declaredLicense": "BSD-3-Clause", "notice": "artifact" },
+    { "id": "pyclipper", "name": "pyclipper", "version": "1.4.0", "declaredLicense": "MIT", "notice": "artifact" },
+    { "id": "pypdfium2", "name": "pypdfium2", "version": "5.12.1", "declaredLicense": "BSD-3-Clause AND Apache-2.0 AND PDFium dependency licenses", "notice": "artifact-complete-license-set" },
+    { "id": "pyyaml", "name": "PyYAML", "version": "6.0.3", "declaredLicense": "MIT", "notice": "artifact" },
+    { "id": "rapidocr", "name": "rapidocr", "version": "3.9.2", "declaredLicense": "Apache-2.0", "notice": "supplemental:RapidOCR-3.9.2-LICENSE.txt" },
+    { "id": "requests", "name": "requests", "version": "2.34.2", "declaredLicense": "Apache-2.0", "notice": "artifact-complete-license-set" },
+    { "id": "shapely", "name": "shapely", "version": "2.1.2", "declaredLicense": "BSD-3-Clause AND GEOS-LGPL-2.1-or-later", "notice": "artifact-complete-license-set" },
+    { "id": "six", "name": "six", "version": "1.17.0", "declaredLicense": "MIT", "notice": "artifact" },
+    { "id": "tqdm", "name": "tqdm", "version": "4.70.0", "declaredLicense": "MPL-2.0 AND MIT", "notice": "artifact" },
+    { "id": "urllib3", "name": "urllib3", "version": "2.7.0", "declaredLicense": "MIT", "notice": "artifact" },
+    { "id": "onnxruntime-cpu", "name": "onnxruntime", "version": "1.28.0", "declaredLicense": "MIT AND dependency licenses", "notice": "artifact-complete-license-set" },
+    { "id": "mpmath", "name": "mpmath", "version": "1.3.0", "declaredLicense": "BSD-3-Clause", "notice": "artifact" },
+    { "id": "onnxruntime-directml", "name": "onnxruntime-directml", "version": "1.24.4", "declaredLicense": "MIT AND dependency licenses", "notice": "artifact-complete-license-set" },
+    { "id": "sympy", "name": "sympy", "version": "1.14.0", "declaredLicense": "BSD-3-Clause", "notice": "artifact-complete-license-set" }
+  ],
+  "models": [
+    {
+      "name": "PP-OCRv6 medium detector and recognizer",
+      "source": "PaddlePaddle",
+      "declaredLicense": "Apache-2.0",
+      "notice": "supplemental:PaddleOCR-LICENSE.txt"
+    },
+    {
+      "name": "RapidOCR orientation classifier",
+      "source": "RapidAI",
+      "declaredLicense": "Apache-2.0",
+      "notice": "supplemental:RapidOCR-3.9.2-LICENSE.txt"
+    }
+  ],
+  "limitations": {
+    "cuda": "No onnxruntime-gpu wheel or CUDA runtime is included in this reviewed profile because that path was not live-tested.",
+    "authenticity": "SHA-256 and immutable source revisions establish byte identity, not publisher signature authenticity."
+  }
+}

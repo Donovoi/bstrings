@@ -83,6 +83,31 @@ public sealed class AnalysisBundleIntegrityTests
         Assert.False(Directory.Exists(output));
     }
 
+    [Fact]
+    public async Task Analyze_RejectsAnUnverifiedOcrModelBeforeCreatingAResultsDirectory()
+    {
+        using var scope = new TemporaryAnalysis();
+        scope.CreateBundle(ocrModelSha256: new string('0', 64));
+        var evidence = scope.WriteFile("ocr-evidence.png", "fixture image bytes");
+        var output = Path.Combine(scope.Root, "unverified-ocr-results");
+        var options = CreateOptions(scope.BundleRoot, evidence, output) with
+        {
+            OcrMode = OcrWorkflowMode.Auto,
+            TranslationMode = TranslationWorkflowMode.Off,
+        };
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            AnalysisOrchestrator.RunAsync(
+                options,
+                TestContext.Current.CancellationToken,
+                executingExecutablePath: scope.BstringsExecutable
+            )
+        );
+
+        Assert.Contains("OCR model SHA-256 mismatch", error.Message, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(output));
+    }
+
     [Theory]
     [InlineData("off")]
     [InlineData("detect-only")]
@@ -303,6 +328,9 @@ public sealed class AnalysisBundleIntegrityTests
             null,
             output,
             Full: false,
+            OcrWorkflowMode.Off,
+            OcrProvider.Auto,
+            0,
             ExecutableRecoveryMode.Off,
             TranslationWorkflowMode.DetectOnly,
             LanguageDetectionMode.Adaptive,
@@ -366,7 +394,7 @@ public sealed class AnalysisBundleIntegrityTests
         internal string BundleRoot { get; }
         internal string BstringsExecutable => Path.Combine(BundleRoot, "bstrings.exe");
 
-        internal BundleVerificationResult CreateBundle()
+        internal BundleVerificationResult CreateBundle(string? ocrModelSha256 = null)
         {
             WriteBundleFile("runtime/python.exe", "private-python");
             WriteBundleFile("tools/bstrings_enrich.py", "private-adapter");
@@ -374,13 +402,35 @@ public sealed class AnalysisBundleIntegrityTests
                 Path.Combine(AppContext.BaseDirectory, "bstrings.exe"),
                 BstringsExecutable
             );
-            var configuration = new
+            var configuration = new Dictionary<string, object?>
             {
-                schemaVersion = 1,
-                bstringsExecutable = "bstrings.exe",
-                pythonExecutable = "runtime/python.exe",
-                enrichmentAdapter = "tools/bstrings_enrich.py",
+                ["schemaVersion"] = 1,
+                ["bstringsExecutable"] = "bstrings.exe",
+                ["pythonExecutable"] = "runtime/python.exe",
+                ["enrichmentAdapter"] = "tools/bstrings_enrich.py",
             };
+            if (ocrModelSha256 is not null)
+            {
+                WriteBundleFile("ocr/python.exe", "private-ocr-python");
+                WriteBundleFile("ocr/ocr.exe", "private-ocr-engine");
+                WriteBundleFile("ocr/ocr-adapter.py", "private-ocr-adapter");
+                WriteBundleFile("ocr/model-pack.json", "private-ocr-model-pack");
+                configuration["ocr"] = new
+                {
+                    pythonExecutable = "ocr/python.exe",
+                    executable = "ocr/ocr.exe",
+                    adapter = "ocr/ocr-adapter.py",
+                    engine = "fixture-ocr",
+                    engineVersion = "1.0.0",
+                    model = new
+                    {
+                        path = "ocr/model-pack.json",
+                        id = "fixture/ocr-model",
+                        revision = "revision-1",
+                        sha256 = ocrModelSha256,
+                    },
+                };
+            }
             File.WriteAllText(
                 Path.Combine(BundleRoot, "airgap-config.json"),
                 JsonSerializer.Serialize(configuration)

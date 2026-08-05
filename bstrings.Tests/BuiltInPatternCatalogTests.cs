@@ -46,7 +46,10 @@ public class BuiltInPatternCatalogTests
                 ["card 4111 1111 1111 1111 end"],
                 ["card 4111 1111 end", "card 4111 1111 1111 1112 end"]
             ),
-            ["ipv4"] = new("peer=192.168.1.250:443", "peer=1.2.3.4.5"),
+            ["ipv4"] = new(
+                ["peer=192.168.1.250:443", "The source was 192.0.2.14."],
+                ["peer=1.2.3.4.5"]
+            ),
             ["ipv6"] = new("peer ::ffff:192.0.2.128 active", "peer 2001:::1"),
             ["email"] = new(
                 [

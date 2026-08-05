@@ -1,68 +1,137 @@
 # Offline release maintenance
 
 This guide is for maintainers of the Windows x64 release. Examiners should use
-the shorter [air-gapped deployment guide](air-gapped-deployment.md).
+[air-gapped deployment](air-gapped-deployment.md); they do not need the build
+tools, Python commands, or dependency details below.
 
-## Release outputs
+## Planned v1.9.0 release shape
 
-A successful exact project-version tag is configured to publish three Windows
-assets:
+No current public release contains the complete-kit asset set below. Until
+v1.9.0 is tagged and its gates pass, build and verify from current source; do
+not combine an older core ZIP with new manifests. An exact project-version tag
+publishes:
 
-- `bstrings-win-x64.zip`: the self-contained core scanner;
-- `bstrings-win-x64-offline-cpu.zip`: the complete CPU/Q4 archive; and
-- `bstrings-win-x64-offline-cpu.zip.sha256`: the lowercase SHA-256 of the exact
-  offline ZIP.
+- `bstrings-win-x64.zip`, the self-contained core scanner and split-pack
+  acquisition client;
+- `bstrings-win-x64-offline-base.zip`, the shared application/runtime/OCR base;
+- `airgap-config-{quality,balanced,compact}.json`;
+- `airgap-manifest-{quality,balanced,compact}.json`;
+- `Hy-MT2-Apache-2.0-{quality,balanced,compact}.txt`;
+- `bundle-packs-{quality,balanced,compact}.json`;
+- `SHA256SUMS.txt`; and
+- `offline-profile-acceptance.json`, the tag- and commit-bound acceptance record
+  for every advertised profile.
 
-Manual workflow dispatches build and retain the same artifacts for review but
-do not create an untagged GitHub release. The complete archive must remain
-smaller than 2,000,000,000 bytes. That conservative project limit stays below
-GitHub's strict 2 GiB per-release-asset limit, which is documented in
-[About releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases#about-releases).
+| Item | Release asset? | Role |
+| --- | --- | --- |
+| Core ZIP | Yes | Scanner and acquisition client |
+| Shared base ZIP | Yes | Common runtimes, OCR, recovery tools, and manifests |
+| Profile files/trust manifest | Yes | Select and authenticate one translation profile |
+| Immutable translation model | No; acquired from its pinned official source | Large external pack named by the trust manifest |
+| Complete offline kit | No; assembled locally | Directory transferred to the disconnected host |
 
-## Pinned component lock
+The shared base must remain smaller than 2,000,000,000 bytes. This conservative
+project ceiling stays below GitHub's strict 2 GiB per-release-file limit,
+documented in [About releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases#about-releases).
 
-`tools/airgap/offline-components.lock.json` is the only component acquisition
-plan used by the complete release builder. Its `windows-x64-cpu-q4` profile
-pins, at minimum:
+Large translation models are immutable external file packs. Each profile trust
+manifest records the official HTTPS URL, exact byte length, SHA-256, target
+path, profile configuration, canonical license, shared-base identity, and final
+air-gap manifest. The integrated `bstrings.exe bundle acquire` command resumes,
+verifies, caches, assembles, and verifies these parts. This keeps every GitHub
+asset within the limit without asking examiners to manipulate files manually.
 
-| Component | Pinned artifact |
+Manual workflow dispatches retain the same generated files as a workflow
+artifact for review. They do not create an untagged GitHub release, so their
+generated tagged-release URLs are not a public acquisition channel.
+
+## Pinned acquisition plans
+
+`tools/airgap/offline-components.lock.json` is the complete release acquisition
+plan. It uses profile `windows-x64-offline-v2`, defaults to `quality`, and pins:
+
+| Component | Reviewed input |
 | --- | --- |
 | CPython | Official 3.14.6 Windows x64 embeddable ZIP |
-| Magika | Official `cli/v1.1.0` Windows x64 CLI ZIP |
-| FLOSS | Official v3.1.1 standalone Windows ZIP |
+| Magika | Official [`cli/v1.1.0`](https://github.com/google/magika/releases/tag/cli%2Fv1.1.0) Windows x64 CLI ZIP |
+| FLOSS | Official [v3.1.1](https://github.com/mandiant/flare-floss/releases/tag/v3.1.1) standalone Windows ZIP |
 | llama.cpp | Source ZIP for tag `b10248`, commit `e8e06f78e253a98a739b8ae4c6b661b357249ce4` |
-| Hy-MT2 | Revision `1cd5208700acedef4ef93019b6cfc148b8522d45`, Q4_K_M GGUF |
+| Quality translation | Hy-MT2-7B Q8_0, revision `707464294cf5b2a5a69982855020858ed58cf1d1` |
+| Balanced translation | Hy-MT2-1.8B Q8_0, revision `1cd5208700acedef4ef93019b6cfc148b8522d45` |
+| Compact translation | Hy-MT2-1.8B Q4_K_M, the same immutable 1.8B revision |
 
-Each downloaded artifact and separately acquired license has a fixed URL, byte length,
-and lowercase SHA-256. The builder rejects length or hash mismatches, missing
-expected executables, unsafe archive paths, and absent license inputs. Redirects
-cannot substitute different bytes without failing the locked length or digest.
-A filename or version label is never sufficient.
+Exact model identities are:
 
-The primary upstream locations are Python's
-[embeddable package](https://docs.python.org/3/using/windows.html#the-embeddable-package),
-the [Magika CLI](https://github.com/google/magika#command-line-tool),
-[FLOSS releases](https://github.com/mandiant/flare-floss/releases),
-[llama.cpp source repository](https://github.com/ggml-org/llama.cpp), and the
-[Hy-MT2 GGUF repository](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF).
+| Profile | Filename | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| `quality` | `HY-MT2-7B-Q8_0.gguf` | 7,981,928,896 | `58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0` |
+| `balanced` | `Hy-MT2-1.8B-Q8_0.gguf` | 1,908,528,192 | `5c3fe0b1408a5ceb0143184ef247b11b579c525f4b02b060e6c851bb76fef1a4` |
+| `compact` | `Hy-MT2-1.8B-Q4_K_M.gguf` | 1,133,080,448 | `dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699` |
 
-Review a lock change as executable supply-chain code. Confirm the official
-source, redistribution terms, exact downloaded bytes, executable layout, and
-third-party notices before committing it. Do not update a version and leave an
-old digest or license pin behind.
+Filename case matters: the official 7B repository uses uppercase
+`HY-MT2-7B-Q8_0.gguf`. The lock uses immutable model revisions and a separately
+verified immutable 7B license revision.
 
-## Build the core
+`tools/airgap/ocr-components.lock.json` independently pins profile
+`windows-x64-ocr-cpu-directml-v1`: two CPython runtimes, 26 exact packages,
+CPU and DirectML ONNX Runtime sets, immutable PP-OCRv6
+[detector](https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx/tree/61323801669c338b7891481ec7bac61ce31b576a)/[recognizer](https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/tree/50c7eacafc52fa7bcf4194e8cd08e46f8558504b)
+files,
+orientation classifier, 18,708-entry dictionary, and all license inputs. Its
+model-pack manifest SHA-256 is
+`b3b683eb29ec09e9da835e09fb4470792af7702cfc6cee40f2725c232d258534`.
+The classifier is extracted from the immutable
+[RapidOCR 3.9.2](https://github.com/RapidAI/RapidOCR/releases/tag/v3.9.2)
+wheel; an
+independent immutable upstream location is retained as provenance rather than
+used as an unverified fallback. The composite revision's `cls-390c78...` value
+is an internal component identity token, not the upstream source revision. The
+traceable source identities are RapidOCR tag commit
+`095232a4c94f7f0e6600ba5bba1177010ad696d4`, wheel SHA-256
+`04d6b8d151f823d930bd91910555f57bea897c0c44fa6794267b94cf9c1ef9a0`,
+classifier SHA-256
+`e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c`,
+and independent mirror revision `7a679896b7722a2e346fd2dd3148b3faaabe5790`.
 
-The release uses the [.NET 10 LTS SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-and the repository's pinned Rust toolchain:
+Every remote file has an HTTPS URL, positive bounded byte length, lowercase
+SHA-256, safe leaf name, and exact license/source relationship. Builders reject
+redirect substitution, overlong or short responses, digest mismatch, unsafe
+archive paths, reparse points, absent notices, unexpected files, and runtime
+inventory drift.
+
+Review a lock change as executable supply-chain code. Verify the official
+source, immutable revision, exact downloaded bytes, redistribution terms,
+runtime imports, dependency closure, and notices before committing it. Never
+change a version/filename without its size, digest, provenance, and license.
+
+Primary upstreams are the [CPython embeddable package](https://docs.python.org/3/using/windows.html#the-embeddable-package),
+[Magika](https://github.com/google/magika),
+[FLOSS](https://github.com/mandiant/flare-floss),
+[llama.cpp](https://github.com/ggml-org/llama.cpp),
+[Hy-MT2 7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF) and
+[Hy-MT2 1.8B](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF),
+[RapidOCR](https://github.com/RapidAI/RapidOCR),
+[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), and
+[ONNX Runtime](https://github.com/microsoft/onnxruntime).
+
+## Build and test the self-contained core
+
+The v1.9.0 release plan uses
+[.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
+repository-pinned Rust toolchain:
 
 ```powershell
+cargo fmt --manifest-path native\bstrings_core\Cargo.toml -- --check
+cargo clippy --manifest-path native\bstrings_core\Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path native\bstrings_core\Cargo.toml --locked
 cargo build --manifest-path native\bstrings_core\Cargo.toml --release --locked
 
-$noticeSource = Join-Path $env:TEMP 'bstrings-release-notices'
+$noticeCache = Join-Path $env:TEMP 'bstrings-release-notice-cache'
+$noticeSource = Join-Path $env:TEMP ("bstrings-release-notices-" + [Guid]::NewGuid().ToString('N'))
 dotnet restore bstrings.sln --runtime win-x64
 .\tools\licenses\Stage-ManagedThirdPartyNotices.ps1 `
-  -DestinationDirectory $noticeSource
+  -DestinationDirectory $noticeSource `
+  -DownloadCacheDirectory $noticeCache
 .\tools\licenses\Verify-ManagedThirdPartyNotices.ps1 `
   -NoticeSourceDirectory $noticeSource
 
@@ -70,16 +139,12 @@ dotnet build bstrings.sln -c Release --no-restore
 dotnet test bstrings.sln -c Release --no-build
 
 dotnet publish bstrings\bstrings.csproj `
-  -c Release `
-  -f net10.0 `
-  -r win-x64 `
-  --self-contained true `
+  -c Release -f net10.0 -r win-x64 --self-contained true `
   -o publish\win-x64 `
   -p:PublishSingleFile=true `
   -p:IncludeNativeLibrariesForSelfExtract=true `
   -p:TreatWarningsAsErrors=true `
-  -p:DebugType=None `
-  -p:DebugSymbols=false `
+  -p:DebugType=None -p:DebugSymbols=false `
   "-p:ReleaseNoticeSourceDirectory=$noticeSource"
 
 .\tools\licenses\Verify-ManagedThirdPartyNotices.ps1 `
@@ -90,262 +155,364 @@ dotnet publish bstrings\bstrings.csproj `
   -DestinationDirectory .\publish\win-x64
 ```
 
-The self-contained publish is why the user does not install .NET. Native
-libraries may be extracted under `%TEMP%\.net` by the official single-file
-host; Microsoft documents that behavior in
+The self-contained publish removes the examiner's .NET prerequisite. Native
+libraries may still be extracted under `%TEMP%\.net` by the official
+single-file host; Microsoft documents that in
 [single-file deployment](https://learn.microsoft.com/en-us/dotnet/core/deploying/single-file/overview#native-libraries).
-`Stage-VisualCppRuntime.ps1` discovers or accepts the licensed x64
-`Microsoft.VC*.CRT` redist directory, refuses `System32`, and atomically stages
-and verifies the four lock-named DLLs beside `bstrings.exe`. Run it before the
-core smoke and before creating `bstrings-win-x64.zip`.
 
-The notice staging step takes the exact ILGPU files from its restored package,
-the exact .NET runtime-pack files from `Microsoft.NETCore.App.Runtime.win-x64`
-10.0.10, the Rust 1.95.0 standard-library attribution from the active pinned
-sysroot, and the hash-pinned DeviceIOControlLib license. The verifier compares
-the complete nine-package runtime graph, NuGet license metadata, nupkg hashes,
-runtime-pack pin, and every staged/published notice byte with
-`licenses/bstrings-managed-win-x64.json`. Both release ZIPs must pass this check.
+The managed notice verifier compares the exact .NET runtime pack, NuGet graph,
+Rust standard-library attribution, DeviceIOControlLib license, and published
+notice bytes against `licenses/bstrings-managed-win-x64.json`.
 
-## Validate and assemble the complete bundle
+## Validate the connected build plan
 
-First validate PowerShell syntax and print the lock-resolved plan without
-downloading or creating output:
+First parse the scripts and print the lock-resolved plan without downloads or
+bundle output:
 
 ```powershell
 .\tools\airgap\Build-CompleteOfflineBundle.ps1 `
   -PublishedBstringsDirectory .\publish\win-x64 `
-  -OutputDirectory .\publish\offline `
+  -OutputDirectory .\publish\offline-quality `
+  -TranslationProfile quality `
   -DryRun
 ```
 
-Build on a connected staging host:
+`-DryRun` validates both locks and every profile even though it selects one
+profile for assembly. `-ValidateOnly` is different: it requires a fully warmed
+exact cache, disables network fallback, rebuilds/verifies the temporary
+component overlays, and creates no final output.
+
+## Build the OCR overlay
+
+The complete builder invokes this step automatically. It can be isolated for a
+fresh-cache supply-chain or runtime review:
+
+```powershell
+.\tools\airgap\Build-OcrComponents.ps1 `
+  -DestinationDirectory D:\bstrings-staging\ocr-components `
+  -DownloadCacheDirectory D:\bstrings-staging\ocr-downloads
+```
+
+The stage builder safely expands the two embeddable runtimes and wheel/sdist
+contents, derives the exact classifier/dictionary, writes complete runtime and
+license inventories, and validates every staged byte against the reviewed
+inventories. Fresh-cache builds must succeed; a warmed cache alone is not
+evidence that official URLs remain usable.
+
+After the complete assembler adds application-local VC files, bundle
+configuration, verifier, and smoke fixtures, run
+`.\tools\airgap\Verify-OcrRuntime.ps1 -BundleDirectory <complete-bundle> -Smoke`.
+That smoke
+performs real CPU/DirectML/hybrid inference by default. Pass
+`-SmokeProviders cpu` for the hosted CPU gate. The assembler always requires
+CPU inference and records `assemblySelfTestProviders` in the bundle; a custom
+hardware build may add DirectML/hybrid, but the separate hardware-acceptance
+workflow is the release-process evidence for those paths. Do not run GPU-path
+acceptance while another large model owns most VRAM; that can turn a valid
+DirectML runtime into device-loss error `887A0006`.
+
+Any OCR model/runtime change also requires the full test suite:
+
+```powershell
+python -m unittest discover -s tools\enrichment\tests -v
+```
+
+`benchmark_ocr.py --help` is option discovery, not a quality run. Synthetic
+fixtures remain packaging/regression tests. Develop and recalibrate on the
+pinned SROIE train split, preserving its repair/duplicate audits, but never
+reuse the consumed SROIE test split as independent confirmation. Before a new
+quality claim, preregister the committed scorer, model, thresholds, runtimes,
+and a genuinely untouched holdout, then preserve its immutable witness and
+single terminal result. Compare exact identifier recall, CER, provider
+identity, determinism, provenance, and throughput; never accept speed by
+weakening correctness. See [OCR and document analysis](ocr-and-document-analysis.md)
+and the [current OCR benchmark record](ocr-benchmark-2026-08-05.md).
+
+## Build a complete profile
+
+On a connected Windows release host:
 
 ```powershell
 .\tools\airgap\Build-CompleteOfflineBundle.ps1 `
   -PublishedBstringsDirectory .\publish\win-x64 `
-  -OutputDirectory .\publish\offline `
-  -WorkingDirectory D:\bstrings-release-staging
-```
-
-The output directory must not already exist. The builder downloads or reuses
-only the exact lock-pinned inputs, validates their byte lengths and SHA-256
-values, securely extracts archives, checks the required license material, and
-then invokes the network-free directory assembler. Downloads are retained under
-the working directory so a CI cache may speed later builds without weakening
-hash validation. When a server supplies `Content-Length`, it must equal the
-locked length; the streaming downloader also stops after at most the locked
-length plus one sentinel byte, so an oversized response is rejected before it
-can fill the staging disk.
-
-### Magika and FLOSS redistribution closures
-
-The complete builder stages and verifies two component-owned overlays before
-calling the network-free assembler:
-
-- `Stage-MagikaRedistribution.ps1` produces exactly 22 files and 49,497,911
-  bytes. It supplies `tools/magika/magika.exe`, the required app-local
-  `DirectML.dll`, a reviewed 70-package dependency inventory, notices, and the
-  required MPL-covered source. The much larger Magika, ONNX Runtime, DirectML,
-  and Rust source archives are exact hash-checked cache inputs, not duplicated
-  in the examiner-facing archive.
-- `Stage-FlossThirdPartyNotices.ps1` produces exactly 18 files and 2,045,571
-  bytes. It records the embedded Python/PyInstaller runtime, 29 Python
-  packages, 67 native entries, both Rust dependency closures, notices, and the
-  required `tqdm` source archive.
-
-Their machine-readable inventories are themselves byte- and hash-pinned by
-`offline-components.lock.json`. Run the same fail-closed checks immediately
-before packaging a completed bundle:
-
-```powershell
-.\tools\licenses\Verify-MagikaRedistribution.ps1 `
-  -BundleDirectory .\publish\offline
-
-.\tools\licenses\Verify-FlossThirdPartyNotices.ps1 `
-  -FlossExecutable .\publish\offline\tools\floss\floss.exe `
-  -StagedDirectory .\publish\offline
-```
-
-The release workflow performs these checks before ZIP creation, and
-`Verify-AirgapBundle.ps1` repeats them for the completed/extracted payload.
-See [Magika CLI redistribution](magika-cli-redistribution.md) and
-[FLOSS standalone redistribution](floss-standalone-redistribution.md) before
-changing either inventory or its generated notices.
-
-The lock deliberately does not use llama.cpp's published Windows CPU ZIP:
-that archive contains `libomp140.x86_64.dll` copied from Visual Studio's
-`debug_nonredist` tree. Instead, `Build-LlamaCpuRuntime.ps1` builds the pinned
-source commit with the installed Visual Studio x64 toolchain. It enables the
-dynamic CPU backend variants but disables OpenMP, KleidiAI FetchContent, RPC,
-the Web UI and prebuilt UI, OpenSSL/BoringSSL/LibreSSL, and subprocess/video
-support. Only the `llama-server` target's reviewed PE closure is staged. The
-builder rejects `libomp140*.dll`, any `debug_nonredist` path, an unexpected PE
-import, a missing CPU backend, or a missing `--offline` option.
-
-The staged runtime includes `llama-build-provenance.json`, recording the exact
-source archive, tag, commit, CMake and compiler versions, flags, file hashes,
-and recursive PE imports. Applicable upstream license and borrowed-code notice
-sources are preserved byte-for-byte under `licenses/llama.cpp`. Visual Studio
-and CMake are release-host requirements only; neither is needed on the offline
-examiner workstation.
-
-The bundle also needs the four x64 Visual C++ runtime DLL names fixed by the lock.
-When `-VisualCppRuntimeDirectory` is omitted, the connected builder uses
-`vswhere.exe` to select the newest Visual Studio installation with the latest
-VC redistributable component, then selects an x64 `Microsoft.VC*.CRT` redist
-directory containing every required DLL. It refuses `System32` as a source.
-If auto-discovery is unavailable, pass an explicit licensed redist directory:
-
-```powershell
-.\tools\airgap\Build-CompleteOfflineBundle.ps1 `
-  -PublishedBstringsDirectory .\publish\win-x64 `
-  -OutputDirectory .\publish\offline `
+  -OutputDirectory .\publish\offline-quality `
   -WorkingDirectory D:\bstrings-release-staging `
+  -TranslationProfile quality
+```
+
+Use `balanced` or `compact` to build the other model profile. The output
+directory must not already exist. The working directory retains exact verified
+downloads for resumable CI caching. `-KeepStaging` retains extracted temporary
+inputs for diagnostics and is not the release default.
+
+When `-VisualCppRuntimeDirectory` is omitted, the builder uses `vswhere.exe` to
+select the newest licensed x64 Visual Studio redistributable directory that
+contains every required DLL. It refuses `System32`. An approved explicit source
+can be passed:
+
+```powershell
+.\tools\airgap\Build-CompleteOfflineBundle.ps1 `
+  -PublishedBstringsDirectory .\publish\win-x64 `
+  -OutputDirectory .\publish\offline-compact `
+  -WorkingDirectory D:\bstrings-release-staging `
+  -TranslationProfile compact `
   -VisualCppRuntimeDirectory 'C:\approved-redist\x64\Microsoft.VC14x.CRT'
 ```
 
-The connected builder reuses `Stage-VisualCppRuntime.ps1`; the lower-level
-assembler proves that the same bytes are staged beside the root
-`bstrings.exe`, Python, Magika, FLOSS, and llama.cpp. It records each deployment
-directory and each DLL's filename, version, length, and SHA-256 in
-`airgap-config.json`. This makes the application runtime-local; it does not
-expand Microsoft's redistribution rights. Build and publish only from an
-appropriately licensed toolchain and retain the applicable terms.
-Microsoft documents
+The same exact VC DLL bytes are staged beside the root scanner and every
+bundled native CLI/runtime that needs them. The configuration records filenames,
+versions, lengths, hashes, and deployment directories. This does not expand
+Microsoft's redistribution rights; publish only from an appropriately licensed
+toolchain. Microsoft documents
 [application-local deployment](https://learn.microsoft.com/en-us/cpp/windows/choosing-a-deployment-method?view=msvc-170)
-and the
-[supported Visual C++ redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).
+and the [supported redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170).
 
-The component lock freezes downloaded offline inputs. The published bstrings,
-.NET, and Rust payload is release-built, while the Visual C++ payload is
-selected from the licensed builder redist. The release records the selected VC
-versions, lengths, and hashes in `airgap-config.json`; the finished manifest
-then records and verifies the exact bytes of all of those release-selected
-files. The four VC bytes are not themselves frozen in the component lock.
+The llama.cpp runtime is built from pinned source instead of using an upstream
+Windows archive containing `libomp140.x86_64.dll` from a `debug_nonredist`
+tree. The builder disables OpenMP, network-fetched build inputs, RPC, web UI,
+SSL stacks, subprocess/video support, and stages only the reviewed server PE
+closure. It rejects `libomp140*.dll`, unexpected imports/files, missing CPU
+backends, or a missing `--offline` option. Build provenance, compiler/CMake
+versions, flags, hashes, imports, licenses, and borrowed-code notices travel in
+the bundle.
 
-Use `-ComponentLockPath` only to test an intentional alternate lock. Use
-`-ValidateOnly` when every expected file already exists in the working
-directory's `downloads` folder. It disables download fallback, rechecks the
-main component and license bytes, stages all 14 Magika redistribution inputs
-with `-CacheOnly`, builds and verifies the exact Magika and FLOSS overlays in a
-temporary directory, then removes that directory without creating bundle
-output. `-KeepStaging` preserves extracted temporary inputs for maintainer
-diagnostics during a real build; it is not part of the release path.
+The root `.incomplete` marker remains in place through final manifest creation.
+That path is reserved and excluded from manifest entries. The builder performs
+full Python and native file-set, hash, and link verification in their narrow
+builder-only marker mode, then removes the marker as the final completion-state
+change. Any later failure restores the marker. Do not use
+`--allow-incomplete-marker` for runtime or release acceptance; default
+verification rejects a lingering marker.
 
-## Package and test the exact archive
+## Verify a completed bundle
 
-Create the ZIP from the contents of the completed output directory so
-`bstrings.exe` is at archive root. The assembler ships an explicit allowlist of
-examiner/maintainer Markdown rather than the benchmark harness, and
-`tools/airgap/Verify-MarkdownLinks.ps1` rejects any shipped relative link whose
-target is absent or escapes the bundle. Then:
-
-1. Fail if the ZIP length is greater than or equal to 2,000,000,000 bytes.
-2. Write the SHA-256 for the exact ZIP bytes to the adjacent `.sha256` file.
-3. Extract that ZIP into a new empty directory.
-4. Run the extracted root `bstrings.exe bundle verify` for bundle integrity;
-   do not substitute a separately installed verifier.
-5. Run the extracted `Verify-AirgapBundle.ps1 -TranslationSmoke`. It invokes
-   the root executable for the exact CPU translation fixture and a separate
-   reviewed benign-PE Magika/FLOSS recovery fixture.
-6. Require complete run and summary records, no incomplete marker, exactly one
-   translated child per candidate, air-gap provenance, retained synthetic
-   identifiers, the expected email match, and the exact attributable FLOSS
-   decoded marker.
-
-Testing the pre-compression directory is insufficient: the release gate must
-exercise the archive that will actually be uploaded.
-
-The workflow also runs Rust formatting, Clippy and tests; .NET restore, build,
-tests and self-contained publish; Python unit tests, Ruff and `py_compile`; a
-PowerShell parser pass; and a dry-run lock validation. Multi-gigabyte offline
-acquisition, packaging, archive verification, and full smokes are limited to
-version tags and manual dispatches, while ordinary pushes and pull requests
-retain the faster core gates.
-
-## Custom Q8 or GPU bundles
-
-Q8 remains an optional local staging choice for environments where the single
-GitHub-asset ceiling does not apply. It requires a separate reviewed component
-lock whose translation-model filename, URL, revision, byte length, SHA-256,
-and license fields describe the exact Q8 input. Do not edit or weaken the
-published Q4 lock in place.
-
-Use the lower-level `tools/airgap/Build-AirgapBundle.ps1` with already acquired,
-independently verified component directories, the Q8 file, and that alternate
-lock:
+From the finished bundle root:
 
 ```powershell
-.\tools\licenses\Stage-MagikaRedistribution.ps1 `
-  -DestinationDirectory C:\staging\magika-redistribution `
-  -DownloadCacheDirectory C:\staging\downloads
-
-.\tools\licenses\Stage-FlossThirdPartyNotices.ps1 `
-  -FlossExecutable C:\staging\floss-3.1.1\floss.exe `
-  -DestinationDirectory C:\staging\floss-redistribution
-
-.\tools\airgap\Stage-VisualCppRuntime.ps1 `
-  -ComponentLockPath C:\staging\offline-components-q8.lock.json `
-  -VisualCppRuntimeDirectory 'C:\approved-redist\x64\Microsoft.VC14x.CRT' `
-  -DestinationDirectory @(
-    'C:\staging\bstrings-publish',
-    'C:\staging\python-embed-amd64',
-    'C:\staging\magika',
-    'C:\staging\floss-3.1.1',
-    'C:\staging\llama-cpu'
-  )
-
-.\tools\airgap\Build-AirgapBundle.ps1 `
-  -OutputDirectory E:\transfer\bstrings-airgap-q8 `
-  -PublishedBstringsDirectory C:\staging\bstrings-publish `
-  -PythonDirectory C:\staging\python-embed-amd64 `
-  -MagikaDirectory C:\staging\magika `
-  -MagikaRedistributionDirectory C:\staging\magika-redistribution `
-  -FlossDirectory C:\staging\floss-3.1.1 `
-  -FlossRedistributionDirectory C:\staging\floss-redistribution `
-  -LlamaDirectory C:\staging\llama-cpu `
-  -VisualCppRuntimeDirectory 'C:\approved-redist\x64\Microsoft.VC14x.CRT' `
-  -TranslationModelDirectory C:\staging\hy-mt2-q8 `
-  -TranslationModel Hy-MT2-1.8B-Q8_0.gguf `
-  -TranslationModelRevision 1cd5208700acedef4ef93019b6cfc148b8522d45 `
-  -ComponentLockPath C:\staging\offline-components-q8.lock.json
+.\bstrings.exe bundle verify
+.\Verify-AirgapBundle.ps1 -TranslationSmoke -OcrSmoke
 ```
 
-Without the alternate lock, the command fails because the default lock pins
-Q4. The alternate lock's schema and profile must also be explicitly accepted by
-the current builder; do not bypass that guard. This is not the standard release
-profile. It needs its own manifest, transport hash, full CPU smoke, license
-review, and archive/media procedure.
+The verifier repeats strict file-set/hash/link checks, Markdown-link checks,
+managed/native notice closure, Magika/FLOSS redistribution checks, OCR runtime
+and model checks, translation model/license identity, and real synthetic
+recovery/OCR/translation runs under enforced offline settings. It requires
+complete run/summary status, no `.incomplete` marker, protected identifiers,
+expected pattern matches, exact OCR lines, and the attributable FLOSS marker.
 
-GPU translation additionally needs an approved llama.cpp GPU backend and
-runtime files plus a compatible host driver. The driver is external system
-software and cannot truthfully be described as bundled. Maintain CPU fallback
-and test each GPU profile on the exact supported hardware image.
+On a CPU-only hosted runner, select the CPU OCR gate explicitly:
 
-## Integrity, authenticity, and acceptance boundaries
+```powershell
+.\Verify-AirgapBundle.ps1 `
+  -TranslationSmoke `
+  -OcrSmoke `
+  -OcrSmokeProviders cpu
+```
 
-The strict file manifest and adjacent SHA-256 checksum detect changes relative
-to their recorded values. They do not establish publisher identity when the
-manifest, archive, and checksum travel through the same trust channel.
+Do not describe that as DirectML/hybrid acceptance.
 
-Do not claim signed or authenticated releases until the workflow actually:
+Use the same checks again after extracting a release pack. Testing only the
+pre-package directory is insufficient.
 
-- Authenticode-signs and RFC 3161 timestamps the executable bytes;
-- verifies a detached signed manifest against an independently trusted key;
-- preserves that trust anchor outside the release payload; and
-- publishes through a GitHub immutable-release policy.
+## Create split release packs
 
-Microsoft documents
-[Authenticode timestamping](https://learn.microsoft.com/en-us/windows/win32/seccrypto/time-stamping-authenticode-signatures),
-and GitHub documents
-[immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
+CI builds a complete compact profile as the template because it is the smallest
+model that can be exercised economically on the hosted runner. After the full
+smokes pass:
 
-Likewise, the hosted runner smoke uses the real extracted bundle and offline
-application mode, but it is not evidence of a pristine disconnected Windows
-installation. Before describing a release as clean-VM validated, record a pass
-on a standard-user Windows 11 x64 24H2-or-newer VM with its virtual NIC disabled and without
-separately installed .NET, Python, VC runtime, Git, Rust, or package managers.
-Include paths with spaces and non-ASCII characters, read-only media,
-insufficient disk, tampered/missing/extra files, and endpoint-control behavior
-in that acceptance matrix.
+```powershell
+.\tools\airgap\New-BundlePackRelease.ps1 `
+  -BundleDirectory .\publish\offline-compact `
+  -OutputDirectory .\release-packs `
+  -ReleaseAssetBaseUrl 'https://github.com/Donovoi/bstrings/releases/download/vX.Y.Z'
+```
+
+The script:
+
+1. verifies the complete input bundle with its own root executable;
+2. creates one deterministic no-compression shared-base ZIP excluding the
+   selected configuration, canonical model license, final manifest, and all
+   profile model paths;
+3. generates exact configuration, canonical license, final manifest, and trust
+   manifest files for quality, balanced, and compact;
+4. points each model file pack to its immutable official URL and exact hash;
+5. writes `SHA256SUMS.txt`; and
+6. locally assembles and verifies the template profile unless
+   `-SkipAssemblyTest` is deliberately supplied.
+
+The local assembly test must remain enabled in release CI. Because the CI
+template is compact, that test proves the shared layout plus compact profile.
+It is not sufficient evidence for the other two profiles. The tag-only profile
+acceptance job separately acquires, assembles, verifies, and translation-smokes
+quality, balanced, and compact from their generated trust manifests before the
+release job can start.
+
+The pack generator refuses output inside the verified input bundle and leaves
+an `.incomplete` marker if any generation, checksum, or local-assembly step
+fails. Treat such a directory as diagnostic residue, not release assets; use a
+new empty output for the next attempt.
+
+Never edit a generated trust manifest by hand. Regenerate it from a verified
+complete bundle and reviewed locks.
+
+## Release CI gates
+
+Ordinary pushes and pull requests run Rust format/Clippy/tests, .NET
+restore/build/tests/publish, Python unit tests/Ruff/bytecode compilation,
+PowerShell parser checks, lock dry-runs, and core packaging. Version tags and
+manual dispatches additionally:
+
+- cache exact ordinary and OCR downloads keyed by both lock files;
+- build a compact complete bundle from connected inputs;
+- revalidate the warmed cache with no network fallback;
+- run real translation and CPU OCR smokes under dead external proxies;
+- generate and checksum split packs;
+- locally assemble/verify the compact pack; and
+- retain the generated artifacts for the next gate.
+
+An exact tag then queues `profile-acceptance` on
+`[self-hosted, Windows, X64, bstrings-offline-release]`. That runner must have
+GitHub Actions Runner **2.327.1 or newer** because the pinned checkout,
+artifact upload, and artifact download actions use the Node 24 action runtime.
+It must also have at least 30,000,000,000 free bytes and enough CPU/RAM for the
+7B Q8 model. The connected acceptance phase needs outbound HTTPS to GitHub
+Actions and the immutable official model URLs. The job uses the core and split
+packs from the same workflow run, preloads the release-owned packs, and runs
+`bundle acquire`, assembled `bundle verify`, and the full offline translation
+smoke for quality, balanced, and compact. Profiles are processed sequentially
+so verified temporary model/bundle copies can be removed within a path-checked
+per-run work directory.
+
+Only after all three pass does the job write and upload
+`offline-profile-acceptance.json`. It records the tag, commit, build run and
+positive acceptance attempt, core archive identity, exact release-pack
+inventory, checksum-file identity, and each profile's trust manifest, final
+manifest, configuration, license, model ID, revision, size, and hash. The
+release job depends on both `build` and `profile-acceptance`. Before publishing,
+`Test-OfflineProfileReleaseEvidence.ps1` rejects extra files, links/reparse
+points, duplicate evidence/checksum/manifest rows, a non-exact checksum set, or
+any byte/hash/configuration mismatch. Every release-owned base, configuration,
+license, and manifest URL must equal
+`GITHUB_SERVER_URL/GITHUB_REPOSITORY/releases/download/GITHUB_REF_NAME/<asset>`
+byte-for-byte. Alternate hosts, repository/tag paths, casing, percent escapes,
+credentials, queries, and fragments are rejected even when they would resolve
+to equivalent content. Each translation-model URL is recorded by acceptance
+and must equal both the trust manifest and the exact checked
+`offline-components.lock.json` URL; the lock URL must also be the canonical
+Hugging Face `model-id/resolve/revision/filename?download=true` form. The release
+job then publishes the checked record beside the exact split packs. The build
+run ID, repository, tag, and commit must match exactly. The acceptance attempt
+must be positive but is intentionally not required to equal the release job's
+current attempt: GitHub can rerun only a failed downstream release job while
+safely reusing immutable acceptance evidence from the same workflow run.
+A missing runner, failed download, failed hash, failed assembly, failed strict
+verification, or failed translation smoke blocks publication. This all-profile
+gate runs for every version tag, so quality and balanced model/revision changes
+cannot reach a release on compact-only evidence.
+
+Release artifacts use fixed names and remain immutable. For a failed tag run,
+choose **Re-run failed jobs**, not **Re-run all jobs**. Re-running a successful
+artifact-producing job under the same workflow run would try to upload an
+already existing name and must fail rather than overwrite reviewed bytes. If an
+artifact-producing job failed after completing an upload, preserve the old run
+for diagnosis and start a clean release run instead of deleting or overwriting
+its evidence.
+
+DirectML/hybrid acceptance is intentionally separate. Manually dispatch
+`.github/workflows/ocr-hardware-acceptance.yml` with the source build run ID.
+It targets only `[self-hosted, Windows, X64, bstrings-directml]`, downloads the
+core and split-pack artifacts from that run, preloads the release-owned compact
+packs, acquires the immutable compact model through the trust manifest,
+assembles/verifies the exact bundle, and then requires full CPU, DirectML, and
+hybrid image/PDF inference. It uploads a small synthetic hardware-acceptance
+record containing the source run ID, manifest/lock hashes, resolved providers,
+and display-adapter/driver identity.
+
+The hardware workflow has only `workflow_dispatch`; it never auto-queues on a
+push, pull request, or tag. A release claiming DirectML/hybrid acceptance must
+retain a passing hardware artifact tied to its build run. The earlier local
+benchmark remains useful path/performance evidence, but is not a substitute for
+that release-specific record.
+
+Evidence types are not interchangeable:
+
+| Evidence | What it establishes |
+| --- | --- |
+| `offline-profile-acceptance.json` | Per-tag acquisition, assembly, strict verification, and translation smoke for every advertised profile |
+| OCR hardware acceptance artifact | CPU/DirectML/hybrid packaged-path behavior for one source build and named host/driver |
+| Immutable v3 SROIE CPU calibration | Frozen-candidate printed-receipt quality on the selected training corpus |
+| SROIE terminal and post-hoc results | The consumed one-shot disposition and later diagnostic findings; neither establishes independent acceptance |
+
+The immutable CPU-only
+[v3 calibration](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
+selected 616 of 626 training documents and passed its frozen calibration gate.
+The exact metrics and artifact hashes are kept in the
+[OCR benchmark record](ocr-benchmark-2026-08-05.md).
+
+The one-shot test still failed closed on a degenerate source annotation before
+quality scoring. The consumed ledger and immutable
+[terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
+must not be replaced with another one-shot run. The later immutable
+[post-hoc diagnostic](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2),
+with report SHA-256
+`4129295263007d9ff8fb4da3f4cd7bbb9134262f66b73dbdd43a3ffef6dee543`,
+audited all 361 rows, excluded eight exact train/test image overlaps, and scored
+353 rows, including repaired dataset row index 142 (zero-based). Every backend
+met all 11 frozen numeric thresholds, and the aggregate and per-document scored
+metrics matched. Evidence-record integrity did not, so the diagnostic failed
+overall. It is not an acceptance or parity result.
+
+Synthetic OCR tests remain packaging/regression evidence. A materially changed
+candidate needs a genuinely untouched holdout for any new independent claim.
+
+For a future untouched holdout, keep the maintainer sequence explicit: clean
+remote commit and exact green CI; a calibration run that passed its frozen gate
+and its derived policy; path-free immutable pre-test witness; isolated GitHub
+verification with an explicit `GH_TOKEN`; one ledger-claimed run; preservation
+of private evidence; and publication of only a path-free terminal result.
+Never make the one-shot command a normal tag CI job, reset its stable ledger
+for a protocol revision,
+or promote an unsealed output, failed ledger, stale calibration, or synthetic
+smoke as quality acceptance.
+
+Do not weaken the exactness gates to make CI faster. If a large transfer is the
+bottleneck, preserve resumability and immutable caches rather than skipping
+byte verification.
+
+## Licenses and redistribution closure
+
+The complete builder and verifier enforce component-owned overlays:
+
+- Magika's CLI, app-local DirectML, 70-package runtime inventory, notices, and
+  required MPL-covered source;
+- FLOSS's embedded Python/PyInstaller/native/Rust dependency inventories,
+  notices, and required corresponding source;
+- llama.cpp build provenance and notice closure;
+- OCR's two Python/ONNX Runtime closures, models/dictionary, inventories,
+  notices, and licenses;
+- all three Hy-MT2 profile licenses plus the selected canonical license; and
+- exact .NET/Rust/VC runtime attribution.
+
+Read [Magika redistribution](magika-cli-redistribution.md) and
+[FLOSS redistribution](floss-standalone-redistribution.md) before changing
+those inventories. A repository or package label never substitutes for a
+byte-exact license/source check.
+
+## Integrity and acceptance boundaries
+
+The strict manifest, pack trust manifest, and checksums establish consistency
+relative to the bytes they name. They do not authenticate a publisher if an
+attacker can replace both data and manifests. Do not claim a signed release
+until the workflow actually Authenticode-signs/RFC 3161-timestamps executables,
+verifies a detached signed manifest against an independently trusted key, and
+uses an immutable release policy. See Microsoft's
+[timestamping guidance](https://learn.microsoft.com/en-us/windows/win32/seccrypto/time-stamping-authenticode-signatures)
+and GitHub's [immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
+
+Hosted-runner smokes use the real bundle and enforced offline mode, but do not
+prove a pristine disconnected Windows installation. Before making that claim,
+record acceptance on a standard-user supported Windows VM with its virtual NIC
+disabled and without separately installed .NET, Python, VC runtime, Git, Rust,
+or package managers. Include paths with spaces/non-ASCII characters, read-only
+media, insufficient disk, interrupted/resumed acquisition, tampered/missing/
+extra files, GPU contention, and endpoint-control behavior.

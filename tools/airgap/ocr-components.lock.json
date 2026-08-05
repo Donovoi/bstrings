@@ -1,0 +1,408 @@
+{
+  "schemaVersion": 1,
+  "profile": "windows-x64-ocr-cpu-directml-v1",
+  "description": "Exact connected-staging inputs for the bstrings offline OCR CPU and DirectML runtimes.",
+  "activeRuntime": "directml",
+  "runtimePolicy": {
+    "liveValidated": [
+      "cpu",
+      "directml",
+      "hybrid-directml-cpu"
+    ],
+    "notLiveValidated": [
+      "cuda",
+      "hybrid-cuda-cpu"
+    ],
+    "networkDuringExamination": false
+  },
+  "pythonRuntimes": {
+    "cpu": {
+      "version": "3.14.6",
+      "fileName": "python-3.14.6-embed-amd64.zip",
+      "url": "https://www.python.org/ftp/python/3.14.6/python-3.14.6-embed-amd64.zip",
+      "bytes": 12570832,
+      "sha256": "df901e84a896ff1ee720ad03377e0c8d8c2244fda79808aeeaff6316df1cb75c"
+    },
+    "directml": {
+      "version": "3.14.5",
+      "fileName": "python-3.14.5-embed-amd64.zip",
+      "url": "https://www.python.org/ftp/python/3.14.5/python-3.14.5-embed-amd64.zip",
+      "bytes": 12048447,
+      "sha256": "ba6bd811c4eedb19195cf275770ef127e893d63701e24152606e2cb76f6d876a"
+    }
+  },
+  "packages": [
+    {
+      "id": "antlr4-python3-runtime",
+      "name": "antlr4-python3-runtime",
+      "version": "4.9.3",
+      "archiveType": "sdist-src",
+      "sourceRoot": "antlr4-python3-runtime-4.9.3/src",
+      "fileName": "antlr4-python3-runtime-4.9.3.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/3e/38/7859ff46355f76f8d19459005ca000b6e7012f2f1ca597746cbcd1fbfe5e/antlr4-python3-runtime-4.9.3.tar.gz",
+      "bytes": 117034,
+      "sha256": "f224469b4168294902bb1efa80a8bf7855f24c99aef99cbefc1bcd3cce77881b"
+    },
+    {
+      "id": "certifi",
+      "name": "certifi",
+      "version": "2026.7.22",
+      "archiveType": "wheel",
+      "fileName": "certifi-2026.7.22-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl",
+      "bytes": 136983,
+      "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775"
+    },
+    {
+      "id": "charset-normalizer",
+      "name": "charset-normalizer",
+      "version": "3.4.9",
+      "archiveType": "wheel",
+      "fileName": "charset_normalizer-3.4.9-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/49/fd/a1d26144398c67486422a72bf5812cda22cb4ccfcd95a290fb41ceb4b8e2/charset_normalizer-3.4.9-cp314-cp314-win_amd64.whl",
+      "bytes": 162796,
+      "sha256": "16b65ea0f2465b6fb52aa22de5eca612aa964ddfec00a912e26f4656cbef890b"
+    },
+    {
+      "id": "colorama",
+      "name": "colorama",
+      "version": "0.4.6",
+      "archiveType": "wheel",
+      "fileName": "colorama-0.4.6-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl",
+      "bytes": 25335,
+      "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"
+    },
+    {
+      "id": "colorlog",
+      "name": "colorlog",
+      "version": "6.12.0",
+      "archiveType": "wheel",
+      "fileName": "colorlog-6.12.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/d4/19/0b6647bf5e331521e55d2b63bfbdc210bd9cd605189273f03614a05f702d/colorlog-6.12.0-py3-none-any.whl",
+      "bytes": 12239,
+      "sha256": "30d392604e9110045a2c2aeefc27d7a017abbab63f3a8aee594eac0801df784e"
+    },
+    {
+      "id": "flatbuffers",
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "archiveType": "wheel",
+      "fileName": "flatbuffers-25.12.19-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl",
+      "bytes": 26661,
+      "sha256": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4"
+    },
+    {
+      "id": "idna",
+      "name": "idna",
+      "version": "3.18",
+      "archiveType": "wheel",
+      "fileName": "idna-3.18-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl",
+      "bytes": 65455,
+      "sha256": "7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2"
+    },
+    {
+      "id": "numpy",
+      "name": "numpy",
+      "version": "2.5.1",
+      "archiveType": "wheel",
+      "fileName": "numpy-2.5.1-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/c1/1a/837f9ed7405adcd7a40538792eb169eddd8fa5630c16a1ef49dae71a30f4/numpy-2.5.1-cp314-cp314-win_amd64.whl",
+      "bytes": 12562177,
+      "sha256": "24d0eb82c0541d3415a33425db64ae439dffccd7b4dbcb30e7c35120205c506a"
+    },
+    {
+      "id": "omegaconf",
+      "name": "omegaconf",
+      "version": "2.3.1",
+      "archiveType": "wheel",
+      "fileName": "omegaconf-2.3.1-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/a4/0e/152509871bf30df6fc38569f52a2db9b55dd41aae957adae50a053ac7778/omegaconf-2.3.1-py3-none-any.whl",
+      "bytes": 79502,
+      "sha256": "3d701d14e9a8828f1edd28bb70b725908b34277cdd72cf7d6a83f94dadc6b6a0"
+    },
+    {
+      "id": "opencv-python",
+      "name": "opencv-python",
+      "version": "5.0.0.93",
+      "archiveType": "wheel",
+      "fileName": "opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/21/f0/9fa6e85cb10c8eb36a0222d27e50fe381b86ce49a55446bf39f491727564/opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl",
+      "bytes": 44000345,
+      "sha256": "f90ba04b8f73bc5c3814037699739f0156f597338a98f05956c684e7c3ca10d2"
+    },
+    {
+      "id": "packaging",
+      "name": "packaging",
+      "version": "26.3",
+      "archiveType": "wheel",
+      "fileName": "packaging-26.3-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl",
+      "bytes": 129956,
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+    },
+    {
+      "id": "pillow",
+      "name": "pillow",
+      "version": "12.3.0",
+      "archiveType": "wheel",
+      "fileName": "pillow-12.3.0-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/f1/e0/492879f69d94f91f60fc8cd05ba03650e9520afebb2fb7aa12777d7c7f38/pillow-12.3.0-cp314-cp314-win_amd64.whl",
+      "bytes": 7237707,
+      "sha256": "fdafc9cce40277e0f7a0feabce0ee50dd2fa1800f3b38015e51296b5e814048d"
+    },
+    {
+      "id": "protobuf",
+      "name": "protobuf",
+      "version": "7.35.1",
+      "archiveType": "wheel",
+      "fileName": "protobuf-7.35.1-cp310-abi3-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/0a/19/8d0cb6f20a1ef7b18f1c8986ad5783f22f84cce39c6ce9a6e645ea55192e/protobuf-7.35.1-cp310-abi3-win_amd64.whl",
+      "bytes": 439996,
+      "sha256": "230a75ddfc2de4806e56696ce9640c1cdfdb6543b7cfce98d42a4c0a0e7bdb87"
+    },
+    {
+      "id": "pyclipper",
+      "name": "pyclipper",
+      "version": "1.4.0",
+      "archiveType": "wheel",
+      "fileName": "pyclipper-1.4.0-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/e3/d7/7f4354e69f10a917e5c7d5d72a499ef2e10945312f5e72c414a0a08d2ae4/pyclipper-1.4.0-cp314-cp314-win_amd64.whl",
+      "bytes": 106782,
+      "sha256": "6c317e182590c88ec0194149995e3d71a979cfef3b246383f4e035f9d4a11826"
+    },
+    {
+      "id": "pypdfium2",
+      "name": "pypdfium2",
+      "version": "5.12.1",
+      "archiveType": "wheel",
+      "fileName": "pypdfium2-5.12.1-py3-none-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/a9/c3/08b62718faf2f6b6aa49207626e3113ff3ec1b3cd076c0ef8fd852f0e57c/pypdfium2-5.12.1-py3-none-win_amd64.whl",
+      "bytes": 3859845,
+      "sha256": "9609be73a6701a68f29dffe0335f7a2e4b3ba581542ed65d35d49f761a4600ca"
+    },
+    {
+      "id": "pyyaml",
+      "name": "PyYAML",
+      "version": "6.0.3",
+      "archiveType": "wheel",
+      "fileName": "pyyaml-6.0.3-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/23/20/bb6982b26a40bb43951265ba29d4c246ef0ff59c9fdcdf0ed04e0687de4d/pyyaml-6.0.3-cp314-cp314-win_amd64.whl",
+      "bytes": 156429,
+      "sha256": "4a2e8cebe2ff6ab7d1050ecd59c25d4c8bd7e6f400f5f82b96557ac0abafd0ac"
+    },
+    {
+      "id": "rapidocr",
+      "name": "rapidocr",
+      "version": "3.9.2",
+      "archiveType": "wheel",
+      "fileName": "rapidocr-3.9.2-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/55/ed/0ee9b9281986974be9d2406ae0134c8d7c91d2fc613f16ffda9701eeda6f/rapidocr-3.9.2-py3-none-any.whl",
+      "bytes": 27275208,
+      "sha256": "04d6b8d151f823d930bd91910555f57bea897c0c44fa6794267b94cf9c1ef9a0"
+    },
+    {
+      "id": "requests",
+      "name": "requests",
+      "version": "2.34.2",
+      "archiveType": "wheel",
+      "fileName": "requests-2.34.2-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl",
+      "bytes": 73075,
+      "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0"
+    },
+    {
+      "id": "shapely",
+      "name": "shapely",
+      "version": "2.1.2",
+      "archiveType": "wheel",
+      "fileName": "shapely-2.1.2-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/74/d4/135684f342e909330e50d31d441ace06bf83c7dc0777e11043f99167b123/shapely-2.1.2-cp314-cp314-win_amd64.whl",
+      "bytes": 1773019,
+      "sha256": "a444e7afccdb0999e203b976adb37ea633725333e5b119ad40b1ca291ecf311c"
+    },
+    {
+      "id": "six",
+      "name": "six",
+      "version": "1.17.0",
+      "archiveType": "wheel",
+      "fileName": "six-1.17.0-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl",
+      "bytes": 11050,
+      "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"
+    },
+    {
+      "id": "tqdm",
+      "name": "tqdm",
+      "version": "4.70.0",
+      "archiveType": "wheel",
+      "fileName": "tqdm-4.70.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/f9/1c/01bfd571a64e7f270e6bab5e33777debe0edc56759233ce84f27dec92d14/tqdm-4.70.0-py3-none-any.whl",
+      "bytes": 80184,
+      "sha256": "7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953"
+    },
+    {
+      "id": "urllib3",
+      "name": "urllib3",
+      "version": "2.7.0",
+      "archiveType": "wheel",
+      "fileName": "urllib3-2.7.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl",
+      "bytes": 131087,
+      "sha256": "9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897"
+    },
+    {
+      "id": "onnxruntime-cpu",
+      "name": "onnxruntime",
+      "version": "1.28.0",
+      "archiveType": "wheel",
+      "fileName": "onnxruntime-1.28.0-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/bb/e2/6feb3a43517aaf2b1bf7e46897ba5eb81a29717f7d7901420614d5ee4653/onnxruntime-1.28.0-cp314-cp314-win_amd64.whl",
+      "bytes": 14093738,
+      "sha256": "f2a3b9e30ce880d4ca54999cb313569e36da4f62eefe25f87be18f43e9a3a4d5"
+    },
+    {
+      "id": "mpmath",
+      "name": "mpmath",
+      "version": "1.3.0",
+      "archiveType": "wheel",
+      "fileName": "mpmath-1.3.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl",
+      "bytes": 536198,
+      "sha256": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c"
+    },
+    {
+      "id": "onnxruntime-directml",
+      "name": "onnxruntime-directml",
+      "version": "1.24.4",
+      "archiveType": "wheel",
+      "fileName": "onnxruntime_directml-1.24.4-cp314-cp314-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/b7/04/816932a3ade867a687e406716ca76e0774c6b921545b45818e3ebfcc54ce/onnxruntime_directml-1.24.4-cp314-cp314-win_amd64.whl",
+      "bytes": 25571098,
+      "sha256": "51d86bb949488e572b00422f344990a4a81d982416d73b6c0e4ced2bcd423d19"
+    },
+    {
+      "id": "sympy",
+      "name": "sympy",
+      "version": "1.14.0",
+      "archiveType": "wheel",
+      "fileName": "sympy-1.14.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl",
+      "bytes": 6299353,
+      "sha256": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5"
+    }
+  ],
+  "runtimeSets": {
+    "common": [
+      "antlr4-python3-runtime",
+      "certifi",
+      "charset-normalizer",
+      "colorama",
+      "colorlog",
+      "flatbuffers",
+      "idna",
+      "numpy",
+      "omegaconf",
+      "opencv-python",
+      "packaging",
+      "pillow",
+      "protobuf",
+      "pyclipper",
+      "pypdfium2",
+      "pyyaml",
+      "rapidocr",
+      "requests",
+      "shapely",
+      "six",
+      "tqdm",
+      "urllib3"
+    ],
+    "cpu": [
+      "onnxruntime-cpu"
+    ],
+    "directml": [
+      "mpmath",
+      "onnxruntime-directml",
+      "sympy"
+    ]
+  },
+  "modelPack": {
+    "schemaVersion": 1,
+    "fileName": "ocr-model-pack.json",
+    "bytes": 852,
+    "sha256": "b3b683eb29ec09e9da835e09fb4470792af7702cfc6cee40f2725c232d258534",
+    "modelId": "PaddlePaddle/PP-OCRv6-medium-onnx+RapidAI/RapidOCR-classifier",
+    "revision": "det-61323801669c338b7891481ec7bac61ce31b576a_rec-50c7eacafc52fa7bcf4194e8cd08e46f8558504b_cls-390c78b5e9a2e69bd9e33be9cd77f7b2622ce55b",
+    "detector": {
+      "path": "ppocrv6_medium_det.onnx",
+      "fileName": "ppocrv6-medium-det-inference.onnx",
+      "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx/resolve/61323801669c338b7891481ec7bac61ce31b576a/inference.onnx?download=true",
+      "bytes": 62032837,
+      "sha256": "eb13b44b25bb36f89528b68720af8a61d9cf381176107f465db1757b65d086e1"
+    },
+    "recognizer": {
+      "path": "ppocrv6_medium_rec.onnx",
+      "fileName": "ppocrv6-medium-rec-inference.onnx",
+      "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/resolve/50c7eacafc52fa7bcf4194e8cd08e46f8558504b/inference.onnx?download=true",
+      "bytes": 76554979,
+      "sha256": "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba"
+    },
+    "classifier": {
+      "path": "ch_ppocr_mobile_v2.0_cls_mobile.onnx",
+      "bytes": 585532,
+      "sha256": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c",
+      "derivedFrom": {
+        "packageId": "rapidocr",
+        "path": "rapidocr/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+      },
+      "independentUpstream": {
+        "revision": "7a679896b7722a2e346fd2dd3148b3faaabe5790",
+        "url": "https://huggingface.co/spaces/RapidAI/TableStructureRec/resolve/7a679896b7722a2e346fd2dd3148b3faaabe5790/models/ocr/ch_ppocr_mobile_v2.0_cls_infer.onnx"
+      }
+    },
+    "dictionary": {
+      "path": "ppocrv6_medium_rec_character_dict.txt",
+      "entries": 18708,
+      "bytes": 74947,
+      "sha256": "b5f2bfe2bdd9448429e3e82b51c789775d9b42f2403d082b00662eb77e401c5d",
+      "derivedFrom": {
+        "fileName": "ppocrv6-medium-rec-inference.yml",
+        "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/resolve/50c7eacafc52fa7bcf4194e8cd08e46f8558504b/inference.yml?download=true",
+        "bytes": 150580,
+        "sha256": "991b700facf5b50a7de193468207d5f4255b538dde0d312ae3b7c7a9b6873129"
+      }
+    }
+  },
+  "supplementalLicenses": [
+    {
+      "id": "rapidocr",
+      "fileName": "RapidOCR-3.9.2-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/RapidAI/RapidOCR/095232a4c94f7f0e6600ba5bba1177010ad696d4/LICENSE",
+      "bytes": 11422,
+      "sha256": "3e0af25fdd06aa9586ae97adb00ea927ebe5a3805ac77d2d3a81ce5f55693333"
+    },
+    {
+      "id": "antlr4",
+      "fileName": "ANTLR4-4.9.3-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/antlr/antlr4/e4c1a74c66bd5290364ea2b36c97cd724b247357/LICENSE.txt",
+      "bytes": 2699,
+      "sha256": "b1b379fcaf3219593a4c433feb1b35c780bed23fafaae440b1ae2771a9521e3a"
+    },
+    {
+      "id": "flatbuffers",
+      "fileName": "FlatBuffers-25.12.19-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/google/flatbuffers/7e163021e59cca4f8e1e35a7c828b5c6b7915953/LICENSE",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "id": "paddleocr",
+      "fileName": "PaddleOCR-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/LICENSE",
+      "bytes": 11376,
+      "sha256": "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
+    }
+  ]
+}

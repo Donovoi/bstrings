@@ -200,3 +200,10 @@ __pycache__/
 
 # Local benchmark, publish, and evidence-derived outputs
 /artifacts/
+
+# Transient files for the project-global CORD confirmatory one-shot ledger.
+# The canonical ledger and any quarantine record are deliberate evidence and
+# remain trackable after the real holdout attempt.
+/tools/enrichment/cord-v2-train-confirmatory-attempt-v1.json.incomplete
+/tools/enrichment/cord-v2-train-confirmatory-attempt-v1.json.partial-*
+/tools/enrichment/cord-v2-train-confirmatory-attempt-v1.json.staged

@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -348,6 +349,25 @@ internal static class EnrichmentRegexPipelineCore
                 $"Enrichment JSONL line {lineNumber:N0} has an incomplete extractor origin."
             );
         }
+        var hasOriginModel = !string.IsNullOrWhiteSpace(record.Origin.Model);
+        var hasOriginRevision = !string.IsNullOrWhiteSpace(record.Origin.Revision);
+        var hasOriginModelSha256 = !string.IsNullOrWhiteSpace(record.Origin.ModelSha256);
+        if (
+            hasOriginModel != hasOriginRevision
+            || hasOriginModel != hasOriginModelSha256
+            || (
+                hasOriginModelSha256
+                && (
+                    record.Origin.ModelSha256!.Length != 64
+                    || record.Origin.ModelSha256.Any(character => !Uri.IsHexDigit(character))
+                )
+            )
+        )
+        {
+            throw new InvalidDataException(
+                $"Enrichment JSONL line {lineNumber:N0} must provide a complete origin model, revision, and 64-character modelSha256."
+            );
+        }
         if (
             record.Location is null
             || string.IsNullOrWhiteSpace(record.Location.Kind)
@@ -411,7 +431,11 @@ internal static class EnrichmentRegexPipelineCore
             record.Location.Value,
             record.Origin!.Extractor,
             record.Origin.Version,
-            record.Origin.Kind
+            record.Origin.Kind,
+            record.Origin.Model,
+            record.Origin.Revision,
+            record.Origin.ModelSha256,
+            record.Origin.Provider
         );
 
     internal static void ValidateTranslationRequirements(

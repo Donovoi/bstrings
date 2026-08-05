@@ -1,4 +1,4 @@
-# Offline translation selection gate — 2026-08-04
+# Offline translation selection gate — 2026-08-04, updated 2026-08-06
 
 This is a developer/research reproduction record. Examiners normally use the
 integrated `bstrings.exe analyze -d carved-files --full -o results` workflow;
@@ -6,18 +6,109 @@ they do not need to invoke Python or the benchmark runner. A raw image must be
 mounted or carved first when filesystem or embedded-executable coverage is
 required; bstrings does not imply that coverage from `--full`.
 
-## Decision
+## Current decision — 2026-08-05
 
-Use Hy-MT2-1.8B Q8 through llama.cpp for languages Hy-MT2 officially supports.
-On the reviewed laptop it produced better aggregate translations than the
-existing MADLAD-400-3B-MT path, preserved every tested evidence identifier,
-and was 13.1 times faster. Use Q4_K_M when speed or memory matters more than
-the last 1–2 chrF++ points. Keep MADLAD as an advanced adapter and benchmark
-fallback for languages outside Hy-MT2's much smaller language set. The
-integrated `bstrings.exe analyze` workflow does not expose MADLAD selection.
+Use [Hy-MT2-7B Q8_0](https://huggingface.co/tencent/Hy-MT2-7B-GGUF)
+through llama.cpp as the `quality` profile and default complete bundle. It
+cleared the final strict gate with the strongest measured
+translation quality while preserving every protected identifier and expected
+regex result. Keep Hy-MT2-1.8B Q8_0 as `balanced` and Hy-MT2-1.8B Q4_K_M as
+`compact`; they are substantially smaller and faster operational choices.
+
+| Profile | Exact model | Bytes | WMT24++ chrF++ | Forensic chrF++ | Protected identifiers | Pattern precision/recall | Strings/s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `quality` (default) | Hy-MT2-7B Q8_0 | 7,981,928,896 | **62.6786** | **92.8310** | 22/22 | 1.0 / 1.0 (10/10) | 0.2793 |
+| `balanced` | Hy-MT2-1.8B Q8_0 | 1,908,528,192 | 58.6211 | 87.5297 | 22/22 | 1.0 / 1.0 (10/10) | 1.8870 |
+| `compact` | Hy-MT2-1.8B Q4_K_M | 1,133,080,448 | 58.1829 | 85.6382 | 22/22 | 1.0 / 1.0 (10/10) | 2.7055 |
+
+The final quality run used strict corpus SHA-256
+`9b3ace5991ab616a9dab570b80eb1d6741e41f67c8272817861d6176ae27d213`,
+took 257.7479 seconds for 72 strings, and reported no identifier omission,
+addition, or duplication, plus zero pattern false positives or false negatives.
+The exact promoted model file is `HY-MT2-7B-Q8_0.gguf`, revision
+`707464294cf5b2a5a69982855020858ed58cf1d1`, SHA-256
+`58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0`.
+
+TranslateGemma remains a research challenger. Gated access was resolved and an
+isolated run of Google's official
+[BF16 TranslateGemma 4B](https://huggingface.co/google/translategemma-4b-it)
+completed all 72 rows
+under the air-gap guard. It scored 56.1631 WMT24++ chrF++ and 84.2550 forensic
+chrF++, retained 22/22 identifiers with zero invariant deltas, and returned all
+10 expected downstream matches with precision/recall/F1 of 1.0. It took
+1,374.83 seconds (0.05237 strings/s): lower quality and about 51.7 times slower
+than compact Hy-MT2 on this bounded corpus. It is gated, unbundled, and has not
+cleared the complete one-executable runtime/packaging/redistribution gate, so it
+is not promoted. Its gated Gemma Terms permit redistribution only with the
+required terms, NOTICE, and downstream restrictions, so a release pack still
+needs a terms-compliant distribution design and may require each builder to
+accept access independently. MADLAD remains an advanced benchmark fallback
+rather than an integrated CLI choice.
+
+That challenger ran with PyTorch `2.10.0+cu130` (CUDA 13.0), Transformers
+`5.14.1`, and Accelerate `1.13.0`, using hybrid CPU/GPU offload on the NVIDIA
+GeForce RTX 4060 Laptop GPU with 8 GB VRAM. These versions describe only the
+isolated challenger run; they are not dependencies of a shipped bstrings bundle.
+
+Neither of the two
+[Google Cloud Translation](https://docs.cloud.google.com/translate/docs/advanced/compare-models)
+models was empirically run because the host had no configured Google Cloud
+project or credentials. Specifically, neither
+[`general/translation-llm`](https://docs.cloud.google.com/translate/docs/translation-llm)
+nor [`general/nmt`](https://docs.cloud.google.com/translate/docs/advanced/compare-models)
+was measured, and the consumer Google Translate product was not tested. These
+local chrF++ results establish neither parity nor superiority versus Google.
+Throughput is also specific to this 72-row corpus, runtime, and host.
+
+The harness has a deliberately explicit networked comparison path, but accepts
+only public or synthetic rows and requires the operator to acknowledge that
+those rows leave the machine. A fair future comparison must use the same
+corpus, direction, normalization, seed, and scorer. This standalone setup uses
+[uv](https://docs.astral.sh/uv/getting-started/installation/) and the
+[`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli):
+
+```powershell
+uv venv C:\bench\.venv
+$benchPython = 'C:\bench\.venv\Scripts\python.exe'
+uv pip install --python $benchPython `
+  "sacrebleu>=2.5,<3" `
+  "google-auth[requests]>=2,<3"
+
+hf download google/wmt24pp `
+  --repo-type dataset `
+  --revision fd7405c06494bc66a57b25f55d217a72f96e60dc `
+  --local-dir C:\bench\wmt24pp
+
+$projectId = 'replace-with-your-google-cloud-project-id'
+foreach ($model in @('general/translation-llm', 'general/nmt')) {
+  $modelSlug = $model.Split('/')[-1]
+  & $benchPython tools\enrichment\benchmark_translation.py `
+    --engine google-cloud `
+    --google-project $projectId `
+    --google-location global `
+    --google-model $model `
+    --allow-google-cloud-public-benchmark `
+    --wmt-root C:\bench\wmt24pp `
+    --forensic-cases tools\enrichment\forensic_translation_cases.jsonl `
+    --locales ar_EG de_DE es_MX fa_IR fr_FR hi_IN ja_JP ko_KR ru_RU th_TH tr_TR zh_CN `
+    --wmt-direction locale-to-en-postedit `
+    --sample-seed 20260805 `
+    --wmt-per-locale 5 `
+    --output "C:\bench\results\google-$modelSlug.json"
+  if ($LASTEXITCODE -ne 0) { throw "Google benchmark failed for $model" }
+}
+```
+
+Credentials are read from Google Application Default Credentials or
+`GOOGLE_OAUTH_ACCESS_TOKEN`; they are never a command-line argument. Do not use
+this networked backend with case evidence.
 
 This is a selection gate for `bstrings`, not a claim that one model is best in
-every domain or on every machine.
+every domain, language, workload, or machine. The original 2026-08-04 1.8B and
+MADLAD study remains below as historical evidence; where its recommendation
+differs, this promotion update supersedes it.
+
+## Original 2026-08-04 study
 
 ## What was tested
 
@@ -184,8 +275,12 @@ free speed-up.
 
 - [TranslateGemma 4B](https://huggingface.co/google/translategemma-4b-it) is a
   serious candidate: Google's report evaluates it across WMT24++ and WMT25.
-  The weights required accepted Gemma access, and the test host was not
-  authenticated or approved, so it was not ranked from paper results alone.
+  Gemma access was subsequently accepted. The official BF16 challenger passed
+  the 72-row air-gap/invariant run, but scored 56.1631/84.2550 chrF++ at only
+  0.05237 strings/s, behind even compact Hy-MT2's 58.1829/85.6382 at 2.70545
+  strings/s. It also has not cleared the integrated-runtime, offline-packaging,
+  and redistribution gates. It is therefore not shipped merely on the strength
+  of paper results or a standalone run.
 - [NLLB-200 distilled 600M](https://huggingface.co/facebook/nllb-200-distilled-600M)
   and [SeamlessM4T v2](https://huggingface.co/facebook/seamless-m4t-v2-large)
   have broad coverage but use CC-BY-NC-4.0 model licenses. They fail the
@@ -206,34 +301,45 @@ This advanced reproduction requires [Python](https://www.python.org/downloads/),
 [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli),
 [SacreBLEU](https://github.com/mjpost/sacrebleu), a pinned
 [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases), and the
-[Hy-MT2 GGUF model](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF).
+[Hy-MT2 7B GGUF model](https://huggingface.co/tencent/Hy-MT2-7B-GGUF).
 Install the benchmark-only dependency and download the same WMT24++ revision.
 The benchmark runner never downloads a model. It can own a short-lived,
 loopback-only llama.cpp server so the benchmark exercises the same scheduler as
 the production adapter.
 
 ```powershell
-uv pip install "sacrebleu>=2.5,<3"
+uv venv C:\bench\.venv
+$benchPython = 'C:\bench\.venv\Scripts\python.exe'
+uv pip install --python $benchPython "sacrebleu>=2.5,<3"
 
 hf download google/wmt24pp `
   --repo-type dataset `
   --revision fd7405c06494bc66a57b25f55d217a72f96e60dc `
   --local-dir C:\bench\wmt24pp
 
-python tools\enrichment\benchmark_translation.py `
+& $benchPython tools\enrichment\benchmark_translation.py `
   --engine llama-cpp `
-  --llama-server C:\forensic-tools\llama.cpp\llama-server.exe `
-  --model-path C:\forensic-models\hy-mt2-1.8b\Hy-MT2-1.8B-Q8_0.gguf `
-  --model-id tencent/Hy-MT2-1.8B-GGUF `
-  --model-revision 1cd5208700acedef4ef93019b6cfc148b8522d45 `
-  --model-sha256 5C3FE0B1408A5CEB0143184EF247B11B579C525F4B02B060E6C851BB76FEF1A4 `
-  --runtime "llama.cpp b10248; CUDA 12.4; Q8_0" `
-  --device auto `
-  --parallelism 0 `
+  --llama-server C:\Tools\bstrings-quality\runtime\llama\llama-server.exe `
+  --model-path C:\Tools\bstrings-quality\models\hy-mt2\HY-MT2-7B-Q8_0.gguf `
+  --model-id tencent/Hy-MT2-7B-GGUF `
+  --model-revision 707464294cf5b2a5a69982855020858ed58cf1d1 `
+  --model-sha256 58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0 `
+  --runtime "llama.cpp b10248; CPU; Q8_0" `
+  --device cpu `
+  --parallelism 1 `
+  --strict-determinism `
   --wmt-root C:\bench\wmt24pp `
+  --forensic-cases tools\enrichment\forensic_translation_cases.jsonl `
+  --locales ar_EG de_DE es_MX fa_IR fr_FR hi_IN ja_JP ko_KR ru_RU th_TH tr_TR zh_CN `
+  --wmt-direction locale-to-en-postedit `
+  --sample-seed 20260805 `
   --wmt-per-locale 5 `
-  --output C:\bench\results\hy-mt2-q8.json
+  --output C:\bench\results\hy-mt2-7b-quality-strict.json
 ```
 
 Generated result JSON/JSONL and downloaded corpora stay outside the repository.
-Only the runner and synthetic forensic fixtures are versioned.
+Only the runner and synthetic forensic fixtures are versioned. Raw summaries
+can contain absolute corpus paths; Google runs can contain a project ID/model
+resource; records JSONL contains sources, references, and hypotheses. Review
+and sanitize any derived publication instead of committing raw benchmark
+output or exposing it through public CI logs.

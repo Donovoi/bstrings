@@ -69,6 +69,63 @@ public sealed class BundleManifestVerifierTests
     }
 
     [Fact]
+    public void Verify_DefaultRejectsAReservedIncompleteMarker()
+    {
+        using var scope = new TemporaryBundle();
+        scope.WriteFile("tools/tool.exe", "tool");
+        BundleManifestTestFixture.Write(scope.Root);
+        scope.WriteFile(BundleManifestVerifier.IncompleteMarkerFileName, "building");
+
+        var error = Assert.Throws<InvalidDataException>(() =>
+            BundleManifestVerifier.Verify(scope.Root)
+        );
+
+        Assert.Contains("lingering root .incomplete", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Verify_BuilderOnlyModeRequiresAndExcludesThePhysicalMarker()
+    {
+        using var scope = new TemporaryBundle();
+        scope.WriteFile("tools/tool.exe", "tool");
+        BundleManifestTestFixture.Write(scope.Root);
+
+        var missing = Assert.Throws<InvalidDataException>(() =>
+            BundleManifestVerifier.Verify(scope.Root, allowIncompleteMarker: true)
+        );
+        Assert.Contains("requires a root .incomplete", missing.Message, StringComparison.Ordinal);
+
+        scope.WriteFile(BundleManifestVerifier.IncompleteMarkerFileName, "building");
+        var result = BundleManifestVerifier.Verify(
+            scope.Root,
+            allowIncompleteMarker: true
+        );
+
+        Assert.Equal(1, result.FileCount);
+    }
+
+    [Fact]
+    public void Verify_RejectsAnIncompleteMarkerDirectoryInEveryMode()
+    {
+        using var scope = new TemporaryBundle();
+        scope.WriteFile("tools/tool.exe", "tool");
+        BundleManifestTestFixture.Write(scope.Root);
+        Directory.CreateDirectory(
+            Path.Combine(scope.Root, BundleManifestVerifier.IncompleteMarkerFileName)
+        );
+
+        var strict = Assert.Throws<InvalidDataException>(() =>
+            BundleManifestVerifier.Verify(scope.Root)
+        );
+        var builder = Assert.Throws<InvalidDataException>(() =>
+            BundleManifestVerifier.Verify(scope.Root, allowIncompleteMarker: true)
+        );
+
+        Assert.Contains("physical regular file", strict.Message, StringComparison.Ordinal);
+        Assert.Contains("physical regular file", builder.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Verify_RejectsCaseInsensitiveManifestDuplicates()
     {
         using var scope = new TemporaryBundle();
@@ -100,6 +157,7 @@ public sealed class BundleManifestVerifierTests
     [InlineData("tools/NUL.txt")]
     [InlineData("tools/trailing. ")]
     [InlineData("airgap-manifest.json")]
+    [InlineData(".incomplete")]
     public void ValidateRelativePath_RejectsUnsafeOrAmbiguousWindowsPaths(string path)
     {
         Assert.Throws<InvalidDataException>(() =>
@@ -137,6 +195,27 @@ public sealed class BundleManifestVerifierTests
         var exitCode = await BundleCli.RunAsync(["verify", "--bundle-root", scope.Root]);
 
         Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public async Task BundleCli_BuilderOnlyMarkerOptionIsExplicitAndFailClosed()
+    {
+        using var scope = new TemporaryBundle();
+        scope.WriteFile("tools/tool.exe", "tool");
+        BundleManifestTestFixture.Write(scope.Root);
+
+        var missingMarker = await BundleCli.RunAsync(
+            ["verify", "--bundle-root", scope.Root, "--allow-incomplete-marker"]
+        );
+        scope.WriteFile(BundleManifestVerifier.IncompleteMarkerFileName, "building");
+        var strict = await BundleCli.RunAsync(["verify", "--bundle-root", scope.Root]);
+        var builder = await BundleCli.RunAsync(
+            ["verify", "--bundle-root", scope.Root, "--allow-incomplete-marker"]
+        );
+
+        Assert.Equal(2, missingMarker);
+        Assert.Equal(2, strict);
+        Assert.Equal(0, builder);
     }
 
     [Fact]

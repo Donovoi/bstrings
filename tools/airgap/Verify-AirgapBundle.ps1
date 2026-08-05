@@ -1,11 +1,21 @@
 [CmdletBinding()]
 param(
     [switch]$TranslationSmoke,
+    [switch]$OcrSmoke,
+    [ValidateSet('cpu', 'directml', 'hybrid')]
+    [string[]]$OcrSmokeProviders = @('cpu', 'directml', 'hybrid'),
     [switch]$SkipExecutableProbes
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if (-not $OcrSmoke -and $PSBoundParameters.ContainsKey('OcrSmokeProviders')) {
+    throw '-OcrSmokeProviders requires -OcrSmoke.'
+}
+$incompleteMarker = Join-Path $PSScriptRoot '.incomplete'
+if ($null -ne (Get-Item -LiteralPath $incompleteMarker -Force -ErrorAction SilentlyContinue)) {
+    throw 'The air-gap bundle has a lingering root .incomplete marker.'
+}
 . (Join-Path $PSScriptRoot 'Set-AirgapEnvironment.ps1')
 Enable-BstringsAirgapEnvironment -BundleRoot $PSScriptRoot
 
@@ -77,13 +87,38 @@ $requiredNoticeFiles = @(
     'licenses/llama.cpp/SOURCE-ggml-cpu-ops.cpp',
     'licenses/llama.cpp/SOURCE-llama-vocab.cpp',
     'licenses/llama.cpp/NOTICE-SCOPE.md',
-    'licenses/Hy-MT2-Apache-2.0.txt'
+    'licenses/Hy-MT2-Apache-2.0.txt',
+    'licenses/Hy-MT2-7B-Apache-2.0.txt',
+    'licenses/Hy-MT2-1.8B-Apache-2.0.txt',
+    'ocr-components.lock.json',
+    'licenses/ocr-runtime-win-x64.json',
+    'licenses/ocr-runtime-files.json',
+    'licenses/ocr-runtime/RapidOCR-3.9.2-LICENSE.txt',
+    'licenses/ocr-runtime/ANTLR4-4.9.3-LICENSE.txt',
+    'licenses/ocr-runtime/FlatBuffers-25.12.19-LICENSE.txt',
+    'licenses/ocr-runtime/PaddleOCR-LICENSE.txt',
+    'tools/airgap/Verify-OcrRuntime.ps1'
 )
 foreach ($relativePath in $requiredNoticeFiles) {
     $noticeFile = Resolve-BundlePath $relativePath
     if (-not [IO.File]::Exists($noticeFile)) {
         throw "Required bstrings third-party notice is missing: $relativePath"
     }
+}
+$offlineLockPath = Resolve-BundlePath $config.componentLock
+$offlineLock = Get-Content -LiteralPath $offlineLockPath -Raw | ConvertFrom-Json
+$translationProfileName = [string]$config.translationProfile
+if ($translationProfileName -notin @('quality', 'balanced', 'compact')) {
+    throw "Bundle configuration has an unsupported translation profile: $translationProfileName"
+}
+$translationProfile = $offlineLock.translationProfiles.$translationProfileName
+$translationLicense = Resolve-BundlePath 'licenses/Hy-MT2-Apache-2.0.txt'
+if (
+    (Get-Item -LiteralPath $translationLicense).Length -ne [long]$translationProfile.license.bytes -or
+    (Get-FileHash -LiteralPath $translationLicense -Algorithm SHA256).Hash.ToLowerInvariant() -ne
+        [string]$translationProfile.license.sha256
+) {
+    throw 'The canonical Hy-MT2 license does not match the selected translation profile.'
 }
 
 if (-not ($config.PSObject.Properties.Name -contains 'magikaRedistribution')) {
@@ -134,6 +169,16 @@ $guardProbe = Resolve-BundlePath $config.networkGuardProbe
 & $python $guardProbe
 if ($LASTEXITCODE -ne 0) {
     throw 'Python air-gap network guard verification failed.'
+}
+$ocrVerifier = Resolve-BundlePath 'tools/airgap/Verify-OcrRuntime.ps1'
+if ($OcrSmoke) {
+    & $ocrVerifier `
+        -BundleDirectory $PSScriptRoot `
+        -Smoke `
+        -SmokeProviders $OcrSmokeProviders
+}
+else {
+    & $ocrVerifier -BundleDirectory $PSScriptRoot
 }
 
 if (-not ($config.PSObject.Properties.Name -contains 'llamaCppRuntime')) {

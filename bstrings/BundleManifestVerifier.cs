@@ -21,8 +21,9 @@ internal sealed record BundleVerificationResult(
 internal static class BundleManifestVerifier
 {
     internal const string ManifestFileName = "airgap-manifest.json";
+    internal const string IncompleteMarkerFileName = ".incomplete";
     private const int SupportedSchemaVersion = 1;
-    private const long MaximumManifestBytes = 128L * 1024 * 1024;
+    internal const long MaximumManifestBytes = 128L * 1024 * 1024;
     private static readonly HashSet<string> ReservedWindowsDeviceNames = new(
         [
             "CON",
@@ -51,23 +52,27 @@ internal static class BundleManifestVerifier
         StringComparer.OrdinalIgnoreCase
     );
 
-    private sealed record ExpectedFile(string RelativePath, long Length, string Sha256);
-    private sealed record ParsedManifest(
+    internal sealed record ExpectedFile(string RelativePath, long Length, string Sha256);
+    internal sealed record ParsedManifest(
         Dictionary<string, ExpectedFile> Files,
         string Sha256
     );
 
-    internal static BundleVerificationResult Verify(string bundleRoot) =>
-        VerifyCore(bundleRoot, File.GetAttributes);
+    internal static BundleVerificationResult Verify(
+        string bundleRoot,
+        bool allowIncompleteMarker = false
+    ) => VerifyCore(bundleRoot, File.GetAttributes, allowIncompleteMarker);
 
     internal static BundleVerificationResult VerifyForTesting(
         string bundleRoot,
-        Func<string, FileAttributes> getAttributes
-    ) => VerifyCore(bundleRoot, getAttributes);
+        Func<string, FileAttributes> getAttributes,
+        bool allowIncompleteMarker = false
+    ) => VerifyCore(bundleRoot, getAttributes, allowIncompleteMarker);
 
     private static BundleVerificationResult VerifyCore(
         string bundleRoot,
-        Func<string, FileAttributes> getAttributes
+        Func<string, FileAttributes> getAttributes,
+        bool allowIncompleteMarker
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(bundleRoot);
@@ -93,6 +98,21 @@ internal static class BundleManifestVerifier
         var parsedManifest = ReadManifest(manifestPath);
         var expected = parsedManifest.Files;
         var actual = EnumerateBundleFiles(root, getAttributes);
+        if (allowIncompleteMarker)
+        {
+            if (!actual.Remove(IncompleteMarkerFileName))
+            {
+                throw new InvalidDataException(
+                    "Builder-only incomplete-marker verification requires a root .incomplete file."
+                );
+            }
+        }
+        else if (actual.ContainsKey(IncompleteMarkerFileName))
+        {
+            throw new InvalidDataException(
+                "Bundle has a lingering root .incomplete marker."
+            );
+        }
 
         var missing = expected.Keys.Except(actual.Keys, StringComparer.OrdinalIgnoreCase).ToArray();
         var unexpected = actual.Keys
@@ -180,15 +200,31 @@ internal static class BundleManifestVerifier
             64 * 1024,
             FileOptions.SequentialScan
         );
-        if (stream.Length == 0 || stream.Length > MaximumManifestBytes)
+        return ReadManifest(stream, stream.Length);
+    }
+
+    internal static ParsedManifest ReadManifest(Stream stream, long declaredLength)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!stream.CanRead)
+        {
+            throw new InvalidDataException("Bundle manifest stream must be readable.");
+        }
+        if (declaredLength <= 0 || declaredLength > MaximumManifestBytes)
         {
             throw new InvalidDataException(
                 $"Bundle manifest length must be between 1 and {MaximumManifestBytes:N0} bytes."
             );
         }
 
-        var manifestBytes = new byte[checked((int)stream.Length)];
+        var manifestBytes = new byte[checked((int)declaredLength)];
         stream.ReadExactly(manifestBytes);
+        if (stream.ReadByte() != -1)
+        {
+            throw new InvalidDataException(
+                "Bundle manifest stream exceeded its declared length."
+            );
+        }
         var manifestSha256 = Convert
             .ToHexString(SHA256.HashData(manifestBytes))
             .ToLowerInvariant();
@@ -379,9 +415,18 @@ internal static class BundleManifestVerifier
                 );
             }
         }
-        if (string.Equals(value, ManifestFileName, StringComparison.OrdinalIgnoreCase))
+        if (
+            string.Equals(value, ManifestFileName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                value,
+                IncompleteMarkerFileName,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
-            throw new InvalidDataException("The bundle manifest cannot list itself.");
+            throw new InvalidDataException(
+                "The bundle manifest cannot list a reserved root path."
+            );
         }
         return value;
     }
@@ -428,6 +473,19 @@ internal static class BundleManifestVerifier
                 var relativePath = Path.GetRelativePath(root, candidate)
                     .Replace(Path.DirectorySeparatorChar, '/');
                 relativePath = ValidateActualRelativePath(relativePath);
+                if (
+                    string.Equals(
+                        relativePath,
+                        IncompleteMarkerFileName,
+                        StringComparison.Ordinal
+                    )
+                    && (attributes & FileAttributes.Directory) != 0
+                )
+                {
+                    throw new InvalidDataException(
+                        "The root .incomplete marker must be a physical regular file."
+                    );
+                }
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
                     pending.Push(candidate);
@@ -456,7 +514,10 @@ internal static class BundleManifestVerifier
 
     private static string ValidateActualRelativePath(string value)
     {
-        if (string.Equals(value, ManifestFileName, StringComparison.Ordinal))
+        if (
+            string.Equals(value, ManifestFileName, StringComparison.Ordinal)
+            || string.Equals(value, IncompleteMarkerFileName, StringComparison.Ordinal)
+        )
         {
             return value;
         }

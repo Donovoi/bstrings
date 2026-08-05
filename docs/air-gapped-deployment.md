@@ -1,210 +1,278 @@
 # Air-gapped deployment
 
-The checked `bstrings-win-x64-offline-cpu.zip` is the normal deployment for
-a disconnected Windows x64 workstation. It carries every application
-dependency needed by the CPU workflow. The examiner extracts one archive and
-uses the root `bstrings.exe`; they do not install or invoke Python, .NET,
-Magika, FLOSS, llama.cpp, a model hub, or a package manager.
+The complete Windows x64 kit built from current source is prepared on a
+connected staging machine, verified, then copied as a directory to the
+disconnected workstation. During an examination, the user runs only the root
+`bstrings.exe`: no package manager, Python command, model hub, service
+installation, or network access is needed.
+PowerShell is only the shell displaying the examples below; normal users do not
+run a Python script or package-manager command.
 
-The conservative supported baseline for this release profile is Windows 11
-x64 24H2 or newer, following Microsoft's [.NET supported-Windows
-table](https://learn.microsoft.com/en-us/dotnet/core/install/windows).
-Magika carries DirectML 1.15.4 application-local, but that runtime still uses
-the operating system's D3D12/DXGI graphics interfaces; Microsoft's [DirectML
-version history](https://learn.microsoft.com/en-us/windows/ai/directml/dml-version-history)
-does not make an older or unsupported Windows image a supported target.
+The conservative supported baseline is Windows 11 x64 24H2 or newer, following
+Microsoft's [.NET supported-Windows table](https://learn.microsoft.com/en-us/dotnet/core/install/windows).
+CPU analysis needs no GPU. DirectML uses the host's D3D12/DXGI stack and a
+compatible graphics driver; those operating-system components are not bundled.
 
-## Deploy the published CPU bundle
+| Download | Purpose |
+| --- | --- |
+| Core ZIP | Scanner, Rust engine, and `bundle acquire` client. Useful alone for direct/native extraction and pattern search. |
+| Complete offline kit | The directory created by `bundle acquire`. It adds [Magika](https://github.com/google/magika), [FLOSS](https://github.com/mandiant/flare-floss), OCR, language detection, and local translation. |
 
-On a connected transfer workstation:
+Release assets are the ingredients; the assembled directory is what you
+transfer offline. “One executable” means one user interface. Its adjacent
+models and runtimes are still required and must remain beside it.
 
-1. Until a matching version tag publishes the archive, run the [Windows build
-   workflow](https://github.com/Donovoi/bstrings/actions/workflows/dotnet-desktop.yml)
-   manually and download the `bstrings-win-x64-offline-cpu` artifact, which
-   contains the ZIP and adjacent `.sha256`. A future matching tag publishes the
-   same checked files on [bstrings releases](https://github.com/Donovoi/bstrings/releases).
-2. Apply the organization's approved download, malware-scanning, media, and
-   chain-of-custody procedure.
-3. Copy both files to the approved transfer media. Do not modify the archive.
+## Choose a translation profile
 
-Inside the disconnected environment, extract the complete archive into a new
-directory. Do not move `bstrings.exe` away from its adjacent `runtime`, `tools`,
-`models`, `licenses`, configuration, and manifest files.
+Every profile gets the same scanner, OCR, FLOSS, Magika, and reporting tools.
+Only the local translation model changes.
 
-From that directory, use only the bundled executable:
+| Profile | Exact model | Bytes | Selection guidance |
+| --- | --- | ---: | --- |
+| `quality` | Hy-MT2-7B Q8_0 | 7,981,928,896 | Default; best measured translation quality |
+| `balanced` | Hy-MT2-1.8B Q8_0 | 1,908,528,192 | Smaller transfer and memory footprint |
+| `compact` | Hy-MT2-1.8B Q4_K_M | 1,133,080,448 | Smallest and fastest of the three |
+
+The quality model is the default because it scored 62.6786 WMT24++ chrF++ and
+92.8310 forensic chrF++ in the final strict gate, retained 22/22 protected
+identifiers, and produced 10/10 expected pattern matches with no false positive
+or false negative. The smaller models remain useful operational choices. See
+the [translation benchmark](translation-benchmark-2026-08-04.md) for the exact
+corpus, pins, results, and limits.
+
+## Acquire and assemble on a connected machine
+
+The v1.9.0 complete-kit assets are not in the current public
+[GitHub releases](https://github.com/Donovoi/bstrings/releases) yet. Until they
+are published, maintainers can build them from current source using
+[offline release maintenance](offline-release-maintenance.md). An examiner
+should not combine an older core ZIP with current manifests.
+
+A complete-kit release contains:
+
+- `bstrings-win-x64.zip`, a small self-contained core that provides the
+  acquisition command;
+- one shared `bstrings-win-x64-offline-base.zip`, kept below GitHub's 2 GB
+  per-file limit;
+- profile-specific configuration, license, manifest, and trust-manifest files;
+  and
+- `SHA256SUMS.txt`.
+
+The large model is not mirrored into a GitHub asset. Its exact immutable
+official URL, byte count, and SHA-256 are in the profile trust manifest.
+
+On the connected staging machine:
+
+1. Download and extract `bstrings-win-x64.zip`.
+2. Download exactly one `bundle-packs-<profile>.json` from the same tagged
+   release.
+3. Preserve that trust manifest through your approved publisher-verification
+   procedure.
+4. Run `bundle acquire` from the extracted core:
+
+```powershell
+.\bstrings.exe bundle acquire `
+  --manifest C:\Downloads\bundle-packs-quality.json `
+  --output C:\Tools\bstrings-quality
+
+C:\Tools\bstrings-quality\bstrings.exe bundle verify
+```
+
+`bundle acquire` supports resumed HTTPS downloads. It streams each pack into a
+bounded temporary file, rejects overlong data, verifies exact length and
+SHA-256, caches only verified bytes, safely extracts the shared ZIP, adds the
+profile files, and checks the finished strict manifest. The output directory
+must be new; an interrupted run leaves verified cached packs available for a
+retry.
+
+The default cache is beside the trust manifest under
+`bundle-pack-cache/<profile>`. To place it elsewhere:
+
+```powershell
+.\bstrings.exe bundle acquire `
+  --manifest C:\Downloads\bundle-packs-balanced.json `
+  --cache D:\bstrings-pack-cache\balanced `
+  --output D:\Tools\bstrings-balanced
+```
+
+For an organization that acquires packs through another approved downloader,
+place the exact verified bytes under the cache names `base.zip`,
+`configuration.file`, `translation-license.file`, `airgap-manifest.file`, and
+`translation-model.file`, then assemble without networking:
+
+```powershell
+.\bstrings.exe bundle assemble `
+  --manifest D:\transfer\bundle-packs-compact.json `
+  --cache D:\transfer\verified-cache `
+  --output D:\Tools\bstrings-compact
+```
+
+`assemble` still verifies every cached pack before use. It is not a bypass for
+the trust manifest or hashes.
+
+## Transfer and verify offline
+
+Apply the organization's malware scanning, approved-media, and chain-of-custody
+procedure to the complete output directory. Copy the whole directory; do not
+move `bstrings.exe` away from its adjacent `runtime`, `tools`, `models`,
+`licenses`, configuration, and manifest files.
+
+On the disconnected workstation:
 
 ```powershell
 .\bstrings.exe bundle verify
-.\bstrings.exe analyze -d D:\evidence\carved-files --full -o D:\results\evidence
+.\bstrings.exe analyze -d D:\evidence\carved-files --full -o D:\results\case-01
 ```
 
 `bundle verify` rejects a missing, extra, linked, resized, or SHA-256-mismatched
-file before analysis. `analyze --full` then coordinates extraction, executable
-string recovery, language assessment, local CPU translation, pattern matching,
-and final reporting. A requested stage fails rather than being silently
-omitted.
+file. `analyze --full` runs native extraction, executable recovery, OCR,
+language assessment, local translation, and every built-in pattern. A requested
+stage fails instead of being silently skipped.
 
-`--full` means every bstrings stage; it does not mean full forensic parsing of
-a disk or memory image. bstrings does not mount filesystems or carve embedded
-PEs. Mount or carve a raw image with an appropriate forensic tool before using
-the directory workflow above. A raw image can instead be passed to the direct
-extract/search interface for byte strings and patterns, but FLOSS receives a
-PE only when that complete PE is supplied as a file.
-
-The external `.sha256` is useful for detecting transfer corruption when it is
-compared through an independently trusted procedure. Neither that checksum nor
-the manifest inside the same archive authenticates the publisher by itself: an
-attacker able to replace both data and checksums can make them agree. Release
-signing and independently anchored provenance are described under
-[hardening boundaries](#release-hardening-boundaries).
+`--full` does not parse filesystems or carve embedded files from a raw disk or
+memory image. Mount or carve an image with an appropriate forensic tool when
+that coverage is required. The direct scanner can still search the raw bytes,
+but FLOSS sees an executable only when the complete executable is supplied as a
+file, and OCR sees only supported image/PDF files in the input inventory.
 
 ## What is bundled
 
-The release profile is `windows-x64-cpu-q4` and includes:
+The `windows-x64-offline-v2` base carries:
 
 - the self-contained Windows x64 .NET application and native Rust scanner;
-- the isolated official CPython embeddable runtime;
-- the standalone Windows Magika tool with its application-local DirectML
-  runtime, and the standalone FLOSS tool;
-- a Windows x64 CPU llama.cpp runtime built from the lock-pinned source commit
-  with OpenMP and network-fetched build inputs disabled;
-- pinned Hy-MT2-1.8B Q4_K_M GGUF weights;
-- the four required x64 Visual C++ runtime DLL names, deployed application-local
-  beside the root scanner and each bundled native CLI from a licensed Visual
-  Studio redistributable directory;
-- the enrichment adapter, offline guards, smoke evidence, documentation,
-  dependency inventories, notices, required corresponding source, and
+- isolated official CPython embeddable runtimes;
+- [Magika](https://github.com/google/magika) and its app-local DirectML
+  dependency;
+- standalone [FLOSS](https://github.com/mandiant/flare-floss);
+- a CPU [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime built from
+  lock-pinned source with network-fetched build inputs disabled;
+- CPU and DirectML OCR runtimes using
+  [RapidOCR](https://github.com/RapidAI/RapidOCR),
+  [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR),
+  [ONNX Runtime](https://github.com/microsoft/onnxruntime),
+  [PDFium](https://pdfium.googlesource.com/pdfium/), Pillow, and OpenCV;
+- the enrichment/OCR workers, offline guards, documentation, smoke fixtures,
+  dependency inventories, notices, corresponding source where required, and
   licenses; and
-- a strict manifest governing the exact allowed regular-file set.
+- application-local Visual C++ runtime DLLs and a strict file manifest.
 
-Downloaded offline components, their source URLs, byte lengths, SHA-256 values,
-executable paths, model revision, and license inputs are frozen in
-`tools/airgap/offline-components.lock.json`. Published bstrings/.NET/Rust bytes
-and the licensed release-selected Visual C++ runtime bytes are instead captured
-by `airgap-config.json` and the finished strict manifest. The release builder
-and archive verification reject any mismatch from those recorded bytes.
+The selected Hy-MT2 model and its canonical license are added during profile
+assembly. Exact URLs, lengths, hashes, revisions, runtime inventories, and
+license inputs are frozen in `offline-components.lock.json` and
+`ocr-components.lock.json` inside the bundle.
 
-The bundle does not install services, drivers, Python packages, or global
-runtimes. llama.cpp is started only as a private loopback child process with
-its `--offline` guard. Offline model variables are forced and the adapter
-rejects non-loopback sockets. `runtime/llama/llama-build-provenance.json`
-records its pinned source, compiler, build flags, runtime hashes, and PE import
-closure; the corresponding byte-exact notices are under `licenses/llama.cpp`.
-Magika's 70-package runtime closure, app-local DirectML dependency, notices,
-and required source are governed by
-`licenses/magika-cli-1.1.0-redistribution.json`. FLOSS's embedded Python,
-PyInstaller, native-runtime, Python-package, and Rust dependency closures are
-governed by `licenses/floss-v3.1.1-win-x64.json`. The complete-bundle verifier
-invokes both component verifiers, so a missing dependency, notice, source file,
-or unexpected component-owned file fails before analysis.
+Nothing installs a service, driver, global runtime, or Python package.
+llama.cpp is a private loopback child process with its offline guard. Offline
+model variables are forced, the adapters reject non-loopback network use, and
+the OCR worker performs no network request. Application-local payloads are not
+system prerequisites.
 
-These files are private application-local payloads, not prerequisites. The
-examiner does not install DirectML, ONNX Runtime, Python packages, FLOSS, or
-Magika separately. Detailed redistribution records are in
-[Magika CLI redistribution](magika-cli-redistribution.md) and
-[FLOSS standalone redistribution](floss-standalone-redistribution.md).
+## OCR hardware choices
 
-## Why the release carries Q4
+The v1.9.0 OCR profile in current source defines two runtime environments. Its
+complete-kit release assets are still pending:
 
-GitHub requires every individual release asset to be smaller than 2 GiB.
-[GitHub documents that release limit](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases#about-releases).
-The Q8 model alone is 1,908,528,192 bytes; after adding the application,
-portable runtimes, FLOSS, Magika, llama.cpp, notices, and ZIP overhead, a
-complete Q8 archive cannot fit below the release ceiling. Q4_K_M is
-1,133,080,448 bytes and leaves enough room for the complete CPU toolchain.
+- a CPU-only ONNX Runtime environment, verified separately as a fallback; and
+- the active DirectML ONNX Runtime environment, which exposes both DirectML and
+  CPU execution providers. Normal CPU and hybrid requests use provider-specific
+  sessions in this active environment.
 
-The bounded translation gate measured Q4 at 1.8554 strings/s and Q8 at 1.2885
-strings/s on the reviewed CUDA laptop. Both preserved 22/22 forensic
-identifiers; Q4 scored 58.4248 versus 59.7396 WMT chrF++, and 86.3056 versus
-87.5297 forensic chrF++. Those results support Q4 as the downloadable default,
-not as a universal quality ranking. See the
-[translation benchmark](translation-benchmark-2026-08-04.md) for the corpus,
-hardware, pins, and limitations.
+CPU, DirectML, and DirectML+CPU hybrid paths passed per-path source-profile
+smoke tests. Those checks show that each path can run; they do not establish
+cross-provider equality or corpus-level OCR quality. CUDA OCR is not bundled or
+claimed by this profile, even though the general CLI accepts
+`--ocr-provider cuda` for future/custom profiles.
 
-A maintainer may still produce a local Q8 bundle for approved media where the
-GitHub per-asset limit does not apply. That is a separate custom build and must
-be fully rehashed and re-tested; replacing the model inside a published bundle
-invalidates its manifest.
+Three evidence types answer different questions:
 
-## Administrator acceptance
+- synthetic smoke demonstrates on fixed fixtures that the packaged paths run
+  and recover expected text;
+- the immutable v3 616-document CPU SROIE calibration provides bounded
+  printed-receipt quality evidence for its frozen candidate; and
+- release-specific DirectML acceptance demonstrates the packaged GPU path on
+  the named hardware/driver.
 
-Run `.\bstrings.exe bundle verify` after every transfer and before evidence work.
-For stronger administrator acceptance, run the bundled verifier's complete
-smoke on each target workstation image after the root executable passes:
+The immutable CPU-only
+[v3 calibration](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
+selected 616 of 626 training documents and passed its frozen calibration gate.
+The exact metrics and artifact hashes are in the
+[OCR benchmark record](ocr-benchmark-2026-08-05.md).
+
+The separate 361-document one-shot test still failed closed on one degenerate
+source annotation before OCR or quality scoring. It was consumed and was not
+rerun; the immutable
+[terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
+therefore does not establish independent acceptance. A later immutable
+[post-hoc diagnostic](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2)
+audited all 361 rows, excluded eight exact train/test image overlaps, and scored
+353 rows, including repaired dataset row index 142 (zero-based). Every backend
+met all 11 frozen numeric thresholds, and the aggregate and per-document scored
+metrics matched. Evidence-record integrity did not, so the diagnostic failed
+overall. It is not an acceptance or parity result. See the
+[OCR benchmark record](ocr-benchmark-2026-08-05.md).
+
+Hybrid does not guarantee higher throughput, and another GPU-heavy process can
+exhaust graphics memory or cause a DirectML device-loss error. Use
+`--ocr-provider cpu` to avoid GPU execution, or schedule GPU work so OCR and
+other large models do not compete. The integrated pipeline completes OCR
+before translation.
+
+More detail is in [OCR and document analysis](ocr-and-document-analysis.md).
+
+## Acceptance checks
+
+Run `bundle verify` after every transfer and before evidence work. An
+administrator can additionally run the bundled real-inference smoke tests:
 
 ```powershell
 .\bstrings.exe bundle verify
-.\Verify-AirgapBundle.ps1 -TranslationSmoke
+.\Verify-AirgapBundle.ps1 -TranslationSmoke -OcrSmoke
 ```
 
-The verifier runs two real `bstrings.exe analyze` examinations using only
-manifest-covered synthetic inputs. The translation path loads the exact CPU
-GGUF, requires complete output and air-gap provenance, and retains and matches
-`analyst@example.com`. The recovery path sends a reviewed benign PE through
-Magika and FLOSS, then requires the exact attributable decoded marker. It
-removes its temporary results after either success or failure.
+The OCR smoke creates synthetic image and image-only PDF fixtures, exercises
+the configured active and alternate runtimes, requires exact recovery of fixed
+email, URL, IP/CVE, and Windows-path lines, and verifies that the output remains
+air-gapped. The translation smoke loads the exact selected GGUF and requires
+complete output plus protected-identifier retention. Recovery smoke sends a
+reviewed benign executable through Magika and FLOSS and requires its fixed
+marker.
 
-This PowerShell verifier is an administrator acceptance tool, not the normal
-examiner interface. Evidence work still calls only `bstrings.exe`.
+These are per-path packaging smokes, not cross-provider parity or SROIE quality
+evidence.
 
-Release CI performs both complete smokes after extracting the finished ZIP,
-with offline environment flags and dead external proxies. That is valuable
-regression coverage, but it is not equivalent to an independently prepared
-clean VM with its virtual NIC disabled. Perform the disconnected-machine test
-under the organization's acceptance procedure before approving a workstation
-image.
+This PowerShell verifier is an administrator/release acceptance tool. The
+normal examiner interface remains `bstrings.exe`.
 
-## Operational boundaries
+CI runs these checks with offline flags and dead external proxies after
+extracting the complete bundle. Generic hosted CI exercises CPU OCR only;
+DirectML and hybrid release acceptance is a separate manual job on an explicitly
+labeled self-hosted Windows runner, with an evidence artifact tied to the source
+build run. Those are strong regression checks, but they are not the same as an
+independently prepared clean VM with its virtual NIC disabled. Organizations
+should accept their actual workstation image under their own controls.
 
-- No GPU is needed by the published CPU bundle. GPU acceleration requires a
-  separately prepared runtime profile plus a compatible host driver. A display
-  or compute driver is hardware and operating-system software and is not
-  bundled by bstrings.
-- The CPU profile avoids CUDA redistributables and their additional driver and
-  licensing constraints.
-- The app-local DirectML runtime removes a separate DirectML package install;
-  Windows D3D12/DXGI remain operating-system components.
+## Integrity, authenticity, and operational boundaries
+
+- The internal manifest and adjacent `SHA256SUMS.txt` prove byte consistency,
+  not publisher identity. Independently authenticate the selected
+  `bundle-packs-*.json`; it anchors the hashes used by acquisition.
+- A driver is host and operating-system software. It cannot be made a truthful
+  application-local dependency. CPU remains the no-GPU path.
+- The standard complete profile's llama.cpp translation runtime is CPU-only.
+  Translation CUDA/hybrid requires a separately reviewed runtime profile and
+  compatible host driver; selecting the option does not manufacture that
+  dependency.
 - Endpoint security, WDAC, AppLocker, or organizational policy may block a
-  bundled upstream executable even when its hash matches. Approve the recorded
-  file hashes through the local control process.
-- Model and language detection remain probabilistic. Consequential translated
-  matches must be checked against the original parent string and surrounding
-  evidence.
-- Editing any executable, model, configuration, documentation, notice, or
-  license invalidates the strict manifest. Rebuild the bundle instead of
-  patching it in place.
+  bundled upstream executable even when its hash matches. Approve exact hashes
+  through the local process.
+- Model output, language detection, and OCR are probabilistic. Verify
+  consequential leads against the source evidence and untranslated parents.
+- Editing an executable, model, configuration, document, notice, or license
+  invalidates the strict manifest. Rebuild rather than patching a bundle.
 
-## Maintainers and custom bundles
+Do not describe the release as signed unless it actually has Authenticode/RFC
+3161 signatures and an independently verified signed manifest. Microsoft
+documents [Authenticode timestamping](https://learn.microsoft.com/en-us/windows/win32/seccrypto/time-stamping-authenticode-signatures),
+and GitHub documents [immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
 
-Connected acquisition, the pinned component lock, release automation, custom
-Q8 staging, archive-size enforcement, and the current signing/clean-VM
-boundaries are documented in
-[offline release maintenance](offline-release-maintenance.md). The normal
-examiner does not need those tools or instructions.
-
-Primary upstream references: the official Python
-[embeddable-package documentation](https://docs.python.org/3/using/windows.html#the-embeddable-package),
-[Magika CLI](https://github.com/google/magika#command-line-tool), standalone
-[FLOSS releases](https://github.com/mandiant/flare-floss/releases),
-[llama.cpp source repository](https://github.com/ggml-org/llama.cpp), and the
-[Hy-MT2 GGUF repository](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF).
-
-## Release hardening boundaries
-
-The current checksum and manifest provide exact-byte integrity checks. Do not
-describe them as code signing or publisher authentication unless the release
-actually adds and verifies those controls.
-
-Before making that stronger claim, Authenticode-sign and RFC 3161 timestamp the
-published executables, verify a detached signed manifest against an
-independently trusted signer, and publish through an immutable release process.
-Microsoft documents
-[Authenticode timestamping](https://learn.microsoft.com/en-us/windows/win32/seccrypto/time-stamping-authenticode-signatures),
-and GitHub documents
-[immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
-
-Likewise, CI archive extraction and full-path smoke testing do not establish
-that every supported clean Windows image is dependency-free. A pristine,
-standard-user Windows x64 VM with no separately installed .NET, Python, VC
-runtime, package manager, or development tool remains the acceptance boundary
-until that matrix has been run and recorded.
+Maintainers should continue with [offline release maintenance](offline-release-maintenance.md).

@@ -34,7 +34,21 @@ internal static class AnalysisCli
         var fullOption = new Option<bool>("--full")
         {
             Description =
-                "Run native extraction, executable recovery, language triage, offline translation, and all pattern matching",
+                "Run native extraction, executable recovery, OCR, language triage, offline translation, and all pattern matching",
+        };
+        var ocrOption = new Option<string?>("--ocr")
+        {
+            Description = "Optical character recognition for supported files: off, auto, or force",
+        };
+        var ocrProviderOption = new Option<string?>("--ocr-provider")
+        {
+            Description = "OCR execution hardware: auto, cpu, cuda, directml, or hybrid",
+        };
+        var ocrThreadsOption = new Option<int>("--ocr-threads")
+        {
+            Description =
+                $"ONNX session threads; 0 selects a bounded provider-aware value, up to {OcrCompletionCore.MaximumSessionThreads}",
+            DefaultValueFactory = _ => 0,
         };
         var recoveryOption = new Option<string?>("--recover-executable-strings")
         {
@@ -146,6 +160,9 @@ internal static class AnalysisCli
             outputOption,
             maskOption,
             fullOption,
+            ocrOption,
+            ocrProviderOption,
+            ocrThreadsOption,
             recoveryOption,
             translationOption,
             detectionOption,
@@ -178,6 +195,11 @@ internal static class AnalysisCli
                 try
                 {
                     var full = result.GetValue(fullOption);
+                    var ocrMode = ResolveOcrMode(result.GetValue(ocrOption), full);
+                    var ocrProvider = ResolveOcrProvider(
+                        result.GetValue(ocrProviderOption),
+                        full
+                    );
                     var recoveryText = result.GetValue(recoveryOption) ?? (full ? "auto" : "off");
                     var translationText =
                         result.GetValue(translationOption) ?? (full ? "auto" : "off");
@@ -213,6 +235,8 @@ internal static class AnalysisCli
                     var minimumStringLength = result.GetValue(minimumLengthOption);
                     var maximumStringLength = result.GetValue(maximumLengthOption);
                     ValidateStringLengthBounds(minimumStringLength, maximumStringLength);
+                    var ocrThreads = result.GetValue(ocrThreadsOption);
+                    OcrCompletionCore.ValidateRequestedThreads(ocrThreads);
 
                     var options = new AnalysisOptions(
                         result.GetValue(fileOption),
@@ -220,6 +244,9 @@ internal static class AnalysisCli
                         result.GetValue(maskOption),
                         result.GetValue(outputOption)!,
                         full,
+                        ocrMode,
+                        ocrProvider,
+                        ocrThreads,
                         recoveryMode,
                         translationMode,
                         detectionMode,
@@ -309,6 +336,92 @@ internal static class AnalysisCli
                 nameof(maximumLength),
                 $"Maximum string length cannot exceed {EnrichmentRegexPipelineCore.MaxNativeTextCharacters:N0} in the JSONL analysis workflow."
             );
+        }
+    }
+
+    internal static OcrWorkflowMode ResolveOcrMode(string? value, bool full)
+    {
+        var effective = value ?? (full ? "auto" : "off");
+        if (TryParseOcrMode(effective, out var mode, out var error))
+        {
+            return mode;
+        }
+        throw new ArgumentException(error);
+    }
+
+    internal static OcrProvider ResolveOcrProvider(string? value, bool full)
+    {
+        if (value is null && full)
+        {
+            return OcrProvider.Auto;
+        }
+        var effective = value ?? "auto";
+        if (TryParseOcrProvider(effective, out var provider, out var error))
+        {
+            return provider;
+        }
+        throw new ArgumentException(error);
+    }
+
+    private static bool TryParseOcrProvider(
+        string value,
+        out OcrProvider provider,
+        out string? error
+    )
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "auto":
+                provider = OcrProvider.Auto;
+                error = null;
+                return true;
+            case "cpu":
+                provider = OcrProvider.Cpu;
+                error = null;
+                return true;
+            case "cuda":
+                provider = OcrProvider.Cuda;
+                error = null;
+                return true;
+            case "directml":
+                provider = OcrProvider.DirectMl;
+                error = null;
+                return true;
+            case "hybrid":
+                provider = OcrProvider.Hybrid;
+                error = null;
+                return true;
+            default:
+                provider = OcrProvider.Auto;
+                error = "OCR provider must be auto, cpu, cuda, directml, or hybrid.";
+                return false;
+        }
+    }
+
+    private static bool TryParseOcrMode(
+        string value,
+        out OcrWorkflowMode mode,
+        out string? error
+    )
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "off":
+                mode = OcrWorkflowMode.Off;
+                error = null;
+                return true;
+            case "auto":
+                mode = OcrWorkflowMode.Auto;
+                error = null;
+                return true;
+            case "force":
+                mode = OcrWorkflowMode.Force;
+                error = null;
+                return true;
+            default:
+                mode = OcrWorkflowMode.Off;
+                error = "OCR must be off, auto, or force.";
+                return false;
         }
     }
 
