@@ -149,6 +149,28 @@ class SroieAcceptanceTests(unittest.TestCase):
             acceptance.CONFIRMATORY_ATTEMPT_LEDGER.name,
         )
 
+    def test_isolated_github_environment_requires_only_an_explicit_token(self) -> None:
+        outer_token = acceptance.os.environ.get("GH_TOKEN")
+        with (
+            patch.object(acceptance, "_ENTRY_GH_TOKEN", None),
+            self.assertRaisesRegex(acceptance.AcceptanceError, "GH_TOKEN"),
+        ):
+            acceptance._fresh_gh_environment(self.root / "missing-token")
+        with (
+            patch.object(acceptance, "_ENTRY_GH_TOKEN", "bad token"),
+            self.assertRaisesRegex(acceptance.AcceptanceError, "GH_TOKEN"),
+        ):
+            acceptance._fresh_gh_environment(self.root / "invalid-token")
+        with patch.object(acceptance, "_ENTRY_GH_TOKEN", "g" * 40):
+            environment = acceptance._fresh_gh_environment(self.root / "authenticated")
+        self.assertEqual("g" * 40, environment["GH_TOKEN"])
+        self.assertEqual("1", environment["GH_PROMPT_DISABLED"])
+        self.assertEqual(
+            str(self.root / "authenticated" / "gh-config"),
+            environment["GH_CONFIG_DIR"],
+        )
+        self.assertEqual(outer_token, acceptance.os.environ.get("GH_TOKEN"))
+
     def test_determinism_binds_the_case_insensitive_scoring_profile(self) -> None:
         documents = tuple(SimpleNamespace(row_index=index) for index in range(10))
         corpus = SimpleNamespace(documents=documents, selection_sha256="a" * 64)
@@ -388,7 +410,10 @@ class SroieAcceptanceTests(unittest.TestCase):
             )
             return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
 
-        with patch.object(acceptance, "_run_pinned_gh", side_effect=run_gh):
+        with (
+            patch.object(acceptance, "_ENTRY_GH_TOKEN", "g" * 40),
+            patch.object(acceptance, "_run_pinned_gh", side_effect=run_gh),
+        ):
             validated = acceptance._load_witness(
                 self.root / "gh.exe",
                 value["githubImmutableRelease"]["tag"],
@@ -417,6 +442,7 @@ class SroieAcceptanceTests(unittest.TestCase):
             return run_gh(executable, arguments, cwd=cwd, **kwargs)
 
         with (
+            patch.object(acceptance, "_ENTRY_GH_TOKEN", "g" * 40),
             patch.object(acceptance, "_run_pinned_gh", side_effect=run_tampered),
             self.assertRaisesRegex(acceptance.AcceptanceError, "witness"),
         ):

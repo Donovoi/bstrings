@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+_ENTRY_GH_TOKEN = os.environ.get("GH_TOKEN")
 _INVOCATION_CWD = Path.cwd().absolute()
 _SOURCE_FILE = (
     Path(__file__) if Path(__file__).is_absolute() else _INVOCATION_CWD / Path(__file__)
@@ -1839,10 +1840,22 @@ def _safe_release_asset_name(value: str) -> bool:
 
 
 def _fresh_gh_environment(root: Path) -> dict[str, str]:
+    token = _ENTRY_GH_TOKEN
+    if (
+        not isinstance(token, str)
+        or not 1 <= len(token) <= 4096
+        or "\x00" in token
+        or any(character.isspace() for character in token)
+    ):
+        raise AcceptanceError(
+            "A valid GH_TOKEN is required for isolated release verification",
+            stage="witness",
+        )
     environment = {
         "GH_CONFIG_DIR": str(root / "gh-config"),
         "GH_NO_UPDATE_NOTIFIER": "1",
         "GH_PROMPT_DISABLED": "1",
+        "GH_TOKEN": token,
         "HOME": str(root / "home"),
         "NO_COLOR": "1",
         "TEMP": str(root / "temp"),
