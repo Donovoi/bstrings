@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import bstrings_ocr as ocr_worker  # noqa: E402
 from benchmark_ocr import (  # noqa: E402
     OFFLINE_ENVIRONMENT,
     Backend,
@@ -30,6 +31,7 @@ from benchmark_ocr_cord import (  # noqa: E402
     CORD_V2_TEST_SHA256,
     CORD_V2_VALIDATION_BYTES,
     CORD_V2_VALIDATION_SHA256,
+    OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION,
     AnnotationBoundaryClip,
     CordDocument,
     CordLine,
@@ -372,6 +374,24 @@ class CordBenchmarkTests(unittest.TestCase):
         multi_entry_repeating["repeating_symbol"] = [[symbol, second_symbol]]
         parsed = parse_cord_annotation(0, multi_entry_repeating)
         self.assertEqual(2, len(parsed.repeating_symbol_polygons))
+
+        empty_text_repeating = annotation_fixture()
+        empty_text_repeating["repeating_symbol"] = [[{"quad": quad(0, 70, 20, 80), "text": ""}]]
+        parsed = parse_cord_annotation(0, empty_text_repeating)
+        self.assertEqual(1, len(parsed.repeating_symbol_polygons))
+
+        for invalid_text in (None, 0, "\x00"):
+            invalid_repeating_text = annotation_fixture()
+            invalid_repeating_text["repeating_symbol"] = [
+                [{"quad": quad(0, 70, 20, 80), "text": invalid_text}]
+            ]
+            with self.assertRaisesRegex(BenchmarkError, "invalid text"):
+                parse_cord_annotation(0, invalid_repeating_text)
+
+        missing_repeating_text = annotation_fixture()
+        missing_repeating_text["repeating_symbol"] = [[{"quad": quad(0, 70, 20, 80)}]]
+        with self.assertRaisesRegex(BenchmarkError, "exact v2 schema"):
+            parse_cord_annotation(0, missing_repeating_text)
 
         four_entry_dontcare = annotation_fixture()
         four_entry_dontcare["dontcare"] = [
@@ -1199,7 +1219,7 @@ class CordBenchmarkTests(unittest.TestCase):
         first = assemble_report(**kwargs)
         second = assemble_report(**kwargs)
         self.assertEqual(canonical_json(first), canonical_json(second))
-        self.assertEqual(4, first["schemaVersion"])
+        self.assertEqual(5, first["schemaVersion"])
         self.assertEqual("2.1.2", first["benchmarkDependencies"]["shapely"])
         self.assertTrue(first["benchmarkDependencies"]["geos"])
         self.assertEqual(1, first["corpus"]["annotationBoundaryClipRecords"])
@@ -1388,6 +1408,11 @@ class CordBenchmarkTests(unittest.TestCase):
         self.assertEqual(0, row["clippedDontcareRegions"])
         self.assertEqual(0, row["clippedRepeatingSymbolRegions"])
         self.assertEqual([], row["annotationBoundaryClips"])
+        worker_row = json.loads(first.worker_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION, worker_row["schemaVersion"])
+        self.assertEqual(ocr_worker.SCHEMA_VERSION, worker_row["schemaVersion"])
+        parsed_worker_row = ocr_worker._parse_input_manifest_entry(canonical_json(worker_row))
+        self.assertEqual(str(self.document.path), parsed_worker_row.path)
 
     def test_backend_uses_full_quality_once_and_subset_for_determinism(self) -> None:
         placeholder = self.root / "placeholder"

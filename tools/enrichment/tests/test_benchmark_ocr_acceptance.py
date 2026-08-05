@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import benchmark_ocr as benchmark_core  # noqa: E402
 import benchmark_ocr_acceptance as acceptance  # noqa: E402
 import benchmark_ocr_cord as cord  # noqa: E402
+import bstrings_ocr as ocr_worker  # noqa: E402
 import ocr_acceptance_policy as policy  # noqa: E402
 
 
@@ -143,7 +144,7 @@ def make_corpus(root: Path, document: cord.CordDocument, *, role: str) -> cord.E
         ],
     }
     worker_row = {
-        "schemaVersion": cord.SCHEMA_VERSION,
+        "schemaVersion": cord.OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION,
         "path": str(document.path),
         "length": document.length,
         "sha256": document.sha256,
@@ -195,7 +196,7 @@ def make_inputs(
     worker.write_bytes(
         acceptance._canonical_bytes(
             {
-                "schemaVersion": cord.SCHEMA_VERSION,
+                "schemaVersion": cord.OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION,
                 "path": str(image.path),
                 "length": image.length,
                 "sha256": image.sha256,
@@ -557,6 +558,13 @@ class OcrAcceptanceWrapperTests(unittest.TestCase):
         self.assertEqual(
             "valid_line[0].words[0]", manifest["annotationBoundaryClips"][0]["locator"]
         )
+        worker_row = json.loads(corpus.worker_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(cord.OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION, worker_row["schemaVersion"])
+        self.assertEqual(ocr_worker.SCHEMA_VERSION, worker_row["schemaVersion"])
+        self.assertEqual(
+            str(corpus.documents[0].path),
+            ocr_worker._parse_input_manifest_entry(cord.canonical_json(worker_row)).path,
+        )
 
     def test_blind_input_extraction_never_reads_ground_truth_column(self) -> None:
         import pyarrow.parquet as pq
@@ -602,6 +610,12 @@ class OcrAcceptanceWrapperTests(unittest.TestCase):
         self.assertEqual([["image"]], columns_seen)
         parser.assert_not_called()
         self.assertNotIn("SECRET", inputs.input_manifest.read_text(encoding="utf-8"))
+        worker_row = json.loads(inputs.worker_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(cord.OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION, worker_row["schemaVersion"])
+        self.assertEqual(
+            str(inputs.images[0].path),
+            ocr_worker._parse_input_manifest_entry(cord.canonical_json(worker_row)).path,
+        )
 
     def test_all_five_micro_metrics_recompute_from_per_document_counts(self) -> None:
         metrics = make_metrics(make_document(self.root))
@@ -1402,6 +1416,12 @@ class OcrAcceptanceWrapperTests(unittest.TestCase):
         for forbidden in ("--attempt-manifest", "--threads", "--min-detection-hmean"):
             with self.assertRaises(SystemExit):
                 acceptance.parse_arguments([*base, forbidden, "x"])
+
+    def test_checked_in_retirement_marker_blocks_cord_confirmation(self) -> None:
+        self.assertTrue(acceptance.CONFIRMATORY_RETIREMENT_MARKER.is_file())
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "retired") as captured:
+            acceptance._reject_retired_confirmatory_role()
+        self.assertEqual("one-shot", captured.exception.stage)
 
     def test_failure_report_uses_exact_policy_loader_top_level_schema(self) -> None:
         args = argparse.Namespace(phase="calibration")

@@ -1,10 +1,35 @@
 # OCR benchmark and acceptance design (2026-08-05)
 
 This note records the acceptance design initially frozen before any OCR output
-or annotation from the CORD v2 train split was examined, plus the one parser
-repair derived from the 600-row calibration role. It separates development
-evidence from the still-sealed result that is allowed to confirm a release
-claim.
+or annotation from the CORD v2 train split was examined, plus the parser and
+runtime-contract repairs derived from the 600-row calibration role. It
+also records why the original CORD confirmation role was retired before it was
+run.
+
+## Holdout retirement notice
+
+The CORD train confirmation described below is now historical design, not an
+available release gate. During first-party schema research, a public dataset
+viewer/API search accessed CORD train annotation content across an indeterminate
+set of rows. The local one-shot ledger was never created and no confirmatory
+OCR output or metric was generated, but the claim that the 200-row role remained
+unseen is no longer defensible. The checked-in
+`cord-v2-train-confirmatory-retired-v1.json` marker makes the confirmation CLI
+fail before creating output or a ledger. CORD train is development data for
+this project from this point forward.
+
+The replacement release gate is the previously untouched SROIE receipt test
+split. Dataset repository `jsdnrs/ICDAR2019-SROIE` is frozen at commit
+`bffe40c26759f3376ec2b3ae9031dbba54cd587c`. Its 626-row train Parquet is
+development data; its 361-row test Parquet remains sealed while a separate
+protocol is implemented and committed. The complete repository was downloaded
+without reading either split's rows and verified against the Hub. The pinned
+Parquet identities are:
+
+| Split | Bytes | SHA-256 |
+| --- | ---: | --- |
+| train | 318,620,215 | `b18c16b4d8481e5e4537a1700e4616907fe4acd92d6362a7e430b0e866213887` |
+| test | 191,045,976 | `04f8f31b45944cc6e6459a7a95c851a721fc93ffec0a5c29ece9ded734a684c2` |
 
 ## What is and is not a holdout
 
@@ -15,7 +40,7 @@ hand-anchored scorer tests. CORD v2 `validation` is also development data: a
 is covered by parser tests. Neither split may be described as independent or
 confirmatory.
 
-The only project-level confirmatory data comes from CORD v2 `train` at
+The original project-level confirmatory design used CORD v2 `train` at
 immutable dataset revision `7f0115a4b758a71d6473b8d085751692da2fef98`. All
 four parquet shards are required in this exact order:
 
@@ -66,7 +91,8 @@ rows must have identical canonical annotation hashes or the corpus fails
 closed.
 
 Only the image column was read to freeze those identities. Ground-truth fields
-and OCR output for both roles remained unread at design time.
+and OCR output for both roles remained unread at design time; the later viewer
+incident described above retired that status before confirmation.
 
 ## Fixed model and execution contract
 
@@ -94,7 +120,11 @@ ledger.
 The frozen generic runner `tools/enrichment/benchmark_ocr.py` has SHA-256
 `b79cd6997201585798a72af26ca1d5d886c0d1b2909d5c31b01e806259d0e49a`.
 The frozen CORD scorer `tools/enrichment/benchmark_ocr_cord.py` has SHA-256
-`ada3432666e7ddafd1efec249684d247b65fcea86e533ce74e376c66d716820a`.
+`e9faec03c4477c4b4f039803f270f5a76aebd5e16bd0eeedee4d30a21e6903bf`.
+Its scoring-constants SHA-256 remains
+`cf5671a4d144b544d406e180b1b5d1c62b0f8d1701819ba53dff1357388cd0b5`:
+the calibration repairs changed annotation compatibility and the worker wire
+contract, not metric thresholds or geometry constants.
 The acceptance report also records and binds the wrapper and policy-module
 hashes from the exact committed source used for the run.
 
@@ -167,11 +197,13 @@ every exact image intersection was nonempty and convex; and all 600 embedded-
 image dimensions matched their metadata. Maximum overshoot was 18 pixels, or
 3.7656903766% of the corresponding axis. The smallest retained area was
 80.4084704938%.
-Confirmatory annotations were not converted or parsed, and the one-shot ledger
-was not created.
+The local calibration process did not convert or parse confirmatory annotations,
+and the one-shot ledger was not created. This does not undo the later public-
+viewer exposure recorded in the retirement notice.
 
-Protocol v4 therefore uses a rounded conjunctive envelope selected only from
-calibration evidence. A non-degenerate `valid_line`, `dontcare`, or
+The boundary policy introduced in scorer protocol v4 and retained unchanged in
+v5 therefore uses a rounded conjunctive envelope selected only from calibration
+evidence. A non-degenerate `valid_line`, `dontcare`, or
 `repeating_symbol` polygon derived from the four raw coordinates may be
 intersected with `[0,width] x [0,height]` only when, on each axis, overshoot is
 at most both 24 pixels and 5% of that image dimension, and the intersection
@@ -193,7 +225,7 @@ Raw source annotations remain unchanged and are still covered by their
 canonical SHA-256. Only derived scoring polygons are clipped. Each repair is
 written to the corpus manifest with its annotation locator, crossed sides,
 outside-vertex count, per-axis pixel and relative overshoot, original and
-clipped area, and retained-area ratio. Acceptance protocol v2 uses schema
+clipped area, and retained-area ratio. Acceptance protocol v3 uses schema
 version 2 for its blind input, scoring-corpus, failed-ledger, and quarantine
 records. The project-global attempt filename retains its original `v1` suffix
 deliberately:
@@ -204,6 +236,45 @@ annotation locator, failed predicate, sides, and measured geometry in the
 failure report, failed ledger, and quarantine marker. A degenerate, excessive,
 empty, or low-retention result fails validation; the scorer never drops the
 truth item or relaxes the rule after confirmation.
+
+### Repeating-symbol text and worker-manifest compatibility
+
+The second real calibration attempt ran from a clean, pushed commit after its
+exact GitHub Actions run passed. It stopped before OCR quality scoring at
+calibration global row 383 because three `repeating_symbol` entries contain an
+empty `text` string. The failed report and partial evidence remain preserved.
+A calibration-only scan then examined all 619 repeating-symbol entries in the
+600 permitted rows: all entries used the exact `{quad,text}` shape, all text
+values were strings without NUL characters, and only those three entries in
+one document were empty. Confirmatory values were not converted or parsed, and
+the one-shot ledger was not created.
+
+The official CORD schema describes repeating symbols as cut-line annotations
+with `quad` and `text`, but does not state that `text` must be nonempty. Scorer
+protocol v5 therefore permits the empty string for this field while still
+requiring the exact schema, a string value without NUL, a nonempty group, and a
+valid bounded polygon. The original empty value remains covered by the
+canonical annotation hash. The descriptive text is not used for scoring; the
+validated polygon is retained as an ignored cut-line region. This is a
+calibration-derived compatibility repair, not a claim that the published CORD
+schema formally guarantees empty values.
+
+After the CORD holdout was retired, an exhaustive scan of the pinned local
+train bytes parsed all 800 documents successfully. All 845 repeating-symbol
+entries used the exact `{quad,text}` shape; exactly the same three values were
+empty, and none omitted `text`, used a non-string, or contained NUL. Apparent
+quad-only objects returned by the public search API could not be reproduced in
+the hash-pinned Parquet and were not used to broaden the parser. Missing keys
+therefore still fail closed.
+
+The same pre-OCR review found that scorer protocol versions had accidentally
+been written into worker input manifests even though the integrated
+`bstrings_ocr.py` executable has a separate schema-version-1 wire contract.
+Those rows would have failed deterministically at worker startup. The two
+contracts are now independent: scorer reports and scoring-corpus rows use
+schema version 5, while every generated OCR worker input row uses the worker's
+schema version 1. Cross-module tests feed generated rows through the real worker
+parser so a future scorer revision cannot silently reintroduce this mismatch.
 
 ## Absolute quality floors
 
@@ -265,9 +336,11 @@ calibration metrics, absolute floors, margins, and resulting thresholds. The
 confirmatory report must bind the policy SHA-256 and reject a partial,
 overridden, mismatched, or tampered policy.
 
-## One-shot rule
+## Historical CORD one-shot rule
 
-Confirmatory output may be generated once after the policy is frozen. If it
+This section records the retired design and must not be used to authorize a
+CORD confirmation. Under that design, confirmatory output could be generated
+once after the policy was frozen. If it
 fails, that is the result. A scorer, model, preprocessing, threshold, or worker
 change prompted by its metrics makes the 200 rows development data; the same
 rows cannot then be rerun and presented as independent confirmation. Execution
@@ -321,7 +394,7 @@ $Shard2 = "$Dataset\train-00002-of-00004-688fe1305a55e5cc.parquet"
 $Shard3 = "$Dataset\train-00003-of-00004-2d0cd200555ed7fd.parquet"
 ```
 
-Then run calibration:
+The calibration command remains useful only for CORD development diagnostics:
 
 ```powershell
 & $BenchmarkPython -I -B $Wrapper calibration `
@@ -333,38 +406,16 @@ Then run calibration:
   --policy-output "$Evidence\ocr-acceptance-policy.json"
 ```
 
-The report stores only stable paths relative to the calibration evidence root.
-For the command above that root is
+The report stores only stable artifact paths relative to the calibration
+evidence root. The raw evidence tree still contains absolute host paths in its
+worker manifests and inventories, so keep that tree private or in an encrypted
+archive; publish only path-free reports, policies, and checksum manifests. For
+the command above the required live evidence root is
 `D:\ABSOLUTE\ocr-acceptance\calibration-work\calibration`; keep it with the
-report and policy. Confirmation requires it explicitly:
-
-```powershell
-& $BenchmarkPython -I -B $Wrapper confirmatory `
-  --parquet $Shard0 --parquet $Shard1 --parquet $Shard2 --parquet $Shard3 `
-  --selection-manifest $Selection --worker $Worker --model-pack $ModelPack `
-  --cpu-python $CpuPython --directml-python $DirectMlPython `
-  --work-directory "$Evidence\confirmatory-work" `
-  --output "$Evidence\confirmatory-report.json" `
-  --calibration-report "$Evidence\calibration-report.json" `
-  --calibration-evidence-root "$Evidence\calibration-work\calibration" `
-  --policy "$Evidence\ocr-acceptance-policy.json"
-```
-
-Do not use the confirmatory command as a dry run. It atomically creates the
-project-global ledger
-`tools/enrichment/cord-v2-train-confirmatory-attempt-v1.json` before opening
-confirmatory labels. That canonical claim is deliberately not ignored and a
-failed or quarantined attempt does not become reusable merely by recalibrating,
-moving files, deleting work output, or changing a candidate. Preserve the
-ledger and any quarantine record as evidence.
-
-After a successful two-phase report/ledger commit, independently verify their
-binding with the same isolated benchmark interpreter:
-
-```powershell
-& $BenchmarkPython -I -B $Wrapper verify-completed `
-  --report "$Evidence\confirmatory-report.json"
-```
+report and policy. The former confirmation command is intentionally omitted:
+the checked-in retirement marker causes the CLI to fail before the ledger or
+any confirmatory output can be created. Use the separate SROIE acceptance
+protocol once it is frozen instead.
 
 ## Development observations
 

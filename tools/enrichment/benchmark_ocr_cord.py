@@ -48,8 +48,11 @@ from benchmark_ocr import (
     validate_release_matrix,
 )
 
-SCHEMA_VERSION = 4
-PROTOCOL = "bstrings-derived-CORD-v2-rowid-constrained-segmentation-tolerant-OCR-v4"
+SCHEMA_VERSION = 5
+PROTOCOL = "bstrings-derived-CORD-v2-rowid-constrained-segmentation-tolerant-OCR-v5"
+# The integrated OCR executable owns this separate wire contract. Scorer/report
+# revisions must not leak into the worker's schema-version-1 input manifest.
+OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION = 1
 CORD_V2_COMMIT = "7f0115a4b758a71d6473b8d085751692da2fef98"
 CORD_V2_ROWS = 100
 CORD_V2_TEST_BYTES = 234_202_795
@@ -455,7 +458,9 @@ def _repeating_symbol_polygon_group(value: Any) -> tuple[Polygon, ...]:
                 stage="annotation-parse",
             )
         text = item["text"]
-        if not isinstance(text, str) or not text or "\x00" in text:
+        # CORD v2 contains valid cut-line regions whose label text is empty.
+        # Scoring uses the validated polygon, not this descriptive string.
+        if not isinstance(text, str) or "\x00" in text:
             raise BenchmarkError(
                 "A CORD repeating_symbol has invalid text", stage="annotation-parse"
             )
@@ -1128,7 +1133,7 @@ def extract_cord_corpus(
             )
             worker_rows.append(
                 {
-                    "schemaVersion": SCHEMA_VERSION,
+                    "schemaVersion": OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION,
                     "path": str(image_path),
                     "length": len(raw_image),
                     "sha256": image_sha256,
@@ -1209,7 +1214,7 @@ def create_corpus_view(
     ]
     worker_rows = [
         {
-            "schemaVersion": SCHEMA_VERSION,
+            "schemaVersion": OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION,
             "path": str(document.path),
             "length": document.length,
             "sha256": document.sha256,

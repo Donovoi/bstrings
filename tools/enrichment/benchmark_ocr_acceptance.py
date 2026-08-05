@@ -194,13 +194,16 @@ else:
 
 SCHEMA_VERSION = 2
 SCORING_CORPUS_MANIFEST_SCHEMA_VERSION = 2
-PROTOCOL = "bstrings-cord-v2-train-ocr-calibration-confirmatory-v2"
+PROTOCOL = "bstrings-cord-v2-train-ocr-calibration-confirmatory-v3"
 DETERMINISM_DOCUMENTS = 10
 DETERMINISM_REPETITIONS = 2
 CONFIRMATORY_ATTEMPT_LEDGER = (
     # This path names the dataset-level one-shot namespace and deliberately
     # remains stable across acceptance-protocol revisions.
     Path(__file__).resolve().with_name("cord-v2-train-confirmatory-attempt-v1.json")
+)
+CONFIRMATORY_RETIREMENT_MARKER = (
+    Path(__file__).resolve().with_name("cord-v2-train-confirmatory-retired-v1.json")
 )
 MAX_REPORT_BYTES = 64 * 1024 * 1024
 MAX_RUNTIME_INVENTORY_BYTES = 512 * 1024 * 1024
@@ -738,7 +741,7 @@ def extract_role_inputs(
     ]
     worker_rows = [
         {
-            "schemaVersion": cord.SCHEMA_VERSION,
+            "schemaVersion": cord.OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION,
             "path": str(image.path),
             "length": image.length,
             "sha256": image.sha256,
@@ -931,7 +934,7 @@ def extract_role_corpus(
     ]
     worker_rows = [
         {
-            "schemaVersion": cord.SCHEMA_VERSION,
+            "schemaVersion": cord.OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION,
             "path": str(document.path),
             "length": document.length,
             "sha256": document.sha256,
@@ -2376,6 +2379,14 @@ def _canonical_attempt_path() -> Path:
     return CONFIRMATORY_ATTEMPT_LEDGER.expanduser().resolve()
 
 
+def _reject_retired_confirmatory_role() -> None:
+    if CONFIRMATORY_RETIREMENT_MARKER.is_file():
+        raise AcceptanceError(
+            "The CORD v2 train confirmatory role is retired and cannot be run",
+            stage="one-shot",
+        )
+
+
 def _start_attempt(
     context: CalibrationContext,
     policy_sha256: str,
@@ -3308,6 +3319,8 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = parse_arguments(argv)
+        if args.phase == "confirmatory":
+            _reject_retired_confirmatory_role()
         if args.phase == "verify-completed":
             _require_outer_runtime_isolation()
             report = verify_completed_confirmation(args.report, _canonical_attempt_path())

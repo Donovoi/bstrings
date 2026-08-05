@@ -1,0 +1,1 @@
+{"dataset":"naver-clova-ix/cord-v2","reason":"Train annotation content was accessed during pre-confirmation schema research, so the frozen role is no longer an unseen holdout.","schemaVersion":1,"selectionEntriesSha256":"c1415ecc2cd56cff29b9896edcf753200de16c256f41f62edcead0a1236579b0","status":"retired"}
