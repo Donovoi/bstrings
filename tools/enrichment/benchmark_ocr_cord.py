@@ -48,8 +48,8 @@ from benchmark_ocr import (
     validate_release_matrix,
 )
 
-SCHEMA_VERSION = 3
-PROTOCOL = "bstrings-derived-CORD-v2-rowid-constrained-segmentation-tolerant-OCR-v3"
+SCHEMA_VERSION = 4
+PROTOCOL = "bstrings-derived-CORD-v2-rowid-constrained-segmentation-tolerant-OCR-v4"
 CORD_V2_COMMIT = "7f0115a4b758a71d6473b8d085751692da2fef98"
 CORD_V2_ROWS = 100
 CORD_V2_TEST_BYTES = 234_202_795
@@ -85,9 +85,14 @@ REFERENCE_ROW_MERGE_NORMALIZED_DISTANCE = 0.75
 SEGMENTATION_OVERLAP_THRESHOLD = 0.5
 CONFIDENCE_PARITY_MAX_ABS_DELTA = 1e-4
 SHAPELY_VERSION = "2.1.2"
-# A small number of pinned v2 text/ignore quads overshoot an image edge by 1-3
-# pixels. Admit no larger discrepancy and clip derived polygons before scoring.
-ANNOTATION_BOUNDARY_TOLERANCE_PIXELS = 3
+# CORD maintainers document that annotation coordinates can cross an image edge
+# and recommend projecting them back to the raster. These conjunctive,
+# calibration-derived guards admit only small edge truncations; the raw quad is
+# retained in the pinned source annotation while scoring uses its exact
+# intersection with the verified image rectangle.
+ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_PIXELS = 24.0
+ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_RATIO = 0.05
+ANNOTATION_BOUNDARY_MINIMUM_RETAINED_AREA_RATIO = 0.75
 
 Point: TypeAlias = tuple[float, float]
 Polygon: TypeAlias = tuple[Point, ...]
@@ -132,6 +137,7 @@ class ParsedCordAnnotation:
     clipped_valid_lines: int
     clipped_dontcare_regions: int
     clipped_repeating_symbol_regions: int
+    annotation_boundary_clips: tuple[AnnotationBoundaryClip, ...] = ()
 
     @property
     def ignored_polygons(self) -> tuple[Polygon, ...]:
@@ -156,6 +162,7 @@ class CordDocument:
     words: tuple[CordWord, ...] = ()
     rows: tuple[CordPhysicalRow, ...] = ()
     roi_polygon: Polygon = ()
+    annotation_boundary_clips: tuple[AnnotationBoundaryClip, ...] = ()
 
     @property
     def ignored_polygons(self) -> tuple[Polygon, ...]:
@@ -196,6 +203,56 @@ class PolygonMatch:
     truth_index: int
     prediction_index: int
     iou: float
+
+
+@dataclass(frozen=True)
+class AnnotationBoundaryClip:
+    locator: str
+    clipped_area: float
+    horizontal_overshoot_pixels: float
+    horizontal_overshoot_ratio: float
+    original_area: float
+    outside_vertices: int
+    retained_area_ratio: float
+    sides: tuple[str, ...]
+    vertical_overshoot_pixels: float
+    vertical_overshoot_ratio: float
+
+
+class AnnotationBoundaryError(BenchmarkError):
+    """A safely reportable annotation-edge guard failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        locator: str,
+        predicate: str,
+        horizontal_overshoot_pixels: float,
+        horizontal_overshoot_ratio: float,
+        vertical_overshoot_pixels: float,
+        vertical_overshoot_ratio: float,
+        original_area: float,
+        clipped_area: float | None,
+        retained_area_ratio: float | None,
+        outside_vertices: int,
+        sides: tuple[str, ...],
+    ) -> None:
+        super().__init__(message, stage="annotation-parse")
+        self.diagnostic = {
+            "kind": "annotationBoundary",
+            "locator": locator,
+            "predicate": predicate,
+            "horizontalOvershootPixels": horizontal_overshoot_pixels,
+            "horizontalOvershootRatio": horizontal_overshoot_ratio,
+            "verticalOvershootPixels": vertical_overshoot_pixels,
+            "verticalOvershootRatio": vertical_overshoot_ratio,
+            "originalArea": original_area,
+            "clippedArea": clipped_area,
+            "retainedAreaRatio": retained_area_ratio,
+            "outsideVertices": outside_vertices,
+            "sides": list(sides),
+        }
 
 
 @dataclass(frozen=True)
@@ -363,7 +420,13 @@ def _quad(value: Any) -> Polygon:
         )
         for index in range(1, 5)
     )
-    return convex_hull(points)
+    hull = convex_hull(points)
+    if len(hull) != 4:
+        raise BenchmarkError(
+            "A CORD quad does not have four distinct hull vertices",
+            stage="annotation-parse",
+        )
+    return hull
 
 
 def _dontcare_polygon_group(value: Any) -> tuple[Polygon, ...]:
@@ -400,17 +463,57 @@ def _repeating_symbol_polygon_group(value: Any) -> tuple[Polygon, ...]:
     return tuple(polygons)
 
 
-def _clip_annotation_polygon(polygon: Polygon, width: int, height: int) -> tuple[Polygon, bool]:
+def _clip_annotation_polygon(
+    polygon: Polygon,
+    width: int,
+    height: int,
+    *,
+    locator: str,
+) -> tuple[Polygon, AnnotationBoundaryClip | None]:
     if all(0 <= x <= width and 0 <= y <= height for x, y in polygon):
-        return polygon, False
-    tolerance = ANNOTATION_BOUNDARY_TOLERANCE_PIXELS
-    if any(
-        x < -tolerance or x > width + tolerance or y < -tolerance or y > height + tolerance
-        for x, y in polygon
+        return polygon, None
+    left = max((max(0.0, -x) for x, _ in polygon), default=0.0)
+    right = max((max(0.0, x - width) for x, _ in polygon), default=0.0)
+    top = max((max(0.0, -y) for _, y in polygon), default=0.0)
+    bottom = max((max(0.0, y - height) for _, y in polygon), default=0.0)
+    horizontal_overshoot = max(left, right)
+    vertical_overshoot = max(top, bottom)
+    horizontal_ratio = horizontal_overshoot / width
+    vertical_ratio = vertical_overshoot / height
+    outside_vertices = sum(not (0 <= x <= width and 0 <= y <= height) for x, y in polygon)
+    sides = tuple(
+        name
+        for name, overshoot in (
+            ("left", left),
+            ("right", right),
+            ("top", top),
+            ("bottom", bottom),
+        )
+        if overshoot > 0
+    )
+    original_area = polygon_area(polygon)
+    if (
+        horizontal_overshoot > ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_PIXELS
+        or vertical_overshoot > ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_PIXELS
+        or horizontal_ratio > ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_RATIO
+        or vertical_ratio > ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_RATIO
     ):
-        raise BenchmarkError(
-            "A CORD annotation polygon exceeds the bounded edge tolerance",
-            stage="annotation-parse",
+        raise AnnotationBoundaryError(
+            "A CORD annotation polygon exceeds the bounded edge overshoot "
+            f"({locator}: horizontal={horizontal_overshoot:.12g}px/"
+            f"{horizontal_ratio:.12g}, vertical={vertical_overshoot:.12g}px/"
+            f"{vertical_ratio:.12g})",
+            locator=locator,
+            predicate="edgeOvershoot",
+            horizontal_overshoot_pixels=horizontal_overshoot,
+            horizontal_overshoot_ratio=horizontal_ratio,
+            vertical_overshoot_pixels=vertical_overshoot,
+            vertical_overshoot_ratio=vertical_ratio,
+            original_area=original_area,
+            clipped_area=None,
+            retained_area_ratio=None,
+            outside_vertices=outside_vertices,
+            sides=sides,
         )
     image_bounds: Polygon = (
         (0.0, 0.0),
@@ -420,11 +523,65 @@ def _clip_annotation_polygon(polygon: Polygon, width: int, height: int) -> tuple
     )
     clipped = polygon_intersection(polygon, image_bounds)
     if not clipped or polygon_area(clipped) <= 0:
-        raise BenchmarkError(
+        raise AnnotationBoundaryError(
             "A CORD annotation polygon does not intersect the declared image",
-            stage="annotation-parse",
+            locator=locator,
+            predicate="emptyIntersection",
+            horizontal_overshoot_pixels=horizontal_overshoot,
+            horizontal_overshoot_ratio=horizontal_ratio,
+            vertical_overshoot_pixels=vertical_overshoot,
+            vertical_overshoot_ratio=vertical_ratio,
+            original_area=original_area,
+            clipped_area=0.0,
+            retained_area_ratio=0.0,
+            outside_vertices=outside_vertices,
+            sides=sides,
         )
-    return clipped, True
+    clipped_area = polygon_area(clipped)
+    retained_area_ratio = clipped_area / original_area
+    if retained_area_ratio < ANNOTATION_BOUNDARY_MINIMUM_RETAINED_AREA_RATIO:
+        raise AnnotationBoundaryError(
+            "A CORD annotation polygon retains too little area after edge clipping "
+            f"({locator}: retained={retained_area_ratio:.12g})",
+            locator=locator,
+            predicate="retainedArea",
+            horizontal_overshoot_pixels=horizontal_overshoot,
+            horizontal_overshoot_ratio=horizontal_ratio,
+            vertical_overshoot_pixels=vertical_overshoot,
+            vertical_overshoot_ratio=vertical_ratio,
+            original_area=original_area,
+            clipped_area=clipped_area,
+            retained_area_ratio=retained_area_ratio,
+            outside_vertices=outside_vertices,
+            sides=sides,
+        )
+    return clipped, AnnotationBoundaryClip(
+        locator=locator,
+        clipped_area=clipped_area,
+        horizontal_overshoot_pixels=horizontal_overshoot,
+        horizontal_overshoot_ratio=horizontal_ratio,
+        original_area=original_area,
+        outside_vertices=outside_vertices,
+        retained_area_ratio=retained_area_ratio,
+        sides=sides,
+        vertical_overshoot_pixels=vertical_overshoot,
+        vertical_overshoot_ratio=vertical_ratio,
+    )
+
+
+def _annotation_boundary_clip_record(clip: AnnotationBoundaryClip) -> dict[str, Any]:
+    return {
+        "locator": clip.locator,
+        "clippedArea": clip.clipped_area,
+        "horizontalOvershootPixels": clip.horizontal_overshoot_pixels,
+        "horizontalOvershootRatio": clip.horizontal_overshoot_ratio,
+        "originalArea": clip.original_area,
+        "outsideVertices": clip.outside_vertices,
+        "retainedAreaRatio": clip.retained_area_ratio,
+        "sides": list(clip.sides),
+        "verticalOvershootPixels": clip.vertical_overshoot_pixels,
+        "verticalOvershootRatio": clip.vertical_overshoot_ratio,
+    }
 
 
 def _reject_duplicate_json_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -510,6 +667,7 @@ def parse_cord_annotation(
         raise BenchmarkError("A CORD row has no valid_line annotations", stage="annotation-parse")
     lines: list[CordLine] = []
     all_words: list[CordWord] = []
+    annotation_boundary_clips: list[AnnotationBoundaryClip] = []
     clipped_valid_lines = 0
     for line_index, raw_line in enumerate(valid_lines):
         line = _as_mapping(raw_line, "valid_line entry")
@@ -550,12 +708,17 @@ def parse_cord_annotation(
             normalized_text = _normalized_text(text)
             if not normalized_text:
                 raise BenchmarkError("A CORD word has invalid text", stage="annotation-parse")
-            word_polygon, word_was_clipped = _clip_annotation_polygon(
-                _quad(word.get("quad")), width, height
+            word_polygon, word_clip = _clip_annotation_polygon(
+                _quad(word.get("quad")),
+                width,
+                height,
+                locator=f"valid_line[{line_index}].words[{word_index}]",
             )
             texts.append(normalized_text)
             points.extend(word_polygon)
-            line_was_clipped = line_was_clipped or word_was_clipped
+            if word_clip is not None:
+                annotation_boundary_clips.append(word_clip)
+                line_was_clipped = True
             all_words.append(
                 CordWord(
                     line_index=line_index,
@@ -575,23 +738,30 @@ def parse_cord_annotation(
             )
         )
     raw_dontcare = tuple(
-        polygon
-        for item in _as_list(annotation.get("dontcare"), "dontcare")
-        for polygon in _dontcare_polygon_group(item)
+        (f"dontcare[{group_index}][{polygon_index}]", polygon)
+        for group_index, item in enumerate(_as_list(annotation.get("dontcare"), "dontcare"))
+        for polygon_index, polygon in enumerate(_dontcare_polygon_group(item))
     )
     raw_repeating_symbols = tuple(
-        polygon
-        for item in _as_list(annotation.get("repeating_symbol"), "repeating_symbol")
-        for polygon in _repeating_symbol_polygon_group(item)
+        (f"repeating_symbol[{group_index}][{polygon_index}]", polygon)
+        for group_index, item in enumerate(
+            _as_list(annotation.get("repeating_symbol"), "repeating_symbol")
+        )
+        for polygon_index, polygon in enumerate(_repeating_symbol_polygon_group(item))
     )
     clipped_dontcare = tuple(
-        _clip_annotation_polygon(polygon, width, height) for polygon in raw_dontcare
+        _clip_annotation_polygon(polygon, width, height, locator=locator)
+        for locator, polygon in raw_dontcare
     )
     clipped_repeating_symbols = tuple(
-        _clip_annotation_polygon(polygon, width, height) for polygon in raw_repeating_symbols
+        _clip_annotation_polygon(polygon, width, height, locator=locator)
+        for locator, polygon in raw_repeating_symbols
     )
     dontcare = tuple(item[0] for item in clipped_dontcare)
     repeating_symbols = tuple(item[0] for item in clipped_repeating_symbols)
+    annotation_boundary_clips.extend(
+        clip for _, clip in (*clipped_dontcare, *clipped_repeating_symbols) if clip is not None
+    )
     _as_mapping(annotation.get("gt_parse"), "gt_parse")
     roi = _as_mapping(annotation.get("roi"), "roi")
     if roi:
@@ -639,8 +809,11 @@ def parse_cord_annotation(
         dontcare_polygons=dontcare,
         repeating_symbol_polygons=repeating_symbols,
         clipped_valid_lines=clipped_valid_lines,
-        clipped_dontcare_regions=sum(item[1] for item in clipped_dontcare),
-        clipped_repeating_symbol_regions=sum(item[1] for item in clipped_repeating_symbols),
+        clipped_dontcare_regions=sum(item[1] is not None for item in clipped_dontcare),
+        clipped_repeating_symbol_regions=sum(
+            item[1] is not None for item in clipped_repeating_symbols
+        ),
+        annotation_boundary_clips=tuple(annotation_boundary_clips),
     )
 
 
@@ -925,6 +1098,7 @@ def extract_cord_corpus(
                 words=annotation.words,
                 rows=annotation.rows,
                 roi_polygon=annotation.roi_polygon,
+                annotation_boundary_clips=annotation.annotation_boundary_clips,
             )
             documents.append(document)
             corpus_rows.append(
@@ -946,6 +1120,10 @@ def extract_cord_corpus(
                     "clippedValidLines": annotation.clipped_valid_lines,
                     "clippedDontcareRegions": annotation.clipped_dontcare_regions,
                     "clippedRepeatingSymbolRegions": (annotation.clipped_repeating_symbol_regions),
+                    "annotationBoundaryClips": [
+                        _annotation_boundary_clip_record(clip)
+                        for clip in annotation.annotation_boundary_clips
+                    ],
                 }
             )
             worker_rows.append(
@@ -1022,6 +1200,10 @@ def create_corpus_view(
             "clippedValidLines": document.clipped_valid_lines,
             "clippedDontcareRegions": document.clipped_dontcare_regions,
             "clippedRepeatingSymbolRegions": document.clipped_repeating_symbol_regions,
+            "annotationBoundaryClips": [
+                _annotation_boundary_clip_record(clip)
+                for clip in document.annotation_boundary_clips
+            ],
         }
         for document in documents
     ]
@@ -1848,6 +2030,25 @@ def score_document(document: CordDocument, predictions: Sequence[Prediction]) ->
         "clippedValidLines": document.clipped_valid_lines,
         "clippedDontcareRegions": document.clipped_dontcare_regions,
         "clippedRepeatingSymbolRegions": document.clipped_repeating_symbol_regions,
+        "annotationBoundaryClipRecords": len(document.annotation_boundary_clips),
+        "annotationBoundaryMaximumOvershootPixels": max(
+            (
+                max(clip.horizontal_overshoot_pixels, clip.vertical_overshoot_pixels)
+                for clip in document.annotation_boundary_clips
+            ),
+            default=0.0,
+        ),
+        "annotationBoundaryMaximumOvershootRatio": max(
+            (
+                max(clip.horizontal_overshoot_ratio, clip.vertical_overshoot_ratio)
+                for clip in document.annotation_boundary_clips
+            ),
+            default=0.0,
+        ),
+        "annotationBoundaryMinimumRetainedAreaRatio": min(
+            (clip.retained_area_ratio for clip in document.annotation_boundary_clips),
+            default=1.0,
+        ),
         "rawPredictedLines": len(predictions),
         "predictedFragments": len(included_fragments),
         "predictedLines": len(included),
@@ -1925,6 +2126,18 @@ def aggregate_metrics(per_document: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "clippedDontcareRegions": sum(item["clippedDontcareRegions"] for item in per_document),
         "clippedRepeatingSymbolRegions": sum(
             item["clippedRepeatingSymbolRegions"] for item in per_document
+        ),
+        "annotationBoundaryClipRecords": sum(
+            item["annotationBoundaryClipRecords"] for item in per_document
+        ),
+        "annotationBoundaryMaximumOvershootPixels": max(
+            item["annotationBoundaryMaximumOvershootPixels"] for item in per_document
+        ),
+        "annotationBoundaryMaximumOvershootRatio": max(
+            item["annotationBoundaryMaximumOvershootRatio"] for item in per_document
+        ),
+        "annotationBoundaryMinimumRetainedAreaRatio": min(
+            item["annotationBoundaryMinimumRetainedAreaRatio"] for item in per_document
         ),
         "rawPredictedLines": sum(item["rawPredictedLines"] for item in per_document),
         "predictedFragments": sum(item["predictedFragments"] for item in per_document),
@@ -2858,6 +3071,33 @@ def assemble_report(
             "clippedRepeatingSymbolRegions": sum(
                 document.clipped_repeating_symbol_regions for document in corpus.documents
             ),
+            "annotationBoundaryClipRecords": sum(
+                len(document.annotation_boundary_clips) for document in corpus.documents
+            ),
+            "annotationBoundaryMaximumOvershootPixels": max(
+                (
+                    max(clip.horizontal_overshoot_pixels, clip.vertical_overshoot_pixels)
+                    for document in corpus.documents
+                    for clip in document.annotation_boundary_clips
+                ),
+                default=0.0,
+            ),
+            "annotationBoundaryMaximumOvershootRatio": max(
+                (
+                    max(clip.horizontal_overshoot_ratio, clip.vertical_overshoot_ratio)
+                    for document in corpus.documents
+                    for clip in document.annotation_boundary_clips
+                ),
+                default=0.0,
+            ),
+            "annotationBoundaryMinimumRetainedAreaRatio": min(
+                (
+                    clip.retained_area_ratio
+                    for document in corpus.documents
+                    for clip in document.annotation_boundary_clips
+                ),
+                default=1.0,
+            ),
             "qualitySelectionSha256": corpus.selection_sha256,
             "corpusManifestSha256": corpus.corpus_manifest_sha256,
             "workerManifestSha256": corpus.worker_manifest_sha256,
@@ -2876,9 +3116,11 @@ def assemble_report(
                 "words are never reassigned between row_id groups"
             ),
             "annotationBoundaryHandling": (
-                "valid_line, dontcare, and repeating_symbol polygons may overshoot a declared "
-                "image edge by at most 3 pixels and are clipped to the verified image rectangle; "
-                "larger discrepancies fail validation"
+                "valid_line, dontcare, and repeating_symbol polygons are derived from the four "
+                "raw quad coordinates and intersected with the verified image rectangle only "
+                "when each axis overshoots by no more than both 24 pixels and 5 percent and the "
+                "intersection retains at least 75 percent of the original area; every clip is "
+                "recorded and all other boundary discrepancies fail validation"
             ),
             "predictionRows": (
                 "prediction-only slope candidates (zero, +/-0.02, polygon-slope median and "
@@ -2939,7 +3181,15 @@ def assemble_report(
             "referenceSplitNormalizedDistance": REFERENCE_ROW_SPLIT_NORMALIZED_DISTANCE,
             "referenceMergeNormalizedDistance": REFERENCE_ROW_MERGE_NORMALIZED_DISTANCE,
             "confidenceParityMaximumAbsoluteDelta": CONFIDENCE_PARITY_MAX_ABS_DELTA,
-            "annotationBoundaryTolerancePixels": ANNOTATION_BOUNDARY_TOLERANCE_PIXELS,
+            "annotationBoundaryMaximumOvershootPixels": (
+                ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_PIXELS
+            ),
+            "annotationBoundaryMaximumOvershootRatio": (
+                ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_RATIO
+            ),
+            "annotationBoundaryMinimumRetainedAreaRatio": (
+                ANNOTATION_BOUNDARY_MINIMUM_RETAINED_AREA_RATIO
+            ),
             "shapelyVersion": SHAPELY_VERSION,
         },
         "qualityGate": {

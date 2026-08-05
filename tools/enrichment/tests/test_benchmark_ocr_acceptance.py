@@ -123,7 +123,7 @@ def make_corpus(root: Path, document: cord.CordDocument, *, role: str) -> cord.E
     worker = root / f"{role}-worker.jsonl"
     inventory = root / f"{role}-inventory.txt"
     manifest_row = {
-        "schemaVersion": 1,
+        "schemaVersion": acceptance.SCORING_CORPUS_MANIFEST_SCHEMA_VERSION,
         "role": role,
         "rowIndex": document.row_index,
         "imageId": document.image_id,
@@ -134,6 +134,13 @@ def make_corpus(root: Path, document: cord.CordDocument, *, role: str) -> cord.E
         "groundTruthLines": len(document.lines),
         "groundTruthWords": len(document.words),
         "groundTruthPhysicalRows": len(document.rows),
+        "clippedValidLines": document.clipped_valid_lines,
+        "clippedDontcareRegions": document.clipped_dontcare_regions,
+        "clippedRepeatingSymbolRegions": document.clipped_repeating_symbol_regions,
+        "annotationBoundaryClips": [
+            cord._annotation_boundary_clip_record(clip)
+            for clip in document.annotation_boundary_clips
+        ],
     }
     worker_row = {
         "schemaVersion": cord.SCHEMA_VERSION,
@@ -507,6 +514,18 @@ class OcrAcceptanceWrapperTests(unittest.TestCase):
             role="calibration",
         )
         word = cord.CordWord(0, 0, 1, "A", polygon(0, 0, 20, 10))
+        clip = cord.AnnotationBoundaryClip(
+            locator="valid_line[0].words[0]",
+            clipped_area=200.0,
+            horizontal_overshoot_pixels=1.0,
+            horizontal_overshoot_ratio=0.01,
+            original_area=210.0,
+            outside_vertices=2,
+            retained_area_ratio=200.0 / 210.0,
+            sides=("left",),
+            vertical_overshoot_pixels=0.0,
+            vertical_overshoot_ratio=0.0,
+        )
         parsed = cord.ParsedCordAnnotation(
             document=annotation_fixture(),
             image_id=7,
@@ -518,9 +537,10 @@ class OcrAcceptanceWrapperTests(unittest.TestCase):
             roi_polygon=polygon(0, 0, 100, 100),
             dontcare_polygons=(),
             repeating_symbol_polygons=(),
-            clipped_valid_lines=0,
+            clipped_valid_lines=1,
             clipped_dontcare_regions=0,
             clipped_repeating_symbol_regions=0,
+            annotation_boundary_clips=(clip,),
         )
         with (
             patch.object(policy, "validate_role_selection", return_value=[]),
@@ -529,6 +549,14 @@ class OcrAcceptanceWrapperTests(unittest.TestCase):
             corpus = acceptance.extract_role_corpus((shard,), selection, self.root / "role-corpus")
         parser.assert_called_once_with(selected_index, "selected")
         self.assertEqual((selected_index,), tuple(item.row_index for item in corpus.documents))
+        manifest = json.loads(corpus.corpus_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            acceptance.SCORING_CORPUS_MANIFEST_SCHEMA_VERSION, manifest["schemaVersion"]
+        )
+        self.assertEqual(1, manifest["clippedValidLines"])
+        self.assertEqual(
+            "valid_line[0].words[0]", manifest["annotationBoundaryClips"][0]["locator"]
+        )
 
     def test_blind_input_extraction_never_reads_ground_truth_column(self) -> None:
         import pyarrow.parquet as pq
@@ -1287,14 +1315,56 @@ class OcrAcceptanceWrapperTests(unittest.TestCase):
         with patch.object(acceptance, "CONFIRMATORY_ATTEMPT_LEDGER", attempt):
             claim = acceptance._start_attempt(context, "4" * 64, report["identity"])
         args = argparse.Namespace(work_directory=work)
-        error = acceptance.AcceptanceError("failed", stage="worker", backend="cpu")
+        diagnostic = {
+            "kind": "annotationBoundary",
+            "globalRowIndex": 222,
+            "locator": "valid_line[0].words[0]",
+            "predicate": "edgeOvershoot",
+            "horizontalOvershootPixels": 6.0,
+            "horizontalOvershootRatio": 0.06,
+            "verticalOvershootPixels": 0.0,
+            "verticalOvershootRatio": 0.0,
+            "originalArea": 460.0,
+            "clippedArea": None,
+            "retainedAreaRatio": None,
+            "outsideVertices": 2,
+            "sides": ["left"],
+        }
+        error = acceptance.AcceptanceError(
+            "failed",
+            stage="annotation-parse",
+            backend="cpu",
+            diagnostic=diagnostic,
+        )
         acceptance._fail_attempt(claim, error)
         marker = acceptance._quarantine_confirmatory_partials(args, claim, error)
         self.assertIsNotNone(marker)
         self.assertTrue(marker.is_file())
         ledger = json.loads(attempt.read_text(encoding="utf-8"))
         self.assertEqual("quarantined", ledger["status"])
+        self.assertEqual(diagnostic, ledger["failure"]["diagnostic"])
         self.assertNotIn("metrics", ledger)
+
+    def test_boundary_failure_diagnostic_is_safe_structured_and_row_bound(self) -> None:
+        annotation = annotation_fixture()
+        annotation["valid_line"][0]["words"][0]["quad"]["x1"] = -6  # type: ignore[index]
+        annotation["valid_line"][0]["words"][0]["quad"]["x4"] = -6  # type: ignore[index]
+        with self.assertRaises(acceptance.AcceptanceError) as raised:
+            acceptance.parse_train_annotation(222, cord.canonical_json(annotation))
+        diagnostic = raised.exception.diagnostic
+        self.assertIsInstance(diagnostic, dict)
+        self.assertEqual(222, diagnostic["globalRowIndex"])
+        self.assertEqual("valid_line[0].words[0]", diagnostic["locator"])
+        self.assertEqual("edgeOvershoot", diagnostic["predicate"])
+
+        report = acceptance._failure_report(
+            argparse.Namespace(phase="calibration"), raised.exception
+        )
+        self.assertEqual(diagnostic, report["evidence"]["failure"]["diagnostic"])
+        self.assertNotIn(str(self.root), cord.canonical_json(report))
+
+        poisoned = dict(diagnostic, localPath=str(self.root))
+        self.assertIsNone(acceptance._safe_failure_diagnostic(poisoned))
 
     def test_cli_has_no_attempt_threads_or_threshold_overrides(self) -> None:
         base = [
@@ -1354,6 +1424,7 @@ class OcrAcceptanceWrapperTests(unittest.TestCase):
         )
         self.assertFalse(report["runSucceeded"])
         self.assertFalse(report["integrityPassed"])
+        self.assertIsNone(report["evidence"]["failure"]["diagnostic"])
 
 
 if __name__ == "__main__":

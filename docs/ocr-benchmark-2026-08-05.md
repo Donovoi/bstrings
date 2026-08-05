@@ -1,8 +1,10 @@
 # OCR benchmark and acceptance design (2026-08-05)
 
-This note freezes the acceptance design before any OCR output or annotation from
-the CORD v2 train split is examined. It separates development evidence from the
-one result that is allowed to confirm a release claim.
+This note records the acceptance design initially frozen before any OCR output
+or annotation from the CORD v2 train split was examined, plus the one parser
+repair derived from the 600-row calibration role. It separates development
+evidence from the still-sealed result that is allowed to confirm a release
+claim.
 
 ## What is and is not a holdout
 
@@ -92,7 +94,7 @@ ledger.
 The frozen generic runner `tools/enrichment/benchmark_ocr.py` has SHA-256
 `b79cd6997201585798a72af26ca1d5d886c0d1b2909d5c31b01e806259d0e49a`.
 The frozen CORD scorer `tools/enrichment/benchmark_ocr_cord.py` has SHA-256
-`ec43081f7d7b61394fa88e5285ad8764653101b4ae4256ff4d3653f99e79795d`.
+`ada3432666e7ddafd1efec249684d247b65fcea86e533ce74e376c66d716820a`.
 The acceptance report also records and binds the wrapper and policy-module
 hashes from the exact committed source used for the run.
 
@@ -143,6 +145,65 @@ directory contract. The effective policy is recorded without local absolute
 paths. Calibration persists the three complete preimages before OCR starts;
 confirmation verifies them before claiming the global ledger, and both phases
 regenerate and compare the complete inventories after their runs.
+
+### Annotation boundary normalization
+
+CORD does not require every quadrilateral coordinate to lie inside its declared
+image. In an [official repository issue](https://github.com/clovaai/cord/issues/7#issuecomment-1189900218),
+a principal CORD contributor explains that the labelling tool can produce
+outside coordinates and that they normally project those coordinates onto the
+image edge. This is useful first-party implementation guidance, not a formal
+pixel limit: neither the [CORD schema](https://github.com/clovaai/cord/blob/327310ce58c1623255821d062b3a759ff3789e3c/README.md#json-hierarchy)
+nor the v2 dataset publishes a tolerance or retained-area rule.
+
+The first real calibration attempt stopped before OCR when the old 3-pixel
+guard reached a valid-line word extending 5 pixels beyond the left edge. The
+failure report and partial evidence were preserved. A calibration-only audit
+then checked all 15,339 non-ROI quadrilaterals in the 600 allowed development
+rows. Thirty polygons in 16 documents crossed an edge: 14 valid-line words, 13
+`dontcare` regions, and 3 `repeating_symbol` regions. Every raw quad happened to
+be finite, convex, non-self-crossing, and non-degenerate in its source order;
+every exact image intersection was nonempty and convex; and all 600 embedded-
+image dimensions matched their metadata. Maximum overshoot was 18 pixels, or
+3.7656903766% of the corresponding axis. The smallest retained area was
+80.4084704938%.
+Confirmatory annotations were not converted or parsed, and the one-shot ledger
+was not created.
+
+Protocol v4 therefore uses a rounded conjunctive envelope selected only from
+calibration evidence. A non-degenerate `valid_line`, `dontcare`, or
+`repeating_symbol` polygon derived from the four raw coordinates may be
+intersected with `[0,width] x [0,height]` only when, on each axis, overshoot is
+at most both 24 pixels and 5% of that image dimension, and the intersection
+retains at least 75% of the original polygon area. The thresholds are
+inclusive. The 18/4%/80%
+observed envelope and the rounded 24/5%/75% envelope both admit exactly the same
+30 calibration polygons; the rounded values avoid binding the protocol to a
+single calibration maximum while the three simultaneous guards remain
+fail-closed. Outside-vertex count is recorded but is not a gate because it is
+not monotonic with damage: a harmless one-pixel corner truncation can put three
+of four vertices outside while retaining more than 98% of the area.
+
+Point order is not a gate: the four raw coordinates are canonicalized to their
+convex hull, matching the prior scorer and avoiding an unsupported assumption
+about the official schema. Receipt ROI polygons keep their separate,
+intersection-only handling and are not subject to the non-ROI envelope.
+
+Raw source annotations remain unchanged and are still covered by their
+canonical SHA-256. Only derived scoring polygons are clipped. Each repair is
+written to the corpus manifest with its annotation locator, crossed sides,
+outside-vertex count, per-axis pixel and relative overshoot, original and
+clipped area, and retained-area ratio. Acceptance protocol v2 uses schema
+version 2 for its blind input, scoring-corpus, failed-ledger, and quarantine
+records. The project-global attempt filename retains its original `v1` suffix
+deliberately:
+it names one stable dataset-level holdout namespace and cannot be reset by
+changing the acceptance protocol. The report also records clip counts and the worst observed bounds. A boundary
+failure preserves a path-free structured diagnostic containing the global row,
+annotation locator, failed predicate, sides, and measured geometry in the
+failure report, failed ledger, and quarantine marker. A degenerate, excessive,
+empty, or low-retention result fails validation; the scorer never drops the
+truth item or relaxes the rule after confirmation.
 
 ## Absolute quality floors
 

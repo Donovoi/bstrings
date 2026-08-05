@@ -192,11 +192,14 @@ else:
     import generate_cord_selection as selection_builder
     import ocr_acceptance_policy as acceptance_policy
 
-SCHEMA_VERSION = 1
-PROTOCOL = "bstrings-cord-v2-train-ocr-calibration-confirmatory-v1"
+SCHEMA_VERSION = 2
+SCORING_CORPUS_MANIFEST_SCHEMA_VERSION = 2
+PROTOCOL = "bstrings-cord-v2-train-ocr-calibration-confirmatory-v2"
 DETERMINISM_DOCUMENTS = 10
 DETERMINISM_REPETITIONS = 2
 CONFIRMATORY_ATTEMPT_LEDGER = (
+    # This path names the dataset-level one-shot namespace and deliberately
+    # remains stable across acceptance-protocol revisions.
     Path(__file__).resolve().with_name("cord-v2-train-confirmatory-attempt-v1.json")
 )
 MAX_REPORT_BYTES = 64 * 1024 * 1024
@@ -227,10 +230,12 @@ class AcceptanceError(RuntimeError):
         *,
         stage: str,
         backend: str | None = None,
+        diagnostic: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
         self.backend = backend
+        self.diagnostic = dict(diagnostic) if diagnostic is not None else None
 
 
 @dataclass(frozen=True)
@@ -604,7 +609,17 @@ def parse_train_annotation(row_index: int, value: str) -> cord.ParsedCordAnnotat
     try:
         parsed = cord.parse_cord_annotation(row_index, adapted, expected_split="test")
     except benchmark_core.BenchmarkError as exc:
-        raise AcceptanceError(str(exc), stage=exc.stage or "annotation-parse") from exc
+        raw_diagnostic = getattr(exc, "diagnostic", None)
+        diagnostic = (
+            {**raw_diagnostic, "globalRowIndex": row_index}
+            if isinstance(raw_diagnostic, Mapping)
+            else {"kind": "annotationParse", "globalRowIndex": row_index}
+        )
+        raise AcceptanceError(
+            str(exc),
+            stage=exc.stage or "annotation-parse",
+            diagnostic=diagnostic,
+        ) from exc
     return replace(parsed, document=original)
 
 
@@ -865,6 +880,7 @@ def extract_role_corpus(
                     words=annotation.words,
                     rows=annotation.rows,
                     roi_polygon=annotation.roi_polygon,
+                    annotation_boundary_clips=annotation.annotation_boundary_clips,
                 )
                 if width <= 0 or height <= 0:
                     raise AcceptanceError(
@@ -892,7 +908,7 @@ def extract_role_corpus(
     documents = tuple(documents_by_index[index] for index in expected_indices)
     corpus_rows = [
         {
-            "schemaVersion": SCHEMA_VERSION,
+            "schemaVersion": SCORING_CORPUS_MANIFEST_SCHEMA_VERSION,
             "role": role,
             "rowIndex": document.row_index,
             "imageId": document.image_id,
@@ -903,6 +919,13 @@ def extract_role_corpus(
             "groundTruthLines": len(document.lines),
             "groundTruthWords": len(document.words),
             "groundTruthPhysicalRows": len(document.rows),
+            "clippedValidLines": document.clipped_valid_lines,
+            "clippedDontcareRegions": document.clipped_dontcare_regions,
+            "clippedRepeatingSymbolRegions": document.clipped_repeating_symbol_regions,
+            "annotationBoundaryClips": [
+                cord._annotation_boundary_clip_record(clip)
+                for clip in document.annotation_boundary_clips
+            ],
         }
         for document in documents
     ]
@@ -947,7 +970,15 @@ def extract_role_corpus(
 
 def _scoring_constants() -> dict[str, Any]:
     return {
-        "annotationBoundaryTolerancePixels": cord.ANNOTATION_BOUNDARY_TOLERANCE_PIXELS,
+        "annotationBoundaryMaximumOvershootPixels": (
+            cord.ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_PIXELS
+        ),
+        "annotationBoundaryMaximumOvershootRatio": (
+            cord.ANNOTATION_BOUNDARY_MAXIMUM_OVERSHOOT_RATIO
+        ),
+        "annotationBoundaryMinimumRetainedAreaRatio": (
+            cord.ANNOTATION_BOUNDARY_MINIMUM_RETAINED_AREA_RATIO
+        ),
         "confidenceParityMaximumAbsoluteDelta": cord.CONFIDENCE_PARITY_MAX_ABS_DELTA,
         "ignorePrecisionThreshold": cord.IGNORE_PRECISION_THRESHOLD,
         "predictionRowNormalizedDistance": cord.ROW_CLUSTER_NORMALIZED_DISTANCE,
@@ -2443,6 +2474,108 @@ QUARANTINED_LEDGER_KEYS = FAILED_LEDGER_KEYS | {
     "quarantinedAtUtc",
 }
 
+ANNOTATION_BOUNDARY_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "clippedArea",
+        "globalRowIndex",
+        "horizontalOvershootPixels",
+        "horizontalOvershootRatio",
+        "kind",
+        "locator",
+        "originalArea",
+        "outsideVertices",
+        "predicate",
+        "retainedAreaRatio",
+        "sides",
+        "verticalOvershootPixels",
+        "verticalOvershootRatio",
+    }
+)
+
+
+def _safe_failure_diagnostic(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    if set(value) == {"globalRowIndex", "kind"}:
+        row_index = value.get("globalRowIndex")
+        if (
+            value.get("kind") == "annotationParse"
+            and type(row_index) is int
+            and 0
+            <= row_index
+            < acceptance_policy.CALIBRATION_DOCUMENTS + acceptance_policy.CONFIRMATORY_DOCUMENTS
+        ):
+            return {"globalRowIndex": row_index, "kind": "annotationParse"}
+        return None
+    if set(value) != ANNOTATION_BOUNDARY_DIAGNOSTIC_KEYS:
+        return None
+    row_index = value.get("globalRowIndex")
+    locator = value.get("locator")
+    predicate = value.get("predicate")
+    outside_vertices = value.get("outsideVertices")
+    sides = value.get("sides")
+    if (
+        value.get("kind") != "annotationBoundary"
+        or type(row_index) is not int
+        or not 0
+        <= row_index
+        < acceptance_policy.CALIBRATION_DOCUMENTS + acceptance_policy.CONFIRMATORY_DOCUMENTS
+        or not isinstance(locator, str)
+        or len(locator) > 128
+        or not locator.startswith(("valid_line[", "dontcare[", "repeating_symbol["))
+        or predicate not in {"edgeOvershoot", "emptyIntersection", "retainedArea"}
+        or type(outside_vertices) is not int
+        or not 1 <= outside_vertices <= 4
+        or not isinstance(sides, list)
+        or not sides
+        or len(sides) != len(set(sides))
+        or any(side not in {"left", "right", "top", "bottom"} for side in sides)
+    ):
+        return None
+    required_numbers = (
+        "horizontalOvershootPixels",
+        "horizontalOvershootRatio",
+        "originalArea",
+        "verticalOvershootPixels",
+        "verticalOvershootRatio",
+    )
+    if (
+        any(
+            isinstance(value.get(name), bool)
+            or not isinstance(value.get(name), (int, float))
+            or not math.isfinite(float(value[name]))
+            or float(value[name]) < 0
+            for name in required_numbers
+        )
+        or float(value["originalArea"]) <= 0
+    ):
+        return None
+    for name in ("clippedArea", "retainedAreaRatio"):
+        item = value.get(name)
+        if item is not None and (
+            isinstance(item, bool)
+            or not isinstance(item, (int, float))
+            or not math.isfinite(float(item))
+            or float(item) < 0
+        ):
+            return None
+    try:
+        encoded = acceptance_policy.canonical_json(value)
+    except acceptance_policy.PolicyError:
+        return None
+    if len(encoded.encode("utf-8")) > 4096:
+        return None
+    return json.loads(encoded)
+
+
+def _failure_details(error: Exception) -> dict[str, Any]:
+    return {
+        "backend": getattr(error, "backend", None),
+        "diagnostic": _safe_failure_diagnostic(getattr(error, "diagnostic", None)),
+        "stage": getattr(error, "stage", "unknown"),
+        "type": type(error).__name__,
+    }
+
 
 def _ledger_sha256(value: Any, *, name: str) -> str:
     if not isinstance(value, str) or acceptance_policy.SHA256_PATTERN.fullmatch(value) is None:
@@ -2627,11 +2760,13 @@ def _validate_failed_ledger(
         or value.get("integrityPassed") is not False
         or value.get("acceptancePassed") is not False
         or not isinstance(failure, Mapping)
-        or set(failure) != {"backend", "stage", "type"}
+        or set(failure) != {"backend", "diagnostic", "stage", "type"}
         or failure.get("backend") is not None
         and not isinstance(failure.get("backend"), str)
         or not isinstance(failure.get("stage"), str)
         or not isinstance(failure.get("type"), str)
+        or failure.get("diagnostic") is not None
+        and _safe_failure_diagnostic(failure.get("diagnostic")) != failure.get("diagnostic")
     ):
         raise AcceptanceError("The failed ledger schema changed", stage="one-shot")
     try:
@@ -2659,11 +2794,7 @@ def _fail_attempt(claim: AttemptClaim, error: Exception) -> None:
             "runSucceeded": False,
             "integrityPassed": False,
             "acceptancePassed": False,
-            "failure": {
-                "backend": getattr(error, "backend", None),
-                "stage": getattr(error, "stage", "unknown"),
-                "type": type(error).__name__,
-            },
+            "failure": _failure_details(error),
         }
     )
     _validate_failed_ledger(value, claim, quarantined=False)
@@ -2679,11 +2810,7 @@ def _quarantine_confirmatory_partials(
     value = {
         "attemptLedgerName": claim.path.name,
         "failedAtUtc": benchmark_core.utc_timestamp(),
-        "failure": {
-            "backend": getattr(error, "backend", None),
-            "stage": getattr(error, "stage", "unknown"),
-            "type": type(error).__name__,
-        },
+        "failure": _failure_details(error),
         "schemaVersion": SCHEMA_VERSION,
         "status": "quarantined",
     }
@@ -3082,11 +3209,7 @@ def _failure_report(args: argparse.Namespace, error: Exception) -> dict[str, Any
         "evaluationRole": role,
         "evidence": {
             "benchmark": "CORD-v2-train-OCR-acceptance",
-            "failure": {
-                "backend": getattr(error, "backend", None),
-                "stage": getattr(error, "stage", "unknown"),
-                "type": type(error).__name__,
-            },
+            "failure": _failure_details(error),
             "generatedAtUtc": benchmark_core.utc_timestamp(),
             "phase": role,
             "protocol": PROTOCOL,

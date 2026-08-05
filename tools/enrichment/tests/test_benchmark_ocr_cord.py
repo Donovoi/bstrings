@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import struct
@@ -29,17 +30,20 @@ from benchmark_ocr_cord import (  # noqa: E402
     CORD_V2_TEST_SHA256,
     CORD_V2_VALIDATION_BYTES,
     CORD_V2_VALIDATION_SHA256,
+    AnnotationBoundaryClip,
     CordDocument,
     CordLine,
     CordPhysicalRow,
     CordWord,
     ExtractedCorpus,
     Prediction,
+    _clip_annotation_polygon,
     _cluster_prediction_rows,
     _confidence_by_critical_record,
     _embedded_image_dimensions,
     _ignored_prediction,
     _maximum_matches,
+    _quad,
     _reference_rows,
     _segmentation_covered_fraction,
     _shapely_runtime,
@@ -304,6 +308,7 @@ class CordBenchmarkTests(unittest.TestCase):
         self.assertEqual(0, parsed.clipped_valid_lines)
         self.assertEqual(0, parsed.clipped_dontcare_regions)
         self.assertEqual(0, parsed.clipped_repeating_symbol_regions)
+        self.assertEqual((), parsed.annotation_boundary_clips)
         self.assertEqual(3, len(parsed.words))
         self.assertEqual((100, 100, 101), tuple(word.row_id for word in parsed.words))
         self.assertEqual(2, len(parsed.rows))
@@ -391,20 +396,196 @@ class CordBenchmarkTests(unittest.TestCase):
         clipped = annotation_fixture()
         first_word = clipped["valid_line"][0]["words"][0]  # type: ignore[index]
         first_word["quad"] = quad(-1, 0, 40, 10)
-        clipped["dontcare"] = [[quad(-3, 70, 20, 90)]]
+        clipped["dontcare"] = [[quad(70, 70, 80, 103)]]
         clipped["repeating_symbol"] = [[{"quad": quad(80, 70, 103, 80), "text": "-----"}]]
         clipped["roi"] = quad(-19, -10, 119, 130)
         parsed = parse_cord_annotation(0, clipped)
         self.assertEqual(1, parsed.clipped_valid_lines)
         self.assertEqual(1, parsed.clipped_dontcare_regions)
         self.assertEqual(1, parsed.clipped_repeating_symbol_regions)
+        self.assertEqual(3, len(parsed.annotation_boundary_clips))
+        self.assertEqual(
+            (
+                "valid_line[0].words[0]",
+                "dontcare[0][0]",
+                "repeating_symbol[0][0]",
+            ),
+            tuple(clip.locator for clip in parsed.annotation_boundary_clips),
+        )
         self.assertEqual(0.0, min(point[0] for point in parsed.lines[0].polygon))
         self.assertEqual(100.0, max(point[0] for point in parsed.repeating_symbol_polygons[0]))
 
         excessive = annotation_fixture()
-        excessive["dontcare"] = [[quad(-4, 70, 20, 90)]]
-        with self.assertRaises(BenchmarkError):
+        excessive["dontcare"] = [[quad(-6, 70, 20, 90)]]
+        with self.assertRaisesRegex(BenchmarkError, "edge overshoot"):
             parse_cord_annotation(0, excessive)
+
+    def test_annotation_boundary_guards_absolute_relative_and_retained_area(self) -> None:
+        exact_absolute = annotation_fixture()
+        exact_absolute["meta"]["image_size"]["width"] = 500  # type: ignore[index]
+        exact_absolute["valid_line"][0]["words"][0]["quad"] = quad(-24, 0, 72, 10)  # type: ignore[index]
+        parsed = parse_cord_annotation(0, exact_absolute)
+        self.assertEqual(0.75, parsed.annotation_boundary_clips[0].retained_area_ratio)
+        self.assertEqual(24.0, parsed.annotation_boundary_clips[0].horizontal_overshoot_pixels)
+
+        above_absolute = annotation_fixture()
+        above_absolute["meta"]["image_size"]["width"] = 500  # type: ignore[index]
+        above_absolute["valid_line"][0]["words"][0]["quad"] = quad(-25, 0, 75, 10)  # type: ignore[index]
+        with self.assertRaisesRegex(BenchmarkError, "edge overshoot"):
+            parse_cord_annotation(0, above_absolute)
+
+        exact_relative = annotation_fixture()
+        exact_relative["meta"]["image_size"]["width"] = 400  # type: ignore[index]
+        exact_relative["valid_line"][0]["words"][0]["quad"] = quad(-20, 0, 60, 10)  # type: ignore[index]
+        parsed = parse_cord_annotation(0, exact_relative)
+        self.assertEqual(0.05, parsed.annotation_boundary_clips[0].horizontal_overshoot_ratio)
+        self.assertEqual(0.75, parsed.annotation_boundary_clips[0].retained_area_ratio)
+
+        above_relative = annotation_fixture()
+        above_relative["meta"]["image_size"]["width"] = 400  # type: ignore[index]
+        above_relative["valid_line"][0]["words"][0]["quad"] = quad(-21, 0, 63, 10)  # type: ignore[index]
+        with self.assertRaisesRegex(BenchmarkError, "edge overshoot"):
+            parse_cord_annotation(0, above_relative)
+
+        below_retained = annotation_fixture()
+        below_retained["meta"]["image_size"]["width"] = 400  # type: ignore[index]
+        below_retained["valid_line"][0]["words"][0]["quad"] = quad(-20, 0, 59, 10)  # type: ignore[index]
+        with self.assertRaisesRegex(BenchmarkError, "retains too little area"):
+            parse_cord_annotation(0, below_retained)
+
+        edge_tangent = annotation_fixture()
+        edge_tangent["valid_line"][0]["words"][0]["quad"] = quad(-5, 0, 0, 10)  # type: ignore[index]
+        with self.assertRaisesRegex(BenchmarkError, "does not intersect"):
+            parse_cord_annotation(0, edge_tangent)
+
+    def test_annotation_boundary_clipping_accepts_three_outside_vertices(self) -> None:
+        corner = annotation_fixture()
+        corner["valid_line"][0]["words"][0]["quad"] = {  # type: ignore[index]
+            "x1": -1,
+            "y1": -1,
+            "x2": 100,
+            "y2": -1,
+            "x3": 100,
+            "y3": 100,
+            "x4": -1,
+            "y4": 100,
+        }
+        parsed = parse_cord_annotation(0, corner)
+        clip = parsed.annotation_boundary_clips[0]
+        self.assertEqual(3, clip.outside_vertices)
+        self.assertGreater(clip.retained_area_ratio, 0.98)
+        self.assertEqual(("left", "top"), clip.sides)
+
+    def test_annotation_boundary_clipping_accepts_observed_slanted_edge_truncation(self) -> None:
+        observed = annotation_fixture()
+        observed["meta"]["image_size"] = {"width": 268, "height": 478}  # type: ignore[index]
+        observed["dontcare"] = [
+            [
+                {
+                    "x1": 21,
+                    "y1": 12,
+                    "x2": 231,
+                    "y2": -18,
+                    "x3": 248,
+                    "y3": 14,
+                    "x4": 19,
+                    "y4": 35,
+                }
+            ]
+        ]
+        parsed = parse_cord_annotation(0, observed)
+        clip = parsed.annotation_boundary_clips[0]
+        self.assertEqual("dontcare[0][0]", clip.locator)
+        self.assertEqual(18.0, clip.vertical_overshoot_pixels)
+        self.assertAlmostEqual(5007.4375, clip.clipped_area)
+        self.assertAlmostEqual(0.804084704937776, clip.retained_area_ratio)
+
+    def test_annotation_boundary_exact_absolute_limit_is_symmetric(self) -> None:
+        cases = {
+            "left": polygon(-24, 100, 72, 120),
+            "right": polygon(428, 100, 524, 120),
+            "top": polygon(100, -24, 120, 72),
+            "bottom": polygon(100, 428, 120, 524),
+        }
+        for side, source in cases.items():
+            with self.subTest(side=side):
+                clipped, event = _clip_annotation_polygon(
+                    source,
+                    500,
+                    500,
+                    locator="valid_line[0].words[0]",
+                )
+                self.assertIsNotNone(event)
+                self.assertEqual((side,), event.sides)
+                self.assertEqual(
+                    24.0,
+                    max(
+                        event.horizontal_overshoot_pixels,
+                        event.vertical_overshoot_pixels,
+                    ),
+                )
+                self.assertEqual(0.75, event.retained_area_ratio)
+                self.assertGreater(polygon_iou(clipped, clipped), 0.0)
+
+    def test_annotation_parser_canonicalizes_unordered_and_rejects_degenerate_quads(self) -> None:
+        unordered = annotation_fixture()
+        unordered["valid_line"][0]["words"][0]["quad"] = {  # type: ignore[index]
+            "x1": 0,
+            "y1": 0,
+            "x2": 10,
+            "y2": 10,
+            "x3": 0,
+            "y3": 10,
+            "x4": 10,
+            "y4": 0,
+        }
+        parsed = parse_cord_annotation(0, unordered)
+        self.assertEqual(polygon(0, 0, 10, 10), parsed.words[0].polygon)
+
+        degenerate = annotation_fixture()
+        degenerate["valid_line"][0]["words"][0]["quad"] = {  # type: ignore[index]
+            "x1": 0,
+            "y1": 0,
+            "x2": 10,
+            "y2": 0,
+            "x3": 20,
+            "y3": 0,
+            "x4": 30,
+            "y4": 0,
+        }
+        with self.assertRaisesRegex(BenchmarkError, "degenerate"):
+            parse_cord_annotation(0, degenerate)
+
+        malformed_point_sets = (
+            ((0, 0), (10, 0), (10, 10), (5, 5)),
+            ((0, 0), (5, 0), (10, 0), (0, 10)),
+            ((0, 0), (10, 0), (10, 10), (10, 10)),
+        )
+        for points in malformed_point_sets:
+            malformed = {
+                coordinate: points[index - 1][0 if axis == "x" else 1]
+                for index in range(1, 5)
+                for axis in ("x", "y")
+                for coordinate in (f"{axis}{index}",)
+            }
+            with (
+                self.subTest(points=points),
+                self.assertRaisesRegex(BenchmarkError, "four distinct hull vertices"),
+            ):
+                _quad(malformed)
+
+    def test_annotation_quad_point_order_is_not_a_contract(self) -> None:
+        points = ((0, 0), (10, 0), (10, 10), (0, 10))
+        expected = polygon(0, 0, 10, 10)
+        for ordered in itertools.permutations(points):
+            value = {
+                coordinate: ordered[index - 1][0 if axis == "x" else 1]
+                for index in range(1, 5)
+                for axis in ("x", "y")
+                for coordinate in (f"{axis}{index}",)
+            }
+            with self.subTest(ordered=ordered):
+                self.assertEqual(expected, _quad(value))
 
     def test_polygon_iou_uses_true_polygon_intersection(self) -> None:
         left = polygon(0, 0, 10, 10)
@@ -955,8 +1136,25 @@ class CordBenchmarkTests(unittest.TestCase):
         inventory = self.root / "inventory.txt"
         for path in (corpus_manifest, worker_manifest, inventory):
             path.write_text("fixture\n", encoding="utf-8")
+        clip = AnnotationBoundaryClip(
+            locator="valid_line[0].words[0]",
+            clipped_area=400.0,
+            horizontal_overshoot_pixels=1.0,
+            horizontal_overshoot_ratio=0.01,
+            original_area=410.0,
+            outside_vertices=2,
+            retained_area_ratio=400.0 / 410.0,
+            sides=("left",),
+            vertical_overshoot_pixels=0.0,
+            vertical_overshoot_ratio=0.0,
+        )
+        document = replace(
+            self.document,
+            clipped_valid_lines=1,
+            annotation_boundary_clips=(clip,),
+        )
         corpus = ExtractedCorpus(
-            documents=(self.document,),
+            documents=(document,),
             corpus_manifest=corpus_manifest,
             worker_manifest=worker_manifest,
             inventory=inventory,
@@ -964,7 +1162,7 @@ class CordBenchmarkTests(unittest.TestCase):
             worker_manifest_sha256="e" * 64,
             selection_sha256="9" * 64,
         )
-        metrics = aggregate_metrics((score_document(self.document, ()),))
+        metrics = aggregate_metrics((score_document(document, ()),))
         backend = {
             "resolvedProvider": "cpu",
             "canonicalEvidenceSha256": "f" * 64,
@@ -1001,9 +1199,16 @@ class CordBenchmarkTests(unittest.TestCase):
         first = assemble_report(**kwargs)
         second = assemble_report(**kwargs)
         self.assertEqual(canonical_json(first), canonical_json(second))
-        self.assertEqual(3, first["schemaVersion"])
+        self.assertEqual(4, first["schemaVersion"])
         self.assertEqual("2.1.2", first["benchmarkDependencies"]["shapely"])
         self.assertTrue(first["benchmarkDependencies"]["geos"])
+        self.assertEqual(1, first["corpus"]["annotationBoundaryClipRecords"])
+        self.assertEqual(1.0, first["corpus"]["annotationBoundaryMaximumOvershootPixels"])
+        self.assertAlmostEqual(
+            400.0 / 410.0,
+            first["corpus"]["annotationBoundaryMinimumRetainedAreaRatio"],
+        )
+        self.assertEqual(1, metrics["micro"]["annotationBoundaryClipRecords"])
         self.assertEqual(
             0.5,
             first["protocolConstants"]["segmentationOverlapThreshold"],
@@ -1182,6 +1387,7 @@ class CordBenchmarkTests(unittest.TestCase):
         self.assertEqual(0, row["clippedValidLines"])
         self.assertEqual(0, row["clippedDontcareRegions"])
         self.assertEqual(0, row["clippedRepeatingSymbolRegions"])
+        self.assertEqual([], row["annotationBoundaryClips"])
 
     def test_backend_uses_full_quality_once_and_subset_for_determinism(self) -> None:
         placeholder = self.root / "placeholder"
