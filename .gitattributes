@@ -14,6 +14,9 @@ licenses/magika-cli-1.1.0-win-x64.tsv -text whitespace=-trailing-space
 licenses/floss-v3.1.1-win-x64.json -text whitespace=-trailing-space
 licenses/floss-v3.1.1/** -text whitespace=-trailing-space
 
+# This public benchmark selection manifest is hashed byte-for-byte.
+tools/enrichment/cord-v2-train-selection-v1.json -text whitespace=-trailing-space
+
 
 ###############################################################################
 # Set default behavior for command prompt diff.
