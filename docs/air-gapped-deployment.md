@@ -1,14 +1,26 @@
 # Air-gapped deployment
 
-The complete Windows x64 bundle is prepared on a connected staging machine,
-verified, then copied as a directory to the disconnected workstation. During
-an examination, the user runs only the root `bstrings.exe`: no package manager,
-Python command, model hub, service installation, or network access is needed.
+The complete Windows x64 kit built from current source is prepared on a
+connected staging machine, verified, then copied as a directory to the
+disconnected workstation. During an examination, the user runs only the root
+`bstrings.exe`: no package manager, Python command, model hub, service
+installation, or network access is needed.
+PowerShell is only the shell displaying the examples below; normal users do not
+run a Python script or package-manager command.
 
 The conservative supported baseline is Windows 11 x64 24H2 or newer, following
 Microsoft's [.NET supported-Windows table](https://learn.microsoft.com/en-us/dotnet/core/install/windows).
 CPU analysis needs no GPU. DirectML uses the host's D3D12/DXGI stack and a
 compatible graphics driver; those operating-system components are not bundled.
+
+| Download | Purpose |
+| --- | --- |
+| Core ZIP | Scanner, Rust engine, and `bundle acquire` client. Useful alone for direct/native extraction and pattern search. |
+| Complete offline kit | The directory created by `bundle acquire`. It adds [Magika](https://github.com/google/magika), [FLOSS](https://github.com/mandiant/flare-floss), OCR, language detection, and local translation. |
+
+Release assets are the ingredients; the assembled directory is what you
+transfer offline. “One executable” means one user interface. Its adjacent
+models and runtimes are still required and must remain beside it.
 
 ## Choose a translation profile
 
@@ -30,8 +42,13 @@ corpus, pins, results, and limits.
 
 ## Acquire and assemble on a connected machine
 
-A tagged [GitHub release](https://github.com/Donovoi/bstrings/releases)
-contains:
+The v1.9.0 complete-kit assets are not in the current public
+[GitHub releases](https://github.com/Donovoi/bstrings/releases) yet. Until they
+are published, maintainers can build them from current source using
+[offline release maintenance](offline-release-maintenance.md). An examiner
+should not combine an older core ZIP with current manifests.
+
+A complete-kit release contains:
 
 - `bstrings-win-x64.zip`, a small self-contained core that provides the
   acquisition command;
@@ -152,7 +169,8 @@ system prerequisites.
 
 ## OCR hardware choices
 
-The published OCR profile contains two packaged runtimes:
+The v1.9.0 OCR profile in current source contains two packaged runtimes. Its
+complete-kit release assets are still pending:
 
 - a CPU-only ONNX Runtime environment, verified separately as a fallback; and
 - the active DirectML ONNX Runtime environment, which exposes both DirectML and
@@ -163,15 +181,29 @@ CPU, DirectML, and DirectML+CPU hybrid paths passed live inference tests. CUDA
 OCR is not bundled or claimed by this profile, even though the general CLI
 accepts `--ocr-provider cuda` for future/custom profiles.
 
-An earlier deterministic synthetic run recovered all five protected identifiers
-from a clean image, a ten-page raster-only PDF, and a mildly degraded image on
-all three paths. The benchmark has since been hardened and must be rerun before
-publishing a current release speed/quality table. This remains bounded path
-evidence, not a universal ranking. Hybrid does not guarantee higher throughput,
-and another GPU-heavy process can exhaust graphics memory or cause a DirectML
-device-loss error. Use `--ocr-provider cpu` to avoid GPU execution, or schedule
-GPU work so OCR and other large models do not compete. The integrated pipeline
-completes OCR before translation.
+Three evidence types answer different questions:
+
+- synthetic smoke proves that the packaged paths run and recover fixed text;
+- the historical v2 616-document SROIE calibration provides bounded
+  printed-receipt quality evidence for its frozen candidate; and
+- release-specific DirectML acceptance proves the packaged GPU path on the
+  named hardware/driver.
+
+The historical v2 SROIE calibration, bound to source commit
+`23992fc75b624a3c6dab5bfbd0a4b52949133525`, passed that candidate's
+NFC-casefold gate. Its separate 361-document one-shot attempt failed closed on
+one degenerate source annotation before producing quality metrics. The attempt
+was consumed and was not rerun; the immutable
+[terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
+therefore does not establish independent acceptance. The current v3 adapter
+still requires fresh calibration. See the
+[OCR benchmark record](ocr-benchmark-2026-08-05.md).
+
+Hybrid does not guarantee higher throughput, and another GPU-heavy process can
+exhaust graphics memory or cause a DirectML device-loss error. Use
+`--ocr-provider cpu` to avoid GPU execution, or schedule GPU work so OCR and
+other large models do not compete. The integrated pipeline completes OCR
+before translation.
 
 More detail is in [OCR and document analysis](ocr-and-document-analysis.md).
 

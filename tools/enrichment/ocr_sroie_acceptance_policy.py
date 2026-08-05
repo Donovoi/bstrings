@@ -21,10 +21,10 @@ from typing import Any
 
 import ocr_acceptance_policy as generic_policy
 
-SCHEMA_VERSION = 1
-METRICS_REPORT_SCHEMA_VERSION = 1
-POLICY_ID = "bstrings-icdar2019-sroie-train-test-ocr-v2"
-PROTOCOL = "bstrings-icdar2019-sroie-train-calibration-test-one-shot-v2"
+SCHEMA_VERSION = 2
+METRICS_REPORT_SCHEMA_VERSION = 2
+POLICY_ID = "bstrings-icdar2019-sroie-train-test-ocr-v3"
+PROTOCOL = "bstrings-icdar2019-sroie-train-calibration-test-one-shot-v3"
 DATASET_ID = "jsdnrs/ICDAR2019-SROIE"
 DATASET_REVISION = "bffe40c26759f3376ec2b3ae9031dbba54cd587c"
 RAW_TRAIN_ROWS = 626
@@ -282,19 +282,27 @@ def _validate_identity(identity: Any) -> dict[str, Any]:
         _sha256(digest, name=name)
     corpus = _mapping(value.get("calibrationCorpus"), name="calibration corpus identity")
     if set(corpus) != {
+        "bboxRepairAuditSha256",
+        "bboxRepairRecordsSha256",
         "duplicateAuditSha256",
         "excludedRows",
         "corpusManifestSha256",
         "imageIdentitiesSha256",
         "parquetSha256",
+        "repairedRegionCount",
+        "scoringAnnotationIdentitiesSha256",
         "selectedDocuments",
         "sourceImageDigestsSha256",
+        "sourcePayloadIdentitiesSha256",
+        "sourceRegionCount",
         "sourceRows",
         "workerManifestSha256",
     }:
         raise PolicyError("The calibration corpus identity schema changed")
     selected_documents = corpus.get("selectedDocuments")
     excluded_rows = corpus.get("excludedRows")
+    source_regions = corpus.get("sourceRegionCount")
+    repaired_regions = corpus.get("repairedRegionCount")
     if (
         type(corpus.get("sourceRows")) is not int
         or corpus.get("sourceRows") != RAW_TRAIN_ROWS
@@ -303,14 +311,22 @@ def _validate_identity(identity: Any) -> dict[str, Any]:
         or type(excluded_rows) is not int
         or excluded_rows < 0
         or selected_documents + excluded_rows != RAW_TRAIN_ROWS
+        or type(source_regions) is not int
+        or source_regions <= 0
+        or type(repaired_regions) is not int
+        or not 0 <= repaired_regions <= source_regions
     ):
         raise PolicyError("The calibration corpus row accounting changed")
     for name in (
+        "bboxRepairAuditSha256",
+        "bboxRepairRecordsSha256",
         "corpusManifestSha256",
         "duplicateAuditSha256",
         "imageIdentitiesSha256",
         "parquetSha256",
+        "scoringAnnotationIdentitiesSha256",
         "sourceImageDigestsSha256",
+        "sourcePayloadIdentitiesSha256",
         "workerManifestSha256",
     ):
         _sha256(corpus.get(name), name=name)

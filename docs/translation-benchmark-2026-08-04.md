@@ -1,4 +1,4 @@
-# Offline translation selection gate — 2026-08-04, updated 2026-08-05
+# Offline translation selection gate — 2026-08-04, updated 2026-08-06
 
 This is a developer/research reproduction record. Examiners normally use the
 integrated `bstrings.exe analyze -d carved-files --full -o results` workflow;
@@ -50,24 +50,49 @@ That challenger ran with PyTorch `2.10.0+cu130` (CUDA 13.0), Transformers
 GeForce RTX 4060 Laptop GPU with 8 GB VRAM. These versions describe only the
 isolated challenger run; they are not dependencies of a shipped bstrings bundle.
 
-Google Cloud Translation was not empirically run: this benchmark host had no
-configured Google Cloud project or credentials. No result in this report
-therefore establishes parity with either `general/translation-llm` or
-`general/nmt`. The harness has a deliberately explicit networked comparison
-path, but accepts only rows classified as public or synthetic and requires the
-operator to acknowledge that those rows leave the machine:
+Neither of the two
+[Google Cloud Translation](https://docs.cloud.google.com/translate/docs/advanced/compare-models)
+models was empirically run because the host had no configured Google Cloud
+project or credentials. Specifically, neither
+[`general/translation-llm`](https://docs.cloud.google.com/translate/docs/translation-llm)
+nor [`general/nmt`](https://docs.cloud.google.com/translate/docs/advanced/compare-models)
+was measured, and the consumer Google Translate product was not tested. These
+local chrF++ results establish neither parity nor superiority versus Google.
+Throughput is also specific to this 72-row corpus, runtime, and host.
+
+The harness has a deliberately explicit networked comparison path, but accepts
+only public or synthetic rows and requires the operator to acknowledge that
+those rows leave the machine. A fair future comparison must use the same
+corpus, direction, normalization, seed, and scorer. This standalone setup uses
+[uv](https://docs.astral.sh/uv/getting-started/installation/) and the
+[`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli):
 
 ```powershell
+uv venv C:\bench\.venv
+$benchPython = 'C:\bench\.venv\Scripts\python.exe'
+uv pip install --python $benchPython `
+  "sacrebleu>=2.5,<3" `
+  "google-auth[requests]>=2,<3"
+
+hf download google/wmt24pp `
+  --repo-type dataset `
+  --revision fd7405c06494bc66a57b25f55d217a72f96e60dc `
+  --local-dir C:\bench\wmt24pp
+
 $projectId = 'replace-with-your-google-cloud-project-id'
 foreach ($model in @('general/translation-llm', 'general/nmt')) {
   $modelSlug = $model.Split('/')[-1]
-  python tools\enrichment\benchmark_translation.py `
+  & $benchPython tools\enrichment\benchmark_translation.py `
     --engine google-cloud `
     --google-project $projectId `
     --google-location global `
     --google-model $model `
     --allow-google-cloud-public-benchmark `
     --wmt-root C:\bench\wmt24pp `
+    --forensic-cases tools\enrichment\forensic_translation_cases.jsonl `
+    --locales ar_EG de_DE es_MX fa_IR fr_FR hi_IN ja_JP ko_KR ru_RU th_TH tr_TR zh_CN `
+    --wmt-direction locale-to-en-postedit `
+    --sample-seed 20260805 `
     --wmt-per-locale 5 `
     --output "C:\bench\results\google-$modelSlug.json"
   if ($LASTEXITCODE -ne 0) { throw "Google benchmark failed for $model" }
@@ -276,34 +301,45 @@ This advanced reproduction requires [Python](https://www.python.org/downloads/),
 [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli),
 [SacreBLEU](https://github.com/mjpost/sacrebleu), a pinned
 [llama.cpp release](https://github.com/ggml-org/llama.cpp/releases), and the
-[Hy-MT2 GGUF model](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF).
+[Hy-MT2 7B GGUF model](https://huggingface.co/tencent/Hy-MT2-7B-GGUF).
 Install the benchmark-only dependency and download the same WMT24++ revision.
 The benchmark runner never downloads a model. It can own a short-lived,
 loopback-only llama.cpp server so the benchmark exercises the same scheduler as
 the production adapter.
 
 ```powershell
-uv pip install "sacrebleu>=2.5,<3"
+uv venv C:\bench\.venv
+$benchPython = 'C:\bench\.venv\Scripts\python.exe'
+uv pip install --python $benchPython "sacrebleu>=2.5,<3"
 
 hf download google/wmt24pp `
   --repo-type dataset `
   --revision fd7405c06494bc66a57b25f55d217a72f96e60dc `
   --local-dir C:\bench\wmt24pp
 
-python tools\enrichment\benchmark_translation.py `
+& $benchPython tools\enrichment\benchmark_translation.py `
   --engine llama-cpp `
-  --llama-server C:\forensic-tools\llama.cpp\llama-server.exe `
-  --model-path C:\forensic-models\hy-mt2-1.8b\Hy-MT2-1.8B-Q8_0.gguf `
-  --model-id tencent/Hy-MT2-1.8B-GGUF `
-  --model-revision 1cd5208700acedef4ef93019b6cfc148b8522d45 `
-  --model-sha256 5C3FE0B1408A5CEB0143184EF247B11B579C525F4B02B060E6C851BB76FEF1A4 `
-  --runtime "llama.cpp b10248; CUDA 12.4; Q8_0" `
-  --device auto `
-  --parallelism 0 `
+  --llama-server C:\Tools\bstrings-quality\runtime\llama\llama-server.exe `
+  --model-path C:\Tools\bstrings-quality\models\hy-mt2\HY-MT2-7B-Q8_0.gguf `
+  --model-id tencent/Hy-MT2-7B-GGUF `
+  --model-revision 707464294cf5b2a5a69982855020858ed58cf1d1 `
+  --model-sha256 58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0 `
+  --runtime "llama.cpp b10248; CPU; Q8_0" `
+  --device cpu `
+  --parallelism 1 `
+  --strict-determinism `
   --wmt-root C:\bench\wmt24pp `
+  --forensic-cases tools\enrichment\forensic_translation_cases.jsonl `
+  --locales ar_EG de_DE es_MX fa_IR fr_FR hi_IN ja_JP ko_KR ru_RU th_TH tr_TR zh_CN `
+  --wmt-direction locale-to-en-postedit `
+  --sample-seed 20260805 `
   --wmt-per-locale 5 `
-  --output C:\bench\results\hy-mt2-q8.json
+  --output C:\bench\results\hy-mt2-7b-quality-strict.json
 ```
 
 Generated result JSON/JSONL and downloaded corpora stay outside the repository.
-Only the runner and synthetic forensic fixtures are versioned.
+Only the runner and synthetic forensic fixtures are versioned. Raw summaries
+can contain absolute corpus paths; Google runs can contain a project ID/model
+resource; records JSONL contains sources, references, and hypotheses. Review
+and sanitize any derived publication instead of committing raw benchmark
+output or exposing it through public CI logs.

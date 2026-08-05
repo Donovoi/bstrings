@@ -38,10 +38,10 @@ OCR can also be requested without the other optional stages:
 ```
 
 `--ocr` accepts `off`, `auto`, or `force`. `--ocr-provider` accepts `auto`,
-`cpu`, `directml`, `hybrid`, or `cuda`; however, the published
-`windows-x64-ocr-cpu-directml-v1` pack contains and claims only CPU, DirectML,
-and DirectML+CPU hybrid. CUDA requires a separately built and validated custom
-runtime profile.
+`cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.0 source profile
+`windows-x64-ocr-cpu-directml-v1` contains and claims only CPU, DirectML, and
+DirectML+CPU hybrid. Its complete-kit release assets are not published yet.
+CUDA requires a separately built and validated custom runtime profile.
 
 ## File and PDF behavior
 
@@ -65,8 +65,10 @@ may disagree with, conceal, or supplement the embedded text layer.
 
 ## Bundled engine and immutable model pack
 
-The release uses [RapidOCR 3.9.2](https://github.com/RapidAI/RapidOCR/releases/tag/v3.9.2)
-as the local orchestration engine, immutable PP-OCRv6 medium
+The v1.9.0 source profile uses
+[RapidOCR 3.9.2](https://github.com/RapidAI/RapidOCR/releases/tag/v3.9.2)
+as the local orchestration engine, immutable
+[PP-OCRv6 medium](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv6/PP-OCRv6.html)
 [detector](https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx/tree/61323801669c338b7891481ec7bac61ce31b576a)
 and [recognizer](https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/tree/50c7eacafc52fa7bcf4194e8cd08e46f8558504b)
 ONNX models, and RapidOCR's legacy mobile orientation classifier. This is a
@@ -128,29 +130,54 @@ Cyrillic, Devanagari, or Korean coverage. For an unsupported script, retain the
 visual original and use a separately validated model/profile. Offline
 translation can only work with characters OCR recovered correctly.
 
-## Reproducible path and quality gate
+## Historical v2 calibration and its limits
 
-The checked-in `tools/enrichment/benchmark_ocr.py` generates only synthetic
-fixtures. An earlier deterministic run recovered all five protected identifiers
-(email, URL, IPv4 address, CVE, and Windows path) on one clean image, a ten-page
-raster-only PDF, and one mildly degraded image across CPU, DirectML, and hybrid.
-Its raw outputs were byte-identical across repetitions and the normalized
-provider evidence agreed.
+Result scope: this is the published v2, commit-bound, project-defined SROIE
+Task-2-style printed-receipt evaluation on the pinned community
+[`jsdnrs/ICDAR2019-SROIE`](https://huggingface.co/datasets/jsdnrs/ICDAR2019-SROIE/tree/bffe40c26759f3376ec2b3ae9031dbba54cd587c)
+derivative. It is not an official RRC submission, KIE result, universal OCR
+score, handwriting test, or proof that the upstream model never trained on
+SROIE.
 
-That earlier report's CER, multiset, and determinism fields were weaker than the
-hardened benchmark now in the repository. Treat it only as bounded historical
-path evidence. The hardened gate must be rerun before publishing a current
-release table or speed/quality comparison. It still cannot establish
-handwriting quality, arbitrary-language coverage, performance on every
-document, or that hybrid is faster. No CORD quality result is claimed until the
-real corpus run completes.
+| Evidence | Result |
+| --- | --- |
+| Calibration population | 616 selected train documents from 626 raw rows; 10 conflicting duplicate rows excluded by the predeclared image policy |
+| Primary calibration | token F1 0.860229; CER 0.115610; WER 0.218109; localization Hmean 0.978661; exact end-to-end Hmean 0.634888 |
+| Tail calibration | macro token F1 0.857929; p10 token F1 0.784000; p90 CER 0.184987; 0.1623% of documents below 0.50 token F1 |
+| Strict diagnostic | token F1 0.601075; CER 0.335252; WER 0.476079 |
+| CPU calibration path | 616 documents in 1,292.02 s (0.4768 documents/s on that host); output and metrics deterministic in the repeated ten-document view |
+| Independent test | **No quality result.** The 361-document one-shot attempt failed closed during annotation parsing on one degenerate source box; the ledger was consumed and the test was not rerun. |
 
-A later DirectML run returned device-loss error `887A0006` while another model
-occupied roughly 6.2 of 8.2 GB graphics memory; the same OCR path passed after
-that process exited. This is an important operational result: graphics-memory
-contention can matter more than the nominal provider. The integrated bstrings
-order is OCR first, then translation, which avoids its own stages competing for
-the same GPU. Avoid other GPU-heavy processes during OCR or choose CPU.
+That v2 gate uses Unicode NFC plus casefold before exact comparison; whitespace
+is normalized, while punctuation and token boundaries still matter. The report
+also embeds a full NFC, case-sensitive diagnostic computed from the same frozen
+OCR output. Casefolding avoids treating capitalization alone as a recognition
+failure; it is not evidence that raw case-sensitive recognition improved.
+
+The exact path-free historical v2
+[calibration report and policy](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v2-20260805-23992fc)
+are publicly inspectable. The accepted calibration report SHA-256 is
+`3b436109523d9a5caff04d662bff8c5e32ec63b1f0717297bc2acbd3574f4775`;
+its frozen policy SHA-256 is
+`234b4fc4ddacf27c3358f74d0725cf77a997f32201058a54958d9ed7c8bd56f3`.
+The immutable [pre-test witness](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-acceptance-v2-20260805-23992fc)
+and [terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
+bind those artifacts to source commit
+`23992fc75b624a3c6dab5bfbd0a4b52949133525`. The terminal result is failed,
+not accepted; its failure is an evidence/protocol outcome rather than a failed
+OCR metric.
+
+Current source uses the v3 adapter, policy, and acceptance schema introduced
+after that failure. It requires a fresh calibration before any v3 metric can be
+reported. The published v2 figures above remain evidence for their exact source
+commit; they are not a v3 acceptance result.
+
+Synthetic fixtures remain useful packaging tests, while release-specific
+DirectML acceptance remains hardware/runtime evidence. Neither substitutes for
+independent corpus quality evidence. A later DirectML run returned device-loss
+error `887A0006` while another model occupied roughly 6.2 of 8.2 GB graphics
+memory; the same OCR path passed after that process exited. Avoid competing GPU
+work or choose CPU. The integrated pipeline completes OCR before translation.
 
 ## Output and forensic interpretation
 

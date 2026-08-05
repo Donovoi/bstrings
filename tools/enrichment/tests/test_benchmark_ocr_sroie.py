@@ -6,12 +6,14 @@ import struct
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import benchmark_ocr_sroie as sroie  # noqa: E402
+import benchmark_ocr_sroie_acceptance as sroie_acceptance  # noqa: E402
 import bstrings_ocr as ocr_worker  # noqa: E402
 from benchmark_ocr import BenchmarkError, sha256_file  # noqa: E402
 from benchmark_ocr_cord import CordDocument, Prediction, convex_hull, score_document  # noqa: E402
@@ -166,6 +168,55 @@ class SroieAdapterTests(unittest.TestCase):
             parsed.roi_polygon,
         )
         self.assertEqual("unicode-nfc-collapse-whitespace-v1", parsed.document["normalization"])
+        self.assertEqual(sroie.SROIE_BBOX_REPAIR_POLICY, parsed.document["bboxRepairPolicy"])
+        self.assertEqual((), parsed.bbox_repairs)
+        self.assertEqual(
+            hashlib.sha256(
+                sroie.canonical_json(parsed.document).encode("utf-8")
+            ).hexdigest(),
+            parsed.scoring_annotation_sha256,
+        )
+
+    def test_bbox_repair_policy_is_minimal_deterministic_and_fail_closed(self) -> None:
+        cases = {
+            "zero height interior": ([14, 70, 15, 70], [14, 70, 15, 71], "y", "increase-upper"),
+            "zero width interior": ([14, 20, 14, 30], [14, 20, 15, 30], "x", "increase-upper"),
+            "zero height far edge": ([14, 80, 15, 80], [14, 79, 15, 80], "y", "decrease-lower"),
+            "zero width far edge": ([100, 20, 100, 30], [99, 20, 100, 30], "x", "decrease-lower"),
+        }
+        for label, (source, scoring, axis, direction) in cases.items():
+            with self.subTest(label=label):
+                parsed = sroie.parse_sroie_row(
+                    9,
+                    self.selected_row(row_fixture(words=["A"], bboxes=[source])),
+                )
+                self.assertEqual(scoring, parsed.document["regions"][0]["bbox"])
+                self.assertEqual(1, len(parsed.bbox_repairs))
+                repair = parsed.bbox_repairs[0]
+                self.assertEqual(source, repair["sourceBbox"])
+                self.assertEqual(scoring, repair["scoringBbox"])
+                self.assertEqual(axis, repair["degenerateAxis"])
+                self.assertEqual(direction, repair["direction"])
+                self.assertEqual(1, repair["axisExpansionPixels"])
+                self.assertEqual(parsed.source_payload_sha256, repair["sourcePayloadSha256"])
+                self.assertEqual(
+                    parsed.scoring_annotation_sha256,
+                    repair["scoringAnnotationSha256"],
+                )
+        invalid = (
+            [10, 20, 10, 20],
+            [20, 20, 10, 30],
+            [10, 30, 20, 20],
+            [-1, 20, -1, 30],
+            [101, 20, 101, 30],
+            [True, 20, 20, 30],
+        )
+        for source in invalid:
+            with self.subTest(source=source), self.assertRaises(BenchmarkError):
+                sroie.parse_sroie_row(
+                    0,
+                    self.selected_row(row_fixture(words=["A"], bboxes=[source])),
+                )
 
     def test_source_regions_score_perfectly_when_the_worker_merges_them(self) -> None:
         source_row = row_fixture(words=["A", "B"], bboxes=[[1, 2, 40, 12], [50, 2, 90, 12]])
@@ -272,6 +323,31 @@ class SroieAdapterTests(unittest.TestCase):
             sroie.extract_sroie_corpus(path, self.root / "extract")
         self.assertFalse((self.root / "extract").exists())
 
+    def test_second_pass_repair_drift_fails_closed(self) -> None:
+        row = row_fixture(words=["A"], bboxes=[[14, 70, 15, 70]])
+        parquet_path = self.write_parquet([row])
+        config = self.config_for(parquet_path, 1)
+        real_parse = sroie.parse_sroie_row
+        calls = 0
+
+        def drifting_parse(row_index, source_row):
+            nonlocal calls
+            calls += 1
+            parsed = real_parse(row_index, source_row)
+            if calls != 2:
+                return parsed
+            repair = dict(parsed.bbox_repairs[0])
+            repair["direction"] = "decrease-lower"
+            return replace(parsed, bbox_repairs=(repair,))
+
+        with (
+            patch.dict(sroie.SROIE_FILES, {"train": config}),
+            patch.object(sroie, "parse_sroie_row", side_effect=drifting_parse),
+            self.assertRaisesRegex(BenchmarkError, "row identity changed"),
+        ):
+            sroie.extract_sroie_corpus(parquet_path, self.root / "drifted-repair")
+        self.assertEqual(2, calls)
+
     def test_duplicate_policy_audit_worker_contract_and_column_boundary(self) -> None:
         import pyarrow.parquet as pq
 
@@ -279,7 +355,7 @@ class SroieAdapterTests(unittest.TestCase):
         second_image = synthetic_jpeg(marker=b"second")
         singleton_image = synthetic_jpeg(marker=b"singleton")
         rows = [
-            row_fixture(raw_image=first_image, path="zero.jpg", words=["A  B"]),
+            row_fixture(raw_image=first_image, path="zero.jpg", words=["A B"]),
             row_fixture(raw_image=first_image, path="one.jpg", words=["A B"]),
             row_fixture(raw_image=second_image, path="two.jpg", words=["C"]),
             row_fixture(raw_image=second_image, path="three.jpg", words=["DIFFERENT"]),
@@ -343,11 +419,84 @@ class SroieAdapterTests(unittest.TestCase):
         self.assertEqual(corpus.selection_sha256, audit["selectionSha256"])
         self.assertFalse(any(output_root.rglob("*.incomplete-*")))
 
+    def test_source_conflicting_duplicates_do_not_collapse_after_repair(self) -> None:
+        repeated_image = synthetic_jpeg(marker=b"same")
+        rows = [
+            row_fixture(
+                raw_image=repeated_image,
+                path="zero.jpg",
+                words=["A"],
+                bboxes=[[1, 2, 1, 12]],
+            ),
+            row_fixture(
+                raw_image=repeated_image,
+                path="one.jpg",
+                words=["A"],
+                bboxes=[[1, 2, 2, 12]],
+            ),
+            row_fixture(raw_image=synthetic_jpeg(marker=b"single"), path="two.jpg", words=["B"]),
+        ]
+        for row in rows[2:]:
+            row["bboxes"] = [[1, 2, 2, 12]]
+        parquet_path = self.write_parquet(rows)
+        config = self.config_for(parquet_path, len(rows))
+        with patch.dict(sroie.SROIE_FILES, {"train": config}):
+            corpus = sroie.extract_sroie_corpus(
+                parquet_path, self.root / "repair-conflict"
+            )
+        self.assertEqual((2,), tuple(item.row_index for item in corpus.documents))
+        audit = json.loads(corpus.duplicate_audit.read_bytes())
+        group = audit["duplicateGroupAudit"][0]
+        self.assertEqual(2, group["distinctSourcePayloadDigests"])
+        self.assertEqual(1, group["distinctScoringAnnotationDigests"])
+        self.assertEqual("exclude-conflicting-group", group["decision"])
+
+    def test_extraction_writes_text_free_repair_audit_and_manifest_bindings(self) -> None:
+        row = row_fixture(words=["SECRET RECEIPT TEXT"], bboxes=[[14, 70, 15, 70]])
+        parquet_path = self.write_parquet([row])
+        config = self.config_for(parquet_path, 1)
+        with patch.dict(sroie.SROIE_FILES, {"train": config}):
+            corpus = sroie.extract_sroie_corpus(parquet_path, self.root / "repair-audit")
+        audit_bytes = corpus.bbox_repair_audit.read_bytes()
+        audit = json.loads(audit_bytes)
+        manifest = json.loads(corpus.corpus_manifest.read_text(encoding="utf-8"))
+        self.assertNotIn("SECRET RECEIPT TEXT", audit_bytes.decode("utf-8"))
+        self.assertEqual(1, audit["sourceRegions"])
+        self.assertEqual(1, audit["repairedRegions"])
+        self.assertEqual(0, audit["unchangedRegions"])
+        self.assertEqual(corpus.bbox_repair_audit_sha256, hashlib.sha256(audit_bytes).hexdigest())
+        self.assertEqual(corpus.bbox_repair_records_sha256, audit["repairRecordsSha256"])
+        self.assertEqual(
+            corpus.source_payload_identities_sha256,
+            audit["sourcePayloadIdentitiesSha256"],
+        )
+        self.assertEqual(
+            corpus.scoring_annotation_identities_sha256,
+            audit["scoringAnnotationIdentitiesSha256"],
+        )
+        self.assertEqual(1, manifest["bboxRepairCount"])
+        self.assertEqual(
+            audit["rowIdentities"][0]["repairRecordsSha256"],
+            manifest["bboxRepairRecordsSha256"],
+        )
+        self.assertEqual(manifest["annotationSha256"], manifest["scoringAnnotationSha256"])
+        self.assertEqual(
+            sroie_acceptance._corpus_repair_identity(corpus),
+            sroie_acceptance._validate_bbox_repair_audit(
+                corpus.bbox_repair_audit,
+                corpus_manifest=corpus.corpus_manifest,
+                split="train",
+                expected_raw_rows=1,
+                expected_identities=sroie_acceptance._expected_identities(corpus),
+                expected_repair_identity=sroie_acceptance._corpus_repair_identity(corpus),
+            ),
+        )
+
     def test_test_split_scores_every_row_and_only_audits_duplicates(self) -> None:
         first_image = synthetic_jpeg(marker=b"first")
         second_image = synthetic_jpeg(marker=b"second")
         rows = [
-            row_fixture(raw_image=first_image, path="zero.jpg", words=["A  B"]),
+            row_fixture(raw_image=first_image, path="zero.jpg", words=["A B"]),
             row_fixture(raw_image=first_image, path="one.jpg", words=["A B"]),
             row_fixture(raw_image=second_image, path="two.jpg", words=["C"]),
             row_fixture(raw_image=second_image, path="three.jpg", words=["DIFFERENT"]),

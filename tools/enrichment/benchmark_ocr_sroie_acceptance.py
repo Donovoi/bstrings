@@ -65,16 +65,13 @@ def _capture_entry_source() -> tuple[str, tuple[int | None, ...]]:
             if (
                 not stat.S_ISDIR(parent_stat.st_mode)
                 or stat.S_ISLNK(parent_stat.st_mode)
-                or parent_attributes
-                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+                or parent_attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
             ):
                 raise RuntimeError("The acceptance wrapper has an unsafe parent")
         lexical_stat = os.lstat(_SOURCE_FILE)
         descriptor = os.open(
             _SOURCE_FILE,
-            os.O_RDONLY
-            | getattr(os, "O_BINARY", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0),
         )
         try:
             before = os.fstat(descriptor)
@@ -348,7 +345,7 @@ else:
     import ocr_sroie_acceptance_policy as sroie_policy
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROTOCOL = sroie_policy.PROTOCOL
 DETERMINISM_DOCUMENTS = 10
 DETERMINISM_REPETITIONS = 2
@@ -410,6 +407,7 @@ class CalibrationContext:
     expected_identities: tuple[dict[str, Any], ...]
     corpus_manifest: Path
     duplicate_audit: Path
+    bbox_repair_audit: Path
     worker_manifest: Path
     inventory: Path
     runtime_inventories: dict[str, Path]
@@ -439,6 +437,20 @@ class ValidatedWitness:
     release_verification_sha256: str
     gh_executable_sha256: str
     gh_version: str
+
+
+@dataclass(frozen=True)
+class ConfirmatorySealContext:
+    """In-memory values frozen before the public report is staged."""
+
+    validated_policy: sroie_policy.ValidatedPolicy
+    expected_identities: tuple[dict[str, Any], ...]
+    backends_sha256: str
+    cross_backend_integrity_sha256: str
+    determinism_sha256: str
+    evaluations_sha256: str
+    metrics_sha256: str
+    report_sha256: str
 
 
 def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
@@ -666,23 +678,19 @@ def _finalize_report(output: Path, marker: Path, staged: StagedReport) -> None:
         file_identity=staged.file_identity,
     )
     _durable_replace(staged.path, output)
-    _verify_report_file(
-        output, sha256=staged.sha256, byte_length=staged.byte_length
-    )
+    _verify_report_file(output, sha256=staged.sha256, byte_length=staged.byte_length)
     _durable_remove_marker(marker)
 
 
 def _unsafe_file_attributes(value: os.stat_result) -> bool:
     return bool(
-        getattr(value, "st_file_attributes", 0)
-        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        getattr(value, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     )
 
 
 def _file_identity(value: os.stat_result) -> tuple[int | None, ...]:
     return tuple(
-        getattr(value, name, None)
-        for name in ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+        getattr(value, name, None) for name in ("st_dev", "st_ino", "st_size", "st_mtime_ns")
     )
 
 
@@ -690,9 +698,7 @@ def _directory_object_id(value: os.stat_result) -> tuple[int | None, int | None]
     return (getattr(value, "st_dev", None), getattr(value, "st_ino", None))
 
 
-def _parents_stable(
-    parents: Sequence[tuple[Path, tuple[int | None, int | None]]]
-) -> bool:
+def _parents_stable(parents: Sequence[tuple[Path, tuple[int | None, int | None]]]) -> bool:
     for parent, expected in parents:
         try:
             value = os.lstat(parent)
@@ -737,14 +743,10 @@ def _read_regular_file(
             or _unsafe_file_attributes(lexical_stat)
             or lexical_stat.st_size > maximum_bytes
         ):
-            raise AcceptanceError(
-                f"The {name} is unavailable, unsafe, or too large", stage=stage
-            )
+            raise AcceptanceError(f"The {name} is unavailable, unsafe, or too large", stage=stage)
         descriptor = os.open(
             lexical,
-            os.O_RDONLY
-            | getattr(os, "O_BINARY", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0),
         )
     except AcceptanceError:
         raise
@@ -842,6 +844,7 @@ def _parse_json_bytes(
 ) -> dict[str, Any]:
     if len(raw) > maximum_bytes:
         raise AcceptanceError(f"The {name} is too large", stage="input")
+
     def reject_pairs(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
         output: dict[str, Any] = {}
         for key, value in pairs:
@@ -881,9 +884,7 @@ def _parse_jsonl_bytes(
         try:
             value = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise AcceptanceError(
-                f"The {name} line {line_number} is invalid", stage=stage
-            ) from exc
+            raise AcceptanceError(f"The {name} line {line_number} is invalid", stage=stage) from exc
         if not isinstance(value, dict) or raw != _canonical_bytes(value):
             raise AcceptanceError(f"The {name} is not canonical JSONL", stage=stage)
         rows.append(value)
@@ -891,9 +892,7 @@ def _parse_jsonl_bytes(
 
 
 def _strict_jsonl(path: Path, *, name: str) -> list[dict[str, Any]]:
-    _, raw_document, _ = _read_regular_file(
-        path, maximum_bytes=MAX_JSONL_BYTES, name=name
-    )
+    _, raw_document, _ = _read_regular_file(path, maximum_bytes=MAX_JSONL_BYTES, name=name)
     return _parse_jsonl_bytes(raw_document, name=name)
 
 
@@ -1015,6 +1014,8 @@ def verify_candidate(args: argparse.Namespace) -> FrozenCandidate:
 
 def _scoring_constants() -> dict[str, Any]:
     return {
+        "bboxRepairAuditSchemaVersion": sroie.SROIE_BBOX_REPAIR_AUDIT_SCHEMA_VERSION,
+        "bboxRepairPolicy": sroie.SROIE_BBOX_REPAIR_POLICY,
         "confidenceParityMaximumAbsoluteDelta": cord.CONFIDENCE_PARITY_MAX_ABS_DELTA,
         "duplicateImagePolicy": sroie.SROIE_DUPLICATE_IMAGE_POLICY,
         "hybridMinimumLaneFraction": HYBRID_MINIMUM_LANE_FRACTION,
@@ -1088,9 +1089,33 @@ def _runtime_identity(runtimes: Mapping[str, Mapping[str, Any]]) -> dict[str, An
     }
 
 
+_REPAIR_IDENTITY_KEYS = frozenset(
+    {
+        "bboxRepairAuditSha256",
+        "bboxRepairRecordsSha256",
+        "repairedRegionCount",
+        "scoringAnnotationIdentitiesSha256",
+        "sourcePayloadIdentitiesSha256",
+        "sourceRegionCount",
+    }
+)
+
+
+def _corpus_repair_identity(corpus: Any) -> dict[str, Any]:
+    return {
+        "bboxRepairAuditSha256": corpus.bbox_repair_audit_sha256,
+        "bboxRepairRecordsSha256": corpus.bbox_repair_records_sha256,
+        "repairedRegionCount": corpus.repaired_region_count,
+        "scoringAnnotationIdentitiesSha256": (corpus.scoring_annotation_identities_sha256),
+        "sourcePayloadIdentitiesSha256": corpus.source_payload_identities_sha256,
+        "sourceRegionCount": corpus.source_region_count,
+    }
+
+
 def _corpus_identity(corpus: Any, *, parquet_sha256: str) -> dict[str, Any]:
     identities = _expected_identities(corpus)
     return {
+        **_corpus_repair_identity(corpus),
         "corpusManifestSha256": corpus.corpus_manifest_sha256,
         "duplicateAuditSha256": corpus.duplicate_audit_sha256,
         "excludedRows": len(corpus.excluded_row_indices),
@@ -1191,9 +1216,9 @@ def _per_document_bytes(metrics: Mapping[str, Any]) -> bytes:
     per_document = metrics.get("perDocument")
     if not isinstance(per_document, list):
         raise AcceptanceError("The OCR metrics lack per-document rows", stage="scoring")
-    return "".join(
-        sroie_policy.canonical_json(item) + "\n" for item in per_document
-    ).encode("utf-8")
+    return "".join(sroie_policy.canonical_json(item) + "\n" for item in per_document).encode(
+        "utf-8"
+    )
 
 
 def _rescore_backend_run(
@@ -1231,9 +1256,7 @@ def _rescore_backend_run(
             name="OCR strings output",
             stage="scoring",
         )
-        strict_metrics = _profile_metrics(
-            run["metrics"], sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION
-        )
+        strict_metrics = _profile_metrics(run["metrics"], sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION)
         primary_metrics = _profile_metrics(
             sroie.score_records_case_insensitive(corpus, records),
             sroie.SROIE_PRIMARY_TEXT_NORMALIZATION,
@@ -1454,12 +1477,26 @@ def execute_calibration(
             "The full pinned train corpus was not extracted", stage="calibration-corpus"
         )
     expected_identities = _expected_identities(corpus)
+    repair_identity = _validate_bbox_repair_audit(
+        corpus.bbox_repair_audit,
+        corpus_manifest=corpus.corpus_manifest,
+        split="train",
+        expected_raw_rows=sroie_policy.RAW_TRAIN_ROWS,
+        expected_identities=expected_identities,
+        expected_repair_identity=_corpus_repair_identity(corpus),
+    )
     if (
         _validate_duplicate_audit(
             corpus.duplicate_audit,
             split="train",
             expected_raw_rows=sroie_policy.RAW_TRAIN_ROWS,
             expected_identities=expected_identities,
+            expected_source_payload_identities_sha256=repair_identity[
+                "sourcePayloadIdentitiesSha256"
+            ],
+            expected_scoring_annotation_identities_sha256=repair_identity[
+                "scoringAnnotationIdentitiesSha256"
+            ],
         )
         != corpus.source_image_sha256s
     ):
@@ -1503,6 +1540,9 @@ def execute_calibration(
             ),
             "calibrationDuplicateAudit": _safe_artifact(
                 corpus.duplicate_audit, evidence_root=phase_root
+            ),
+            "calibrationBboxRepairAudit": _safe_artifact(
+                corpus.bbox_repair_audit, evidence_root=phase_root
             ),
             "calibrationInventory": _safe_artifact(corpus.inventory, evidence_root=phase_root),
             "calibrationWorkerManifest": _safe_artifact(
@@ -1579,12 +1619,320 @@ def _calibration_expected_identities(manifest: Path) -> tuple[dict[str, Any], ..
     return identities
 
 
+def _validate_bbox_repair_audit(
+    path: Path,
+    *,
+    corpus_manifest: Path,
+    split: str,
+    expected_raw_rows: int,
+    expected_identities: Sequence[Mapping[str, Any]],
+    expected_repair_identity: Mapping[str, Any],
+) -> dict[str, Any]:
+    def is_digest(value: Any) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
+
+    if not isinstance(expected_repair_identity, Mapping):
+        raise AcceptanceError(
+            "The expected bbox repair identity is invalid", stage="bbox-repair-audit"
+        )
+    frozen_expected_repair_identity = dict(expected_repair_identity)
+    if (
+        set(frozen_expected_repair_identity) != _REPAIR_IDENTITY_KEYS
+        or any(
+            not is_digest(frozen_expected_repair_identity.get(name))
+            for name in _REPAIR_IDENTITY_KEYS
+            if name.endswith("Sha256")
+        )
+        or type(frozen_expected_repair_identity.get("sourceRegionCount")) is not int
+        or frozen_expected_repair_identity["sourceRegionCount"] <= 0
+        or type(frozen_expected_repair_identity.get("repairedRegionCount")) is not int
+        or not 0
+        <= frozen_expected_repair_identity["repairedRegionCount"]
+        <= frozen_expected_repair_identity["sourceRegionCount"]
+    ):
+        raise AcceptanceError(
+            "The expected bbox repair identity is invalid", stage="bbox-repair-audit"
+        )
+    audit, audit_sha256 = _strict_json(
+        path, maximum_bytes=MAX_JSONL_BYTES, name=f"{split} bbox repair audit"
+    )
+    root_keys = {
+        "dataset",
+        "policy",
+        "protocol",
+        "repairedRegions",
+        "repairRecordsSha256",
+        "repairs",
+        "revision",
+        "rowIdentities",
+        "schemaVersion",
+        "scoringAnnotationIdentitiesSha256",
+        "sourcePayloadIdentitiesSha256",
+        "sourceRegions",
+        "sourceRows",
+        "split",
+        "unchangedRegions",
+    }
+    if (
+        set(audit) != root_keys
+        or audit.get("schemaVersion") != sroie.SROIE_BBOX_REPAIR_AUDIT_SCHEMA_VERSION
+        or audit.get("protocol") != sroie.SROIE_PROTOCOL
+        or audit.get("dataset") != sroie.SROIE_REPOSITORY
+        or audit.get("revision") != sroie.SROIE_COMMIT
+        or audit.get("split") != split
+        or audit.get("policy") != sroie.SROIE_BBOX_REPAIR_POLICY
+        or audit.get("sourceRows") != expected_raw_rows
+    ):
+        raise AcceptanceError("The bbox repair audit identity changed", stage="bbox-repair-audit")
+
+    row_identities = audit.get("rowIdentities")
+    row_keys = {
+        "repairedRegions",
+        "repairRecordsSha256",
+        "rowIndex",
+        "scoringAnnotationSha256",
+        "sourcePayloadSha256",
+        "sourceRegions",
+    }
+    if not isinstance(row_identities, list) or len(row_identities) != expected_raw_rows:
+        raise AcceptanceError("The bbox repair row inventory changed", stage="bbox-repair-audit")
+    rows_by_index: dict[int, Mapping[str, Any]] = {}
+    for expected_index, row in enumerate(row_identities):
+        if (
+            not isinstance(row, Mapping)
+            or set(row) != row_keys
+            or row.get("rowIndex") != expected_index
+            or type(row.get("sourceRegions")) is not int
+            or row["sourceRegions"] <= 0
+            or type(row.get("repairedRegions")) is not int
+            or not 0 <= row["repairedRegions"] <= row["sourceRegions"]
+            or not is_digest(row.get("sourcePayloadSha256"))
+            or not is_digest(row.get("scoringAnnotationSha256"))
+            or not is_digest(row.get("repairRecordsSha256"))
+        ):
+            raise AcceptanceError(
+                "A bbox repair row identity is invalid", stage="bbox-repair-audit"
+            )
+        rows_by_index[expected_index] = row
+
+    repairs = audit.get("repairs")
+    repair_keys = {
+        "axisExpansionPixels",
+        "degenerateAxis",
+        "direction",
+        "imageHeight",
+        "imageWidth",
+        "rowIndex",
+        "scoringAnnotationSha256",
+        "scoringBbox",
+        "sourceBbox",
+        "sourceIndex",
+        "sourcePayloadSha256",
+    }
+    if not isinstance(repairs, list) or audit.get(
+        "repairRecordsSha256"
+    ) != sroie_policy.sha256_canonical(repairs):
+        raise AcceptanceError("The bbox repair record digest changed", stage="bbox-repair-audit")
+    grouped_repairs: dict[int, list[Mapping[str, Any]]] = {
+        index: [] for index in range(expected_raw_rows)
+    }
+    previous_key: tuple[int, int] | None = None
+    for repair in repairs:
+        if not isinstance(repair, Mapping) or set(repair) != repair_keys:
+            raise AcceptanceError("A bbox repair record is invalid", stage="bbox-repair-audit")
+        row_index = repair.get("rowIndex")
+        source_index = repair.get("sourceIndex")
+        width = repair.get("imageWidth")
+        height = repair.get("imageHeight")
+        if (
+            type(row_index) is not int
+            or row_index not in rows_by_index
+            or type(source_index) is not int
+            or not 0 <= source_index < rows_by_index[row_index]["sourceRegions"]
+            or type(width) is not int
+            or width <= 0
+            or type(height) is not int
+            or height <= 0
+            or type(repair.get("axisExpansionPixels")) is not int
+            or repair.get("axisExpansionPixels") != 1
+            or repair.get("sourcePayloadSha256") != rows_by_index[row_index]["sourcePayloadSha256"]
+            or repair.get("scoringAnnotationSha256")
+            != rows_by_index[row_index]["scoringAnnotationSha256"]
+        ):
+            raise AcceptanceError(
+                "A bbox repair record binding is invalid", stage="bbox-repair-audit"
+            )
+        key = (row_index, source_index)
+        if previous_key is not None and key <= previous_key:
+            raise AcceptanceError("The bbox repair record order changed", stage="bbox-repair-audit")
+        previous_key = key
+        source_box = repair.get("sourceBbox")
+        scoring_box = repair.get("scoringBbox")
+        if (
+            not isinstance(source_box, list)
+            or not isinstance(scoring_box, list)
+            or len(source_box) != 4
+            or len(scoring_box) != 4
+            or any(type(value) is not int for value in (*source_box, *scoring_box))
+        ):
+            raise AcceptanceError("A bbox repair geometry is invalid", stage="bbox-repair-audit")
+        left, top, right, bottom = source_box
+        if not (0 <= left <= right <= width and 0 <= top <= bottom <= height):
+            raise AcceptanceError("A source bbox is outside the image", stage="bbox-repair-audit")
+        zero_width = left == right
+        zero_height = top == bottom
+        if zero_width == zero_height:
+            raise AcceptanceError(
+                "A source bbox is not singly degenerate", stage="bbox-repair-audit"
+            )
+        expected_box = list(source_box)
+        if zero_width:
+            axis = "x"
+            if right < width:
+                expected_box[2] += 1
+                direction = "increase-upper"
+            else:
+                expected_box[0] -= 1
+                direction = "decrease-lower"
+        else:
+            axis = "y"
+            if bottom < height:
+                expected_box[3] += 1
+                direction = "increase-upper"
+            else:
+                expected_box[1] -= 1
+                direction = "decrease-lower"
+        scored_left, scored_top, scored_right, scored_bottom = scoring_box
+        coordinate_deltas = [
+            abs(scored - source) for scored, source in zip(scoring_box, source_box, strict=True)
+        ]
+        if (
+            scoring_box != expected_box
+            or repair.get("degenerateAxis") != axis
+            or repair.get("direction") != direction
+            or sorted(coordinate_deltas) != [0, 0, 0, 1]
+            or not (
+                0 <= scored_left < scored_right <= width
+                and 0 <= scored_top < scored_bottom <= height
+            )
+        ):
+            raise AcceptanceError(
+                "A bbox repair is not the frozen one-pixel transform",
+                stage="bbox-repair-audit",
+            )
+        grouped_repairs[row_index].append(repair)
+
+    for row_index, row in rows_by_index.items():
+        row_repairs = grouped_repairs[row_index]
+        if row["repairedRegions"] != len(row_repairs) or row[
+            "repairRecordsSha256"
+        ] != sroie_policy.sha256_canonical(row_repairs):
+            raise AcceptanceError("A bbox repair row accounting changed", stage="bbox-repair-audit")
+
+    source_payload_identities = [
+        {"rowIndex": index, "sourcePayloadSha256": row["sourcePayloadSha256"]}
+        for index, row in rows_by_index.items()
+    ]
+    scoring_annotation_identities = [
+        {
+            "rowIndex": index,
+            "scoringAnnotationSha256": row["scoringAnnotationSha256"],
+        }
+        for index, row in rows_by_index.items()
+    ]
+    source_regions = sum(row["sourceRegions"] for row in rows_by_index.values())
+    repaired_regions = len(repairs)
+    if (
+        audit.get("sourceRegions") != source_regions
+        or audit.get("repairedRegions") != repaired_regions
+        or audit.get("unchangedRegions") != source_regions - repaired_regions
+        or audit.get("sourcePayloadIdentitiesSha256")
+        != sroie_policy.sha256_canonical(source_payload_identities)
+        or audit.get("scoringAnnotationIdentitiesSha256")
+        != sroie_policy.sha256_canonical(scoring_annotation_identities)
+    ):
+        raise AcceptanceError("The bbox repair totals changed", stage="bbox-repair-audit")
+
+    manifest_rows = _strict_jsonl(corpus_manifest, name=f"{split} corpus manifest")
+    expected_identity_by_row = {
+        item.get("rowIndex"): item.get("imageSha256") for item in expected_identities
+    }
+    if len(expected_identity_by_row) != len(expected_identities) or any(
+        type(row_index) is not int or not is_digest(image_sha256)
+        for row_index, image_sha256 in expected_identity_by_row.items()
+    ):
+        raise AcceptanceError(
+            "The expected corpus identities are invalid", stage="bbox-repair-audit"
+        )
+    manifest_indices: list[int] = []
+    for manifest_row in manifest_rows:
+        row_index = manifest_row.get("rowIndex")
+        row_identity = rows_by_index.get(row_index) if type(row_index) is int else None
+        if (
+            row_identity is None
+            or manifest_indices
+            and row_index <= manifest_indices[-1]
+            or manifest_row.get("schemaVersion")
+            != sroie.SROIE_SCORING_CORPUS_MANIFEST_SCHEMA_VERSION
+            or manifest_row.get("protocol") != sroie.SROIE_PROTOCOL
+            or manifest_row.get("dataset") != sroie.SROIE_REPOSITORY
+            or manifest_row.get("revision") != sroie.SROIE_COMMIT
+            or manifest_row.get("split") != split
+            or manifest_row.get("sha256") != expected_identity_by_row.get(row_index)
+            or manifest_row.get("bboxRepairPolicy") != sroie.SROIE_BBOX_REPAIR_POLICY
+            or manifest_row.get("sourcePayloadSha256") != row_identity["sourcePayloadSha256"]
+            or manifest_row.get("scoringAnnotationSha256")
+            != row_identity["scoringAnnotationSha256"]
+            or manifest_row.get("annotationSha256") != row_identity["scoringAnnotationSha256"]
+            or manifest_row.get("groundTruthLines") != row_identity["sourceRegions"]
+            or manifest_row.get("groundTruthWords") != row_identity["sourceRegions"]
+            or manifest_row.get("groundTruthPhysicalRows") != row_identity["sourceRegions"]
+            or manifest_row.get("bboxRepairCount") != row_identity["repairedRegions"]
+            or manifest_row.get("bboxRepairRecordsSha256") != row_identity["repairRecordsSha256"]
+            or type(manifest_row.get("imageWidth")) is not int
+            or manifest_row["imageWidth"] <= 0
+            or type(manifest_row.get("imageHeight")) is not int
+            or manifest_row["imageHeight"] <= 0
+            or any(
+                repair.get("imageWidth") != manifest_row["imageWidth"]
+                or repair.get("imageHeight") != manifest_row["imageHeight"]
+                for repair in grouped_repairs[row_index]
+            )
+        ):
+            raise AcceptanceError(
+                "The corpus manifest bbox repair binding changed", stage="bbox-repair-audit"
+            )
+        manifest_indices.append(row_index)
+    if manifest_indices != list(expected_identity_by_row):
+        raise AcceptanceError("The corpus manifest selection changed", stage="bbox-repair-audit")
+    actual_repair_identity = {
+        "bboxRepairAuditSha256": audit_sha256,
+        "bboxRepairRecordsSha256": audit["repairRecordsSha256"],
+        "repairedRegionCount": repaired_regions,
+        "scoringAnnotationIdentitiesSha256": audit["scoringAnnotationIdentitiesSha256"],
+        "sourcePayloadIdentitiesSha256": audit["sourcePayloadIdentitiesSha256"],
+        "sourceRegionCount": source_regions,
+    }
+    if actual_repair_identity != frozen_expected_repair_identity:
+        raise AcceptanceError(
+            "The bbox repair audit differs from the independently extracted corpus identity",
+            stage="bbox-repair-audit",
+        )
+    return actual_repair_identity
+
+
 def _validate_duplicate_audit(
     path: Path,
     *,
     split: str,
     expected_raw_rows: int,
     expected_identities: Sequence[Mapping[str, Any]],
+    expected_source_payload_identities_sha256: str | None = None,
+    expected_scoring_annotation_identities_sha256: str | None = None,
 ) -> tuple[str, ...]:
     audit, _ = _strict_json(path, maximum_bytes=MAX_JSONL_BYTES, name=f"{split} duplicate audit")
     required = {
@@ -1601,12 +1949,14 @@ def _validate_duplicate_audit(
         "revision",
         "schemaVersion",
         "selectionSha256",
+        "sourceAnnotationDigests",
         "sourceImageDigestSetSha256",
         "sourceImageDigests",
         "sourceRows",
         "split",
     }
     source_rows = audit.get("sourceImageDigests")
+    source_annotations = audit.get("sourceAnnotationDigests")
     excluded = audit.get("excludedRowIndices")
     if (
         set(audit) != required
@@ -1625,6 +1975,8 @@ def _validate_duplicate_audit(
         != sroie_policy.sha256_canonical([dict(item) for item in expected_identities])
         or not isinstance(source_rows, list)
         or len(source_rows) != expected_raw_rows
+        or not isinstance(source_annotations, list)
+        or len(source_annotations) != expected_raw_rows
     ):
         raise AcceptanceError("The duplicate-selection audit changed", stage="duplicate-audit")
     digests: list[str] = []
@@ -1640,6 +1992,50 @@ def _validate_duplicate_audit(
         ):
             raise AcceptanceError("A source image digest is invalid", stage="duplicate-audit")
         digests.append(digest)
+    source_payload_digests: list[str] = []
+    scoring_annotation_digests: list[str] = []
+    for index, row in enumerate(source_annotations):
+        source_payload = row.get("sourcePayloadSha256") if isinstance(row, Mapping) else None
+        scoring_annotation = (
+            row.get("scoringAnnotationSha256") if isinstance(row, Mapping) else None
+        )
+        if (
+            not isinstance(row, Mapping)
+            or set(row) != {"rowIndex", "scoringAnnotationSha256", "sourcePayloadSha256"}
+            or row.get("rowIndex") != index
+            or any(
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+                for value in (source_payload, scoring_annotation)
+            )
+        ):
+            raise AcceptanceError("A source annotation digest is invalid", stage="duplicate-audit")
+        source_payload_digests.append(source_payload)
+        scoring_annotation_digests.append(scoring_annotation)
+    source_payload_identities_sha256 = sroie_policy.sha256_canonical(
+        [
+            {"rowIndex": index, "sourcePayloadSha256": digest}
+            for index, digest in enumerate(source_payload_digests)
+        ]
+    )
+    scoring_annotation_identities_sha256 = sroie_policy.sha256_canonical(
+        [
+            {"rowIndex": index, "scoringAnnotationSha256": digest}
+            for index, digest in enumerate(scoring_annotation_digests)
+        ]
+    )
+    if (
+        expected_source_payload_identities_sha256 is not None
+        and source_payload_identities_sha256 != expected_source_payload_identities_sha256
+    ) or (
+        expected_scoring_annotation_identities_sha256 is not None
+        and scoring_annotation_identities_sha256 != expected_scoring_annotation_identities_sha256
+    ):
+        raise AcceptanceError(
+            "The duplicate and repair annotation identities differ",
+            stage="duplicate-audit",
+        )
     if audit.get("sourceImageDigestSetSha256") != sroie_policy.sha256_canonical(
         sorted(set(digests))
     ):
@@ -1653,44 +2049,55 @@ def _validate_duplicate_audit(
         digest for digest, indices in grouped_rows.items() if len(indices) > 1
     ]
     group_audit = audit.get("duplicateGroupAudit")
-    if not isinstance(group_audit, list) or len(group_audit) != len(
-        expected_duplicate_digests
-    ):
+    if not isinstance(group_audit, list) or len(group_audit) != len(expected_duplicate_digests):
         raise AcceptanceError("The duplicate group inventory changed", stage="duplicate-audit")
     computed_excluded: list[int] = []
     identical_groups = 0
     conflicting_groups = 0
     group_keys = {
-        "annotationSha256s",
         "decision",
-        "distinctAnnotationDigests",
+        "distinctScoringAnnotationDigests",
+        "distinctSourcePayloadDigests",
         "excludedRowIndices",
         "imageSha256",
         "includedRowIndices",
         "rowCount",
         "rowIndices",
+        "scoringAnnotationSha256s",
+        "sourcePayloadSha256s",
     }
     for group_index, (group, expected_digest) in enumerate(
         zip(group_audit, expected_duplicate_digests, strict=True)
     ):
         expected_rows = grouped_rows[expected_digest]
-        annotation_sha256s = group.get("annotationSha256s") if isinstance(group, Mapping) else None
+        source_payload_sha256s = (
+            group.get("sourcePayloadSha256s") if isinstance(group, Mapping) else None
+        )
+        scoring_annotation_sha256s = (
+            group.get("scoringAnnotationSha256s") if isinstance(group, Mapping) else None
+        )
+        expected_source_payloads = sorted(
+            {source_payload_digests[index] for index in expected_rows}
+        )
+        expected_scoring_annotations = sorted(
+            {scoring_annotation_digests[index] for index in expected_rows}
+        )
         if (
             not isinstance(group, Mapping)
             or set(group) != group_keys
             or group.get("imageSha256") != expected_digest
             or group.get("rowIndices") != expected_rows
             or group.get("rowCount") != len(expected_rows)
-            or not isinstance(annotation_sha256s, list)
-            or annotation_sha256s != sorted(set(annotation_sha256s))
-            or not annotation_sha256s
+            or source_payload_sha256s != expected_source_payloads
+            or scoring_annotation_sha256s != expected_scoring_annotations
             or any(
                 not isinstance(digest, str)
                 or len(digest) != 64
                 or any(character not in "0123456789abcdef" for character in digest)
-                for digest in annotation_sha256s
+                for digest in (*expected_source_payloads, *expected_scoring_annotations)
             )
-            or group.get("distinctAnnotationDigests") != len(annotation_sha256s)
+            or group.get("distinctSourcePayloadDigests") != len(expected_source_payloads)
+            or group.get("distinctScoringAnnotationDigests") != len(expected_scoring_annotations)
         ):
             raise AcceptanceError(
                 f"Duplicate group {group_index} is invalid", stage="duplicate-audit"
@@ -1698,11 +2105,11 @@ def _validate_duplicate_audit(
         if split == "test":
             decision = "score-all-test-rows"
             included_rows = expected_rows
-            if len(annotation_sha256s) == 1:
+            if len(expected_source_payloads) == 1:
                 identical_groups += 1
             else:
                 conflicting_groups += 1
-        elif len(annotation_sha256s) == 1:
+        elif len(expected_source_payloads) == 1:
             decision = "keep-lowest-row-index"
             included_rows = [expected_rows[0]]
             identical_groups += 1
@@ -1759,6 +2166,11 @@ def load_calibration_context(report_path: Path, evidence_root: Path) -> Calibrat
     duplicate_audit = _resolve_artifact(
         root, artifacts.get("calibrationDuplicateAudit"), name="calibration duplicate audit"
     )
+    bbox_repair_audit = _resolve_artifact(
+        root,
+        artifacts.get("calibrationBboxRepairAudit"),
+        name="calibration bbox repair audit",
+    )
     worker_manifest = _resolve_artifact(
         root, artifacts.get("calibrationWorkerManifest"), name="calibration worker manifest"
     )
@@ -1779,19 +2191,40 @@ def load_calibration_context(report_path: Path, evidence_root: Path) -> Calibrat
         for name, value in runtime_artifacts.items()
     }
     expected = _calibration_expected_identities(corpus_manifest)
+    identity = report.get("identity")
+    if not isinstance(identity, dict):
+        raise AcceptanceError("The calibration identity is absent", stage="calibration-input")
+    corpus_identity = identity.get("calibrationCorpus")
+    if not isinstance(corpus_identity, Mapping):
+        raise AcceptanceError(
+            "The calibration corpus identity is absent", stage="calibration-input"
+        )
+    persisted_repair_identity = {
+        key: corpus_identity.get(key) for key in _REPAIR_IDENTITY_KEYS
+    }
+    repair_identity = _validate_bbox_repair_audit(
+        bbox_repair_audit,
+        corpus_manifest=corpus_manifest,
+        split="train",
+        expected_raw_rows=sroie_policy.RAW_TRAIN_ROWS,
+        expected_identities=expected,
+        # This path reloads a frozen calibration. The signed report identity is
+        # its persisted trust anchor; live calibration uses the independently
+        # extracted in-memory corpus identity instead.
+        expected_repair_identity=persisted_repair_identity,
+    )
     source_image_sha256s = _validate_duplicate_audit(
         duplicate_audit,
         split="train",
         expected_raw_rows=sroie_policy.RAW_TRAIN_ROWS,
         expected_identities=expected,
+        expected_source_payload_identities_sha256=repair_identity["sourcePayloadIdentitiesSha256"],
+        expected_scoring_annotation_identities_sha256=repair_identity[
+            "scoringAnnotationIdentitiesSha256"
+        ],
     )
-    identity = report.get("identity")
-    if not isinstance(identity, dict):
-        raise AcceptanceError("The calibration identity is absent", stage="calibration-input")
-    corpus_identity = identity.get("calibrationCorpus")
     if (
-        not isinstance(corpus_identity, Mapping)
-        or corpus_identity.get("corpusManifestSha256")
+        corpus_identity.get("corpusManifestSha256")
         != benchmark_core.sha256_file(corpus_manifest)
         or corpus_identity.get("workerManifestSha256")
         != benchmark_core.sha256_file(worker_manifest)
@@ -1805,6 +2238,7 @@ def load_calibration_context(report_path: Path, evidence_root: Path) -> Calibrat
                 for index, digest in enumerate(source_image_sha256s)
             ]
         )
+        or any(corpus_identity.get(key) != value for key, value in repair_identity.items())
     ):
         raise AcceptanceError("The calibration corpus binding changed", stage="calibration-input")
     return CalibrationContext(
@@ -1814,6 +2248,7 @@ def load_calibration_context(report_path: Path, evidence_root: Path) -> Calibrat
         expected_identities=expected,
         corpus_manifest=corpus_manifest,
         duplicate_audit=duplicate_audit,
+        bbox_repair_audit=bbox_repair_audit,
         worker_manifest=worker_manifest,
         inventory=inventory,
         runtime_inventories=runtime_paths,
@@ -1913,15 +2348,9 @@ def _run_pinned_gh(
         name="pinned GitHub CLI executable",
         stage="witness",
     )
-    if (
-        identity_after != identity_before
-        or _sha256_bytes(executable_after) != PINNED_GH_EXE_SHA256
-    ):
+    if identity_after != identity_before or _sha256_bytes(executable_after) != PINNED_GH_EXE_SHA256:
         raise AcceptanceError("The GitHub CLI executable changed while it ran", stage="witness")
-    if (
-        len(result.stdout) > MAX_GH_STDOUT_BYTES
-        or len(result.stderr) > MAX_GH_STDERR_BYTES
-    ):
+    if len(result.stdout) > MAX_GH_STDOUT_BYTES or len(result.stderr) > MAX_GH_STDERR_BYTES:
         raise AcceptanceError("The GitHub CLI output exceeded its bound", stage="witness")
     if result.returncode != 0:
         raise AcceptanceError("GitHub release verification failed", stage="witness")
@@ -1941,16 +2370,12 @@ def _verify_release_statement(
     bundle = attestation.get("bundle") if isinstance(attestation, Mapping) else None
     envelope = bundle.get("dsseEnvelope") if isinstance(bundle, Mapping) else None
     statement = (
-        verification_result.get("statement")
-        if isinstance(verification_result, Mapping)
-        else None
+        verification_result.get("statement") if isinstance(verification_result, Mapping) else None
     )
     predicate = statement.get("predicate") if isinstance(statement, Mapping) else None
     subjects = statement.get("subject") if isinstance(statement, Mapping) else None
     signature = (
-        verification_result.get("signature")
-        if isinstance(verification_result, Mapping)
-        else None
+        verification_result.get("signature") if isinstance(verification_result, Mapping) else None
     )
     certificate = signature.get("certificate") if isinstance(signature, Mapping) else None
     timestamps = (
@@ -1972,21 +2397,18 @@ def _verify_release_statement(
         or verification_result.get("mediaType")
         != "application/vnd.dev.sigstore.verificationresult+json;version=0.1"
         or not isinstance(certificate, Mapping)
-        or certificate.get("subjectAlternativeName")
-        != "https://dotcom.releases.github.com"
+        or certificate.get("subjectAlternativeName") != "https://dotcom.releases.github.com"
         or not isinstance(timestamps, list)
         or not timestamps
         or not isinstance(statement, Mapping)
         or statement.get("_type") != "https://in-toto.io/Statement/v1"
-        or statement.get("predicateType")
-        != "https://in-toto.io/attestation/release/v0.2"
+        or statement.get("predicateType") != "https://in-toto.io/attestation/release/v0.2"
         or not isinstance(predicate, Mapping)
         or predicate.get("repository") != PINNED_RELEASE_REPOSITORY
         or predicate.get("repositoryId") != PINNED_RELEASE_REPOSITORY_ID
         or predicate.get("ownerId") != PINNED_RELEASE_OWNER_ID
         or predicate.get("tag") != release_tag
-        or predicate.get("purl")
-        != f"pkg:github/{PINNED_RELEASE_REPOSITORY}@{release_tag}"
+        or predicate.get("purl") != f"pkg:github/{PINNED_RELEASE_REPOSITORY}@{release_tag}"
         or not isinstance(subjects, list)
         or not all(isinstance(subject, Mapping) for subject in subjects)
     ):
@@ -2220,11 +2642,8 @@ def _start_attempt(
     return claim
 
 
-def _prepare_machine_ledger_directory(
-) -> tuple[tuple[Path, tuple[int | None, int | None]], ...]:
-    expected = _lexical_absolute(
-        _MACHINE_STATE_ROOT / "bstrings" / "acceptance-ledgers"
-    )
+def _prepare_machine_ledger_directory() -> tuple[tuple[Path, tuple[int | None, int | None]], ...]:
+    expected = _lexical_absolute(_MACHINE_STATE_ROOT / "bstrings" / "acceptance-ledgers")
     if _lexical_absolute(CONFIRMATORY_ATTEMPT_LEDGER).parent != expected:
         raise AcceptanceError("The machine-global ledger namespace changed", stage="one-shot")
     components = (_lexical_absolute(_MACHINE_STATE_ROOT), expected.parent, expected)
@@ -2249,14 +2668,10 @@ def _prepare_machine_ledger_directory(
             or stat.S_ISLNK(value.st_mode)
             or _unsafe_file_attributes(value)
         ):
-            raise AcceptanceError(
-                "The machine-global ledger directory is unsafe", stage="one-shot"
-            )
+            raise AcceptanceError("The machine-global ledger directory is unsafe", stage="one-shot")
         snapshots.append((component, _directory_object_id(value)))
     if not _parents_stable(snapshots):
-        raise AcceptanceError(
-            "The machine-global ledger directory changed", stage="one-shot"
-        )
+        raise AcceptanceError("The machine-global ledger directory changed", stage="one-shot")
     return tuple(snapshots)
 
 
@@ -2270,20 +2685,49 @@ def _load_claim(claim: AttemptClaim) -> dict[str, Any]:
 
 
 def _load_attempt_state(claim: AttemptClaim) -> dict[str, Any]:
-    value, _ = _strict_json(
-        claim.path, maximum_bytes=2 * 1024 * 1024, name="attempt ledger"
-    )
-    if any(
-        key != "status" and value.get(key) != expected
-        for key, expected in claim.value.items()
-    ):
+    value, _ = _strict_json(claim.path, maximum_bytes=2 * 1024 * 1024, name="attempt ledger")
+    if any(key != "status" and value.get(key) != expected for key, expected in claim.value.items()):
         raise AcceptanceError("The immutable attempt claim fields changed", stage="one-shot")
     if value.get("status") != "started" and value.get("claimSha256") != claim.sha256:
         raise AcceptanceError("The attempt state does not bind its initial claim", stage="one-shot")
     return value
 
 
-def _confirmatory_report_bindings(report: Mapping[str, Any]) -> dict[str, Any]:
+_CONFIRMATORY_REPORT_BINDING_KEYS = frozenset(
+    {
+        "acceptancePassed",
+        "confirmatoryBboxRepairAuditSha256",
+        "confirmatoryBboxRepairRecordsSha256",
+        "confirmatoryCorpusManifestSha256",
+        "confirmatoryDocuments",
+        "confirmatoryDuplicateAuditSha256",
+        "confirmatoryIdentitySha256",
+        "confirmatoryImageIdentitiesSha256",
+        "confirmatoryPolicyId",
+        "confirmatoryPolicySha256",
+        "confirmatoryRawRows",
+        "confirmatoryRepairedRegionCount",
+        "confirmatoryScoringAnnotationIdentitiesSha256",
+        "confirmatorySourcePayloadIdentitiesSha256",
+        "confirmatorySourceRegionCount",
+        "confirmatoryWitnessGhExecutableSha256",
+        "confirmatoryWitnessGhVersion",
+        "confirmatoryWitnessReleaseVerificationSha256",
+        "confirmatoryWitnessSha256",
+        "evaluationCompleted",
+        "finalDisposition",
+        "integrityPassed",
+        "runSucceeded",
+        "testSnapshotSha256",
+    }
+)
+
+
+def _confirmatory_report_bindings(
+    report: Mapping[str, Any],
+    claim: AttemptClaim,
+    seal_context: ConfirmatorySealContext,
+) -> dict[str, Any]:
     expected_report_keys = {
         "acceptancePassed",
         "documents",
@@ -2302,13 +2746,44 @@ def _confirmatory_report_bindings(report: Mapping[str, Any]) -> dict[str, Any]:
         "runSucceeded",
         "schemaVersion",
     }
+    claim_value = claim.value
     evidence = report.get("evidence")
+    evidence_keys = {
+        "artifacts",
+        "backends",
+        "confirmatoryCorpus",
+        "crossBackendIntegrity",
+        "determinism",
+        "execution",
+        "generatedAtUtc",
+        "holdoutOverlapCheck",
+        "phase",
+        "policy",
+        "testSnapshotSha256",
+        "thresholdOverridesPermitted",
+        "witness",
+    }
     artifacts = evidence.get("artifacts") if isinstance(evidence, Mapping) else None
     duplicate_audit = (
         artifacts.get("confirmatoryDuplicateAudit") if isinstance(artifacts, Mapping) else None
     )
+    bbox_repair_audit = (
+        artifacts.get("confirmatoryBboxRepairAudit") if isinstance(artifacts, Mapping) else None
+    )
+    corpus_manifest = (
+        artifacts.get("confirmatoryCorpusManifest") if isinstance(artifacts, Mapping) else None
+    )
     duplicate_audit_sha256 = (
         duplicate_audit.get("sha256") if isinstance(duplicate_audit, Mapping) else None
+    )
+    bbox_repair_audit_sha256 = (
+        bbox_repair_audit.get("sha256") if isinstance(bbox_repair_audit, Mapping) else None
+    )
+    corpus_manifest_sha256 = (
+        corpus_manifest.get("sha256") if isinstance(corpus_manifest, Mapping) else None
+    )
+    confirmatory_corpus = (
+        evidence.get("confirmatoryCorpus") if isinstance(evidence, Mapping) else None
     )
     test_snapshot_sha256 = (
         evidence.get("testSnapshotSha256") if isinstance(evidence, Mapping) else None
@@ -2320,6 +2795,30 @@ def _confirmatory_report_bindings(report: Mapping[str, Any]) -> dict[str, Any]:
     identity = report.get("identity")
     metrics = report.get("metrics")
     expected_identities_sha256 = report.get("expectedIdentitiesSha256")
+    backends = evidence.get("backends") if isinstance(evidence, Mapping) else None
+    cross_backend = evidence.get("crossBackendIntegrity") if isinstance(evidence, Mapping) else None
+    determinism = evidence.get("determinism") if isinstance(evidence, Mapping) else None
+    execution = evidence.get("execution") if isinstance(evidence, Mapping) else None
+    holdout_overlap = evidence.get("holdoutOverlapCheck") if isinstance(evidence, Mapping) else None
+    policy = evidence.get("policy") if isinstance(evidence, Mapping) else None
+    witness = evidence.get("witness") if isinstance(evidence, Mapping) else None
+    corpus_keys = {
+        "bboxRepairAuditSha256",
+        "bboxRepairRecordsSha256",
+        "corpusManifestSha256",
+        "duplicateAuditSha256",
+        "excludedRows",
+        "imageIdentitiesSha256",
+        "parquetSha256",
+        "repairedRegionCount",
+        "scoringAnnotationIdentitiesSha256",
+        "selectedDocuments",
+        "sourceImageDigestsSha256",
+        "sourcePayloadIdentitiesSha256",
+        "sourceRegionCount",
+        "sourceRows",
+        "workerManifestSha256",
+    }
 
     def is_sha256(candidate: Any) -> bool:
         return (
@@ -2328,15 +2827,156 @@ def _confirmatory_report_bindings(report: Mapping[str, Any]) -> dict[str, Any]:
             and all(character in "0123456789abcdef" for character in candidate)
         )
 
+    def is_artifact(candidate: Any) -> bool:
+        return (
+            isinstance(candidate, Mapping)
+            and set(candidate) == {"bytes", "path", "sha256"}
+            and type(candidate.get("bytes")) is int
+            and candidate["bytes"] >= 0
+            and isinstance(candidate.get("path"), str)
+            and bool(candidate["path"])
+            and is_sha256(candidate.get("sha256"))
+        )
+
+    artifact_keys = {
+        "confirmatoryBboxRepairAudit",
+        "confirmatoryCorpusManifest",
+        "confirmatoryDuplicateAudit",
+        "confirmatoryInventory",
+        "confirmatoryWorkerManifest",
+        "verifiedTestSnapshot",
+    }
+    provider_names = ("cpu", "directml", "hybrid")
+    resolved_provider_names = ("cpu", "directml", "hybrid-directml-cpu")
+    integrity_check_keys = {
+        "allBackendDeterminismPassed",
+        "allBackendProvenancePassed",
+        "allRawSourceImageSha256SetsDisjoint",
+        "candidateStable",
+        "confidenceParityPassed",
+        "criticalEvidenceEqual",
+        "documentCountsExact",
+        "hybridMeaningfulLaneCoverage",
+        "metricsEqual",
+        "perDocumentMetricsEqual",
+        "requestedProvidersExact",
+        "resolvedProvidersExact",
+        "runtimeHashesExact",
+        "workerHashesExact",
+    }
+    determinism_check_keys = {
+        "byteDeterministic",
+        "canonicalEvidenceDeterministic",
+        "criticalEvidenceDeterministic",
+        "executionProviderCountsStable",
+        "metricsDeterministic",
+        "provenancePassed",
+        "repetitionCountExact",
+        "rowIdentitiesExact",
+        "selectionIdentityExact",
+        "stableProvider",
+        "stableRuntime",
+        "stableTextNormalization",
+        "stableThreadCounts",
+        "stableWorkerCounts",
+        "thresholdOverridesAbsent",
+    }
+    cross_backend_checks = (
+        cross_backend.get("checks") if isinstance(cross_backend, Mapping) else None
+    )
+    confidence_parity = (
+        cross_backend.get("confidenceParity") if isinstance(cross_backend, Mapping) else None
+    )
+    determinism_checks = (
+        determinism.get("checksByBackend") if isinstance(determinism, Mapping) else None
+    )
+    policy_evaluations = policy.get("evaluations") if isinstance(policy, Mapping) else None
+    github_release = witness.get("githubImmutableRelease") if isinstance(witness, Mapping) else None
+    expected_claim_keys = {
+        "candidateIdentitySha256",
+        "phase",
+        "policySha256",
+        "protocol",
+        "schemaVersion",
+        "witnessGhExecutableSha256",
+        "witnessGhVersion",
+        "witnessReleaseVerificationSha256",
+        "witnessSha256",
+    }
+
     if (
-        set(report) != expected_report_keys
+        not isinstance(seal_context, ConfirmatorySealContext)
+        or not isinstance(seal_context.validated_policy, sroie_policy.ValidatedPolicy)
+    ):
+        raise AcceptanceError(
+            "The confirmatory report lacks an authenticated sealing context",
+            stage="one-shot",
+        )
+    expected_identity_rows = [dict(item) for item in seal_context.expected_identities]
+    expected_identity_rows_sha256 = sroie_policy.sha256_canonical(expected_identity_rows)
+    recomputed_evaluations: dict[str, Any] = {}
+    backend_metrics: list[Mapping[str, Any]] = []
+    if isinstance(backends, list):
+        for provider_name, backend in zip(provider_names, backends, strict=False):
+            if not isinstance(backend, Mapping):
+                continue
+            candidate_metrics = backend.get("metrics")
+            if not isinstance(candidate_metrics, Mapping):
+                continue
+            try:
+                recomputed_evaluations[provider_name] = sroie_policy.evaluate_confirmatory(
+                    seal_context.validated_policy,
+                    candidate_metrics,
+                    expected_identities=expected_identity_rows,
+                )
+            except sroie_policy.PolicyError as exc:
+                raise AcceptanceError(
+                    "The confirmatory policy evaluation cannot be authenticated",
+                    stage="one-shot",
+                ) from exc
+            backend_metrics.append(candidate_metrics)
+    backend_per_document_sha256 = [
+        _sha256_bytes(_per_document_bytes(candidate_metrics))
+        for candidate_metrics in backend_metrics
+    ]
+    quality_passed = (
+        set(recomputed_evaluations) == set(provider_names)
+        and all(value.get("passed") is True for value in recomputed_evaluations.values())
+    )
+    determinism_passed = (
+        isinstance(determinism_checks, Mapping)
+        and set(determinism_checks) == set(provider_names)
+        and all(
+            isinstance(checks, Mapping)
+            and bool(checks)
+            and all(value is True for value in checks.values())
+            for checks in determinism_checks.values()
+        )
+    )
+
+    if (
+        not expected_claim_keys.issubset(claim_value)
+        or not is_sha256(claim_value.get("candidateIdentitySha256"))
+        or claim_value.get("phase") != "confirmatory"
+        or not is_sha256(claim_value.get("policySha256"))
+        or claim_value.get("protocol") != PROTOCOL
+        or claim_value.get("schemaVersion") != SCHEMA_VERSION
+        or sroie_policy.sha256_canonical(report) != seal_context.report_sha256
+        or seal_context.validated_policy.file_sha256 != claim_value.get("policySha256")
+        or claim_value.get("witnessGhExecutableSha256") != PINNED_GH_EXE_SHA256
+        or claim_value.get("witnessGhVersion") != PINNED_GH_VERSION
+        or not is_sha256(claim_value.get("witnessReleaseVerificationSha256"))
+        or not is_sha256(claim_value.get("witnessSha256"))
+        or set(report) != expected_report_keys
+        or not isinstance(evidence, Mapping)
+        or set(evidence) != evidence_keys
         or type(report.get("documents")) is not int
         or report["documents"] != sroie_policy.RAW_TEST_ROWS
         or type(report.get("rawRows")) is not int
         or report["rawRows"] != sroie_policy.RAW_TEST_ROWS
         or report.get("evaluationCompleted") is not True
         or report.get("evaluationRole") != "confirmatory"
-        or report.get("protocol") != PROTOCOL
+        or report.get("protocol") != claim_value.get("protocol")
         or report.get("schemaVersion") != SCHEMA_VERSION
         or type(acceptance_passed) is not bool
         or type(integrity_passed) is not bool
@@ -2345,11 +2985,159 @@ def _confirmatory_report_bindings(report: Mapping[str, Any]) -> dict[str, Any]:
         or (acceptance_passed and not integrity_passed)
         or not isinstance(identity, Mapping)
         or report.get("identitySha256") != sroie_policy.sha256_canonical(identity)
+        or report.get("identitySha256") != claim_value.get("candidateIdentitySha256")
         or not isinstance(metrics, Mapping)
         or report.get("metricsSha256") != sroie_policy.sha256_canonical(metrics)
         or not is_sha256(expected_identities_sha256)
+        or expected_identities_sha256 != expected_identity_rows_sha256
         or not is_sha256(duplicate_audit_sha256)
+        or not is_sha256(bbox_repair_audit_sha256)
+        or not is_sha256(corpus_manifest_sha256)
+        or not isinstance(artifacts, Mapping)
+        or set(artifacts) != artifact_keys
+        or any(not is_artifact(artifacts.get(name)) for name in artifact_keys)
+        or not isinstance(confirmatory_corpus, Mapping)
+        or set(confirmatory_corpus) != corpus_keys
+        or confirmatory_corpus.get("selectedDocuments") != sroie_policy.RAW_TEST_ROWS
+        or confirmatory_corpus.get("sourceRows") != sroie_policy.RAW_TEST_ROWS
+        or confirmatory_corpus.get("excludedRows") != 0
+        or type(confirmatory_corpus.get("sourceRegionCount")) is not int
+        or confirmatory_corpus["sourceRegionCount"] <= 0
+        or type(confirmatory_corpus.get("repairedRegionCount")) is not int
+        or not 0
+        <= confirmatory_corpus["repairedRegionCount"]
+        <= confirmatory_corpus["sourceRegionCount"]
+        or any(
+            not is_sha256(confirmatory_corpus.get(name))
+            for name in corpus_keys
+            if name.endswith("Sha256")
+        )
+        or confirmatory_corpus.get("imageIdentitiesSha256") != expected_identities_sha256
+        or confirmatory_corpus.get("duplicateAuditSha256") != duplicate_audit_sha256
+        or confirmatory_corpus.get("bboxRepairAuditSha256") != bbox_repair_audit_sha256
+        or confirmatory_corpus.get("corpusManifestSha256") != corpus_manifest_sha256
+        or confirmatory_corpus.get("workerManifestSha256")
+        != artifacts["confirmatoryWorkerManifest"]["sha256"]
+        or confirmatory_corpus.get("parquetSha256") != sroie_policy.TEST_SHA256
         or test_snapshot_sha256 != sroie_policy.TEST_SHA256
+        or artifacts["verifiedTestSnapshot"]["sha256"] != test_snapshot_sha256
+        or not isinstance(backends, list)
+        or len(backends) != len(provider_names)
+        or any(not isinstance(backend, Mapping) for backend in backends)
+        or tuple(backend.get("requestedProvider") for backend in backends) != provider_names
+        or tuple(backend.get("resolvedProvider") for backend in backends) != resolved_provider_names
+        or sroie_policy.sha256_canonical(backends) != seal_context.backends_sha256
+        or len(backend_metrics) != len(provider_names)
+        or any(
+            backend.get("metricsSha256") != sroie_policy.sha256_canonical(backend_metrics[index])
+            or sroie_policy.canonical_json(backend_metrics[index])
+            != sroie_policy.canonical_json(metrics)
+            or not isinstance(backend.get("qualityRun"), Mapping)
+            or backend["qualityRun"].get("metricsSha256")
+            != sroie_policy.sha256_canonical(backend_metrics[index])
+            or backend["qualityRun"].get("perDocumentMetricsSha256")
+            != backend_per_document_sha256[index]
+            or sroie_policy.canonical_json(backend["qualityRun"].get("metrics"))
+            != sroie_policy.canonical_json(backend_metrics[index])
+            for index, backend in enumerate(backends)
+        )
+        or report.get("metricsSha256") != seal_context.metrics_sha256
+        or not isinstance(cross_backend, Mapping)
+        or set(cross_backend) != {"checks", "confidenceParity"}
+        or not isinstance(cross_backend_checks, Mapping)
+        or set(cross_backend_checks) != integrity_check_keys
+        or any(type(value) is not bool for value in cross_backend_checks.values())
+        or all(cross_backend_checks.values()) != integrity_passed
+        or cross_backend_checks.get("allBackendProvenancePassed")
+        is not all(backend.get("provenancePassed") is True for backend in backends)
+        or cross_backend_checks.get("criticalEvidenceEqual")
+        is not (
+            len({backend.get("criticalEvidenceSha256") for backend in backends}) == 1
+            and all(is_sha256(backend.get("criticalEvidenceSha256")) for backend in backends)
+        )
+        or cross_backend_checks.get("documentCountsExact")
+        is not all(backend.get("qualityRows") == report["documents"] for backend in backends)
+        or cross_backend_checks.get("hybridMeaningfulLaneCoverage")
+        is not _meaningful_hybrid_lane_coverage(backends[2])
+        or cross_backend_checks.get("metricsEqual")
+        is not (len({backend.get("metricsSha256") for backend in backends}) == 1)
+        or cross_backend_checks.get("perDocumentMetricsEqual")
+        is not (len(set(backend_per_document_sha256)) == 1)
+        or cross_backend_checks.get("requestedProvidersExact") is not True
+        or cross_backend_checks.get("resolvedProvidersExact") is not True
+        or cross_backend_checks.get("allRawSourceImageSha256SetsDisjoint") is not True
+        or not isinstance(confidence_parity, Mapping)
+        or type(confidence_parity.get("passed")) is not bool
+        or confidence_parity.get("passed")
+        is not cross_backend_checks.get("confidenceParityPassed")
+        or sroie_policy.sha256_canonical(cross_backend)
+        != seal_context.cross_backend_integrity_sha256
+        or not isinstance(determinism, Mapping)
+        or set(determinism) != {"checksByBackend", "repetitions"}
+        or determinism.get("repetitions") != DETERMINISM_REPETITIONS
+        or not isinstance(determinism_checks, Mapping)
+        or set(determinism_checks) != set(provider_names)
+        or any(
+            not isinstance(checks, Mapping)
+            or set(checks) != determinism_check_keys
+            or any(type(value) is not bool for value in checks.values())
+            for checks in determinism_checks.values()
+        )
+        or cross_backend_checks.get("allBackendDeterminismPassed") is not determinism_passed
+        or sroie_policy.sha256_canonical(determinism) != seal_context.determinism_sha256
+        or not isinstance(execution, Mapping)
+        or set(execution) != {"backendOrder", "oneShotAttemptLedger", "threads"}
+        or execution.get("backendOrder") != list(provider_names)
+        or execution.get("oneShotAttemptLedger") != claim.path.name
+        or execution.get("threads") != 0
+        or not isinstance(evidence.get("generatedAtUtc"), str)
+        or not evidence["generatedAtUtc"].endswith("Z")
+        or evidence.get("phase") != "confirmatory"
+        or not isinstance(holdout_overlap, Mapping)
+        or set(holdout_overlap)
+        != {
+            "algorithm",
+            "calibrationRawImages",
+            "confirmatoryRawImages",
+            "perceptualSimilarityClaimed",
+        }
+        or holdout_overlap.get("algorithm")
+        != "exact SHA-256 equality over decoded embedded image bytes"
+        or holdout_overlap.get("calibrationRawImages") != sroie_policy.RAW_TRAIN_ROWS
+        or holdout_overlap.get("confirmatoryRawImages") != sroie_policy.RAW_TEST_ROWS
+        or holdout_overlap.get("perceptualSimilarityClaimed") is not False
+        or evidence.get("thresholdOverridesPermitted") is not False
+        or not isinstance(policy, Mapping)
+        or set(policy) != {"evaluations", "policyId", "policySha256"}
+        or policy.get("policyId") != sroie_policy.POLICY_ID
+        or policy.get("policySha256") != claim_value.get("policySha256")
+        or not isinstance(policy_evaluations, Mapping)
+        or set(policy_evaluations) != set(provider_names)
+        or any(not isinstance(value, Mapping) for value in policy_evaluations.values())
+        or sroie_policy.canonical_json(policy_evaluations)
+        != sroie_policy.canonical_json(recomputed_evaluations)
+        or sroie_policy.sha256_canonical(policy_evaluations) != seal_context.evaluations_sha256
+        or acceptance_passed is not (integrity_passed and quality_passed)
+        or not isinstance(witness, Mapping)
+        or set(witness)
+        != {
+            "ghExecutableSha256",
+            "ghVersion",
+            "githubImmutableRelease",
+            "releaseVerificationSha256",
+            "sha256",
+        }
+        or witness.get("sha256") != claim_value.get("witnessSha256")
+        or witness.get("releaseVerificationSha256")
+        != claim_value.get("witnessReleaseVerificationSha256")
+        or witness.get("ghExecutableSha256") != claim_value.get("witnessGhExecutableSha256")
+        or witness.get("ghVersion") != claim_value.get("witnessGhVersion")
+        or not isinstance(github_release, Mapping)
+        or set(github_release) != {"assetName", "repository", "tag"}
+        or any(
+            not isinstance(github_release.get(name), str) or not github_release[name]
+            for name in ("assetName", "repository", "tag")
+        )
     ):
         raise AcceptanceError(
             "The confirmatory report cannot complete the ledger", stage="one-shot"
@@ -2357,9 +3145,27 @@ def _confirmatory_report_bindings(report: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "acceptancePassed": acceptance_passed,
         "confirmatoryDocuments": report["documents"],
+        "confirmatoryBboxRepairAuditSha256": bbox_repair_audit_sha256,
+        "confirmatoryBboxRepairRecordsSha256": confirmatory_corpus["bboxRepairRecordsSha256"],
+        "confirmatoryCorpusManifestSha256": corpus_manifest_sha256,
         "confirmatoryDuplicateAuditSha256": duplicate_audit_sha256,
+        "confirmatoryIdentitySha256": report["identitySha256"],
         "confirmatoryImageIdentitiesSha256": expected_identities_sha256,
+        "confirmatoryPolicyId": policy["policyId"],
+        "confirmatoryPolicySha256": policy["policySha256"],
         "confirmatoryRawRows": report["rawRows"],
+        "confirmatoryRepairedRegionCount": confirmatory_corpus["repairedRegionCount"],
+        "confirmatoryScoringAnnotationIdentitiesSha256": confirmatory_corpus[
+            "scoringAnnotationIdentitiesSha256"
+        ],
+        "confirmatorySourcePayloadIdentitiesSha256": confirmatory_corpus[
+            "sourcePayloadIdentitiesSha256"
+        ],
+        "confirmatorySourceRegionCount": confirmatory_corpus["sourceRegionCount"],
+        "confirmatoryWitnessGhExecutableSha256": witness["ghExecutableSha256"],
+        "confirmatoryWitnessGhVersion": witness["ghVersion"],
+        "confirmatoryWitnessReleaseVerificationSha256": witness["releaseVerificationSha256"],
+        "confirmatoryWitnessSha256": witness["sha256"],
         "evaluationCompleted": True,
         "finalDisposition": final_disposition,
         "integrityPassed": integrity_passed,
@@ -2369,7 +3175,10 @@ def _confirmatory_report_bindings(report: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _prepare_attempt_report(
-    claim: AttemptClaim, report: Mapping[str, Any], staged: StagedReport
+    claim: AttemptClaim,
+    report: Mapping[str, Any],
+    staged: StagedReport,
+    seal_context: ConfirmatorySealContext,
 ) -> None:
     value = _load_claim(claim)
     _verify_report_file(
@@ -2378,7 +3187,12 @@ def _prepare_attempt_report(
         byte_length=staged.byte_length,
         file_identity=staged.file_identity,
     )
-    value.update(_confirmatory_report_bindings(report))
+    bindings = _confirmatory_report_bindings(report, claim, seal_context)
+    if set(bindings) != _CONFIRMATORY_REPORT_BINDING_KEYS or any(
+        key in value for key in _CONFIRMATORY_REPORT_BINDING_KEYS
+    ):
+        raise AcceptanceError("The report binding transaction is invalid", stage="one-shot")
+    value.update(bindings)
     value.update(
         {
             "claimSha256": claim.sha256,
@@ -2414,30 +3228,31 @@ def _publish_prepared_report(
         file_identity=staged.file_identity,
     )
     _durable_replace(staged.path, output)
-    _verify_report_file(
-        output, sha256=staged.sha256, byte_length=staged.byte_length
-    )
+    _verify_report_file(output, sha256=staged.sha256, byte_length=staged.byte_length)
     _event("report-published")
 
 
-def _complete_attempt(claim: AttemptClaim, output: Path) -> None:
+def _complete_attempt(
+    claim: AttemptClaim, output: Path, seal_context: ConfirmatorySealContext
+) -> None:
     value = _load_attempt_state(claim)
     if value.get("status") != "report-staged":
         raise AcceptanceError("The attempt is not ready for completion", stage="one-shot")
     _, raw, _ = _read_regular_file(
         output, maximum_bytes=MAX_REPORT_BYTES, name="published report", stage="report"
     )
-    if (
-        len(raw) != value.get("reportBytes")
-        or _sha256_bytes(raw) != value.get("reportSha256")
-    ):
+    if len(raw) != value.get("reportBytes") or _sha256_bytes(raw) != value.get("reportSha256"):
         raise AcceptanceError("The published report differs from the ledger", stage="report")
     report = _parse_json_bytes(
         raw, maximum_bytes=MAX_REPORT_BYTES, name="published report", canonical=True
     )
-    if _confirmatory_report_bindings(report) != {
-        key: value.get(key) for key in _confirmatory_report_bindings(report)
-    }:
+    report_bindings = _confirmatory_report_bindings(report, claim, seal_context)
+    stored_binding_keys = set(value).intersection(_CONFIRMATORY_REPORT_BINDING_KEYS)
+    if (
+        set(report_bindings) != _CONFIRMATORY_REPORT_BINDING_KEYS
+        or stored_binding_keys != _CONFIRMATORY_REPORT_BINDING_KEYS
+        or any(value[key] != report_bindings[key] for key in report_bindings)
+    ):
         raise AcceptanceError("The published report bindings changed", stage="report")
     value.update(
         {
@@ -2449,16 +3264,38 @@ def _complete_attempt(claim: AttemptClaim, output: Path) -> None:
     _event("ledger-completed")
 
 
-def _seal_report(claim: AttemptClaim, output: Path, marker: Path) -> None:
+def _seal_report(
+    claim: AttemptClaim,
+    output: Path,
+    marker: Path,
+    seal_context: ConfirmatorySealContext,
+) -> None:
     value = _load_attempt_state(claim)
     if value.get("status") != "completed" or not marker.exists():
         raise AcceptanceError("The report cannot be sealed", stage="report")
     _require_report_marker(marker)
-    _verify_report_file(
+    _, raw, _ = _read_regular_file(
         output,
-        sha256=value["reportSha256"],
-        byte_length=value["reportBytes"],
+        maximum_bytes=MAX_REPORT_BYTES,
+        name="published report",
+        stage="report",
     )
+    if len(raw) != value.get("reportBytes") or _sha256_bytes(raw) != value.get("reportSha256"):
+        raise AcceptanceError("The report seal bytes changed", stage="report")
+    report = _parse_json_bytes(
+        raw,
+        maximum_bytes=MAX_REPORT_BYTES,
+        name="published report",
+        canonical=True,
+    )
+    bindings = _confirmatory_report_bindings(report, claim, seal_context)
+    stored_binding_keys = set(value).intersection(_CONFIRMATORY_REPORT_BINDING_KEYS)
+    if (
+        set(bindings) != _CONFIRMATORY_REPORT_BINDING_KEYS
+        or stored_binding_keys != _CONFIRMATORY_REPORT_BINDING_KEYS
+        or any(value[key] != bindings[key] for key in bindings)
+    ):
+        raise AcceptanceError("The completed report bindings changed", stage="report")
     _durable_remove_marker(marker)
     final = _load_attempt_state(claim)
     _verify_report_file(
@@ -2501,7 +3338,12 @@ def _claim_from_persisted_state(path: Path, value: Mapping[str, Any]) -> Attempt
     return AttemptClaim(path=path, value=initial, sha256=digest)
 
 
-def _recover_report_commit(output: Path, *, expected_claim: AttemptClaim) -> dict[str, Any]:
+def _recover_report_commit(
+    output: Path,
+    *,
+    expected_claim: AttemptClaim,
+    seal_context: ConfirmatorySealContext,
+) -> dict[str, Any]:
     output = _lexical_absolute(output)
     marker = output.with_name(output.name + ".incomplete")
     staged_path = output.with_name(output.name + ".staged")
@@ -2510,17 +3352,13 @@ def _recover_report_commit(output: Path, *, expected_claim: AttemptClaim) -> dic
         maximum_bytes=2 * 1024 * 1024,
         name="attempt ledger",
     )
-    expected_output_hash = _sha256_bytes(
-        os.path.normcase(str(output)).encode("utf-8")
-    )
+    expected_output_hash = _sha256_bytes(os.path.normcase(str(output)).encode("utf-8"))
     if value.get("reportOutputPathSha256") != expected_output_hash:
         raise AcceptanceError("The recovery output differs from the claim", stage="recovery")
     claim = _claim_from_persisted_state(CONFIRMATORY_ATTEMPT_LEDGER, value)
-    if (
-        claim.sha256 != expected_claim.sha256
-        or sroie_policy.canonical_json(claim.value)
-        != sroie_policy.canonical_json(expected_claim.value)
-    ):
+    if claim.sha256 != expected_claim.sha256 or sroie_policy.canonical_json(
+        claim.value
+    ) != sroie_policy.canonical_json(expected_claim.value):
         raise AcceptanceError(
             "The recovery ledger does not match the authenticated initial claim",
             stage="recovery",
@@ -2546,8 +3384,8 @@ def _recover_report_commit(output: Path, *, expected_claim: AttemptClaim) -> dic
                 sha256=value["reportSha256"],
                 byte_length=value["reportBytes"],
             )
-        _complete_attempt(claim, output)
-        _seal_report(claim, output, marker)
+        _complete_attempt(claim, output, seal_context)
+        _seal_report(claim, output, marker, seal_context)
     elif status == "completed":
         if staged_path.exists() or not output.exists():
             raise AcceptanceError("The completed report is not recoverable", stage="recovery")
@@ -2557,7 +3395,7 @@ def _recover_report_commit(output: Path, *, expected_claim: AttemptClaim) -> dic
             byte_length=value["reportBytes"],
         )
         if marker.exists():
-            _seal_report(claim, output, marker)
+            _seal_report(claim, output, marker, seal_context)
     else:
         raise AcceptanceError(
             "The one-shot attempt cannot resume held-out evaluation", stage="recovery"
@@ -2566,9 +3404,14 @@ def _recover_report_commit(output: Path, *, expected_claim: AttemptClaim) -> dic
         output, maximum_bytes=MAX_REPORT_BYTES, name="recovered report"
     )
     final = _load_attempt_state(claim)
+    bindings = _confirmatory_report_bindings(report, claim, seal_context)
+    stored_binding_keys = set(final).intersection(_CONFIRMATORY_REPORT_BINDING_KEYS)
     if (
         final.get("status") != "completed"
         or final.get("reportSha256") != report_sha256
+        or set(bindings) != _CONFIRMATORY_REPORT_BINDING_KEYS
+        or stored_binding_keys != _CONFIRMATORY_REPORT_BINDING_KEYS
+        or any(final[key] != bindings[key] for key in bindings)
         or marker.exists()
     ):
         raise AcceptanceError("The recovered report is not terminal", stage="recovery")
@@ -2691,9 +3534,7 @@ def _create_fresh_snapshot_directory(
                     ) from None
                 cursor = cursor.parent
         if not missing or missing[0] != root:
-            raise AcceptanceError(
-                "The snapshot destination is not fresh", stage="test-snapshot"
-            )
+            raise AcceptanceError("The snapshot destination is not fresh", stage="test-snapshot")
         existing_components = [*reversed(cursor.parents), cursor]
         snapshots: list[tuple[Path, tuple[int | None, int | None]]] = []
         for component in existing_components:
@@ -2900,9 +3741,7 @@ def _snapshot_test_after_claim_inner(
                 output_after = os.fstat(output_handle.fileno())
             after = os.fstat(source_descriptor)
         except Exception:
-            _remove_snapshot_temporary(
-                temporary, destination_chain, temporary_object_id
-            )
+            _remove_snapshot_temporary(temporary, destination_chain, temporary_object_id)
             raise
     finally:
         os.close(source_descriptor)
@@ -2995,6 +3834,7 @@ def _preclaim_file_object_ids(
         "CORD scorer source": Path(cord.__file__),
         "calibration corpus manifest": context.corpus_manifest,
         "calibration duplicate audit": context.duplicate_audit,
+        "calibration bbox repair audit": context.bbox_repair_audit,
         "calibration inventory": context.inventory,
         "calibration report": args.calibration_report,
         "calibration worker manifest": context.worker_manifest,
@@ -3014,9 +3854,7 @@ def _preclaim_file_object_ids(
     }
     for name, path in context.runtime_inventories.items():
         paths[f"{name} runtime inventory"] = path
-    identifiers = {
-        _regular_file_object_id(path, name=name) for name, path in paths.items()
-    }
+    identifiers = {_regular_file_object_id(path, name=name) for name, path in paths.items()}
     return frozenset(identifiers)
 
 
@@ -3031,7 +3869,8 @@ def _require_disjoint_source_images(
 
 def _meaningful_hybrid_lane_coverage(run: Mapping[str, Any]) -> bool:
     coverage = run.get("hybridLaneRecordCoverage")
-    total = run.get("stringRecords")
+    quality_run = run.get("qualityRun")
+    total = quality_run.get("stringRecords") if isinstance(quality_run, Mapping) else None
     cpu = coverage.get("cpuLaneRecords") if isinstance(coverage, Mapping) else None
     non_cpu = coverage.get("nonCpuLaneRecords") if isinstance(coverage, Mapping) else None
     if any(type(value) is not int or value < 0 for value in (total, cpu, non_cpu)):
@@ -3039,6 +3878,7 @@ def _meaningful_hybrid_lane_coverage(run: Mapping[str, Any]) -> bool:
     minimum = max(1, math.ceil(total * HYBRID_MINIMUM_LANE_FRACTION))
     return (
         total > 0
+        and quality_run.get("hybridLaneRecordCoverage") == coverage
         and cpu + non_cpu == total
         and cpu >= minimum
         and non_cpu >= minimum
@@ -3050,7 +3890,7 @@ def execute_confirmatory(
     args: argparse.Namespace,
     frozen: FrozenCandidate,
     context: CalibrationContext,
-) -> tuple[dict[str, Any], AttemptClaim]:
+) -> tuple[dict[str, Any], AttemptClaim, ConfirmatorySealContext]:
     phase_root = _lexical_absolute(args.work_directory) / "confirmatory"
     if phase_root.exists():
         raise AcceptanceError("The confirmatory work directory already exists", stage="one-shot")
@@ -3120,12 +3960,26 @@ def execute_confirmatory(
         )
     _require_disjoint_source_images(context.source_image_sha256s, corpus.source_image_sha256s)
     expected_identities = _expected_identities(corpus)
+    repair_identity = _validate_bbox_repair_audit(
+        corpus.bbox_repair_audit,
+        corpus_manifest=corpus.corpus_manifest,
+        split="test",
+        expected_raw_rows=sroie_policy.RAW_TEST_ROWS,
+        expected_identities=expected_identities,
+        expected_repair_identity=_corpus_repair_identity(corpus),
+    )
     if (
         _validate_duplicate_audit(
             corpus.duplicate_audit,
             split="test",
             expected_raw_rows=sroie_policy.RAW_TEST_ROWS,
             expected_identities=expected_identities,
+            expected_source_payload_identities_sha256=repair_identity[
+                "sourcePayloadIdentitiesSha256"
+            ],
+            expected_scoring_annotation_identities_sha256=repair_identity[
+                "scoringAnnotationIdentitiesSha256"
+            ],
         )
         != corpus.source_image_sha256s
     ):
@@ -3200,6 +4054,15 @@ def execute_confirmatory(
     }
     integrity_passed = all(integrity_checks.values())
     quality_passed = all(value.get("passed") is True for value in evaluations.values())
+    public_runs = [_public_run(run) for run in runs]
+    cross_backend_integrity = {
+        "checks": integrity_checks,
+        "confidenceParity": confidence,
+    }
+    determinism_evidence = {
+        "checksByBackend": determinism_checks,
+        "repetitions": DETERMINISM_REPETITIONS,
+    }
     evidence = {
         "artifacts": {
             "confirmatoryCorpusManifest": _safe_artifact(
@@ -3208,21 +4071,19 @@ def execute_confirmatory(
             "confirmatoryDuplicateAudit": _safe_artifact(
                 corpus.duplicate_audit, evidence_root=phase_root
             ),
+            "confirmatoryBboxRepairAudit": _safe_artifact(
+                corpus.bbox_repair_audit, evidence_root=phase_root
+            ),
             "confirmatoryInventory": _safe_artifact(corpus.inventory, evidence_root=phase_root),
             "confirmatoryWorkerManifest": _safe_artifact(
                 corpus.worker_manifest, evidence_root=phase_root
             ),
             "verifiedTestSnapshot": _safe_artifact(snapshot, evidence_root=phase_root),
         },
-        "backends": [_public_run(run) for run in runs],
-        "crossBackendIntegrity": {
-            "checks": integrity_checks,
-            "confidenceParity": confidence,
-        },
-        "determinism": {
-            "checksByBackend": determinism_checks,
-            "repetitions": DETERMINISM_REPETITIONS,
-        },
+        "backends": public_runs,
+        "confirmatoryCorpus": _corpus_identity(corpus, parquet_sha256=parquet_sha256),
+        "crossBackendIntegrity": cross_backend_integrity,
+        "determinism": determinism_evidence,
         "execution": {
             "backendOrder": ["cpu", "directml", "hybrid"],
             "oneShotAttemptLedger": claim.path.name,
@@ -3262,8 +4123,20 @@ def execute_confirmatory(
         integrity_passed=integrity_passed,
         acceptance_passed=integrity_passed and quality_passed,
     )
+    seal_context = ConfirmatorySealContext(
+        validated_policy=validated_policy,
+        expected_identities=tuple(dict(item) for item in expected_identities),
+        backends_sha256=sroie_policy.sha256_canonical(public_runs),
+        cross_backend_integrity_sha256=sroie_policy.sha256_canonical(
+            cross_backend_integrity
+        ),
+        determinism_sha256=sroie_policy.sha256_canonical(determinism_evidence),
+        evaluations_sha256=sroie_policy.sha256_canonical(evaluations),
+        metrics_sha256=sroie_policy.sha256_canonical(runs[0]["metrics"]),
+        report_sha256=sroie_policy.sha256_canonical(report),
+    )
     _recheck_policy(args.policy, validated_policy)
-    return report, claim
+    return report, claim, seal_context
 
 
 def _failure_report(args: argparse.Namespace, error: Exception) -> dict[str, Any]:
@@ -3313,12 +4186,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             _finalize_report(output, marker, staged)
             return report
         context = load_calibration_context(args.calibration_report, args.calibration_evidence_root)
-        report, claim = execute_confirmatory(args, frozen, context)
+        report, claim, seal_context = execute_confirmatory(args, frozen, context)
         staged = _stage_report(output, marker, report)
-        _prepare_attempt_report(claim, report, staged)
+        _prepare_attempt_report(claim, report, staged, seal_context)
         _publish_prepared_report(claim, output, marker, staged)
-        _complete_attempt(claim, output)
-        _seal_report(claim, output, marker)
+        _complete_attempt(claim, output, seal_context)
+        _seal_report(claim, output, marker, seal_context)
         return report
     except Exception as exc:
         active = claim or getattr(args, "_attempt_claim", None) or getattr(exc, "claim", None)

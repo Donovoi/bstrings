@@ -7,9 +7,11 @@ import hashlib
 import io
 import json
 import os
+import statistics
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -27,6 +29,7 @@ def context(root: Path, identity: dict | None = None) -> acceptance.CalibrationC
         expected_identities=({"imageSha256": "b" * 64, "rowIndex": 0},),
         corpus_manifest=root / "corpus.jsonl",
         duplicate_audit=root / "duplicates.json",
+        bbox_repair_audit=root / "bbox-repairs.json",
         worker_manifest=root / "worker.jsonl",
         inventory=root / "inventory.txt",
         runtime_inventories={},
@@ -92,7 +95,7 @@ def release_verification(value: dict, witness_sha256: str) -> dict:
                     ).decode("ascii"),
                     "payloadType": "application/vnd.in-toto+json",
                     "signatures": [{"sig": "signature"}],
-                }
+                },
             }
         },
         "verificationResult": {
@@ -109,29 +112,458 @@ def release_verification(value: dict, witness_sha256: str) -> dict:
     }
 
 
-def confirmatory_report(*, accepted: bool, integrity: bool = True) -> dict:
-    identity = {"candidate": "synthetic"}
-    metrics: dict[str, object] = {}
+def _coverage(matched: int, total: int) -> dict:
+    value = matched / total
     return {
+        "falseNegative": total - matched,
+        "falsePositive": total - matched,
+        "hmean": value,
+        "matchedPredictions": matched,
+        "matchedTruths": matched,
+        "precision": value,
+        "predictedUnits": total,
+        "recall": value,
+        "referenceUnits": total,
+        "truePositive": matched,
+    }
+
+
+def _confirmatory_identities() -> list[dict]:
+    return [
+        {
+            "imageSha256": hashlib.sha256(f"held-out-{index}".encode()).hexdigest(),
+            "rowIndex": index,
+        }
+        for index in range(acceptance.sroie_policy.RAW_TEST_ROWS)
+    ]
+
+
+def _confirmatory_metrics(identities: list[dict]) -> dict:
+    per_document = [
+        {
+            "textNormalization": acceptance.sroie_policy.PRIMARY_TEXT_NORMALIZATION,
+            "counts": {
+                "characterEdits": 8,
+                "matchingCharacters": 92,
+                "matchingTokensOrderInvariant": 90,
+                "matchingWords": 85,
+                "predictedCharacters": 100,
+                "predictedWords": 100,
+                "referenceCharacters": 100,
+                "referenceWords": 100,
+                "wordEdits": 15,
+            },
+            "detection": _coverage(92, 100),
+            "endToEndExact": _coverage(70, 100),
+            "imageSha256": identity["imageSha256"],
+            "pageCer": 0.08,
+            "pageWer": 0.15,
+            "rowIndex": identity["rowIndex"],
+            "tokenF1": 0.90,
+        }
+        for identity in identities
+    ]
+    documents = len(per_document)
+    counts = {
+        key: sum(item["counts"][key] for item in per_document)
+        for key in per_document[0]["counts"]
+    }
+    macro = {
+        "pageCer": statistics.fmean(item["pageCer"] for item in per_document),
+        "pageWer": statistics.fmean(item["pageWer"] for item in per_document),
+        "tokenF1": statistics.fmean(item["tokenF1"] for item in per_document),
+    }
+    micro = {
+        "counts": counts,
+        "detection": _coverage(92 * documents, 100 * documents),
+        "documents": documents,
+        "endToEndExact": _coverage(70 * documents, 100 * documents),
+        "pageCer": 0.08,
+        "pageWer": 0.15,
+        "tokenF1": 0.90,
+    }
+    strict_per_document = copy.deepcopy(per_document)
+    for item in strict_per_document:
+        item["textNormalization"] = acceptance.sroie_policy.DIAGNOSTIC_TEXT_NORMALIZATION
+    strict_metrics = {
+        "textNormalization": acceptance.sroie_policy.DIAGNOSTIC_TEXT_NORMALIZATION,
+        "macro": copy.deepcopy(macro),
+        "micro": copy.deepcopy(micro),
+        "perDocument": strict_per_document,
+    }
+    strict_rows = "".join(
+        acceptance.sroie_policy.canonical_json(item) + "\n" for item in strict_per_document
+    ).encode("utf-8")
+    return {
+        "textNormalization": acceptance.sroie_policy.PRIMARY_TEXT_NORMALIZATION,
+        "caseSensitiveDiagnostics": {
+            "metrics": strict_metrics,
+            "metricsSha256": acceptance.sroie_policy.sha256_canonical(strict_metrics),
+            "perDocumentMetricsSha256": hashlib.sha256(strict_rows).hexdigest(),
+            "textNormalization": acceptance.sroie_policy.DIAGNOSTIC_TEXT_NORMALIZATION,
+        },
+        "macro": macro,
+        "micro": micro,
+        "perDocument": per_document,
+    }
+
+
+def confirmatory_fixture(
+    *, accepted: bool, integrity: bool | None = None
+) -> tuple[dict, acceptance.ConfirmatorySealContext]:
+    if integrity is None:
+        integrity = accepted
+    identity = {"calibrationCorpus": {}, "candidate": "identity"}
+    identities = _confirmatory_identities()
+    metrics = _confirmatory_metrics(identities)
+    measurements = acceptance.generic_policy.extract_measurements_for_identities(
+        metrics,
+        expected_identities=identities,
+    )
+    validated_policy = acceptance.sroie_policy.ValidatedPolicy(
+        value={"thresholds": acceptance.generic_policy.derive_thresholds(measurements)},
+        file_sha256="e" * 64,
+    )
+    evaluation = acceptance.sroie_policy.evaluate_confirmatory(
+        validated_policy,
+        metrics,
+        expected_identities=identities,
+    )
+    metrics_sha256 = acceptance.sroie_policy.sha256_canonical(metrics)
+    per_document_sha256 = hashlib.sha256(
+        "".join(
+            acceptance.sroie_policy.canonical_json(item) + "\n"
+            for item in metrics["perDocument"]
+        ).encode("utf-8")
+    ).hexdigest()
+    backends = [
+        {
+            "criticalEvidenceSha256": "d" * 64,
+            "hybridLaneRecordCoverage": {
+                "bothLanesProducedRecords": requested == "hybrid",
+                "cpuLaneRecords": 5 if requested == "hybrid" else 100,
+                "nonCpuLaneRecords": 95 if requested == "hybrid" else 0,
+            },
+            "metrics": metrics,
+            "metricsSha256": metrics_sha256,
+            "provenancePassed": True,
+            "qualityRows": acceptance.sroie_policy.RAW_TEST_ROWS,
+            "qualityRun": {
+                "hybridLaneRecordCoverage": {
+                    "bothLanesProducedRecords": requested == "hybrid",
+                    "cpuLaneRecords": 5 if requested == "hybrid" else 100,
+                    "nonCpuLaneRecords": 95 if requested == "hybrid" else 0,
+                },
+                "metrics": metrics,
+                "metricsSha256": metrics_sha256,
+                "perDocumentMetricsSha256": per_document_sha256,
+                "stringRecords": 100,
+            },
+            "requestedProvider": requested,
+            "resolvedProvider": resolved,
+            "runtimeSha256": "a" * 64 if requested == "cpu" else "b" * 64,
+            "workerSha256": "1" * 64,
+        }
+        for requested, resolved in (
+            ("cpu", "cpu"),
+            ("directml", "directml"),
+            ("hybrid", "hybrid-directml-cpu"),
+        )
+    ]
+    checks = {
+        "allBackendDeterminismPassed": True,
+        "allBackendProvenancePassed": True,
+        "allRawSourceImageSha256SetsDisjoint": True,
+        "candidateStable": integrity,
+        "confidenceParityPassed": True,
+        "criticalEvidenceEqual": True,
+        "documentCountsExact": True,
+        "hybridMeaningfulLaneCoverage": True,
+        "metricsEqual": True,
+        "perDocumentMetricsEqual": True,
+        "requestedProvidersExact": True,
+        "resolvedProvidersExact": True,
+        "runtimeHashesExact": True,
+        "workerHashesExact": True,
+    }
+    cross_backend = {
+        "checks": checks,
+        "confidenceParity": {
+            "changedRecords": 0,
+            "comparedRecords": 10,
+            "evaluated": True,
+            "maximumAbsoluteDelta": 0.0,
+            "meanAbsoluteDelta": 0.0,
+            "passed": True,
+            "structurallyAligned": True,
+            "threshold": acceptance.cord.CONFIDENCE_PARITY_MAX_ABS_DELTA,
+        },
+    }
+    determinism = {
+        "checksByBackend": {
+            name: {
+                key: True
+                for key in (
+                    "byteDeterministic",
+                    "canonicalEvidenceDeterministic",
+                    "criticalEvidenceDeterministic",
+                    "executionProviderCountsStable",
+                    "metricsDeterministic",
+                    "provenancePassed",
+                    "repetitionCountExact",
+                    "rowIdentitiesExact",
+                    "selectionIdentityExact",
+                    "stableProvider",
+                    "stableRuntime",
+                    "stableTextNormalization",
+                    "stableThreadCounts",
+                    "stableWorkerCounts",
+                    "thresholdOverridesAbsent",
+                )
+            }
+            for name in ("cpu", "directml", "hybrid")
+        },
+        "repetitions": acceptance.DETERMINISM_REPETITIONS,
+    }
+    evaluations = {
+        name: copy.deepcopy(evaluation) for name in ("cpu", "directml", "hybrid")
+    }
+    corpus = {
+        "bboxRepairAuditSha256": "3" * 64,
+        "bboxRepairRecordsSha256": "4" * 64,
+        "corpusManifestSha256": "5" * 64,
+        "duplicateAuditSha256": "2" * 64,
+        "excludedRows": 0,
+        "imageIdentitiesSha256": acceptance.sroie_policy.sha256_canonical(identities),
+        "parquetSha256": acceptance.sroie_policy.TEST_SHA256,
+        "repairedRegionCount": 1,
+        "scoringAnnotationIdentitiesSha256": "6" * 64,
+        "selectedDocuments": acceptance.sroie_policy.RAW_TEST_ROWS,
+        "sourceImageDigestsSha256": "7" * 64,
+        "sourcePayloadIdentitiesSha256": "8" * 64,
+        "sourceRegionCount": 1000,
+        "sourceRows": acceptance.sroie_policy.RAW_TEST_ROWS,
+        "workerManifestSha256": "9" * 64,
+    }
+    report = {
         "acceptancePassed": accepted,
         "documents": acceptance.sroie_policy.RAW_TEST_ROWS,
         "evaluationCompleted": True,
         "evaluationRole": "confirmatory",
         "evidence": {
-            "artifacts": {"confirmatoryDuplicateAudit": {"sha256": "2" * 64}},
+            "artifacts": {
+                "confirmatoryBboxRepairAudit": {
+                    "bytes": 1,
+                    "path": "bbox-repairs.json",
+                    "sha256": "3" * 64,
+                },
+                "confirmatoryCorpusManifest": {
+                    "bytes": 1,
+                    "path": "corpus.jsonl",
+                    "sha256": "5" * 64,
+                },
+                "confirmatoryDuplicateAudit": {
+                    "bytes": 1,
+                    "path": "duplicates.json",
+                    "sha256": "2" * 64,
+                },
+                "confirmatoryInventory": {
+                    "bytes": 1,
+                    "path": "inventory.txt",
+                    "sha256": "a" * 64,
+                },
+                "confirmatoryWorkerManifest": {
+                    "bytes": 1,
+                    "path": "worker.jsonl",
+                    "sha256": "9" * 64,
+                },
+                "verifiedTestSnapshot": {
+                    "bytes": acceptance.sroie_policy.TEST_BYTES,
+                    "path": "source-snapshot/test.parquet",
+                    "sha256": acceptance.sroie_policy.TEST_SHA256,
+                },
+            },
+            "backends": backends,
+            "confirmatoryCorpus": corpus,
+            "crossBackendIntegrity": cross_backend,
+            "determinism": determinism,
+            "execution": {
+                "backendOrder": ["cpu", "directml", "hybrid"],
+                "oneShotAttemptLedger": "ledger.json",
+                "threads": 0,
+            },
+            "generatedAtUtc": "2026-08-05T00:00:00Z",
+            "holdoutOverlapCheck": {
+                "algorithm": "exact SHA-256 equality over decoded embedded image bytes",
+                "calibrationRawImages": acceptance.sroie_policy.RAW_TRAIN_ROWS,
+                "confirmatoryRawImages": acceptance.sroie_policy.RAW_TEST_ROWS,
+                "perceptualSimilarityClaimed": False,
+            },
+            "phase": "confirmatory",
+            "policy": {
+                "evaluations": evaluations,
+                "policyId": acceptance.sroie_policy.POLICY_ID,
+                "policySha256": "e" * 64,
+            },
             "testSnapshotSha256": acceptance.sroie_policy.TEST_SHA256,
+            "thresholdOverridesPermitted": False,
+            "witness": {
+                "ghExecutableSha256": acceptance.PINNED_GH_EXE_SHA256,
+                "ghVersion": acceptance.PINNED_GH_VERSION,
+                "githubImmutableRelease": {
+                    "assetName": "sroie-one-shot-witness.json",
+                    "repository": "Donovoi/bstrings",
+                    "tag": "sroie-acceptance-witness-v1",
+                },
+                "releaseVerificationSha256": "0" * 64,
+                "sha256": "f" * 64,
+            },
         },
-        "expectedIdentitiesSha256": "1" * 64,
+        "expectedIdentitiesSha256": acceptance.sroie_policy.sha256_canonical(identities),
         "finalDisposition": "accepted" if accepted else "rejected",
         "identity": identity,
         "identitySha256": acceptance.sroie_policy.sha256_canonical(identity),
         "integrityPassed": integrity,
         "metrics": metrics,
-        "metricsSha256": acceptance.sroie_policy.sha256_canonical(metrics),
+        "metricsSha256": metrics_sha256,
         "protocol": acceptance.PROTOCOL,
         "rawRows": acceptance.sroie_policy.RAW_TEST_ROWS,
         "runSucceeded": True,
         "schemaVersion": acceptance.SCHEMA_VERSION,
+    }
+    seal_context = acceptance.ConfirmatorySealContext(
+        validated_policy=validated_policy,
+        expected_identities=tuple(identities),
+        backends_sha256=acceptance.sroie_policy.sha256_canonical(backends),
+        cross_backend_integrity_sha256=acceptance.sroie_policy.sha256_canonical(cross_backend),
+        determinism_sha256=acceptance.sroie_policy.sha256_canonical(determinism),
+        evaluations_sha256=acceptance.sroie_policy.sha256_canonical(evaluations),
+        metrics_sha256=metrics_sha256,
+        report_sha256=acceptance.sroie_policy.sha256_canonical(report),
+    )
+    return report, seal_context
+
+
+def bbox_repair_fixture(root: Path) -> tuple[Path, Path, dict, list[dict]]:
+    geometries = (
+        ([1, 2, 3, 2], [1, 2, 3, 3], "y", "increase-upper"),
+        ([4, 1, 4, 3], [4, 1, 5, 3], "x", "increase-upper"),
+        ([1, 10, 3, 10], [1, 9, 3, 10], "y", "decrease-lower"),
+        ([10, 1, 10, 3], [9, 1, 10, 3], "x", "decrease-lower"),
+    )
+    repairs = []
+    for row_index, (source, scoring, axis, direction) in enumerate(geometries):
+        repairs.append(
+            {
+                "axisExpansionPixels": 1,
+                "degenerateAxis": axis,
+                "direction": direction,
+                "imageHeight": 10,
+                "imageWidth": 10,
+                "rowIndex": row_index,
+                "scoringAnnotationSha256": f"{row_index + 5:x}" * 64,
+                "scoringBbox": scoring,
+                "sourceBbox": source,
+                "sourceIndex": 0,
+                "sourcePayloadSha256": f"{row_index + 1:x}" * 64,
+            }
+        )
+    row_identities = [
+        {
+            "repairedRegions": 0,
+            "repairRecordsSha256": "",
+            "rowIndex": row_index,
+            "scoringAnnotationSha256": (f"{row_index + 5:x}" * 64 if row_index < 4 else "a" * 64),
+            "sourcePayloadSha256": (f"{row_index + 1:x}" * 64 if row_index < 4 else "b" * 64),
+            "sourceRegions": 1,
+        }
+        for row_index in range(5)
+    ]
+    audit = {
+        "dataset": acceptance.sroie.SROIE_REPOSITORY,
+        "policy": acceptance.sroie.SROIE_BBOX_REPAIR_POLICY,
+        "protocol": acceptance.sroie.SROIE_PROTOCOL,
+        "repairedRegions": 0,
+        "repairRecordsSha256": "",
+        "repairs": repairs,
+        "revision": acceptance.sroie.SROIE_COMMIT,
+        "rowIdentities": row_identities,
+        "schemaVersion": acceptance.sroie.SROIE_BBOX_REPAIR_AUDIT_SCHEMA_VERSION,
+        "scoringAnnotationIdentitiesSha256": "",
+        "sourcePayloadIdentitiesSha256": "",
+        "sourceRegions": 0,
+        "sourceRows": 5,
+        "split": "train",
+        "unchangedRegions": 0,
+    }
+    bind_bbox_repair_fixture(audit)
+    manifest = [
+        {
+            "annotationSha256": row["scoringAnnotationSha256"],
+            "bboxRepairCount": row["repairedRegions"],
+            "bboxRepairPolicy": acceptance.sroie.SROIE_BBOX_REPAIR_POLICY,
+            "bboxRepairRecordsSha256": row["repairRecordsSha256"],
+            "dataset": acceptance.sroie.SROIE_REPOSITORY,
+            "groundTruthLines": row["sourceRegions"],
+            "groundTruthPhysicalRows": row["sourceRegions"],
+            "groundTruthWords": row["sourceRegions"],
+            "imageHeight": 10,
+            "imageWidth": 10,
+            "protocol": acceptance.sroie.SROIE_PROTOCOL,
+            "revision": acceptance.sroie.SROIE_COMMIT,
+            "rowIndex": row["rowIndex"],
+            "schemaVersion": acceptance.sroie.SROIE_SCORING_CORPUS_MANIFEST_SCHEMA_VERSION,
+            "scoringAnnotationSha256": row["scoringAnnotationSha256"],
+            "sha256": f"{row['rowIndex']:x}" * 64,
+            "sourcePayloadSha256": row["sourcePayloadSha256"],
+            "split": "train",
+        }
+        for row in row_identities
+    ]
+    audit_path = root / "bbox-audit.json"
+    manifest_path = root / "corpus.jsonl"
+    audit_path.write_bytes(acceptance._canonical_bytes(audit))
+    manifest_path.write_bytes(b"".join(acceptance._canonical_bytes(row) for row in manifest))
+    return audit_path, manifest_path, audit, manifest
+
+
+def bind_bbox_repair_fixture(audit: dict) -> None:
+    repairs = audit["repairs"]
+    for row in audit["rowIdentities"]:
+        row_repairs = [item for item in repairs if item["rowIndex"] == row["rowIndex"]]
+        row["repairedRegions"] = len(row_repairs)
+        row["repairRecordsSha256"] = acceptance.sroie_policy.sha256_canonical(row_repairs)
+    audit["repairRecordsSha256"] = acceptance.sroie_policy.sha256_canonical(repairs)
+    audit["sourceRegions"] = sum(row["sourceRegions"] for row in audit["rowIdentities"])
+    audit["repairedRegions"] = len(repairs)
+    audit["unchangedRegions"] = audit["sourceRegions"] - len(repairs)
+    audit["sourcePayloadIdentitiesSha256"] = acceptance.sroie_policy.sha256_canonical(
+        [
+            {"rowIndex": row["rowIndex"], "sourcePayloadSha256": row["sourcePayloadSha256"]}
+            for row in audit["rowIdentities"]
+        ]
+    )
+    audit["scoringAnnotationIdentitiesSha256"] = acceptance.sroie_policy.sha256_canonical(
+        [
+            {
+                "rowIndex": row["rowIndex"],
+                "scoringAnnotationSha256": row["scoringAnnotationSha256"],
+            }
+            for row in audit["rowIdentities"]
+        ]
+    )
+
+
+def bbox_repair_fixture_identity(path: Path, audit: dict) -> dict:
+    return {
+        "bboxRepairAuditSha256": acceptance.benchmark_core.sha256_file(path),
+        "bboxRepairRecordsSha256": audit["repairRecordsSha256"],
+        "repairedRegionCount": audit["repairedRegions"],
+        "scoringAnnotationIdentitiesSha256": audit[
+            "scoringAnnotationIdentitiesSha256"
+        ],
+        "sourcePayloadIdentitiesSha256": audit["sourcePayloadIdentitiesSha256"],
+        "sourceRegionCount": audit["sourceRegions"],
     }
 
 
@@ -194,16 +626,12 @@ class SroieAcceptanceTests(unittest.TestCase):
             "determinism": {
                 "rowIndices": list(range(10)),
                 "selectionSha256": corpus.selection_sha256,
-                "runs": [
-                    dict(repetition) for _ in range(acceptance.DETERMINISM_REPETITIONS)
-                ],
+                "runs": [dict(repetition) for _ in range(acceptance.DETERMINISM_REPETITIONS)],
             },
         }
         self.assertTrue(all(acceptance._determinism_checks(run, corpus).values()))
         run["textNormalization"] = acceptance.sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION
-        self.assertFalse(
-            acceptance._determinism_checks(run, corpus)["stableTextNormalization"]
-        )
+        self.assertFalse(acceptance._determinism_checks(run, corpus)["stableTextNormalization"])
 
     def test_rescore_binds_recomputable_primary_and_strict_metrics(self) -> None:
         polygon = ((0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0))
@@ -405,9 +833,7 @@ class SroieAcceptanceTests(unittest.TestCase):
                     stdout=json.dumps(verification).encode("utf-8"), stderr=b"", returncode=0
                 )
             download_root = Path(arguments[arguments.index("--dir") + 1])
-            (download_root / value["githubImmutableRelease"]["assetName"]).write_bytes(
-                raw_witness
-            )
+            (download_root / value["githubImmutableRelease"]["assetName"]).write_bytes(raw_witness)
             return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
 
         with (
@@ -535,26 +961,112 @@ class SroieAcceptanceTests(unittest.TestCase):
         events: list[str] = []
         claim = self._claim(events)
         output, marker = acceptance._new_report_marker(self.root / "report.json")
-        report = confirmatory_report(accepted=True)
+        report, seal_context = confirmatory_fixture(accepted=True)
         staged = acceptance._stage_report(output, marker, report)
         with patch.object(acceptance, "_ACCESS_EVENT_HOOK", events.append):
-            acceptance._prepare_attempt_report(claim, report, staged)
+            acceptance._prepare_attempt_report(claim, report, staged, seal_context)
             acceptance._publish_prepared_report(claim, output, marker, staged)
-            acceptance._complete_attempt(claim, output)
+            acceptance._complete_attempt(claim, output, seal_context)
             self.assertTrue(marker.exists())
-            acceptance._seal_report(claim, output, marker)
+            acceptance._seal_report(claim, output, marker, seal_context)
         self.assertLess(events.index("report-staged"), events.index("report-published"))
         self.assertLess(events.index("report-published"), events.index("ledger-completed"))
         self.assertLess(events.index("ledger-completed"), events.index("report-sealed"))
-        self.assertEqual("completed", json.loads(claim.path.read_text())["status"])
+        ledger = json.loads(claim.path.read_text())
+        self.assertEqual("completed", ledger["status"])
+        self.assertEqual("3" * 64, ledger["confirmatoryBboxRepairAuditSha256"])
+        self.assertEqual("4" * 64, ledger["confirmatoryBboxRepairRecordsSha256"])
+        self.assertEqual("5" * 64, ledger["confirmatoryCorpusManifestSha256"])
+        self.assertEqual("8" * 64, ledger["confirmatorySourcePayloadIdentitiesSha256"])
+        self.assertEqual("6" * 64, ledger["confirmatoryScoringAnnotationIdentitiesSha256"])
         self.assertFalse(marker.exists())
+
+    def test_report_transaction_rejects_unbound_claim_evidence(self) -> None:
+        claim = self._claim([])
+
+        def different_identity(report: dict) -> None:
+            report["identity"] = {"candidate": "different"}
+            report["identitySha256"] = acceptance.sroie_policy.sha256_canonical(report["identity"])
+
+        mutations = [
+            ("identity", different_identity),
+            (
+                "policy-id",
+                lambda report: report["evidence"]["policy"].update(policyId="different-policy"),
+            ),
+            (
+                "policy-sha256",
+                lambda report: report["evidence"]["policy"].update(policySha256="1" * 64),
+            ),
+            (
+                "witness-sha256",
+                lambda report: report["evidence"]["witness"].update(sha256="1" * 64),
+            ),
+            (
+                "witness-release-verification",
+                lambda report: report["evidence"]["witness"].update(
+                    releaseVerificationSha256="1" * 64
+                ),
+            ),
+            (
+                "witness-gh-executable",
+                lambda report: report["evidence"]["witness"].update(ghExecutableSha256="1" * 64),
+            ),
+            (
+                "witness-gh-version",
+                lambda report: report["evidence"]["witness"].update(ghVersion="gh version 0.0.0"),
+            ),
+        ]
+        required_evidence = (
+            "backends",
+            "crossBackendIntegrity",
+            "determinism",
+            "execution",
+            "generatedAtUtc",
+            "holdoutOverlapCheck",
+            "phase",
+            "thresholdOverridesPermitted",
+        )
+        mutations.extend(
+            (
+                f"missing-{key}",
+                lambda report, evidence_key=key: report["evidence"].pop(evidence_key),
+            )
+            for key in required_evidence
+        )
+
+        for index, (name, mutate) in enumerate(mutations):
+            report, seal_context = confirmatory_fixture(accepted=True)
+            mutate(report)
+            output, marker = acceptance._new_report_marker(self.root / f"invalid-{index}.json")
+            staged = acceptance._stage_report(output, marker, report)
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(acceptance.AcceptanceError, "cannot complete"),
+            ):
+                acceptance._prepare_attempt_report(claim, report, staged, seal_context)
+            self.assertEqual("started", json.loads(claim.path.read_text())["status"])
+
+    def test_completion_rejects_a_missing_stored_report_binding(self) -> None:
+        claim = self._claim([])
+        output, marker = acceptance._new_report_marker(self.root / "report.json")
+        report, seal_context = confirmatory_fixture(accepted=True)
+        staged = acceptance._stage_report(output, marker, report)
+        acceptance._prepare_attempt_report(claim, report, staged, seal_context)
+        ledger = json.loads(claim.path.read_text(encoding="utf-8"))
+        ledger.pop("confirmatoryPolicySha256")
+        claim.path.write_bytes(acceptance._canonical_bytes(ledger))
+        acceptance._publish_prepared_report(claim, output, marker, staged)
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "bindings changed"):
+            acceptance._complete_attempt(claim, output, seal_context)
+        self.assertEqual("report-staged", json.loads(claim.path.read_text())["status"])
 
     def test_staged_report_mutation_is_rejected_before_publication(self) -> None:
         claim = self._claim([])
         output, marker = acceptance._new_report_marker(self.root / "report.json")
-        report = confirmatory_report(accepted=False)
+        report, seal_context = confirmatory_fixture(accepted=False)
         staged = acceptance._stage_report(output, marker, report)
-        acceptance._prepare_attempt_report(claim, report, staged)
+        acceptance._prepare_attempt_report(claim, report, staged, seal_context)
         raw = staged.path.read_bytes()
         staged.path.write_bytes(raw[:-2] + (b"0" if raw[-2:-1] != b"0" else b"1") + raw[-1:])
         with self.assertRaisesRegex(acceptance.AcceptanceError, "identity changed"):
@@ -563,20 +1075,22 @@ class SroieAcceptanceTests(unittest.TestCase):
         self.assertTrue(marker.exists())
         self.assertFalse(output.exists())
 
-    def test_crash_after_report_staging_recovers_without_test_access(self) -> None:
+    def test_interrupted_report_commit_continues_without_test_access(self) -> None:
         events: list[str] = []
         claim = self._claim(events)
         output, marker = acceptance._new_report_marker(self.root / "report.json")
-        report = confirmatory_report(accepted=False)
+        report, seal_context = confirmatory_fixture(accepted=False)
         staged = acceptance._stage_report(output, marker, report)
-        acceptance._prepare_attempt_report(claim, report, staged)
+        acceptance._prepare_attempt_report(claim, report, staged, seal_context)
         events.clear()
         with (
             patch.object(acceptance, "CONFIRMATORY_ATTEMPT_LEDGER", claim.path),
             patch.object(acceptance, "_ACCESS_EVENT_HOOK", events.append),
         ):
             recovered = acceptance._recover_report_commit(
-                output, expected_claim=claim
+                output,
+                expected_claim=claim,
+                seal_context=seal_context,
             )
         self.assertEqual(report, recovered)
         self.assertFalse(marker.exists())
@@ -586,9 +1100,9 @@ class SroieAcceptanceTests(unittest.TestCase):
     def test_forged_recovery_ledger_is_rejected(self) -> None:
         claim = self._claim([])
         output, marker = acceptance._new_report_marker(self.root / "report.json")
-        report = confirmatory_report(accepted=False)
+        report, seal_context = confirmatory_fixture(accepted=False)
         staged = acceptance._stage_report(output, marker, report)
-        acceptance._prepare_attempt_report(claim, report, staged)
+        acceptance._prepare_attempt_report(claim, report, staged, seal_context)
         forged = json.loads(claim.path.read_text(encoding="utf-8"))
         forged["policySha256"] = "9" * 64
         forged_initial = dict(claim.value)
@@ -601,7 +1115,52 @@ class SroieAcceptanceTests(unittest.TestCase):
             patch.object(acceptance, "CONFIRMATORY_ATTEMPT_LEDGER", claim.path),
             self.assertRaisesRegex(acceptance.AcceptanceError, "authenticated initial claim"),
         ):
-            acceptance._recover_report_commit(output, expected_claim=claim)
+            acceptance._recover_report_commit(
+                output,
+                expected_claim=claim,
+                seal_context=seal_context,
+            )
+
+    def test_completed_recovery_cannot_seal_a_forged_report(self) -> None:
+        claim = self._claim([])
+        output, marker = acceptance._new_report_marker(self.root / "report.json")
+        report, seal_context = confirmatory_fixture(accepted=True)
+        staged = acceptance._stage_report(output, marker, report)
+        acceptance._prepare_attempt_report(claim, report, staged, seal_context)
+        acceptance._publish_prepared_report(claim, output, marker, staged)
+        acceptance._complete_attempt(claim, output, seal_context)
+
+        forged = copy.deepcopy(report)
+        forged["evidence"]["artifacts"]["confirmatoryCorpusManifest"]["sha256"] = "0" * 64
+        forged["evidence"]["confirmatoryCorpus"]["corpusManifestSha256"] = "0" * 64
+        raw = acceptance._canonical_bytes(forged)
+        output.write_bytes(raw)
+        ledger = json.loads(claim.path.read_text(encoding="utf-8"))
+        ledger["confirmatoryCorpusManifestSha256"] = "0" * 64
+        ledger["reportBytes"] = len(raw)
+        ledger["reportSha256"] = hashlib.sha256(raw).hexdigest()
+        claim.path.write_bytes(acceptance._canonical_bytes(ledger))
+
+        with (
+            patch.object(acceptance, "CONFIRMATORY_ATTEMPT_LEDGER", claim.path),
+            self.assertRaisesRegex(acceptance.AcceptanceError, "cannot complete"),
+        ):
+            acceptance._recover_report_commit(
+                output,
+                expected_claim=claim,
+                seal_context=seal_context,
+            )
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        with (
+            patch.object(acceptance, "CONFIRMATORY_ATTEMPT_LEDGER", claim.path),
+            self.assertRaisesRegex(acceptance.AcceptanceError, "cannot complete"),
+        ):
+            acceptance._recover_report_commit(
+                output,
+                expected_claim=claim,
+                seal_context=seal_context,
+            )
 
     def test_cli_fails_closed_on_any_existing_one_shot_ledger(self) -> None:
         ledger = self.root / "existing-ledger.json"
@@ -674,11 +1233,18 @@ class SroieAcceptanceTests(unittest.TestCase):
         self.assertTrue(
             acceptance._meaningful_hybrid_lane_coverage(
                 {
-                    "stringRecords": 100,
                     "hybridLaneRecordCoverage": {
                         "bothLanesProducedRecords": True,
                         "cpuLaneRecords": 5,
                         "nonCpuLaneRecords": 95,
+                    },
+                    "qualityRun": {
+                        "hybridLaneRecordCoverage": {
+                            "bothLanesProducedRecords": True,
+                            "cpuLaneRecords": 5,
+                            "nonCpuLaneRecords": 95,
+                        },
+                        "stringRecords": 100,
                     },
                 }
             )
@@ -686,11 +1252,18 @@ class SroieAcceptanceTests(unittest.TestCase):
         self.assertFalse(
             acceptance._meaningful_hybrid_lane_coverage(
                 {
-                    "stringRecords": 100,
                     "hybridLaneRecordCoverage": {
                         "bothLanesProducedRecords": True,
                         "cpuLaneRecords": 1,
                         "nonCpuLaneRecords": 99,
+                    },
+                    "qualityRun": {
+                        "hybridLaneRecordCoverage": {
+                            "bothLanesProducedRecords": True,
+                            "cpuLaneRecords": 1,
+                            "nonCpuLaneRecords": 99,
+                        },
+                        "stringRecords": 100,
                     },
                 }
             )
@@ -717,19 +1290,22 @@ class SroieAcceptanceTests(unittest.TestCase):
             "transcription",
             "words",
         ):
-            with self.subTest(field=field), self.assertRaisesRegex(
-                acceptance.AcceptanceError, "forbidden evidence"
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(acceptance.AcceptanceError, "forbidden evidence"),
             ):
                 acceptance._validate_public_report_privacy({field: "secret label"})
 
         for private_path in (r"C:relative\secret.txt", r"\Users\secret.txt"):
-            with self.subTest(path=private_path), self.assertRaisesRegex(
-                acceptance.AcceptanceError, "absolute path"
+            with (
+                self.subTest(path=private_path),
+                self.assertRaisesRegex(acceptance.AcceptanceError, "absolute path"),
             ):
                 acceptance._validate_public_report_privacy({"value": private_path})
 
     def test_confirmatory_report_bindings_reject_impossible_states(self) -> None:
-        baseline = confirmatory_report(accepted=True)
+        claim = self._claim([])
+        baseline, seal_context = confirmatory_fixture(accepted=True)
         mutations = {
             "acceptance-not-bool": {"acceptancePassed": "true"},
             "accepted-without-integrity": {"integrityPassed": False},
@@ -741,17 +1317,265 @@ class SroieAcceptanceTests(unittest.TestCase):
         for name, mutation in mutations.items():
             report = copy.deepcopy(baseline)
             report.update(mutation)
-            with self.subTest(name=name), self.assertRaisesRegex(
-                acceptance.AcceptanceError, "cannot complete"
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(acceptance.AcceptanceError, "cannot complete"),
             ):
-                acceptance._confirmatory_report_bindings(report)
+                acceptance._confirmatory_report_bindings(report, claim, seal_context)
+
+    def test_confirmatory_seal_recomputes_quality_and_rejects_synthetic_metrics(self) -> None:
+        claim = self._claim([])
+        baseline, seal_context = confirmatory_fixture(accepted=True)
+
+        false_acceptance = copy.deepcopy(baseline)
+        false_acceptance["acceptancePassed"] = False
+        false_acceptance["finalDisposition"] = "rejected"
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "cannot complete"):
+            acceptance._confirmatory_report_bindings(
+                false_acceptance,
+                claim,
+                seal_context,
+            )
+
+        forged_evaluation = copy.deepcopy(baseline)
+        forged_evaluation["evidence"]["policy"]["evaluations"]["cpu"]["passed"] = False
+        rebound_evaluation_context = replace(
+            seal_context,
+            evaluations_sha256=acceptance.sroie_policy.sha256_canonical(
+                forged_evaluation["evidence"]["policy"]["evaluations"]
+            ),
+            report_sha256=acceptance.sroie_policy.sha256_canonical(forged_evaluation),
+        )
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "cannot complete"):
+            acceptance._confirmatory_report_bindings(
+                forged_evaluation,
+                claim,
+                rebound_evaluation_context,
+            )
+
+        synthetic = copy.deepcopy(baseline)
+        synthetic["metrics"] = {}
+        synthetic["metricsSha256"] = acceptance.sroie_policy.sha256_canonical({})
+        for backend in synthetic["evidence"]["backends"]:
+            backend["metrics"] = {}
+            backend["metricsSha256"] = synthetic["metricsSha256"]
+            backend["qualityRun"]["metrics"] = {}
+            backend["qualityRun"]["metricsSha256"] = synthetic["metricsSha256"]
+        rebound_synthetic_context = replace(
+            seal_context,
+            backends_sha256=acceptance.sroie_policy.sha256_canonical(
+                synthetic["evidence"]["backends"]
+            ),
+            metrics_sha256=synthetic["metricsSha256"],
+            report_sha256=acceptance.sroie_policy.sha256_canonical(synthetic),
+        )
+        with self.assertRaisesRegex(
+            acceptance.AcceptanceError,
+            "policy evaluation cannot be authenticated",
+        ):
+            acceptance._confirmatory_report_bindings(
+                synthetic,
+                claim,
+                rebound_synthetic_context,
+            )
 
         invalid_audit = copy.deepcopy(baseline)
-        invalid_audit["evidence"]["artifacts"]["confirmatoryDuplicateAudit"][
-            "sha256"
-        ] = "z" * 64
+        invalid_audit["evidence"]["artifacts"]["confirmatoryDuplicateAudit"]["sha256"] = "z" * 64
         with self.assertRaisesRegex(acceptance.AcceptanceError, "cannot complete"):
-            acceptance._confirmatory_report_bindings(invalid_audit)
+            acceptance._confirmatory_report_bindings(invalid_audit, claim, seal_context)
+
+        for key, value in (
+            ("excludedRows", 1),
+            ("selectedDocuments", acceptance.sroie_policy.RAW_TEST_ROWS - 1),
+            ("sourceRows", acceptance.sroie_policy.RAW_TEST_ROWS - 1),
+            ("repairedRegionCount", 1001),
+            ("bboxRepairRecordsSha256", "z" * 64),
+            ("sourcePayloadIdentitiesSha256", "z" * 64),
+            ("scoringAnnotationIdentitiesSha256", "z" * 64),
+        ):
+            report = copy.deepcopy(baseline)
+            report["evidence"]["confirmatoryCorpus"][key] = value
+            with (
+                self.subTest(corpus_key=key),
+                self.assertRaisesRegex(acceptance.AcceptanceError, "cannot complete"),
+            ):
+                acceptance._confirmatory_report_bindings(report, claim, seal_context)
+
+    def test_bbox_repair_audit_validates_all_transforms_and_rejects_tampering(self) -> None:
+        audit_path, manifest_path, baseline, baseline_manifest = bbox_repair_fixture(self.root)
+        expected_repair_identity = bbox_repair_fixture_identity(audit_path, baseline)
+        identity = acceptance._validate_bbox_repair_audit(
+            audit_path,
+            corpus_manifest=manifest_path,
+            split="train",
+            expected_raw_rows=5,
+            expected_identities=[
+                {"imageSha256": row["sha256"], "rowIndex": row["rowIndex"]}
+                for row in baseline_manifest
+            ],
+            expected_repair_identity=expected_repair_identity,
+        )
+        self.assertEqual(4, identity["repairedRegionCount"])
+        self.assertEqual(5, identity["sourceRegionCount"])
+        self.assertEqual(
+            hashlib.sha256(audit_path.read_bytes()).hexdigest(),
+            identity["bboxRepairAuditSha256"],
+        )
+        self.assertNotIn("text", audit_path.read_text(encoding="utf-8").lower())
+
+        def reject(
+            name: str,
+            mutate,
+            *,
+            rebind: bool = True,
+            mutate_manifest=None,
+        ) -> None:
+            audit = copy.deepcopy(baseline)
+            manifest = copy.deepcopy(baseline_manifest)
+            mutate(audit)
+            if rebind:
+                bind_bbox_repair_fixture(audit)
+            if mutate_manifest is not None:
+                mutate_manifest(manifest)
+            audit_path.write_bytes(acceptance._canonical_bytes(audit))
+            manifest_path.write_bytes(
+                b"".join(acceptance._canonical_bytes(row) for row in manifest)
+            )
+            with self.subTest(name=name), self.assertRaises(acceptance.AcceptanceError):
+                acceptance._validate_bbox_repair_audit(
+                    audit_path,
+                    corpus_manifest=manifest_path,
+                    split="train",
+                    expected_raw_rows=5,
+                    expected_identities=[
+                        {
+                            "imageSha256": row["sha256"],
+                            "rowIndex": row["rowIndex"],
+                        }
+                        for row in baseline_manifest
+                    ],
+                    expected_repair_identity=expected_repair_identity,
+                )
+
+        reject(
+            "both axes degenerate",
+            lambda value: value["repairs"][0].update(sourceBbox=[1, 2, 1, 2]),
+        )
+        reject("reversed", lambda value: value["repairs"][0].update(sourceBbox=[3, 2, 1, 2]))
+        reject("out of bounds", lambda value: value["repairs"][0].update(sourceBbox=[-1, 2, 3, 2]))
+        reject(
+            "more than one pixel",
+            lambda value: value["repairs"][0].update(scoringBbox=[1, 2, 3, 4]),
+        )
+        reject(
+            "wrong direction",
+            lambda value: value["repairs"][0].update(direction="decrease-lower"),
+        )
+        reject("wrong axis", lambda value: value["repairs"][0].update(degenerateAxis="x"))
+        reject("invalid dimensions", lambda value: value["repairs"][0].update(imageWidth=0))
+        reject("invalid source index", lambda value: value["repairs"][0].update(sourceIndex=1))
+        reject(
+            "boolean axis expansion",
+            lambda value: value["repairs"][0].update(axisExpansionPixels=True),
+        )
+        reject(
+            "repair dimensions exceed manifest",
+            lambda value: value["repairs"][0].update(
+                imageWidth=11,
+                sourceBbox=[10, 1, 10, 3],
+                scoringBbox=[10, 1, 11, 3],
+                degenerateAxis="x",
+                direction="increase-upper",
+            ),
+        )
+        reject(
+            "record digest drift",
+            lambda value: value["repairs"][0].update(sourcePayloadSha256="f" * 64),
+        )
+        reject("record order", lambda value: value["repairs"].reverse())
+        reject(
+            "duplicate record",
+            lambda value: value["repairs"].append(copy.deepcopy(value["repairs"][0])),
+        )
+        reject("skipped repair", lambda value: value["repairs"].pop(0))
+        reject(
+            "root count drift",
+            lambda value: value.update(repairedRegions=value["repairedRegions"] + 1),
+            rebind=False,
+        )
+        reject(
+            "root digest drift",
+            lambda value: value.update(repairRecordsSha256="0" * 64),
+            rebind=False,
+        )
+        reject(
+            "manifest count drift",
+            lambda value: None,
+            mutate_manifest=lambda rows: rows[0].update(bboxRepairCount=0),
+        )
+
+        reject(
+            "coordinated skipped repair",
+            lambda value: value["repairs"].pop(0),
+            mutate_manifest=lambda rows: rows[0].update(
+                bboxRepairCount=0,
+                bboxRepairRecordsSha256=acceptance.sroie_policy.sha256_canonical([]),
+            ),
+        )
+
+        audit_path.write_bytes(acceptance._canonical_bytes(baseline))
+        manifest_path.write_bytes(
+            b"".join(acceptance._canonical_bytes(row) for row in baseline_manifest)
+        )
+        for name, mutate_expected in (
+            ("missing", lambda value: value.pop("bboxRepairAuditSha256")),
+            ("extra", lambda value: value.update(extra="0" * 64)),
+            ("bad digest", lambda value: value.update(bboxRepairRecordsSha256="z" * 64)),
+            ("boolean source count", lambda value: value.update(sourceRegionCount=True)),
+            ("negative repair count", lambda value: value.update(repairedRegionCount=-1)),
+            (
+                "mismatched digest",
+                lambda value: value.update(bboxRepairRecordsSha256="0" * 64),
+            ),
+        ):
+            changed_expected = copy.deepcopy(expected_repair_identity)
+            mutate_expected(changed_expected)
+            with self.subTest(expected_identity=name), self.assertRaises(
+                acceptance.AcceptanceError
+            ):
+                acceptance._validate_bbox_repair_audit(
+                    audit_path,
+                    corpus_manifest=manifest_path,
+                    split="train",
+                    expected_raw_rows=5,
+                    expected_identities=[
+                        {
+                            "imageSha256": row["sha256"],
+                            "rowIndex": row["rowIndex"],
+                        }
+                        for row in baseline_manifest
+                    ],
+                    expected_repair_identity=changed_expected,
+                )
+
+        with self.assertRaises(TypeError):
+            acceptance._validate_bbox_repair_audit(
+                audit_path,
+                corpus_manifest=manifest_path,
+                split="train",
+                expected_raw_rows=5,
+                expected_identities=[],
+            )
+
+    def test_repair_bindings_are_public_report_safe_and_terminal(self) -> None:
+        claim = self._claim([])
+        report, seal_context = confirmatory_fixture(accepted=True)
+        acceptance._validate_public_report_privacy(report)
+        bindings = acceptance._confirmatory_report_bindings(report, claim, seal_context)
+        self.assertEqual("3" * 64, bindings["confirmatoryBboxRepairAuditSha256"])
+        self.assertEqual("4" * 64, bindings["confirmatoryBboxRepairRecordsSha256"])
+        self.assertEqual("5" * 64, bindings["confirmatoryCorpusManifestSha256"])
+        self.assertEqual(1, bindings["confirmatoryRepairedRegionCount"])
 
     def test_snapshot_destination_parent_swap_fails_before_source_open(self) -> None:
         source_root = self.root / "source"
@@ -788,9 +1612,7 @@ class SroieAcceptanceTests(unittest.TestCase):
         except OSError as exc:
             self.skipTest(f"symlinks unavailable: {exc}")
         with self.assertRaisesRegex(acceptance.AcceptanceError, "unsafe parent"):
-            acceptance._snapshot_test_after_claim(
-                str(source), link / "confirmatory" / "snapshot"
-            )
+            acceptance._snapshot_test_after_claim(str(source), link / "confirmatory" / "snapshot")
         self.assertEqual([], list(redirect.iterdir()))
 
     def test_snapshot_oserror_never_leaks_path_through_main(self) -> None:
@@ -870,6 +1692,11 @@ class SroieAcceptanceTests(unittest.TestCase):
             raise acceptance.AcceptanceError("postclaim", stage="backend")
 
         with (
+            patch.object(
+                acceptance,
+                "CONFIRMATORY_ATTEMPT_LEDGER",
+                self.root / "run-ledger.json",
+            ),
             patch.object(acceptance, "_require_outer_runtime_isolation"),
             patch.object(acceptance, "verify_candidate", return_value=object()),
             patch.object(acceptance, "load_calibration_context", return_value=context(self.root)),
@@ -877,9 +1704,7 @@ class SroieAcceptanceTests(unittest.TestCase):
             patch.object(
                 acceptance,
                 "_terminalize_failed_attempt",
-                side_effect=acceptance.AcceptanceError(
-                    "terminalization", stage="terminalization"
-                ),
+                side_effect=acceptance.AcceptanceError("terminalization", stage="terminalization"),
             ),
             self.assertRaisesRegex(acceptance.AcceptanceError, "terminalization"),
         ):
@@ -945,14 +1770,16 @@ class SroieAcceptanceTests(unittest.TestCase):
             "dataset": acceptance.sroie.SROIE_REPOSITORY,
             "duplicateGroupAudit": [
                 {
-                    "annotationSha256s": ["5" * 64, "6" * 64],
                     "decision": "exclude-conflicting-group",
-                    "distinctAnnotationDigests": 2,
+                    "distinctScoringAnnotationDigests": 1,
+                    "distinctSourcePayloadDigests": 2,
                     "excludedRowIndices": [0, 1],
                     "imageSha256": repeated,
                     "includedRowIndices": [],
                     "rowCount": 2,
                     "rowIndices": [0, 1],
+                    "scoringAnnotationSha256s": ["a" * 64],
+                    "sourcePayloadSha256s": ["5" * 64, "6" * 64],
                 }
             ],
             "duplicateGroups": 1,
@@ -965,6 +1792,23 @@ class SroieAcceptanceTests(unittest.TestCase):
             "revision": acceptance.sroie.SROIE_COMMIT,
             "schemaVersion": acceptance.sroie.SROIE_SCORING_CORPUS_MANIFEST_SCHEMA_VERSION,
             "selectionSha256": acceptance.sroie_policy.sha256_canonical(identities),
+            "sourceAnnotationDigests": [
+                {
+                    "rowIndex": 0,
+                    "scoringAnnotationSha256": "a" * 64,
+                    "sourcePayloadSha256": "5" * 64,
+                },
+                {
+                    "rowIndex": 1,
+                    "scoringAnnotationSha256": "a" * 64,
+                    "sourcePayloadSha256": "6" * 64,
+                },
+                {
+                    "rowIndex": 2,
+                    "scoringAnnotationSha256": "b" * 64,
+                    "sourcePayloadSha256": "7" * 64,
+                },
+            ],
             "sourceImageDigestSetSha256": acceptance.sroie_policy.sha256_canonical(
                 sorted({repeated, singleton})
             ),
@@ -987,6 +1831,44 @@ class SroieAcceptanceTests(unittest.TestCase):
                 expected_identities=identities,
             ),
         )
+        source_identity_sha256 = acceptance.sroie_policy.sha256_canonical(
+            [
+                {
+                    "rowIndex": row["rowIndex"],
+                    "sourcePayloadSha256": row["sourcePayloadSha256"],
+                }
+                for row in audit["sourceAnnotationDigests"]
+            ]
+        )
+        scoring_identity_sha256 = acceptance.sroie_policy.sha256_canonical(
+            [
+                {
+                    "rowIndex": row["rowIndex"],
+                    "scoringAnnotationSha256": row["scoringAnnotationSha256"],
+                }
+                for row in audit["sourceAnnotationDigests"]
+            ]
+        )
+        self.assertEqual(
+            (repeated, repeated, singleton),
+            acceptance._validate_duplicate_audit(
+                path,
+                split="train",
+                expected_raw_rows=3,
+                expected_identities=identities,
+                expected_source_payload_identities_sha256=source_identity_sha256,
+                expected_scoring_annotation_identities_sha256=scoring_identity_sha256,
+            ),
+        )
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "identities differ"):
+            acceptance._validate_duplicate_audit(
+                path,
+                split="train",
+                expected_raw_rows=3,
+                expected_identities=identities,
+                expected_source_payload_identities_sha256="0" * 64,
+                expected_scoring_annotation_identities_sha256=scoring_identity_sha256,
+            )
         tampered = copy.deepcopy(audit)
         tampered["duplicateGroupAudit"][0]["decision"] = "keep-lowest-row-index"
         path.write_bytes(acceptance._canonical_bytes(tampered))
@@ -1011,14 +1893,16 @@ class SroieAcceptanceTests(unittest.TestCase):
             "dataset": acceptance.sroie.SROIE_REPOSITORY,
             "duplicateGroupAudit": [
                 {
-                    "annotationSha256s": ["5" * 64, "6" * 64],
                     "decision": "score-all-test-rows",
-                    "distinctAnnotationDigests": 2,
+                    "distinctScoringAnnotationDigests": 1,
+                    "distinctSourcePayloadDigests": 2,
                     "excludedRowIndices": [],
                     "imageSha256": repeated,
                     "includedRowIndices": [0, 1],
                     "rowCount": 2,
                     "rowIndices": [0, 1],
+                    "scoringAnnotationSha256s": ["a" * 64],
+                    "sourcePayloadSha256s": ["5" * 64, "6" * 64],
                 }
             ],
             "duplicateGroups": 1,
@@ -1031,6 +1915,23 @@ class SroieAcceptanceTests(unittest.TestCase):
             "revision": acceptance.sroie.SROIE_COMMIT,
             "schemaVersion": acceptance.sroie.SROIE_SCORING_CORPUS_MANIFEST_SCHEMA_VERSION,
             "selectionSha256": acceptance.sroie_policy.sha256_canonical(identities),
+            "sourceAnnotationDigests": [
+                {
+                    "rowIndex": 0,
+                    "scoringAnnotationSha256": "a" * 64,
+                    "sourcePayloadSha256": "5" * 64,
+                },
+                {
+                    "rowIndex": 1,
+                    "scoringAnnotationSha256": "a" * 64,
+                    "sourcePayloadSha256": "6" * 64,
+                },
+                {
+                    "rowIndex": 2,
+                    "scoringAnnotationSha256": "b" * 64,
+                    "sourcePayloadSha256": "7" * 64,
+                },
+            ],
             "sourceImageDigestSetSha256": acceptance.sroie_policy.sha256_canonical(
                 sorted({repeated, singleton})
             ),

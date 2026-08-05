@@ -4,9 +4,12 @@ This guide is for maintainers of the Windows x64 release. Examiners should use
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-## Published release shape
+## Planned v1.9.0 release shape
 
-An exact project-version tag publishes:
+No current public release contains the complete-kit asset set below. Until
+v1.9.0 is tagged and its gates pass, build and verify from current source; do
+not combine an older core ZIP with new manifests. An exact project-version tag
+publishes:
 
 - `bstrings-win-x64.zip`, the self-contained core scanner and split-pack
   acquisition client;
@@ -14,10 +17,18 @@ An exact project-version tag publishes:
 - `airgap-config-{quality,balanced,compact}.json`;
 - `airgap-manifest-{quality,balanced,compact}.json`;
 - `Hy-MT2-Apache-2.0-{quality,balanced,compact}.txt`;
-- `bundle-packs-{quality,balanced,compact}.json`; and
+- `bundle-packs-{quality,balanced,compact}.json`;
 - `SHA256SUMS.txt`; and
 - `offline-profile-acceptance.json`, the tag- and commit-bound acceptance record
   for every advertised profile.
+
+| Item | Release asset? | Role |
+| --- | --- | --- |
+| Core ZIP | Yes | Scanner and acquisition client |
+| Shared base ZIP | Yes | Common runtimes, OCR, recovery tools, and manifests |
+| Profile files/trust manifest | Yes | Select and authenticate one translation profile |
+| Immutable translation model | No; acquired from its pinned official source | Large external pack named by the trust manifest |
+| Complete offline kit | No; assembled locally | Directory transferred to the disconnected host |
 
 The shared base must remain smaller than 2,000,000,000 bytes. This conservative
 project ceiling stays below GitHub's strict 2 GiB per-release-file limit,
@@ -42,8 +53,8 @@ plan. It uses profile `windows-x64-offline-v2`, defaults to `quality`, and pins:
 | Component | Reviewed input |
 | --- | --- |
 | CPython | Official 3.14.6 Windows x64 embeddable ZIP |
-| Magika | Official `cli/v1.1.0` Windows x64 CLI ZIP |
-| FLOSS | Official v3.1.1 standalone Windows ZIP |
+| Magika | Official [`cli/v1.1.0`](https://github.com/google/magika/releases/tag/cli%2Fv1.1.0) Windows x64 CLI ZIP |
+| FLOSS | Official [v3.1.1](https://github.com/mandiant/flare-floss/releases/tag/v3.1.1) standalone Windows ZIP |
 | llama.cpp | Source ZIP for tag `b10248`, commit `e8e06f78e253a98a739b8ae4c6b661b357249ce4` |
 | Quality translation | Hy-MT2-7B Q8_0, revision `707464294cf5b2a5a69982855020858ed58cf1d1` |
 | Balanced translation | Hy-MT2-1.8B Q8_0, revision `1cd5208700acedef4ef93019b6cfc148b8522d45` |
@@ -63,11 +74,15 @@ verified immutable 7B license revision.
 
 `tools/airgap/ocr-components.lock.json` independently pins profile
 `windows-x64-ocr-cpu-directml-v1`: two CPython runtimes, 26 exact packages,
-CPU and DirectML ONNX Runtime sets, PP-OCRv6 detector/recognizer files,
+CPU and DirectML ONNX Runtime sets, immutable PP-OCRv6
+[detector](https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx/tree/61323801669c338b7891481ec7bac61ce31b576a)/[recognizer](https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/tree/50c7eacafc52fa7bcf4194e8cd08e46f8558504b)
+files,
 orientation classifier, 18,708-entry dictionary, and all license inputs. Its
 model-pack manifest SHA-256 is
 `b3b683eb29ec09e9da835e09fb4470792af7702cfc6cee40f2725c232d258534`.
-The classifier is extracted from the immutable RapidOCR 3.9.2 wheel; an
+The classifier is extracted from the immutable
+[RapidOCR 3.9.2](https://github.com/RapidAI/RapidOCR/releases/tag/v3.9.2)
+wheel; an
 independent immutable upstream location is retained as provenance rather than
 used as an unverified fallback. The composite revision's `cls-390c78...` value
 is an internal component identity token, not the upstream source revision. The
@@ -101,8 +116,9 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 
 ## Build and test the self-contained core
 
-The release uses [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0)
-and the repository-pinned Rust toolchain:
+The v1.9.0 release plan uses
+[.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
+repository-pinned Rust toolchain:
 
 ```powershell
 cargo fmt --manifest-path native\bstrings_core\Cargo.toml -- --check
@@ -110,10 +126,12 @@ cargo clippy --manifest-path native\bstrings_core\Cargo.toml --all-targets -- -D
 cargo test --manifest-path native\bstrings_core\Cargo.toml --locked
 cargo build --manifest-path native\bstrings_core\Cargo.toml --release --locked
 
-$noticeSource = Join-Path $env:TEMP 'bstrings-release-notices'
+$noticeCache = Join-Path $env:TEMP 'bstrings-release-notice-cache'
+$noticeSource = Join-Path $env:TEMP ("bstrings-release-notices-" + [Guid]::NewGuid().ToString('N'))
 dotnet restore bstrings.sln --runtime win-x64
 .\tools\licenses\Stage-ManagedThirdPartyNotices.ps1 `
-  -DestinationDirectory $noticeSource
+  -DestinationDirectory $noticeSource `
+  -DownloadCacheDirectory $noticeCache
 .\tools\licenses\Verify-ManagedThirdPartyNotices.ps1 `
   -NoticeSourceDirectory $noticeSource
 
@@ -183,7 +201,8 @@ evidence that official URLs remain usable.
 
 After the complete assembler adds application-local VC files, bundle
 configuration, verifier, and smoke fixtures, run
-`Verify-OcrRuntime.ps1 -BundleDirectory <complete-bundle> -Smoke`. That smoke
+`.\tools\airgap\Verify-OcrRuntime.ps1 -BundleDirectory <complete-bundle> -Smoke`.
+That smoke
 performs real CPU/DirectML/hybrid inference by default. Pass
 `-SmokeProviders cpu` for the hosted CPU gate. The assembler always requires
 CPU inference and records `assemblySelfTestProviders` in the bundle; a custom
@@ -192,17 +211,22 @@ workflow is the release-process evidence for those paths. Do not run GPU-path
 acceptance while another large model owns most VRAM; that can turn a valid
 DirectML runtime into device-loss error `887A0006`.
 
-Any OCR model/runtime change also requires:
+Any OCR model/runtime change also requires the full test suite:
 
 ```powershell
-python tools\enrichment\benchmark_ocr.py --help
 python -m unittest discover -s tools\enrichment\tests -v
 ```
 
-Use the committed benchmark options/corpus and compare exact identifier recall,
-CER, provider identity, determinism, provenance, and throughput. Do not accept a
-speed result that weakens the correctness gate. See
-[OCR and document analysis](ocr-and-document-analysis.md).
+`benchmark_ocr.py --help` is option discovery, not a quality run. Synthetic
+fixtures remain packaging/regression tests. Develop and recalibrate on the
+pinned SROIE train split, preserving its repair/duplicate audits, but never
+reuse the consumed SROIE test split as independent confirmation. Before a new
+quality claim, preregister the committed scorer, model, thresholds, runtimes,
+and a genuinely untouched holdout, then preserve its immutable witness and
+single terminal result. Compare exact identifier recall, CER, provider
+identity, determinism, provenance, and throughput; never accept speed by
+weakening correctness. See [OCR and document analysis](ocr-and-document-analysis.md)
+and the [historical v2 record and current v3 status](ocr-benchmark-2026-08-05.md).
 
 ## Build a complete profile
 
@@ -409,6 +433,34 @@ push, pull request, or tag. A release claiming DirectML/hybrid acceptance must
 retain a passing hardware artifact tied to its build run. The earlier local
 benchmark remains useful path/performance evidence, but is not a substitute for
 that release-specific record.
+
+Evidence types are not interchangeable:
+
+| Evidence | What it establishes |
+| --- | --- |
+| `offline-profile-acceptance.json` | Per-tag acquisition, assembly, strict verification, and translation smoke for every advertised profile |
+| OCR hardware acceptance artifact | CPU/DirectML/hybrid packaged-path behavior for one source build and named host/driver |
+| Historical v2 immutable SROIE witness and terminal result | Frozen-candidate printed-receipt quality procedure and its actual one-shot disposition |
+
+The historical SROIE v2 calibration, bound to source commit
+`23992fc75b624a3c6dab5bfbd0a4b52949133525`, passed. Its one-shot test failed
+closed on a degenerate source annotation before quality scoring. The consumed
+ledger and immutable
+[terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
+must not be replaced with a post-hoc replay. Current source uses the v3 adapter,
+policy, and acceptance schema, but fresh v3 calibration is still pending.
+Synthetic OCR tests remain packaging/regression evidence, not independent
+quality acceptance. A materially changed candidate needs a genuinely untouched
+holdout for any new independent claim.
+
+For a future untouched holdout, keep the maintainer sequence explicit: clean
+remote commit and exact green CI; accepted calibration and derived policy;
+path-free immutable pre-test witness; isolated GitHub verification with an
+explicit `GH_TOKEN`; one ledger-claimed run; preservation of private evidence;
+and publication of only a path-free terminal result. Never make the one-shot
+command a normal tag CI job, reset its stable ledger for a protocol revision,
+or promote an unsealed output, failed ledger, stale calibration, or synthetic
+smoke as quality acceptance.
 
 Do not weaken the exactness gates to make CI faster. If a large transfer is the
 bottleneck, preserve resumability and immutable caches rather than skipping

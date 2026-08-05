@@ -117,13 +117,19 @@ def identity(selected_documents: int) -> dict:
     return {
         "benchmark": {name: "a" * 64 for name in source_keys},
         "calibrationCorpus": {
+            "bboxRepairAuditSha256": "8" * 64,
+            "bboxRepairRecordsSha256": "9" * 64,
             "corpusManifestSha256": "b" * 64,
             "duplicateAuditSha256": "c" * 64,
             "excludedRows": policy.RAW_TRAIN_ROWS - selected_documents,
             "imageIdentitiesSha256": "d" * 64,
             "parquetSha256": policy.TRAIN_SHA256,
+            "repairedRegionCount": 1,
+            "scoringAnnotationIdentitiesSha256": "0" * 64,
             "selectedDocuments": selected_documents,
             "sourceImageDigestsSha256": "e" * 64,
+            "sourcePayloadIdentitiesSha256": "7" * 64,
+            "sourceRegionCount": 1000,
             "sourceRows": policy.RAW_TRAIN_ROWS,
             "workerManifestSha256": "f" * 64,
         },
@@ -199,6 +205,34 @@ class SroiePolicyTests(unittest.TestCase):
         self.assertEqual(2, built["calibration"]["documents"])
         self.assertEqual(626, built["calibration"]["rawRows"])
 
+    def test_bbox_repair_identity_and_count_tampering_fails_closed(self) -> None:
+        corpus = self.identity["calibrationCorpus"]
+        for name in (
+            "bboxRepairAuditSha256",
+            "bboxRepairRecordsSha256",
+            "sourcePayloadIdentitiesSha256",
+            "scoringAnnotationIdentitiesSha256",
+        ):
+            with self.subTest(name=name):
+                wrong = copy.deepcopy(self.identity)
+                wrong["calibrationCorpus"][name] = "z" * 64
+                with self.assertRaisesRegex(policy.PolicyError, "lowercase SHA-256"):
+                    policy._validate_identity(wrong)
+        for source_regions, repaired_regions in ((0, 0), (10, 11), (True, 0), (10, True), (10, -1)):
+            with self.subTest(
+                source_regions=source_regions, repaired_regions=repaired_regions
+            ):
+                wrong = copy.deepcopy(self.identity)
+                wrong["calibrationCorpus"]["sourceRegionCount"] = source_regions
+                wrong["calibrationCorpus"]["repairedRegionCount"] = repaired_regions
+                with self.assertRaisesRegex(policy.PolicyError, "row accounting"):
+                    policy._validate_identity(wrong)
+        missing = copy.deepcopy(self.identity)
+        del missing["calibrationCorpus"]["bboxRepairAuditSha256"]
+        with self.assertRaisesRegex(policy.PolicyError, "schema changed"):
+            policy._validate_identity(missing)
+        self.assertEqual(1000, corpus["sourceRegionCount"])
+
     def test_reports_bind_primary_and_case_sensitive_scoring_profiles(self) -> None:
         wrong = copy.deepcopy(self.report)
         wrong["metrics"]["textNormalization"] = policy.DIAGNOSTIC_TEXT_NORMALIZATION
@@ -271,6 +305,37 @@ class SroiePolicyTests(unittest.TestCase):
         )
         self.assertTrue(evaluated["passed"])
         self.assertTrue(evaluated["absoluteFloorsPassed"])
+
+    def test_v2_report_and_policy_cannot_cross_the_v3_boundary(self) -> None:
+        legacy_report = copy.deepcopy(self.report)
+        legacy_report["schemaVersion"] = 1
+        legacy_report["protocol"] = "bstrings-icdar2019-sroie-train-calibration-test-one-shot-v2"
+        with self.assertRaisesRegex(policy.PolicyError, "frozen protocol"):
+            policy.build_policy(
+                calibration_report=legacy_report,
+                calibration_report_sha256=self.report_sha256,
+                expected_identity=self.identity,
+                expected_identities=self.identities,
+                frozen_at_utc="2026-08-05T00:00:00Z",
+            )
+
+        legacy_policy = self.build()
+        legacy_policy.update(
+            {
+                "schemaVersion": 1,
+                "policyId": "bstrings-icdar2019-sroie-train-test-ocr-v2",
+                "protocol": "bstrings-icdar2019-sroie-train-calibration-test-one-shot-v2",
+            }
+        )
+        legacy_policy_path = self.root / "legacy-policy.json"
+        legacy_policy_path.write_bytes(policy.encoded_policy(legacy_policy))
+        with self.assertRaisesRegex(policy.PolicyError, "protocol, dataset, or metrics"):
+            policy.validate_policy(
+                legacy_policy_path,
+                calibration_report_path=self.report_path,
+                expected_identity=self.identity,
+                expected_identities=self.identities,
+            )
 
     def test_calibration_selected_count_and_duplicate_audit_are_bound(self) -> None:
         wrong = copy.deepcopy(self.identity)
