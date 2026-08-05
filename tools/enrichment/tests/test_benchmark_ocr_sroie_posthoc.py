@@ -17,9 +17,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_benchmark_ocr_sroie_acceptance import confirmatory_fixture  # noqa: E402
-
 import benchmark_ocr_sroie_posthoc as posthoc  # noqa: E402
+from test_benchmark_ocr_sroie_acceptance import confirmatory_fixture  # noqa: E402
 
 
 class SroiePosthocTests(unittest.TestCase):
