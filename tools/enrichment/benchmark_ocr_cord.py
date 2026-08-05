@@ -2735,6 +2735,7 @@ def run_backend_once(
             command,
             check=False,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",

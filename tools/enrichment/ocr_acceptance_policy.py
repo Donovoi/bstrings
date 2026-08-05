@@ -752,6 +752,45 @@ def _document_identities(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, An
     return identities
 
 
+def _validate_expected_identities(
+    expected_identities: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    if (
+        isinstance(expected_identities, (str, bytes, bytearray))
+        or not isinstance(expected_identities, Sequence)
+        or not expected_identities
+    ):
+        raise PolicyError("Expected document identities must be a non-empty ordered sequence")
+    identities = []
+    seen_rows: set[int] = set()
+    for index, raw_identity in enumerate(expected_identities):
+        identity = _mapping(raw_identity, name=f"expected document identity {index}")
+        _exact_keys(
+            identity,
+            {"imageSha256", "rowIndex"},
+            name=f"expected document identity {index}",
+        )
+        row_index = identity.get("rowIndex")
+        if (
+            isinstance(row_index, bool)
+            or not isinstance(row_index, int)
+            or row_index < 0
+            or row_index in seen_rows
+        ):
+            raise PolicyError(f"Expected document row identity {index} is invalid or duplicated")
+        seen_rows.add(row_index)
+        identities.append(
+            {
+                "imageSha256": _sha256(
+                    identity.get("imageSha256"),
+                    name=f"expected document identity {index} image",
+                ),
+                "rowIndex": row_index,
+            }
+        )
+    return identities
+
+
 def validate_role_selection(
     selection: ValidatedRoleSelection,
     *,
@@ -791,6 +830,19 @@ def extract_measurements(
     }:
         raise PolicyError("A validated role selection is required")
     expected_identities = validate_role_selection(selection, expected_role=selection.role)
+    return extract_measurements_for_identities(
+        metrics,
+        expected_identities=expected_identities,
+    )
+
+
+def extract_measurements_for_identities(
+    metrics: Mapping[str, Any],
+    *,
+    expected_identities: Sequence[Mapping[str, Any]],
+) -> dict[str, float]:
+    """Strictly recompute OCR acceptance metrics for an exact ordered identity set."""
+    expected_identities = _validate_expected_identities(expected_identities)
     expected_documents = len(expected_identities)
     micro = _mapping(metrics.get("micro"), name="micro metrics")
     macro = _mapping(metrics.get("macro"), name="macro metrics")
@@ -800,13 +852,13 @@ def extract_measurements(
             f"The policy requires exactly {expected_documents} per-document metric rows"
         )
     if type(micro.get("documents")) is not int or micro.get("documents") != expected_documents:
-        raise PolicyError("The micro document count does not match the policy role")
+        raise PolicyError("The micro document count does not match the expected identities")
     per_document = [
         _mapping(item, name=f"per-document metrics {index}")
         for index, item in enumerate(per_document_raw)
     ]
     if _document_identities(per_document) != expected_identities:
-        raise PolicyError("Per-document metrics do not match the frozen role selection")
+        raise PolicyError("Per-document metrics do not match the expected identities")
     document_detection = [
         _coverage_from_row(item.get("detection"), name=f"document {index} detection")
         for index, item in enumerate(per_document)

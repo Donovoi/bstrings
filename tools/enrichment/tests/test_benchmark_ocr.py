@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -166,6 +168,46 @@ class OcrBenchmarkTests(unittest.TestCase):
             "availableExecutionProviders": ["CPUExecutionProvider"],
             "offlineEnvironment": dict(OFFLINE_ENVIRONMENT),
         }
+
+    def test_preclaim_runtime_probes_receive_closed_stdin(self) -> None:
+        executable = Path(sys.executable).resolve()
+        runtime_probe = self._runtime_probe(Path(sys.prefix).resolve(), executable)
+        observed: list[object] = []
+
+        def runtime_capture(command, **kwargs):
+            observed.append(kwargs.get("stdin"))
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(runtime_probe, sort_keys=True),
+                "",
+            )
+
+        with patch("benchmark_ocr.subprocess.run", side_effect=runtime_capture):
+            benchmark_core._run_runtime_probe(Backend("cpu", executable), 1.0)
+
+        system_root = self.root / "windows"
+        powershell = system_root / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        powershell.parent.mkdir(parents=True)
+        powershell.write_bytes(b"synthetic powershell")
+        host_probe = {"adapters": [], "schemaVersion": 1, "systemDlls": []}
+
+        def host_capture(command, **kwargs):
+            observed.append(kwargs.get("stdin"))
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(host_probe, sort_keys=True),
+                "",
+            )
+
+        with (
+            patch("benchmark_ocr._trusted_windows_directory", return_value=system_root),
+            patch("benchmark_ocr.subprocess.run", side_effect=host_capture),
+        ):
+            benchmark_core._run_windows_host_probe(executable, self.root, 1.0)
+
+        self.assertEqual([subprocess.DEVNULL, subprocess.DEVNULL], observed)
 
     @staticmethod
     def _directml_probe(directml_sha256: str) -> dict[str, object]:

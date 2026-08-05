@@ -37,8 +37,7 @@ def make_coverage(matched: int, total: int) -> dict:
     }
 
 
-def make_metrics(selection: policy.ValidatedRoleSelection) -> dict:
-    identities = policy.validate_role_selection(selection, expected_role=selection.role)
+def make_metrics_for_identities(identities: list[dict]) -> dict:
     documents = len(identities)
     per_document = [
         {
@@ -79,6 +78,21 @@ def make_metrics(selection: policy.ValidatedRoleSelection) -> dict:
         },
         "perDocument": per_document,
     }
+
+
+def make_metrics(selection: policy.ValidatedRoleSelection) -> dict:
+    identities = policy.validate_role_selection(selection, expected_role=selection.role)
+    return make_metrics_for_identities(identities)
+
+
+def make_explicit_identities(count: int = 4) -> list[dict]:
+    return [
+        {
+            "imageSha256": hashlib.sha256(f"synthetic-image-{index}".encode()).hexdigest(),
+            "rowIndex": 1000 + index,
+        }
+        for index in range(count)
+    ]
 
 
 def refresh_micro_counts(metrics: dict) -> None:
@@ -178,6 +192,85 @@ def make_identity() -> dict:
 
 
 class OcrAcceptancePolicyTests(unittest.TestCase):
+    def test_explicit_identity_recomputation_matches_frozen_cord_paths(self) -> None:
+        for selection in (CALIBRATION_SELECTION, CONFIRMATORY_SELECTION):
+            with self.subTest(role=selection.role):
+                identities = policy.validate_role_selection(
+                    selection,
+                    expected_role=selection.role,
+                )
+                metrics = make_metrics(selection)
+                self.assertEqual(
+                    policy.extract_measurements(metrics, selection=selection),
+                    policy.extract_measurements_for_identities(
+                        metrics,
+                        expected_identities=identities,
+                    ),
+                )
+
+    def test_explicit_identities_require_exact_order_count_and_unique_rows(self) -> None:
+        identities = make_explicit_identities()
+        metrics = make_metrics_for_identities(identities)
+        self.assertEqual(
+            0.90,
+            policy.extract_measurements_for_identities(
+                metrics,
+                expected_identities=identities,
+            )["exactTokenF1"],
+        )
+
+        with self.assertRaisesRegex(policy.PolicyError, "exactly 3"):
+            policy.extract_measurements_for_identities(
+                metrics,
+                expected_identities=identities[:-1],
+            )
+
+        reordered = list(identities)
+        reordered[0], reordered[1] = reordered[1], reordered[0]
+        with self.assertRaisesRegex(policy.PolicyError, "expected identities"):
+            policy.extract_measurements_for_identities(
+                metrics,
+                expected_identities=reordered,
+            )
+
+        duplicated = copy.deepcopy(identities)
+        duplicated[1]["rowIndex"] = duplicated[0]["rowIndex"]
+        with self.assertRaisesRegex(policy.PolicyError, "invalid or duplicated"):
+            policy.extract_measurements_for_identities(
+                metrics,
+                expected_identities=duplicated,
+            )
+
+        extra_field = copy.deepcopy(identities)
+        extra_field[0]["unexpected"] = True
+        with self.assertRaisesRegex(policy.PolicyError, "unknown fields"):
+            policy.extract_measurements_for_identities(
+                metrics,
+                expected_identities=extra_field,
+            )
+
+        with self.assertRaisesRegex(policy.PolicyError, "non-empty ordered sequence"):
+            policy.extract_measurements_for_identities(metrics, expected_identities=[])
+
+    def test_explicit_identity_path_rejects_aggregate_and_document_tampering(self) -> None:
+        identities = make_explicit_identities()
+
+        aggregate_tampered = make_metrics_for_identities(identities)
+        aggregate_tampered["micro"]["tokenF1"] = 0.91
+        with self.assertRaisesRegex(policy.PolicyError, "micro acceptance metrics"):
+            policy.extract_measurements_for_identities(
+                aggregate_tampered,
+                expected_identities=identities,
+            )
+
+        document_tampered = make_metrics_for_identities(identities)
+        document_tampered["perDocument"][0]["tokenF1"] = 0.91
+        with self.assertRaisesRegex(policy.PolicyError, "not derived from its counts"):
+            policy.extract_measurements_for_identities(
+                document_tampered,
+                expected_identities=identities,
+            )
+
     def test_nearest_rank_and_strict_tail_fraction_are_exact(self) -> None:
         self.assertEqual(1.0, policy.nearest_rank([4.0, 1.0, 3.0, 2.0], 0.25))
         metrics = make_metrics(CALIBRATION_SELECTION)

@@ -249,6 +249,7 @@ class CordBenchmarkTests(unittest.TestCase):
         self.assertEqual(["-I", "-B"], command[1:3])
         self.assertEqual(str(worker.resolve()), command[3])
         environment = observed["env"]
+        self.assertIs(subprocess.DEVNULL, observed["stdin"])
         for name in ("PYTHONPATH", "PYTHONHOME", "OMP_NUM_THREADS"):
             self.assertNotIn(name, environment)
         self.assertNotIn(str(self.root / "poison-path"), environment["PATH"])
