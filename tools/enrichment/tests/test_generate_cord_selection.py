@@ -58,7 +58,8 @@ class CordSelectionTests(unittest.TestCase):
                 patch.object(selection, "SHARDS", shards),
                 patch.object(selection.importlib.metadata, "version", return_value="25.0.0"),
             ):
-                self.assertEqual(paths, selection._validate_shards(paths))
+                expected = tuple(path.resolve() for path in paths)
+                self.assertEqual(expected, selection._validate_shards(paths))
                 with self.assertRaises(selection.SelectionError):
                     selection._validate_shards(tuple(reversed(paths)))
                 paths[2].write_bytes(b"changed!")
