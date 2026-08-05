@@ -79,8 +79,12 @@ function Sync-CheckedEvidence(
         $profileRow.translationLicenseBytes = $licenseIdentity.bytes
         $profileRow.translationLicenseSha256 = $licenseIdentity.sha256
     }
+    $coreIdentity = Get-Identity `
+        (Join-Path $Root 'bstrings-win-x64.zip') `
+        'bstrings-win-x64.zip'
+    $checksummedAssets = @($coreIdentity) + @($releaseAssets)
     $checksumRows = @(
-        $releaseAssets |
+        $checksummedAssets |
             Sort-Object fileName |
             ForEach-Object { "$($_.sha256)  $($_.fileName)" }
     )
@@ -111,6 +115,8 @@ if ($safeTestLeaf -notmatch '^bstrings-release-evidence-test-[0-9a-f]{32}$') {
     throw "Unexpected synthetic test path: $testRoot"
 }
 [IO.Directory]::CreateDirectory($testRoot) | Out-Null
+$assetRoot = Join-Path $testRoot 'release-assets'
+[IO.Directory]::CreateDirectory($assetRoot) | Out-Null
 
 try {
     $repository = 'example/bstrings'
@@ -136,8 +142,8 @@ try {
         }
     }
 
-    Write-Utf8 (Join-Path $testRoot 'bstrings-win-x64.zip') 'synthetic core archive'
-    Write-Utf8 (Join-Path $testRoot 'bstrings-win-x64-offline-base.zip') 'synthetic base archive'
+    Write-Utf8 (Join-Path $assetRoot 'bstrings-win-x64.zip') 'synthetic core archive'
+    Write-Utf8 (Join-Path $assetRoot 'bstrings-win-x64-offline-base.zip') 'synthetic base archive'
     $profileEvidenceRows = [Collections.Generic.List[object]]::new()
     foreach ($profile in $profiles) {
         $model = $modelSpecs[$profile]
@@ -157,12 +163,12 @@ try {
                 sha256 = $model.sha256
             }
         }
-        Write-Json (Join-Path $testRoot $configurationName) $configuration
-        Write-Utf8 (Join-Path $testRoot $licenseName) "synthetic $profile license`n"
+        Write-Json (Join-Path $assetRoot $configurationName) $configuration
+        Write-Utf8 (Join-Path $assetRoot $licenseName) "synthetic $profile license`n"
         $configurationIdentity = Get-Identity `
-            (Join-Path $testRoot $configurationName) `
+            (Join-Path $assetRoot $configurationName) `
             $configurationName
-        $licenseIdentity = Get-Identity (Join-Path $testRoot $licenseName) $licenseName
+        $licenseIdentity = Get-Identity (Join-Path $assetRoot $licenseName) $licenseName
 
         $manifest = [ordered]@{
             schemaVersion = 1
@@ -184,10 +190,10 @@ try {
                 }
             )
         }
-        Write-Json (Join-Path $testRoot $manifestName) $manifest
-        $manifestIdentity = Get-Identity (Join-Path $testRoot $manifestName) $manifestName
+        Write-Json (Join-Path $assetRoot $manifestName) $manifest
+        $manifestIdentity = Get-Identity (Join-Path $assetRoot $manifestName) $manifestName
         $baseIdentity = Get-Identity `
-            (Join-Path $testRoot 'bstrings-win-x64-offline-base.zip') `
+            (Join-Path $assetRoot 'bstrings-win-x64-offline-base.zip') `
             'bstrings-win-x64-offline-base.zip'
         $bundleIdentity = "synthetic-$profile-$($manifestIdentity.sha256.Substring(0, 24))"
         $assetBaseUrl = "$serverUrl/$repository/releases/download/$tag"
@@ -237,8 +243,8 @@ try {
                 }
             )
         }
-        Write-Json (Join-Path $testRoot $trustName) $trust
-        $trustIdentity = Get-Identity (Join-Path $testRoot $trustName) $trustName
+        Write-Json (Join-Path $assetRoot $trustName) $trust
+        $trustIdentity = Get-Identity (Join-Path $assetRoot $trustName) $trustName
         $profileEvidenceRows.Add([pscustomobject]@{
             profile = $profile
             status = 'passed'
@@ -271,19 +277,20 @@ try {
     }
     $releaseAssets = [Collections.Generic.List[object]]::new()
     foreach ($fileName in $packAssetNames) {
-        $releaseAssets.Add((Get-Identity (Join-Path $testRoot $fileName) $fileName))
+        $releaseAssets.Add((Get-Identity (Join-Path $assetRoot $fileName) $fileName))
     }
+    $coreIdentity = Get-Identity `
+        (Join-Path $assetRoot 'bstrings-win-x64.zip') `
+        'bstrings-win-x64.zip'
+    $checksummedAssets = @($coreIdentity) + @($releaseAssets)
     $checksumRows = @(
-        $releaseAssets |
+        $checksummedAssets |
             Sort-Object fileName |
             ForEach-Object { "$($_.sha256)  $($_.fileName)" }
     )
-    $checksumPath = Join-Path $testRoot 'SHA256SUMS.txt'
+    $checksumPath = Join-Path $assetRoot 'SHA256SUMS.txt'
     Write-Utf8 $checksumPath (($checksumRows -join "`n") + "`n")
     $checksumIdentity = Get-Identity $checksumPath 'SHA256SUMS.txt'
-    $coreIdentity = Get-Identity `
-        (Join-Path $testRoot 'bstrings-win-x64.zip') `
-        'bstrings-win-x64.zip'
     $evidence = [ordered]@{
         schemaVersion = 2
         status = 'passed'
@@ -308,7 +315,7 @@ try {
     Write-Json $evidencePath $evidence
     $validatorArguments = @{
         EvidencePath = $evidencePath
-        AssetDirectory = $testRoot
+        AssetDirectory = $assetRoot
         ExpectedRepository = $repository
         ExpectedServerUrl = $serverUrl
         ExpectedTag = $tag
@@ -329,7 +336,7 @@ try {
     $evidence.acceptanceRunAttempt = '7'
     Write-Json $evidencePath $evidence
 
-    $extraPath = Join-Path $testRoot 'unexpected.bin'
+    $extraPath = Join-Path $assetRoot 'unexpected.bin'
     Write-Utf8 $extraPath 'unexpected'
     Assert-ValidationFails $validatorArguments 'linked or non-file|exact expected file set'
     [IO.File]::Delete($extraPath)
@@ -341,6 +348,25 @@ try {
     $evidence.checksumFileSha256 = $mutatedChecksumIdentity.sha256
     Write-Json $evidencePath $evidence
     Assert-ValidationFails $validatorArguments 'exactly one row|Duplicate SHA256SUMS.txt row'
+    Write-Utf8 $checksumPath $originalChecksumText
+    $evidence.checksumFileBytes = $checksumIdentity.bytes
+    $evidence.checksumFileSha256 = $checksumIdentity.sha256
+    Write-Json $evidencePath $evidence
+
+    $publicEvidencePath = Join-Path $assetRoot 'offline-profile-acceptance.json'
+    Copy-Item -LiteralPath $evidencePath -Destination $publicEvidencePath
+    Assert-ValidationFails $validatorArguments 'exact expected file set'
+    [IO.File]::Delete($publicEvidencePath)
+
+    $withoutCoreChecksumRows = @(
+        $checksumRows | Where-Object { $_ -notmatch '  bstrings-win-x64\.zip$' }
+    )
+    Write-Utf8 $checksumPath (($withoutCoreChecksumRows -join "`n") + "`n")
+    $mutatedChecksumIdentity = Get-Identity $checksumPath 'SHA256SUMS.txt'
+    $evidence.checksumFileBytes = $mutatedChecksumIdentity.bytes
+    $evidence.checksumFileSha256 = $mutatedChecksumIdentity.sha256
+    Write-Json $evidencePath $evidence
+    Assert-ValidationFails $validatorArguments 'exactly one row|exact checksummed public release-asset set'
     Write-Utf8 $checksumPath $originalChecksumText
     $evidence.checksumFileBytes = $checksumIdentity.bytes
     $evidence.checksumFileSha256 = $checksumIdentity.sha256
@@ -361,7 +387,7 @@ try {
     $evidence.profiles[0].translationModelId = $originalModelId
     Write-Json $evidencePath $evidence
 
-    $qualityTrustPath = Join-Path $testRoot 'bundle-packs-quality.json'
+    $qualityTrustPath = Join-Path $assetRoot 'bundle-packs-quality.json'
     $qualityTrust = Get-Content -LiteralPath $qualityTrustPath -Raw | ConvertFrom-Json
     $qualityBasePacks = @($qualityTrust.packs | Where-Object { [string]$_.id -ceq 'base' })
     $qualityModelPacks = @($qualityTrust.packs | Where-Object { [string]$_.id -ceq 'translation-model' })
@@ -383,34 +409,34 @@ try {
     foreach ($mutatedUrl in $releaseUrlMutations) {
         $qualityBasePack.url = $mutatedUrl
         Write-Json $qualityTrustPath $qualityTrust
-        Sync-CheckedEvidence $testRoot $evidence $evidencePath $profiles @($packAssetNames)
+        Sync-CheckedEvidence $assetRoot $evidence $evidencePath $profiles @($packAssetNames)
         Assert-ValidationFails `
             $validatorArguments `
             'exact expected server, repository, tag, path, and casing|without credentials, a query, or a fragment'
     }
     $qualityBasePack.url = $canonicalBaseUrl
     Write-Json $qualityTrustPath $qualityTrust
-    Sync-CheckedEvidence $testRoot $evidence $evidencePath $profiles @($packAssetNames)
+    Sync-CheckedEvidence $assetRoot $evidence $evidencePath $profiles @($packAssetNames)
 
     $canonicalModelUrl = [string]$qualityModelPack.url
     $mutatedModelUrl = $canonicalModelUrl.Replace('huggingface.co', 'models.example.invalid')
     $qualityModelPack.url = $mutatedModelUrl
     $evidence.profiles[0].translationModelUrl = $mutatedModelUrl
     Write-Json $qualityTrustPath $qualityTrust
-    Sync-CheckedEvidence $testRoot $evidence $evidencePath $profiles @($packAssetNames)
+    Sync-CheckedEvidence $assetRoot $evidence $evidencePath $profiles @($packAssetNames)
     Assert-ValidationFails $validatorArguments 'translation model evidence differs from the exact checked component lock'
     $qualityModelPack.url = $canonicalModelUrl
     $evidence.profiles[0].translationModelUrl = $canonicalModelUrl
     Write-Json $qualityTrustPath $qualityTrust
-    Sync-CheckedEvidence $testRoot $evidence $evidencePath $profiles @($packAssetNames)
+    Sync-CheckedEvidence $assetRoot $evidence $evidencePath $profiles @($packAssetNames)
 
-    $basePath = Join-Path $testRoot 'bstrings-win-x64-offline-base.zip'
+    $basePath = Join-Path $assetRoot 'bstrings-win-x64-offline-base.zip'
     $originalBase = [IO.File]::ReadAllBytes($basePath)
     [IO.File]::WriteAllBytes($basePath, [byte[]](1, 2, 3, 4))
     Assert-ValidationFails $validatorArguments 'does not match its checked release evidence'
     [IO.File]::WriteAllBytes($basePath, $originalBase)
 
-    $linkPath = Join-Path $testRoot 'linked-extra'
+    $linkPath = Join-Path $assetRoot 'linked-extra'
     try {
         New-Item -ItemType SymbolicLink -Path $linkPath -Target $checksumPath -ErrorAction Stop | Out-Null
         Assert-ValidationFails $validatorArguments 'linked or non-file entry'

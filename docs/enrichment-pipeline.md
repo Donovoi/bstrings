@@ -120,11 +120,10 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The current source
-profile defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed
-a per-path inference smoke test. Complete-kit release assets are not published
-yet, and those smokes do not establish cross-provider parity or corpus-level
-quality. CUDA OCR is not part of the profile. See
+page. Images are always OCR inputs when the stage is enabled. The v1.9.0 profile
+defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
+per-path inference smoke test. Those smokes do not establish cross-provider
+parity or corpus-level quality. CUDA OCR is not part of the profile. See
 [OCR and document analysis](ocr-and-document-analysis.md) for formats, exact
 models, language scope, performance, output coordinates, and GPU-contention
 guidance.

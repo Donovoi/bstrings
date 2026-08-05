@@ -27,7 +27,7 @@ C:\Tools\bstrings-quality\bstrings.exe bundle verify
 
 Copy the entire assembled directory to the offline host and run its root
 `bstrings.exe`; do not copy only the EXE. Full instructions are in the
-[main README](https://github.com/Donovoi/bstrings#choose-what-to-download).
+[main README](https://github.com/Donovoi/bstrings/blob/v1.9.0/README.md#download-verify-run-then-enable-everything).
 
 The bstrings license is in `LICENSE.md`; dependency attribution is in
 `THIRD_PARTY_NOTICES.md` and `licenses/`.

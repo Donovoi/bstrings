@@ -207,7 +207,11 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn("name: bstrings-offline-profile-acceptance", release)
         self.assertIn("Validate checked profile-acceptance evidence", release)
         self.assertIn("Test-OfflineProfileReleaseEvidence.ps1", release)
-        self.assertIn("release-assets/offline-profile-acceptance.json", release)
+        self.assertIn("path: release-gate-evidence", release)
+        self.assertIn(
+            "-EvidencePath release-gate-evidence/offline-profile-acceptance.json",
+            release,
+        )
         self.assertIn("-ExpectedServerUrl $env:GITHUB_SERVER_URL", release)
         self.assertIn("-ComponentLockPath tools/airgap/offline-components.lock.json", release)
         self.assertIn("fail_on_unmatched_files: true", release)
@@ -217,6 +221,10 @@ class AirgapManifestTests(unittest.TestCase):
             )
         ]
         self.assertNotIn("GITHUB_RUN_ATTEMPT", validation)
+        publication = release[release.index("Create GitHub release") :]
+        self.assertIn("body_path: docs/releases/${{ github.ref_name }}.md", publication)
+        self.assertIn("generate_release_notes: false", publication)
+        self.assertNotIn("offline-profile-acceptance.json", publication)
 
         script = (repo_root / "tools" / "airgap" / "Invoke-OfflineProfileAcceptance.ps1").read_text(
             encoding="utf-8"

@@ -4,12 +4,11 @@ This guide is for maintainers of the Windows x64 release. Examiners should use
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-## Planned v1.9.0 release shape
+## v1.9.0 release process and asset set
 
-No current public release contains the complete-kit asset set below. Until
-v1.9.0 is tagged and its gates pass, build and verify from current source; do
-not combine an older core ZIP with new manifests. An exact project-version tag
-publishes:
+The exact v1.9.0 project-version tag publishes the asset set below after every
+required gate passes. Do not combine a core ZIP with manifests from another
+version.
 
 - `bstrings-win-x64.zip`, the self-contained core scanner and split-pack
   acquisition client;
@@ -18,15 +17,22 @@ publishes:
 - `airgap-manifest-{quality,balanced,compact}.json`;
 - `Hy-MT2-Apache-2.0-{quality,balanced,compact}.txt`;
 - `bundle-packs-{quality,balanced,compact}.json`;
-- `SHA256SUMS.txt`; and
-- `offline-profile-acceptance.json`, the tag- and commit-bound acceptance record
-  for every advertised profile.
+- `SHA256SUMS.txt`.
+
+The tag- and commit-bound `offline-profile-acceptance.json` remains an internal
+Actions gate artifact. The release job validates it, but does not publish it as
+a user download.
+
+The workflow uses [`releases/v1.9.0.md`](releases/v1.9.0.md) as the human
+release body. Review it against the final filenames, profile identities, and
+known boundaries before tagging.
 
 | Item | Release asset? | Role |
 | --- | --- | --- |
 | Core ZIP | Yes | Scanner and acquisition client |
 | Shared base ZIP | Yes | Common runtimes, OCR, recovery tools, and manifests |
 | Profile files/trust manifest | Yes | Select and authenticate one translation profile |
+| Profile acceptance evidence | No; internal Actions artifact | Blocks publication unless every advertised profile passes |
 | Immutable translation model | No; acquired from its pinned official source | Large external pack named by the trust manifest |
 | Complete offline kit | No; assembled locally | Directory transferred to the disconnected host |
 
@@ -44,6 +50,14 @@ asset within the limit without asking examiners to manipulate files manually.
 Manual workflow dispatches retain the same generated files as a workflow
 artifact for review. They do not create an untagged GitHub release, so their
 generated tagged-release URLs are not a public acquisition channel.
+
+GitHub Releases are reserved for the usable application, acquisition and
+installation inputs, licenses, checksums, manifests, and the bounded
+release-verification record listed above. Do not attach benchmark datasets,
+raw OCR/translation output, one-shot witnesses or ledgers, logs, host details,
+or experimental reports. Keep those in access-controlled workflow artifacts or
+internal evidence storage. Repository and release documentation may carry only
+a concise, qualified summary.
 
 ## Pinned acquisition plans
 
@@ -116,7 +130,7 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 
 ## Build and test the self-contained core
 
-The v1.9.0 release plan uses
+The v1.9.0 release process uses
 [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
 repository-pinned Rust toolchain:
 
@@ -324,6 +338,7 @@ smokes pass:
 .\tools\airgap\New-BundlePackRelease.ps1 `
   -BundleDirectory .\publish\offline-compact `
   -OutputDirectory .\release-packs `
+  -CoreReleaseArchive .\bstrings-win-x64.zip `
   -ReleaseAssetBaseUrl 'https://github.com/Donovoi/bstrings/releases/download/vX.Y.Z'
 ```
 
@@ -336,7 +351,7 @@ The script:
 3. generates exact configuration, canonical license, final manifest, and trust
    manifest files for quality, balanced, and compact;
 4. points each model file pack to its immutable official URL and exact hash;
-5. writes `SHA256SUMS.txt`; and
+5. writes `SHA256SUMS.txt` covering the core ZIP and every split-pack asset; and
 6. locally assembles and verifies the template profile unless
    `-SkipAssemblyTest` is deliberately supplied.
 
@@ -384,11 +399,12 @@ so verified temporary model/bundle copies can be removed within a path-checked
 per-run work directory.
 
 Only after all three pass does the job write and upload
-`offline-profile-acceptance.json`. It records the tag, commit, build run and
-positive acceptance attempt, core archive identity, exact release-pack
-inventory, checksum-file identity, and each profile's trust manifest, final
-manifest, configuration, license, model ID, revision, size, and hash. The
-release job depends on both `build` and `profile-acceptance`. Before publishing,
+`offline-profile-acceptance.json` as an internal workflow artifact. It records
+the tag, commit, build run and positive acceptance attempt, core archive
+identity, exact release-pack inventory, checksum-file identity, and each
+profile's trust manifest, final manifest, configuration, license, model ID,
+revision, size, and hash. The release job depends on both `build` and
+`profile-acceptance`. Before publishing,
 `Test-OfflineProfileReleaseEvidence.ps1` rejects extra files, links/reparse
 points, duplicate evidence/checksum/manifest rows, a non-exact checksum set, or
 any byte/hash/configuration mismatch. Every release-owned base, configuration,
@@ -400,8 +416,10 @@ to equivalent content. Each translation-model URL is recorded by acceptance
 and must equal both the trust manifest and the exact checked
 `offline-components.lock.json` URL; the lock URL must also be the canonical
 Hugging Face `model-id/resolve/revision/filename?download=true` form. The release
-job then publishes the checked record beside the exact split packs. The build
-run ID, repository, tag, and commit must match exactly. The acceptance attempt
+job validates the internal record against the exact public assets, then
+publishes only the user-facing product, installation, verification, license,
+checksum, and manifest files. The build run ID, repository, tag, and commit must
+match exactly. The acceptance attempt
 must be positive but is intentionally not required to equal the release job's
 current attempt: GitHub can rerun only a failed downstream release job while
 safely reusing immutable acceptance evidence from the same workflow run.
@@ -438,38 +456,35 @@ Evidence types are not interchangeable:
 
 | Evidence | What it establishes |
 | --- | --- |
-| `offline-profile-acceptance.json` | Per-tag acquisition, assembly, strict verification, and translation smoke for every advertised profile |
+| Internal `offline-profile-acceptance.json` artifact | Per-tag acquisition, assembly, strict verification, and translation smoke for every advertised profile; never a public Release asset |
 | OCR hardware acceptance artifact | CPU/DirectML/hybrid packaged-path behavior for one source build and named host/driver |
-| Immutable v3 SROIE CPU calibration | Frozen-candidate printed-receipt quality on the selected training corpus |
-| SROIE terminal and post-hoc results | The consumed one-shot disposition and later diagnostic findings; neither establishes independent acceptance |
+| Local v3 SROIE CPU calibration | Frozen-candidate printed-receipt quality on the selected training corpus |
+| Internal SROIE terminal and post-hoc records | The consumed one-shot disposition and later diagnostic findings; neither establishes independent acceptance |
 
-The immutable CPU-only
-[v3 calibration](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
-selected 616 of 626 training documents and passed its frozen calibration gate.
-The exact metrics and artifact hashes are kept in the
-[OCR benchmark record](ocr-benchmark-2026-08-05.md).
+The local CPU-only v3 calibration selected 616 of 626 training documents and
+passed its frozen development-data gate. The exact metrics and limits are kept
+in the [OCR benchmark record](ocr-benchmark-2026-08-05.md).
 
 The one-shot test still failed closed on a degenerate source annotation before
-quality scoring. The consumed ledger and immutable
-[terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
-must not be replaced with another one-shot run. The later immutable
-[post-hoc diagnostic](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2),
-with report SHA-256
-`4129295263007d9ff8fb4da3f4cd7bbb9134262f66b73dbdd43a3ffef6dee543`,
-audited all 361 rows, excluded eight exact train/test image overlaps, and scored
-353 rows, including repaired dataset row index 142 (zero-based). Every backend
-met all 11 frozen numeric thresholds, and the aggregate and per-document scored
-metrics matched. Evidence-record integrity did not, so the diagnostic failed
-overall. It is not an acceptance or parity result.
+quality scoring. Its consumed ledger must not be replaced with another
+one-shot run. The later post-hoc diagnostic audited all 361 rows, excluded
+eight exact train/test image overlaps, and scored 353 rows, including repaired
+dataset row index 142 (zero-based). Every backend met all 11 frozen numeric
+thresholds, and the aggregate and per-document scored metrics matched.
+Evidence-record integrity did not, so the diagnostic failed overall. It is not
+an acceptance or parity result. Raw reports, witnesses, ledgers, outputs, and
+logs remain CI/internal evidence; they are not GitHub Release assets.
 
 Synthetic OCR tests remain packaging/regression evidence. A materially changed
 candidate needs a genuinely untouched holdout for any new independent claim.
 
 For a future untouched holdout, keep the maintainer sequence explicit: clean
 remote commit and exact green CI; a calibration run that passed its frozen gate
-and its derived policy; path-free immutable pre-test witness; isolated GitHub
-verification with an explicit `GH_TOKEN`; one ledger-claimed run; preservation
-of private evidence; and publication of only a path-free terminal result.
+and its derived policy; a path-free hash-bound pre-test witness; independent
+verification of that witness; one ledger-claimed run; and preservation of the
+private terminal evidence in CI/internal storage. Publish only a concise,
+qualified result summary in documentation—never the benchmark evidence as a
+GitHub Release.
 Never make the one-shot command a normal tag CI job, reset its stable ledger
 for a protocol revision,
 or promote an unsealed output, failed ledger, stale calibration, or synthetic

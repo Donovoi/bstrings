@@ -42,11 +42,10 @@ corpus, pins, results, and limits.
 
 ## Acquire and assemble on a connected machine
 
-The v1.9.0 complete-kit assets are not in the current public
-[GitHub releases](https://github.com/Donovoi/bstrings/releases) yet. Until they
-are published, maintainers can build them from current source using
-[offline release maintenance](offline-release-maintenance.md). An examiner
-should not combine an older core ZIP with current manifests.
+Download v1.9.0 from the
+[GitHub Releases page](https://github.com/Donovoi/bstrings/releases). Use only
+assets from the same version. Maintainers producing those assets should follow
+[offline release maintenance](offline-release-maintenance.md).
 
 A complete-kit release contains:
 
@@ -169,8 +168,7 @@ system prerequisites.
 
 ## OCR hardware choices
 
-The v1.9.0 OCR profile in current source defines two runtime environments. Its
-complete-kit release assets are still pending:
+The v1.9.0 OCR profile defines two runtime environments:
 
 - a CPU-only ONNX Runtime environment, verified separately as a fallback; and
 - the active DirectML ONNX Runtime environment, which exposes both DirectML and
@@ -187,29 +185,26 @@ Three evidence types answer different questions:
 
 - synthetic smoke demonstrates on fixed fixtures that the packaged paths run
   and recover expected text;
-- the immutable v3 616-document CPU SROIE calibration provides bounded
+- the local v3 616-document CPU SROIE calibration provides bounded
   printed-receipt quality evidence for its frozen candidate; and
 - release-specific DirectML acceptance demonstrates the packaged GPU path on
   the named hardware/driver.
 
-The immutable CPU-only
-[v3 calibration](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
-selected 616 of 626 training documents and passed its frozen calibration gate.
-The exact metrics and artifact hashes are in the
-[OCR benchmark record](ocr-benchmark-2026-08-05.md).
+The local CPU-only v3 calibration selected 616 of 626 training documents and
+passed its frozen development-data gate. The exact metrics and limits are in
+the [OCR benchmark record](ocr-benchmark-2026-08-05.md).
 
-The separate 361-document one-shot test still failed closed on one degenerate
-source annotation before OCR or quality scoring. It was consumed and was not
-rerun; the immutable
-[terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
-therefore does not establish independent acceptance. A later immutable
-[post-hoc diagnostic](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2)
-audited all 361 rows, excluded eight exact train/test image overlaps, and scored
-353 rows, including repaired dataset row index 142 (zero-based). Every backend
-met all 11 frozen numeric thresholds, and the aggregate and per-document scored
-metrics matched. Evidence-record integrity did not, so the diagnostic failed
-overall. It is not an acceptance or parity result. See the
-[OCR benchmark record](ocr-benchmark-2026-08-05.md).
+The separate 361-document one-shot test failed closed on one degenerate source
+annotation before OCR or quality scoring. It was consumed and was not rerun,
+so it does not establish independent acceptance. A later post-hoc diagnostic
+audited all 361 rows, excluded eight exact train/test image overlaps, and
+scored 353 rows, including repaired dataset row index 142 (zero-based). Every
+backend met all 11 frozen numeric thresholds, and the aggregate and
+per-document scored metrics matched. Evidence-record integrity did not, so the
+diagnostic failed overall. It is not an acceptance or parity result. Raw
+benchmark evidence remains in CI/internal evidence storage rather than GitHub
+Releases; see the [OCR benchmark record](ocr-benchmark-2026-08-05.md) for the
+public summary.
 
 Hybrid does not guarantee higher throughput, and another GPU-heavy process can
 exhaust graphics memory or cause a DirectML device-loss error. Use
