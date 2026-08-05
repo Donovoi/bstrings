@@ -79,10 +79,11 @@ function Get-FileIdentityRow([string]$Path, [string]$FileName) {
 
 function Get-CheckedPackInventory(
     [string]$Root,
-    [string[]]$ExpectedAssetNames
+    [string[]]$ExpectedAssetNames,
+    [object[]]$AdditionalChecksummedAssets = @()
 ) {
     $checksumName = 'SHA256SUMS.txt'
-    $expectedNames = @($ExpectedAssetNames) + $checksumName
+    $expectedDirectoryNames = @($ExpectedAssetNames) + $checksumName
     $entries = @(Get-ChildItem -LiteralPath $Root -Force -ErrorAction Stop)
     foreach ($entry in $entries) {
         if (
@@ -94,10 +95,32 @@ function Get-CheckedPackInventory(
     }
     if (
         (@($entries.Name | Sort-Object) -join '|') -cne
-        (@($expectedNames | Sort-Object) -join '|')
+        (@($expectedDirectoryNames | Sort-Object) -join '|')
     ) {
         throw 'Split-pack artifact directory does not contain the exact release-owned file set.'
     }
+
+    $checksummedAssetByName = [Collections.Generic.Dictionary[string, object]]::new(
+        [StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($asset in @($AdditionalChecksummedAssets)) {
+        $fileName = [string]$asset.fileName
+        if (
+            [string]::IsNullOrWhiteSpace($fileName) -or
+            [IO.Path]::GetFileName($fileName) -cne $fileName -or
+            [long]$asset.bytes -lt 1 -or
+            [string]$asset.sha256 -notmatch '^[0-9a-f]{64}$' -or
+            -not $checksummedAssetByName.TryAdd($fileName, $asset)
+        ) {
+            throw "Invalid or duplicate additional checksummed release asset: $fileName"
+        }
+    }
+    foreach ($expectedName in $ExpectedAssetNames) {
+        if ($checksummedAssetByName.ContainsKey($expectedName)) {
+            throw "Checksummed release-asset name collides with a split-pack asset: $expectedName"
+        }
+    }
+    $expectedChecksumNames = @($ExpectedAssetNames) + @($checksummedAssetByName.Keys)
 
     $checksumPath = Get-RequiredPack $Root $checksumName
     $checksumItem = Get-Item -LiteralPath $checksumPath -Force -ErrorAction Stop
@@ -109,8 +132,8 @@ function Get-CheckedPackInventory(
         throw 'SHA256SUMS.txt must use canonical LF-terminated rows.'
     }
     $checksumRows = @($checksumText.Substring(0, $checksumText.Length - 1) -split "`n")
-    if ($checksumRows.Count -ne $ExpectedAssetNames.Count) {
-        throw 'SHA256SUMS.txt does not contain exactly one row per release-owned pack asset.'
+    if ($checksumRows.Count -ne $expectedChecksumNames.Count) {
+        throw 'SHA256SUMS.txt does not contain exactly one row per checksummed public release asset.'
     }
     $checksumByName = [Collections.Generic.Dictionary[string, string]]::new(
         [StringComparer]::OrdinalIgnoreCase
@@ -122,6 +145,12 @@ function Get-CheckedPackInventory(
         if (-not $checksumByName.TryAdd([string]$Matches.name, [string]$Matches.hash)) {
             throw "Duplicate split-pack checksum row: $($Matches.name)"
         }
+    }
+    if (
+        (@($checksumByName.Keys | Sort-Object) -join '|') -cne
+        (@($expectedChecksumNames | Sort-Object) -join '|')
+    ) {
+        throw 'SHA256SUMS.txt does not name the exact checksummed public release-asset set.'
     }
 
     $inventory = [Collections.Generic.List[object]]::new()
@@ -135,6 +164,16 @@ function Get-CheckedPackInventory(
             throw "SHA256SUMS.txt does not match release asset: $expectedName"
         }
         $inventory.Add($identity)
+    }
+    foreach ($additionalName in $checksummedAssetByName.Keys) {
+        $expectedHash = $null
+        if (-not $checksumByName.TryGetValue($additionalName, [ref]$expectedHash)) {
+            throw "SHA256SUMS.txt is missing release asset: $additionalName"
+        }
+        $identity = $checksummedAssetByName[$additionalName]
+        if ([string]$identity.sha256 -cne $expectedHash) {
+            throw "SHA256SUMS.txt does not match release asset: $additionalName"
+        }
     }
     return @($inventory)
 }
@@ -227,8 +266,9 @@ foreach ($profile in $profiles) {
     $releaseAssetNames.Add("airgap-manifest-$profile.json")
     $releaseAssetNames.Add("bundle-packs-$profile.json")
 }
+$coreIdentity = Get-FileIdentityRow $resolvedCoreArchive 'bstrings-win-x64.zip'
 $releaseAssets = @(
-    Get-CheckedPackInventory $packRoot @($releaseAssetNames)
+    Get-CheckedPackInventory $packRoot @($releaseAssetNames) @($coreIdentity)
 )
 $releaseAssetByName = @{}
 foreach ($releaseAsset in $releaseAssets) {
@@ -237,7 +277,6 @@ foreach ($releaseAsset in $releaseAssets) {
 $checksumIdentity = Get-FileIdentityRow `
     (Join-Path $packRoot 'SHA256SUMS.txt') `
     'SHA256SUMS.txt'
-$coreIdentity = Get-FileIdentityRow $resolvedCoreArchive 'bstrings-win-x64.zip'
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Directory]::CreateDirectory($workRoot) | Out-Null

@@ -46,7 +46,11 @@ FLOSS recovery smokes. The exact procedure is in
 [offline release maintenance](docs/offline-release-maintenance.md). Create a
 release tag only from a commit whose full `master` workflow has passed.
 
-## Create a release
+## Create v1.9.0 when its gates pass
+
+v1.9.0 is the version prepared by this source tree. Confirm that the exact
+candidate commit is green and that the version has not already been tagged
+before creating the release tag.
 
 Use exactly `v<MAJOR.MINOR.PATCH>`, with no suffix, and make it match the one
 `Version` value in `bstrings/bstrings.csproj`:
@@ -58,10 +62,32 @@ git push origin v1.9.0
 
 The workflow rejects a mismatched tag before installing build toolchains or
 starting the multi-gigabyte release path. Pull requests and ordinary pushes
-build the temporary core artifact. A manual workflow dispatch also produces a
-reviewable complete offline artifact without creating a release. Only an exact
-matching pushed tag creates a GitHub release with all three Windows assets:
+build a temporary core artifact. A manual workflow dispatch produces
+reviewable build artifacts without creating a release. Only an exact matching
+pushed tag can start the final release job, and publication remains blocked
+until every required profile gate passes.
+
+The v1.9.0 release job publishes:
 
 - `bstrings-win-x64.zip`;
-- `bstrings-win-x64-offline-cpu.zip`; and
-- `bstrings-win-x64-offline-cpu.zip.sha256`.
+- `bstrings-win-x64-offline-base.zip`;
+- `airgap-config-{quality,balanced,compact}.json`;
+- `airgap-manifest-{quality,balanced,compact}.json`;
+- `Hy-MT2-Apache-2.0-{quality,balanced,compact}.txt`;
+- `bundle-packs-{quality,balanced,compact}.json`;
+- `SHA256SUMS.txt`.
+
+The workflow separately retains `offline-profile-acceptance.json` as an
+internal Actions gate artifact. The release job validates it against the exact
+tagged build, but it is not a public Release download.
+
+The human release body is [`docs/releases/v1.9.0.md`](docs/releases/v1.9.0.md).
+Keep its download names, commands, profiles, and boundaries synchronized with
+the workflow before tagging.
+
+GitHub Releases are the product channel. Keep only usable program/download,
+installation, license, checksum, manifest, and release-verification assets
+there. Benchmark corpora, raw outputs, one-shot witnesses and ledgers, logs,
+host details, and experimental test reports belong in workflow artifacts or
+controlled internal evidence storage. Put only a concise, qualified benchmark
+summary in repository documentation and release notes.

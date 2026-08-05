@@ -94,13 +94,9 @@ jobs:
             throw "Ruff failed with exit code $LASTEXITCODE."
           }
 
-          $pythonFiles = @(
-            Get-ChildItem tools/enrichment, tools/airgap -Recurse -File -Filter '*.py' |
-              Select-Object -ExpandProperty FullName
-          )
-          python -m py_compile @pythonFiles
+          python -m compileall -q -f tools/enrichment tools/airgap
           if ($LASTEXITCODE -ne 0) {
-            throw "py_compile failed with exit code $LASTEXITCODE."
+            throw "compileall failed with exit code $LASTEXITCODE."
           }
 
       - name: Test Python tools
@@ -404,17 +400,47 @@ jobs:
           ./tools/airgap/New-BundlePackRelease.ps1 `
             -BundleDirectory $bundleRoot `
             -OutputDirectory release-packs `
-            -ReleaseAssetBaseUrl $releaseBase
+            -ReleaseAssetBaseUrl $releaseBase `
+            -CoreReleaseArchive (Join-Path $PWD 'bstrings-win-x64.zip')
 
           $checksumRows = Get-Content -LiteralPath release-packs/SHA256SUMS.txt
+          $expectedChecksumFiles = [Collections.Generic.Dictionary[string, string]]::new(
+            [StringComparer]::Ordinal
+          )
+          $coreArchive = Get-Item -LiteralPath bstrings-win-x64.zip -Force
+          if (-not $expectedChecksumFiles.TryAdd($coreArchive.Name, $coreArchive.FullName)) {
+            throw "Duplicate public release-asset name: $($coreArchive.Name)"
+          }
+          foreach ($file in Get-ChildItem -LiteralPath release-packs -File -Force) {
+            if ($file.Name -ceq 'SHA256SUMS.txt') {
+              continue
+            }
+            if (-not $expectedChecksumFiles.TryAdd($file.Name, $file.FullName)) {
+              throw "Duplicate public release-asset name: $($file.Name)"
+            }
+          }
+          if ($checksumRows.Count -ne $expectedChecksumFiles.Count) {
+            throw 'SHA256SUMS.txt does not contain exactly one row per checksummed public release asset.'
+          }
+          $checkedNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
           foreach ($row in $checksumRows) {
             if ($row -notmatch '^(?<hash>[0-9a-f]{64})  (?<name>[^/\\]+)$') {
               throw "Invalid split-pack checksum row: $row"
             }
-            $actual = (Get-FileHash -LiteralPath (Join-Path release-packs $Matches.name) -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $Matches.hash) {
-              throw "Split-pack checksum mismatch: $($Matches.name)"
+            $assetPath = $null
+            if (-not $expectedChecksumFiles.TryGetValue([string]$Matches.name, [ref]$assetPath)) {
+              throw "SHA256SUMS.txt names an unexpected public release asset: $($Matches.name)"
             }
+            if (-not $checkedNames.Add([string]$Matches.name)) {
+              throw "Duplicate public release-asset checksum row: $($Matches.name)"
+            }
+            $actual = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $Matches.hash) {
+              throw "Public release-asset checksum mismatch: $($Matches.name)"
+            }
+          }
+          if ($checkedNames.Count -ne $expectedChecksumFiles.Count) {
+            throw 'SHA256SUMS.txt does not name the exact public release-asset set.'
           }
 
       - name: Upload complete offline split packs
@@ -508,14 +534,14 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: bstrings-offline-profile-acceptance
-          path: release-assets
+          path: release-gate-evidence
 
       - name: Validate checked profile-acceptance evidence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           ./tools/airgap/Test-OfflineProfileReleaseEvidence.ps1 `
-            -EvidencePath release-assets/offline-profile-acceptance.json `
+            -EvidencePath release-gate-evidence/offline-profile-acceptance.json `
             -AssetDirectory release-assets `
             -ExpectedRepository $env:GITHUB_REPOSITORY `
             -ExpectedServerUrl $env:GITHUB_SERVER_URL `
@@ -527,6 +553,8 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
+          name: bstrings ${{ github.ref_name }}
+          body_path: docs/releases/${{ github.ref_name }}.md
           files: |
             release-assets/bstrings-win-x64.zip
             release-assets/bstrings-win-x64-offline-base.zip
@@ -535,6 +563,5 @@ jobs:
             release-assets/Hy-MT2-Apache-2.0-*.txt
             release-assets/bundle-packs-*.json
             release-assets/SHA256SUMS.txt
-            release-assets/offline-profile-acceptance.json
-          generate_release_notes: true
+          generate_release_notes: false
           fail_on_unmatched_files: true

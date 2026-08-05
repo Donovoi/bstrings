@@ -44,10 +44,10 @@ internal sealed record AnalysisToolchain(
 internal static class AnalysisToolchainLocator
 {
     private const string OfflineBundleAcquisition =
-        "Run the Windows build workflow and download the "
-        + "bstrings-win-x64-offline-cpu artifact; a future matching version tag "
-        + "publishes the same ZIP and checksum on Releases: "
-        + "https://github.com/Donovoi/bstrings/actions/workflows/dotnet-desktop.yml";
+        "Download bstrings-win-x64.zip, SHA256SUMS.txt, and "
+        + "bundle-packs-quality.json from the same GitHub Release, verify the core ZIP, "
+        + "then run 'bstrings.exe bundle acquire --manifest bundle-packs-quality.json "
+        + "--output <directory>': https://github.com/Donovoi/bstrings/releases/latest";
 
     private const string ConfigurationFileName = "airgap-config.json";
     private const string MagikaUrl = "https://github.com/google/magika#command-line-tool";

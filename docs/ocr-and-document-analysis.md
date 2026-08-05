@@ -40,8 +40,8 @@ OCR can also be requested without the other optional stages:
 `--ocr` accepts `off`, `auto`, or `force`. `--ocr-provider` accepts `auto`,
 `cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.0 source profile
 `windows-x64-ocr-cpu-directml-v1` contains and claims only CPU, DirectML, and
-DirectML+CPU hybrid. Its complete-kit release assets are not published yet.
-CUDA requires a separately built and validated custom runtime profile.
+DirectML+CPU hybrid. CUDA requires a separately built and validated custom
+runtime profile.
 
 ## File and PDF behavior
 
@@ -156,27 +156,14 @@ also embeds a full NFC, case-sensitive diagnostic computed from the same frozen
 OCR output. Casefolding avoids treating capitalization alone as a recognition
 failure; it is not evidence that raw case-sensitive recognition improved.
 
-The exact path-free v3
-[calibration report and policy](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
-are publicly inspectable. The calibration report SHA-256 is
-`5e6be755e913ed0d73d634f25899fe2051b1e62706b461d0a88bfd8765bccd70`;
-its frozen policy SHA-256 is
-`51c6e07d21d128b4886801a232ff3f62adcd06ae5bdd3c38002992c505262852`.
-The immutable [pre-test witness](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-acceptance-v2-20260805-23992fc)
-and [terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
-preserve the earlier v2 one-shot chain at source commit
-`23992fc75b624a3c6dab5bfbd0a4b52949133525`; they do not turn the later v3
-calibration into a fresh test. The terminal result is failed, not accepted. The
-run stopped before OCR, so it is not a model-quality result.
-
-The immutable
-[post-hoc diagnostic report](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2)
-is bound to candidate commit `81c0fb2b6393d59564645b84422bcf8f7a78e3da`;
-its SHA-256 is
-`4129295263007d9ff8fb4da3f4cd7bbb9134262f66b73dbdd43a3ffef6dee543`.
-It contains no OCR text or host paths. Its `acceptancePassed` value is null and
-its final disposition is `diagnostic-integrity-failed`, so a passing quality
-table must never be paraphrased as independent acceptance.
+The calibration report, frozen policy, pre-test witness, consumed ledger,
+terminal record, post-hoc report, raw OCR output, and host logs are retained as
+CI/internal evidence. They are deliberately not product assets on GitHub
+Releases. The public summary remains in this guide and the
+[OCR benchmark record](ocr-benchmark-2026-08-05.md). The predeclared run stopped
+before OCR and produced no model-quality result; the post-hoc report's final
+disposition is `diagnostic-integrity-failed`. Neither may be paraphrased as
+independent acceptance or full backend parity.
 
 Synthetic fixtures remain useful packaging tests, while release-specific
 DirectML acceptance remains hardware/runtime evidence. Neither substitutes for

@@ -20,23 +20,26 @@ community derivative, not an official RRC leaderboard result.
 | Post-hoc diagnostic | All 361 test rows were audited, eight exact train/test image overlaps were excluded, and the remaining 353 were scored; repaired dataset row index 142 remained included (zero-based) |
 | Post-hoc quality | CPU, DirectML, and hybrid produced identical aggregate and per-document metrics, and every backend met all 11 frozen numeric thresholds; the report-level diagnostic comparison remained false because integrity failed |
 | Post-hoc integrity | **Failed.** Provider-neutral critical evidence was not exactly equal and confidence records did not align structurally across all providers |
-| Release claim | No independent SROIE acceptance, full CPU/DirectML/hybrid parity, or official RRC result |
+| Product claim | No independent SROIE acceptance, full CPU/DirectML/hybrid parity, or official RRC result |
 
-The current v3 calibration is published in the immutable
-[`ocr-sroie-calibration-v3-20260805-e3f4567`](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
-release, bound to source commit
+The current v3 calibration record is bound internally to source commit
 `e3f456708517f0ca64baae0e925fdccbf0c3a4d2`. Its report SHA-256 is
 `5e6be755e913ed0d73d634f25899fe2051b1e62706b461d0a88bfd8765bccd70`
 and its policy SHA-256 is
 `51c6e07d21d128b4886801a232ff3f62adcd06ae5bdd3c38002992c505262852`.
 
-The final post-hoc report is published in the immutable
-[`ocr-sroie-posthoc-v2-20260805-81c0fb2`](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2)
-release, bound to candidate commit
+The final post-hoc report is bound internally to candidate commit
 `81c0fb2b6393d59564645b84422bcf8f7a78e3da`. Its report SHA-256 is
 `4129295263007d9ff8fb4da3f4cd7bbb9134262f66b73dbdd43a3ffef6dee543`.
 The report contains no OCR text or host paths. Its `acceptancePassed` value is
 null and its final disposition is `diagnostic-integrity-failed`.
+
+This file is the concise public summary. Raw reports, policies, witnesses,
+ledgers, OCR output, logs, and machine-specific diagnostics belong in
+access-controlled CI artifacts or internal evidence storage. They are not
+GitHub Release assets; Releases are reserved for the usable product, download
+and installation inputs, checksums, manifests, licenses, and bounded
+release-verification records.
 
 ## Dataset and comparison boundary
 
@@ -117,14 +120,16 @@ The one-shot protocol separated these evidence events:
 1. Push a clean candidate and require green CI on that exact commit.
 2. Run calibration, validate every document, and derive a fixed policy without
    opening the test Parquet.
-3. Publish an immutable, path-free witness binding source, report, policy, and
+3. Write a hash-bound, path-free witness binding source, report, policy, and
    the expected test identity.
-4. Verify that release and asset through an isolated GitHub CLI subprocess.
+4. Store and independently verify that witness in the controlled evidence
+   channel before opening the test data.
 5. Create the stable machine ledger before accepting the test-split path over
    standard input or parsing any label.
 6. Snapshot and hash the test artifact, then extract, run all backends, compare
    evidence, score, and seal—or fail closed and quarantine partials.
-7. Publish a separate immutable, path-free terminal outcome.
+7. Store a separate hash-bound, path-free terminal outcome in CI/internal
+   evidence storage and publish only a concise qualified summary.
 
 The predeclared attempt used the earlier v2 witness chain. Steps 1–5 completed,
 and the snapshot was exactly 191,045,976 bytes with the expected SHA-256. The
@@ -134,13 +139,9 @@ quarantined partials, and recorded `runSucceeded:false`,
 `integrityPassed:false`, `acceptancePassed:false`, and
 `finalDisposition:"failed"`.
 
-The immutable
-[pre-test witness](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-acceptance-v2-20260805-23992fc)
-and
-[terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
-preserve that outcome at source commit
-`23992fc75b624a3c6dab5bfbd0a4b52949133525`. They do not bind the later v3
-calibration or convert it into a fresh test.
+The internally retained pre-test witness and terminal result preserve that
+outcome at source commit `23992fc75b624a3c6dab5bfbd0a4b52949133525`.
+They do not bind the later v3 calibration or convert it into a fresh test.
 
 This is not a model-quality rejection because no one-shot test metric was
 created. It is also not acceptance. The failed attempt consumed the
@@ -148,8 +149,8 @@ dataset-stable ledger. A code, protocol, or model revision does not reset that
 ledger, and deleting it or renaming the protocol would not restore independence.
 
 The ledger is strong procedural/local evidence, not protection against an
-administrator who can alter code or machine state. The immutable remote witness
-and result make later changes to the published claims detectable.
+administrator who can alter code or machine state. Hash-bound witness and
+terminal records make later changes to the retained evidence detectable.
 
 ## Source-annotation repair
 
@@ -214,7 +215,7 @@ because structural alignment failed before pairwise comparison. Those zeros are
 not evidence of equal confidence values.
 
 An exploratory, unsealed comparison of the private local outputs—not a field in
-the immutable report and not release evidence—localized the observed critical
+the sealed report and not acceptance evidence—localized the observed critical
 record differences to bounding-box and derived-location fields. Because that
 follow-up is unpublished, no exact counts or deltas are used as a public claim.
 It does not satisfy or weaken the frozen exact-equality gate.
@@ -255,11 +256,13 @@ experiment on 20 already-development CORD validation documents produced 82.6%
 token recall but 7.3% precision (13.4% F1), with repeated/hallucinated output.
 It did not run the official full pipeline and was not promoted.
 
-## Release rule
+## Publication rule
 
-Do not label an OCR release quality-accepted from calibration, synthetic smoke,
+Do not label OCR quality accepted from calibration, synthetic smoke,
 hardware-path evidence, an incomplete report, a failed ledger, or a post-hoc
-replay. Preserve all terminal outcomes. For a materially changed model or
-scorer, choose a genuinely untouched corpus, freeze the procedure before labels
-are opened, and repeat the clean-commit, CI, calibration, immutable witness,
-single-attempt, and immutable-result sequence.
+replay. Preserve all terminal outcomes in CI/internal evidence storage. For a
+materially changed model or scorer, choose a genuinely untouched corpus,
+freeze the procedure before labels are opened, and repeat the clean-commit,
+CI, calibration, hash-bound witness, single-attempt, and terminal-record
+sequence. GitHub Releases remain product-only; summarize the qualified result
+in documentation without attaching the raw benchmark evidence.

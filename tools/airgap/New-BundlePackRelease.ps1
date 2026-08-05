@@ -6,6 +6,8 @@ param(
     [string]$OutputDirectory,
     [Parameter(Mandatory = $true)]
     [string]$ReleaseAssetBaseUrl,
+    [Parameter(Mandatory = $true)]
+    [string]$CoreReleaseArchive,
     [string]$ComponentLockPath,
     [switch]$SkipAssemblyTest
 )
@@ -382,11 +384,37 @@ foreach ($profileName in @('quality', 'balanced', 'compact')) {
     })
 }
 
-$checksums = [Collections.Generic.List[string]]::new()
+$checksumInputByName = [Collections.Generic.Dictionary[string, string]]::new(
+    [StringComparer]::OrdinalIgnoreCase
+)
 foreach ($file in Get-ChildItem -LiteralPath $output -File | Sort-Object Name) {
     if ($file.Name -in @('.incomplete', 'SHA256SUMS.txt')) { continue }
-    $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    $checksums.Add("$hash  $($file.Name)")
+    if (-not $checksumInputByName.TryAdd($file.Name, $file.FullName)) {
+        throw "Duplicate release-asset checksum name: $($file.Name)"
+    }
+}
+$coreArchivePath = [IO.Path]::GetFullPath($CoreReleaseArchive)
+$coreArchiveItem = Get-Item -LiteralPath $coreArchivePath -Force -ErrorAction Stop
+if (
+    $coreArchiveItem.PSIsContainer -or
+    ($coreArchiveItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+    [long]$coreArchiveItem.Length -lt 1
+) {
+    throw "Core release archive must be a non-empty physical file: $coreArchivePath"
+}
+if ($coreArchiveItem.Name -cne 'bstrings-win-x64.zip') {
+    throw "Core release archive must use the exact public asset name bstrings-win-x64.zip: $coreArchivePath"
+}
+if (-not $checksumInputByName.TryAdd($coreArchiveItem.Name, $coreArchiveItem.FullName)) {
+    throw "Duplicate release-asset checksum name: $($coreArchiveItem.Name)"
+}
+
+$checksums = [Collections.Generic.List[string]]::new()
+foreach ($fileName in @($checksumInputByName.Keys | Sort-Object)) {
+    $hash = (
+        Get-FileHash -LiteralPath $checksumInputByName[$fileName] -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    $checksums.Add("$hash  $fileName")
 }
 [IO.File]::WriteAllText(
     (Join-Path $output 'SHA256SUMS.txt'),

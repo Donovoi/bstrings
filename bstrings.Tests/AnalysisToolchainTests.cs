@@ -202,7 +202,7 @@ public sealed class AnalysisToolchainTests
     }
 
     [Fact]
-    public void Locate_MissingConfigurationPointsToTheCompleteOfflineCpuArtifact()
+    public void Locate_MissingConfigurationPointsToTheReleaseBundleAcquisitionFlow()
     {
         using var scope = new TemporaryDirectory();
         var previousBundle = Environment.GetEnvironmentVariable("BSTRINGS_AIRGAP_BUNDLE");
@@ -218,16 +218,22 @@ public sealed class AnalysisToolchainTests
             );
 
             Assert.Contains(
-                "bstrings-win-x64-offline-cpu",
+                "bundle-packs-quality.json",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );
             Assert.Contains(
-                "github.com/Donovoi/bstrings/actions/workflows/dotnet-desktop.yml",
+                "bundle acquire",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );
-            Assert.DoesNotContain("core-only", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                "github.com/Donovoi/bstrings/releases/latest",
+                error.Message,
+                StringComparison.OrdinalIgnoreCase
+            );
+            Assert.DoesNotContain("offline-cpu", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("actions/workflows", error.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

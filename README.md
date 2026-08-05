@@ -1,13 +1,73 @@
 # bstrings
 
 `bstrings` finds useful forensic strings, validates identifiers, recovers
-obfuscated strings from executables, reads images and PDFs, detects language,
-translates locally when needed, and runs the same pattern catalogue over every
-result. A complete Windows kit built from current source works without internet
-access. Examiners use one interface—`bstrings.exe`—without installing Python or
-calling helper tools.
+obfuscated strings with [FLOSS](https://github.com/mandiant/flare-floss), routes
+files with [Magika](https://github.com/google/magika), reads images and PDFs,
+detects language, translates locally when needed, and runs the same pattern
+catalogue over every result. A complete Windows kit built from current source
+works without internet access. Examiners use one interface—`bstrings.exe`—without
+installing Python or calling helper tools.
 
-## Start here
+## Download, verify, run, then enable everything
+
+Download the latest Windows x64 version from the
+[Releases page](https://github.com/Donovoi/bstrings/releases). The v1.9.0 asset
+set and commands are described below. Keep the core ZIP, checksum file, and any
+offline-profile manifest on the same version; never mix release versions.
+
+### 1. Download
+
+For a basic scan, download the
+[Windows x64 core ZIP](https://github.com/Donovoi/bstrings/releases/latest/download/bstrings-win-x64.zip)
+and its [SHA-256 list](https://github.com/Donovoi/bstrings/releases/latest/download/SHA256SUMS.txt).
+For every feature, also download the
+[quality profile manifest](https://github.com/Donovoi/bstrings/releases/latest/download/bundle-packs-quality.json),
+or choose another `bundle-packs-<profile>.json` from the same release.
+
+### 2. Verify and extract
+
+Check the core ZIP before opening it. This uses Windows PowerShell only:
+
+```powershell
+$rows = @(Select-String -LiteralPath .\SHA256SUMS.txt `
+  -Pattern '^[0-9a-f]{64}  bstrings-win-x64\.zip$')
+if ($rows.Count -ne 1) { throw 'Missing or duplicate core checksum' }
+$expected = $rows[0].Line.Substring(0, 64)
+$actual = (Get-FileHash -LiteralPath .\bstrings-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'bstrings-win-x64.zip SHA-256 mismatch' }
+'Core ZIP verified'
+```
+
+Extract the ZIP with Windows Explorer and keep every extracted file together.
+
+### 3. Run the core scanner
+
+From the extracted directory:
+
+```powershell
+.\bstrings.exe -f D:\evidence\image.raw --lr all --ro --off -s -o D:\results\hits.csv
+```
+
+### 4. Enable every offline feature
+
+On a connected staging machine, use the core executable and the profile
+manifest downloaded from that same release:
+
+```powershell
+.\bstrings.exe bundle acquire `
+  --manifest C:\Downloads\bundle-packs-quality.json `
+  --output C:\Tools\bstrings-quality
+
+C:\Tools\bstrings-quality\bstrings.exe bundle verify
+C:\Tools\bstrings-quality\bstrings.exe analyze -d D:\carved --full -o D:\results\full
+```
+
+`bundle acquire` resumes downloads, validates every size and SHA-256, assembles
+the complete directory, and verifies it. Copy that whole directory to the
+air-gapped workstation and run `bstrings.exe bundle verify` again before case
+work. Nothing is downloaded during examination.
+
+## Common jobs
 
 | Your goal | What to use | Command |
 | --- | --- | --- |
@@ -40,30 +100,15 @@ matched. Read the [scale](docs/scale-benchmark-2026-08.md),
 [translation](docs/translation-benchmark-2026-08-04.md) reports before applying
 them to another host or corpus.
 
-## Choose what to download
+## Package details
 
 | Package | What it does |
 | --- | --- |
 | `bstrings-win-x64.zip` | Core scanner, Rust engine, and acquisition client. The v1.9.0 build can extract and pattern-match directly, but does not contain every enrichment model/runtime. |
 | Complete offline kit | A new directory created by the v1.9.0 `bundle acquire` command. It adds [Magika](https://github.com/google/magika), [FLOSS](https://github.com/mandiant/flare-floss), OCR, language detection, and local translation. Copy the whole directory offline. |
 
-The complete-kit assets are prepared for v1.9.0 but are not in the current
-public releases yet. Until that release exists, build from current source using
-the [maintainer guide](docs/offline-release-maintenance.md). Do not combine an
+Each v1.9.0 asset is produced by the same gated tag workflow. Do not combine an
 older core ZIP with current manifests.
-
-Once a [release](https://github.com/Donovoi/bstrings/releases) contains the core
-ZIP, the offline base, and all `bundle-packs-*.json` assets, download the core
-and one trust manifest from that same release. On a connected staging machine:
-
-```powershell
-.\bstrings.exe bundle acquire `
-  --manifest .\bundle-packs-quality.json `
-  --output C:\Tools\bstrings-quality
-
-C:\Tools\bstrings-quality\bstrings.exe bundle verify
-C:\Tools\bstrings-quality\bstrings.exe analyze -d D:\carved --full -o D:\results\full
-```
 
 Choose `quality` for the strongest measured local translation, `balanced` for
 a much smaller Q8 model, or `compact` for the smallest and fastest reviewed
@@ -78,11 +123,9 @@ profile:
 The selected model remains at its immutable, commit-pinned
 [Hy-MT2 7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF) or
 [Hy-MT2 1.8B](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF) source.
-`bundle acquire` resumes downloads, verifies exact sizes and SHA-256 values,
-assembles the kit, and verifies the finished manifest. Nothing is downloaded
-during examination. Authenticate the trust manifest through an independently
-trusted release channel; checksums detect changed bytes but do not identify the
-publisher by themselves.
+Authenticate the trust manifest through an independently trusted release
+channel; checksums detect changed bytes but do not identify the publisher by
+themselves.
 
 ## What `--full` does
 
@@ -96,42 +139,28 @@ memory image. Mount or carve first when filesystem coverage is required. A
 direct raw-image scan still finds byte patterns, while FLOSS needs the recovered
 executable and OCR needs supported image/PDF files.
 
-The v1.9.0 source profile supports CPU, DirectML, and DirectML+CPU hybrid paths;
-its complete-kit assets are not published yet. CUDA is not bundled or claimed.
-`auto` is the normal choice. Use CPU when GPU memory is busy or stability
-matters. A compatible graphics driver is a host prerequisite and cannot be
-bundled truthfully.
+The v1.9.0 profile supports CPU, DirectML, and DirectML+CPU hybrid paths. CUDA
+is not bundled or claimed. `auto` is the normal choice. Use CPU when GPU memory
+is busy or stability matters. A compatible graphics driver is a host
+prerequisite and cannot be bundled truthfully.
 
-## Measured OCR evidence
+## Local OCR benchmark summary
 
-We published the v3
-[616-document SROIE calibration](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
-as an immutable release.
-It selected 616 of 626 train rows under the frozen duplicate policy and measured
+The frozen CPU calibration selected 616 of 626 SROIE training rows and measured
 token F1 0.8602, CER 0.1156, WER 0.2181, localization Hmean 0.9787, and exact
-end-to-end Hmean 0.6349 on CPU. This is calibration evidence, not test
-acceptance.
+end-to-end Hmean 0.6349. The predeclared test attempt stopped before OCR on a
+degenerate source annotation and produced no quality result. A later post-hoc
+353-document diagnostic met its numeric thresholds on CPU, DirectML, and
+hybrid, but failed the cross-provider evidence-integrity gate. It is not
+independent acceptance, backend-parity proof, or an official RRC result.
 
-The predeclared 361-document one-shot attempt failed closed on one degenerate
-source annotation before OCR, consumed the one-shot ledger, and was not rerun.
-The immutable
-[pre-test witness](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-acceptance-v2-20260805-23992fc)
-and [terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
-preserve that outcome.
-
-A later, explicitly post-hoc
-[test-split diagnostic](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2)
-audited all 361 test rows, excluded eight train/test overlaps with identical
-decoded image bytes, and scored the remaining 353 while retaining repaired
-dataset row index 142 (zero-based). CPU, DirectML, and hybrid produced identical
-aggregate and per-document scored metrics, and every backend met all 11 frozen
-numeric thresholds: token F1 0.8559, CER 0.1167, WER 0.2245, localization Hmean
-0.9785, and exact end-to-end Hmean 0.6254. The metric artifacts matched under
-both scoring profiles, but some provider-neutral OCR output records did not, so
-backend parity was not established. The diagnostic did not pass overall and is
-not an acceptance result or an official RRC leaderboard submission. See the
-[OCR benchmark record](docs/ocr-benchmark-2026-08-05.md) for the evidence
-chain, exact limits, and hashes.
+This concise summary belongs in repository documentation. Raw benchmark
+reports, witnesses, ledgers, OCR output, logs, and machine-specific test
+artifacts belong in CI artifacts or controlled internal evidence storage—not
+GitHub Releases. Public Releases are reserved for usable product, download,
+installation, checksum, manifest, and release-verification assets. Read the
+[OCR benchmark record](docs/ocr-benchmark-2026-08-05.md) for the method,
+metrics, limits, and evidence-retention policy.
 
 ## Results and evidence safety
 

@@ -287,9 +287,8 @@ if ((@($lockedProfileNames | Sort-Object) -join '|') -cne 'balanced|compact|qual
 
 $assetRoot = Resolve-PhysicalDirectory $AssetDirectory 'Release asset directory'
 $resolvedEvidence = Resolve-PhysicalFile $EvidencePath 'Offline profile acceptance evidence'
-$expectedEvidencePath = Join-Path $assetRoot 'offline-profile-acceptance.json'
-if ([IO.Path]::GetFullPath($resolvedEvidence) -cne [IO.Path]::GetFullPath($expectedEvidencePath)) {
-    throw 'Offline profile acceptance evidence must be the exact release asset file.'
+if ([IO.Path]::GetFileName($resolvedEvidence) -cne 'offline-profile-acceptance.json') {
+    throw 'Offline profile acceptance evidence must use its exact internal gate-evidence file name.'
 }
 
 $profiles = @('quality', 'balanced', 'compact')
@@ -305,7 +304,6 @@ $expectedFileNames = @(
     'bstrings-win-x64.zip'
     @($packAssetNames)
     'SHA256SUMS.txt'
-    'offline-profile-acceptance.json'
 )
 $entries = @(Get-ChildItem -LiteralPath $assetRoot -Force -ErrorAction Stop)
 foreach ($entry in $entries) {
@@ -410,8 +408,9 @@ if (-not $checksumText.EndsWith("`n", [StringComparison]::Ordinal) -or $checksum
     throw 'SHA256SUMS.txt must use canonical LF-terminated rows.'
 }
 $checksumRows = @($checksumText.Substring(0, $checksumText.Length - 1) -split "`n")
-if ($checksumRows.Count -ne $packAssetNames.Count) {
-    throw 'SHA256SUMS.txt does not contain exactly one row per release-pack asset.'
+$checksummedAssetNames = @('bstrings-win-x64.zip') + @($packAssetNames)
+if ($checksumRows.Count -ne $checksummedAssetNames.Count) {
+    throw 'SHA256SUMS.txt does not contain exactly one row per checksummed public release asset.'
 }
 $checksumByName = [Collections.Generic.Dictionary[string, string]]::new(
     [StringComparer]::OrdinalIgnoreCase
@@ -426,9 +425,16 @@ foreach ($row in $checksumRows) {
 }
 if (
     (@($checksumByName.Keys | Sort-Object) -join '|') -cne
-    (@($packAssetNames | Sort-Object) -join '|')
+    (@($checksummedAssetNames | Sort-Object) -join '|')
 ) {
-    throw 'SHA256SUMS.txt does not name the exact release-pack asset set.'
+    throw 'SHA256SUMS.txt does not name the exact checksummed public release-asset set.'
+}
+$coreChecksumHash = Get-RequiredChecksum $checksumByName 'bstrings-win-x64.zip'
+if (
+    $coreChecksumHash -cne [string]$coreActual.sha256 -or
+    $coreChecksumHash -cne (Get-LowerSha256 $record.coreArchiveSha256 'Core archive SHA-256')
+) {
+    throw 'SHA256SUMS.txt differs from the core asset and acceptance-evidence hash.'
 }
 foreach ($fileName in $packAssetNames) {
     $checksumHash = Get-RequiredChecksum $checksumByName $fileName
