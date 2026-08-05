@@ -27,7 +27,7 @@ import os
 import stat
 import tempfile
 import types
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -84,9 +84,14 @@ def _cleanup_outer_sandbox() -> None:
     _CONTROLLED_CWD_OWNER.cleanup()
 
 
+def _canonical_environment_names(names: Iterable[str]) -> set[str]:
+    if os.name == "nt":
+        return {name.upper() for name in names}
+    return set(names)
+
+
 def _sanitize_outer_environment() -> None:
     global _CONTROLLED_CWD, _CONTROLLED_CWD_OWNER, _DLL_SEARCH_POLICY
-    inherited = dict(os.environ)
     kernel32: Any = None
     windows_directory: Path | None = None
     if os.name == "nt":
@@ -101,7 +106,7 @@ def _sanitize_outer_environment() -> None:
         windows_directory = Path(buffer.value).resolve()
         canonical_system_root = os.path.normcase(str(windows_directory))
         for name in ("SystemRoot", "WINDIR"):
-            inherited_value = inherited.get(name)
+            inherited_value = os.environ.get(name)
             if inherited_value and os.path.normcase(str(Path(inherited_value).resolve())) != (
                 canonical_system_root
             ):
@@ -314,7 +319,8 @@ def _require_outer_runtime_isolation() -> None:
             os.environ.get(name) != expected
             for name, expected in _OUTER_OFFLINE_ENVIRONMENT.items()
         )
-        or set(os.environ) != allowed_environment
+        or _canonical_environment_names(os.environ)
+        != _canonical_environment_names(allowed_environment)
         or _CONTROLLED_CWD is None
         or Path.cwd().resolve() != _CONTROLLED_CWD
         or not _CONTROLLED_CWD.is_dir()

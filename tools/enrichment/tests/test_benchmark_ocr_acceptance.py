@@ -875,20 +875,45 @@ class OcrAcceptanceWrapperTests(unittest.TestCase):
         )
         self.assertEqual(0, isolated.returncode, isolated.stderr)
         self.assertFalse(marker.exists())
+        guarded = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-B",
+                wrapper,
+                "verify-completed",
+                "--report",
+                str(self.root / "missing-confirmatory-report.json"),
+            ],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(1, guarded.returncode)
+        self.assertNotIn("requires an isolated -I -B", guarded.stderr)
+        self.assertIn("confirmatory report is unavailable", guarded.stderr)
+        self.assertFalse(marker.exists())
         if os.name == "nt":
-            poisoned_windows = environment.copy()
-            poisoned_windows["WINDIR"] = str(poison)
-            rejected = subprocess.run(
-                [sys.executable, "-I", "-B", wrapper, "--help"],
-                cwd=self.root,
-                env=poisoned_windows,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(1, rejected.returncode)
-            self.assertIn("inherited WINDIR", rejected.stderr)
-            self.assertFalse(marker.exists())
+            for variable, displayed_name in (("WINDIR", "WINDIR"), ("sYsTeMrOoT", "SystemRoot")):
+                poisoned_windows = {
+                    name: value
+                    for name, value in environment.items()
+                    if name.casefold() != variable.casefold()
+                }
+                poisoned_windows[variable] = str(poison)
+                rejected = subprocess.run(
+                    [sys.executable, "-I", "-B", wrapper, "--help"],
+                    cwd=self.root,
+                    env=poisoned_windows,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(1, rejected.returncode)
+                self.assertIn(f"inherited {displayed_name}", rejected.stderr)
+                self.assertFalse(marker.exists())
 
     def test_prepared_snapshot_detects_image_mutation_during_run(self) -> None:
         document = make_document(self.root)
