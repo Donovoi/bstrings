@@ -31,6 +31,7 @@ def coverage(matched: int, total: int) -> dict:
 def metrics(identities: list[dict]) -> dict:
     per_document = [
         {
+            "textNormalization": policy.PRIMARY_TEXT_NORMALIZATION,
             "counts": {
                 "characterEdits": 8,
                 "matchingCharacters": 92,
@@ -56,17 +57,40 @@ def metrics(identities: list[dict]) -> dict:
     counts = {
         key: sum(item["counts"][key] for item in per_document) for key in per_document[0]["counts"]
     }
+    micro = {
+        "counts": counts,
+        "detection": coverage(92 * documents, 100 * documents),
+        "documents": documents,
+        "endToEndExact": coverage(70 * documents, 100 * documents),
+        "pageCer": 0.08,
+        "pageWer": 0.15,
+        "tokenF1": 0.90,
+    }
+    macro = {"pageCer": 0.08, "pageWer": 0.15, "tokenF1": 0.90}
+    strict_per_document = copy.deepcopy(per_document)
+    for item in strict_per_document:
+        item["textNormalization"] = policy.DIAGNOSTIC_TEXT_NORMALIZATION
+    strict_metrics = {
+        "textNormalization": policy.DIAGNOSTIC_TEXT_NORMALIZATION,
+        "macro": copy.deepcopy(macro),
+        "micro": copy.deepcopy(micro),
+        "perDocument": strict_per_document,
+    }
+    strict_per_document_bytes = "".join(
+        policy.canonical_json(item) + "\n" for item in strict_per_document
+    ).encode("utf-8")
     return {
-        "macro": {"pageCer": 0.08, "pageWer": 0.15, "tokenF1": 0.90},
-        "micro": {
-            "counts": counts,
-            "detection": coverage(92 * documents, 100 * documents),
-            "documents": documents,
-            "endToEndExact": coverage(70 * documents, 100 * documents),
-            "pageCer": 0.08,
-            "pageWer": 0.15,
-            "tokenF1": 0.90,
+        "textNormalization": policy.PRIMARY_TEXT_NORMALIZATION,
+        "caseSensitiveDiagnostics": {
+            "metrics": strict_metrics,
+            "metricsSha256": policy.sha256_canonical(strict_metrics),
+            "perDocumentMetricsSha256": hashlib.sha256(
+                strict_per_document_bytes
+            ).hexdigest(),
+            "textNormalization": policy.DIAGNOSTIC_TEXT_NORMALIZATION,
         },
+        "macro": macro,
+        "micro": micro,
         "perDocument": per_document,
     }
 
@@ -174,6 +198,57 @@ class SroiePolicyTests(unittest.TestCase):
         built = self.build()
         self.assertEqual(2, built["calibration"]["documents"])
         self.assertEqual(626, built["calibration"]["rawRows"])
+
+    def test_reports_bind_primary_and_case_sensitive_scoring_profiles(self) -> None:
+        wrong = copy.deepcopy(self.report)
+        wrong["metrics"]["textNormalization"] = policy.DIAGNOSTIC_TEXT_NORMALIZATION
+        wrong["metricsSha256"] = policy.sha256_canonical(wrong["metrics"])
+        with self.assertRaisesRegex(policy.PolicyError, "primary text normalization"):
+            policy.build_policy(
+                calibration_report=wrong,
+                calibration_report_sha256=self.report_sha256,
+                expected_identity=self.identity,
+                expected_identities=self.identities,
+                frozen_at_utc="2026-08-05T00:00:00Z",
+            )
+        wrong = copy.deepcopy(self.report)
+        del wrong["metrics"]["caseSensitiveDiagnostics"]["perDocumentMetricsSha256"]
+        wrong["metricsSha256"] = policy.sha256_canonical(wrong["metrics"])
+        with self.assertRaisesRegex(policy.PolicyError, "diagnostic schema"):
+            policy.build_policy(
+                calibration_report=wrong,
+                calibration_report_sha256=self.report_sha256,
+                expected_identity=self.identity,
+                expected_identities=self.identities,
+                frozen_at_utc="2026-08-05T00:00:00Z",
+            )
+        wrong = copy.deepcopy(self.report)
+        wrong["metrics"]["perDocument"][0]["textNormalization"] = (
+            policy.DIAGNOSTIC_TEXT_NORMALIZATION
+        )
+        wrong["metricsSha256"] = policy.sha256_canonical(wrong["metrics"])
+        with self.assertRaisesRegex(policy.PolicyError, "per-document text normalization"):
+            policy.build_policy(
+                calibration_report=wrong,
+                calibration_report_sha256=self.report_sha256,
+                expected_identity=self.identity,
+                expected_identities=self.identities,
+                frozen_at_utc="2026-08-05T00:00:00Z",
+            )
+        wrong = copy.deepcopy(self.report)
+        strict = wrong["metrics"]["caseSensitiveDiagnostics"]["metrics"]
+        strict["micro"]["tokenF1"] = 1.0
+        diagnostic = wrong["metrics"]["caseSensitiveDiagnostics"]
+        diagnostic["metricsSha256"] = policy.sha256_canonical(strict)
+        wrong["metricsSha256"] = policy.sha256_canonical(wrong["metrics"])
+        with self.assertRaisesRegex(policy.PolicyError, "diagnostic metrics are invalid"):
+            policy.build_policy(
+                calibration_report=wrong,
+                calibration_report_sha256=self.report_sha256,
+                expected_identity=self.identity,
+                expected_identities=self.identities,
+                frozen_at_utc="2026-08-05T00:00:00Z",
+            )
 
     def test_policy_round_trip_and_dynamic_confirmatory_count(self) -> None:
         path = self.root / "policy.json"

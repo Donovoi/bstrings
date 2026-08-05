@@ -198,6 +198,46 @@ class SroieAdapterTests(unittest.TestCase):
         self.assertEqual(1.0, metrics["endToEndExact"]["hmean"])
         self.assertEqual(1.0, metrics["tokenF1"])
 
+    def test_case_insensitive_profile_preserves_exact_punctuation(self) -> None:
+        source_row = row_fixture(words=["MERCHANT NAME", "TOTAL: 9.00"])
+        parsed = sroie.parse_sroie_row(0, self.selected_row(source_row))
+        document = CordDocument(
+            row_index=0,
+            image_id=0,
+            relative_path="images/row-0000.jpg",
+            path=self.root / "row-0000.jpg",
+            length=len(parsed.raw_image),
+            sha256=hashlib.sha256(parsed.raw_image).hexdigest(),
+            annotation_sha256="a" * 64,
+            lines=parsed.lines,
+            dontcare_polygons=(),
+            repeating_symbol_polygons=(),
+            clipped_valid_lines=0,
+            clipped_dontcare_regions=0,
+            clipped_repeating_symbol_regions=0,
+            words=parsed.words,
+            rows=parsed.rows,
+            roi_polygon=parsed.roi_polygon,
+        )
+        case_only = (
+            Prediction("merchant name", parsed.rows[0].polygon, 1.0, "case-only-1"),
+            Prediction("total: 9.00", parsed.rows[1].polygon, 1.0, "case-only-2"),
+        )
+        strict = score_document(document, case_only)
+        normalized = sroie.score_document_case_insensitive(document, case_only)
+        punctuation_changed = sroie.score_document_case_insensitive(
+            document,
+            (
+                case_only[0],
+                Prediction("total 9.00", parsed.rows[1].polygon, 1.0, "missing-colon"),
+            ),
+        )
+        self.assertLess(strict["tokenF1"], 1.0)
+        self.assertEqual(1.0, normalized["tokenF1"])
+        self.assertEqual(1.0, normalized["endToEndExact"]["hmean"])
+        self.assertLess(punctuation_changed["tokenF1"], 1.0)
+        self.assertLess(punctuation_changed["endToEndExact"]["hmean"], 1.0)
+
     def test_parser_rejects_hidden_paths_bad_text_and_bad_boxes(self) -> None:
         invalid_rows = {
             "nested path": row_fixture(path="folder/receipt.jpg"),

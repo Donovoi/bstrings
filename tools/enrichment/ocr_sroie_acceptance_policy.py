@@ -23,8 +23,8 @@ import ocr_acceptance_policy as generic_policy
 
 SCHEMA_VERSION = 1
 METRICS_REPORT_SCHEMA_VERSION = 1
-POLICY_ID = "bstrings-icdar2019-sroie-train-test-ocr-v1"
-PROTOCOL = "bstrings-icdar2019-sroie-train-calibration-test-one-shot-v1"
+POLICY_ID = "bstrings-icdar2019-sroie-train-test-ocr-v2"
+PROTOCOL = "bstrings-icdar2019-sroie-train-calibration-test-one-shot-v2"
 DATASET_ID = "jsdnrs/ICDAR2019-SROIE"
 DATASET_REVISION = "bffe40c26759f3376ec2b3ae9031dbba54cd587c"
 RAW_TRAIN_ROWS = 626
@@ -35,6 +35,8 @@ TRAIN_SHA256 = "b18c16b4d8481e5e4537a1700e4616907fe4acd92d6362a7e430b0e866213887
 TEST_FILE = "data/test-00000-of-00001.parquet"
 TEST_BYTES = 191_045_976
 TEST_SHA256 = "04f8f31b45944cc6e6459a7a95c851a721fc93ffec0a5c29ece9ded734a684c2"
+PRIMARY_TEXT_NORMALIZATION = "unicode-nfc-casefold-v1"
+DIAGNOSTIC_TEXT_NORMALIZATION = "unicode-nfc-case-sensitive-v1"
 MAX_POLICY_BYTES = 2 * 1024 * 1024
 MAX_METRICS_REPORT_BYTES = 128 * 1024 * 1024
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -359,6 +361,66 @@ def _validate_identity(identity: Any) -> dict[str, Any]:
     return value
 
 
+def _validate_metric_profile(metrics: Mapping[str, Any], expected: str, *, name: str) -> None:
+    if metrics.get("textNormalization") != expected:
+        raise PolicyError(f"The {name} text normalization changed")
+    per_document = metrics.get("perDocument")
+    if not isinstance(per_document, list) or not per_document:
+        raise PolicyError(f"The {name} per-document metrics are invalid")
+    for item in per_document:
+        row = _mapping(item, name=f"{name} per-document metric")
+        if row.get("textNormalization") != expected:
+            raise PolicyError(f"A {name} per-document text normalization changed")
+
+
+def _per_document_sha256(metrics: Mapping[str, Any]) -> str:
+    per_document = metrics.get("perDocument")
+    if not isinstance(per_document, list):
+        raise PolicyError("The per-document metrics are invalid")
+    payload = "".join(canonical_json(item) + "\n" for item in per_document).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_scoring_profiles(
+    metrics: Mapping[str, Any], *, expected_identities: Sequence[Mapping[str, Any]]
+) -> None:
+    _validate_metric_profile(metrics, PRIMARY_TEXT_NORMALIZATION, name="SROIE primary")
+    diagnostic = _mapping(
+        metrics.get("caseSensitiveDiagnostics"),
+        name="case-sensitive diagnostic metrics",
+    )
+    expected_keys = {
+        "metrics",
+        "metricsSha256",
+        "perDocumentMetricsSha256",
+        "textNormalization",
+    }
+    if set(diagnostic) != expected_keys:
+        raise PolicyError("The case-sensitive diagnostic schema changed")
+    if diagnostic.get("textNormalization") != DIAGNOSTIC_TEXT_NORMALIZATION:
+        raise PolicyError("The diagnostic text normalization changed")
+    strict_metrics = _mapping(diagnostic.get("metrics"), name="case-sensitive metrics")
+    if "caseSensitiveDiagnostics" in strict_metrics:
+        raise PolicyError("The case-sensitive diagnostic metrics are recursive")
+    _validate_metric_profile(
+        strict_metrics,
+        DIAGNOSTIC_TEXT_NORMALIZATION,
+        name="case-sensitive diagnostic",
+    )
+    if diagnostic.get("metricsSha256") != sha256_canonical(strict_metrics):
+        raise PolicyError("The case-sensitive diagnostic metrics digest changed")
+    if diagnostic.get("perDocumentMetricsSha256") != _per_document_sha256(strict_metrics):
+        raise PolicyError("The case-sensitive per-document metrics digest changed")
+    try:
+        generic_policy.extract_measurements_for_identities(
+            strict_metrics,
+            expected_identities=[dict(item) for item in expected_identities],
+        )
+    except generic_policy.PolicyError as exc:
+        raise PolicyError(f"The case-sensitive diagnostic metrics are invalid: {exc}") from exc
+    canonical_json(diagnostic)
+
+
 def _validate_report(
     report: Mapping[str, Any],
     *,
@@ -411,6 +473,7 @@ def _validate_report(
     metrics = _mapping(report.get("metrics"), name="calibration metrics")
     if report.get("metricsSha256") != sha256_canonical(metrics):
         raise PolicyError("The calibration metrics digest changed")
+    _validate_scoring_profiles(metrics, expected_identities=expected_identity_rows)
     try:
         return generic_policy.extract_measurements_for_identities(
             metrics,
@@ -589,10 +652,13 @@ def evaluate_confirmatory(
 ) -> dict[str, Any]:
     if not isinstance(validated_policy, ValidatedPolicy):
         raise PolicyError("A validated SROIE policy is required")
+    metrics = _mapping(metrics, name="confirmatory metrics")
+    expected_identity_rows = [dict(item) for item in expected_identities]
+    _validate_scoring_profiles(metrics, expected_identities=expected_identity_rows)
     try:
         measurements = generic_policy.extract_measurements_for_identities(
             metrics,
-            expected_identities=[dict(item) for item in expected_identities],
+            expected_identities=expected_identity_rows,
         )
         evaluated = generic_policy.evaluate_thresholds(
             measurements,

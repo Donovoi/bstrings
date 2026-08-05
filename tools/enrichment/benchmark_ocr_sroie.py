@@ -21,7 +21,7 @@ from __future__ import annotations
 import stat
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -33,14 +33,19 @@ from benchmark_ocr_cord import (
     CordPhysicalRow,
     CordWord,
     ExtractedCorpus,
+    Prediction,
     _atomic_write,
     _embedded_image_dimensions,
     _image_extension,
     convex_hull,
+    score_document,
+    score_records,
 )
 
 SROIE_SCORING_CORPUS_MANIFEST_SCHEMA_VERSION = 1
 SROIE_PROTOCOL = "bstrings-ICDAR2019-SROIE-parquet-adapter-v2"
+SROIE_PRIMARY_TEXT_NORMALIZATION = "unicode-nfc-casefold-v1"
+SROIE_DIAGNOSTIC_TEXT_NORMALIZATION = "unicode-nfc-case-sensitive-v1"
 SROIE_COMMIT = "bffe40c26759f3376ec2b3ae9031dbba54cd587c"
 SROIE_REPOSITORY = "jsdnrs/ICDAR2019-SROIE"
 SROIE_DUPLICATE_IMAGE_POLICY = (
@@ -100,6 +105,59 @@ class _RowIdentity:
     row_index: int
     image_sha256: str
     annotation_sha256: str
+
+
+def _casefold_text(value: str) -> str:
+    """Normalize comparison text without changing stored OCR evidence."""
+
+    return unicodedata.normalize("NFC", value).casefold()
+
+
+def _casefold_document(document: CordDocument) -> CordDocument:
+    words = tuple(replace(word, text=_casefold_text(word.text)) for word in document.words)
+    rows = tuple(
+        replace(
+            row,
+            text=_casefold_text(row.text),
+            words=tuple(replace(word, text=_casefold_text(word.text)) for word in row.words),
+        )
+        for row in document.rows
+    )
+    lines = tuple(replace(line, text=_casefold_text(line.text)) for line in document.lines)
+    return replace(document, words=words, rows=rows, lines=lines)
+
+
+def score_document_case_insensitive(
+    document: CordDocument, predictions: Sequence[Prediction]
+) -> dict[str, Any]:
+    """Score exact SROIE text after NFC casefold while preserving all other semantics."""
+
+    return score_document(
+        _casefold_document(document),
+        tuple(
+            replace(prediction, text=_casefold_text(prediction.text))
+            for prediction in predictions
+        ),
+    )
+
+
+def score_records_case_insensitive(
+    corpus: ExtractedCorpus, records: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    """Apply the SROIE case-insensitive profile to in-memory scoring views only."""
+
+    scoring_corpus = replace(
+        corpus,
+        documents=tuple(_casefold_document(document) for document in corpus.documents),
+    )
+    scoring_records = []
+    for record in records:
+        value = dict(record)
+        text = value.get("text")
+        if isinstance(text, str):
+            value["text"] = _casefold_text(text)
+        scoring_records.append(value)
+    return score_records(scoring_corpus, scoring_records)
 
 
 def _split_config(split: str) -> dict[str, object]:

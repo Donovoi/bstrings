@@ -27,6 +27,7 @@ import argparse
 import atexit
 import base64
 import binascii
+import copy
 import ctypes
 import hashlib
 import json
@@ -172,6 +173,8 @@ CONFIRMATORY_ATTEMPT_LEDGER = (
     _MACHINE_STATE_ROOT
     / "bstrings"
     / "acceptance-ledgers"
+    # This dataset-level name is intentionally stable across protocol revisions.
+    # A scoring change must never replenish the held-out test attempt.
     / "icdar2019-sroie-bffe40c26759-test-one-shot-v1.json"
 )
 
@@ -867,24 +870,30 @@ def _strict_json(path: Path, *, maximum_bytes: int, name: str) -> tuple[dict[str
     return value, _sha256_bytes(raw)
 
 
-def _strict_jsonl(path: Path, *, name: str) -> list[dict[str, Any]]:
-    _, raw_document, _ = _read_regular_file(
-        path, maximum_bytes=MAX_JSONL_BYTES, name=name
-    )
+def _parse_jsonl_bytes(
+    raw_document: bytes, *, name: str, stage: str = "input"
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for line_number, raw in enumerate(raw_document.splitlines(keepends=True), start=1):
         if not raw.endswith(b"\n") or len(raw) > 1024 * 1024:
-            raise AcceptanceError(f"The {name} line framing is invalid", stage="input")
+            raise AcceptanceError(f"The {name} line framing is invalid", stage=stage)
         try:
             value = json.loads(raw)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise AcceptanceError(
-                f"The {name} line {line_number} is invalid", stage="input"
+                f"The {name} line {line_number} is invalid", stage=stage
             ) from exc
         if not isinstance(value, dict) or raw != _canonical_bytes(value):
-            raise AcceptanceError(f"The {name} is not canonical JSONL", stage="input")
+            raise AcceptanceError(f"The {name} is not canonical JSONL", stage=stage)
         rows.append(value)
     return rows
+
+
+def _strict_jsonl(path: Path, *, name: str) -> list[dict[str, Any]]:
+    _, raw_document, _ = _read_regular_file(
+        path, maximum_bytes=MAX_JSONL_BYTES, name=name
+    )
+    return _parse_jsonl_bytes(raw_document, name=name)
 
 
 def _safe_artifact(path: Path, *, evidence_root: Path) -> dict[str, Any]:
@@ -1012,6 +1021,7 @@ def _scoring_constants() -> dict[str, Any]:
         "referenceMergeNormalizedDistance": cord.REFERENCE_ROW_MERGE_NORMALIZED_DISTANCE,
         "referenceSplitNormalizedDistance": cord.REFERENCE_ROW_SPLIT_NORMALIZED_DISTANCE,
         "segmentationOverlapThreshold": cord.SEGMENTATION_OVERLAP_THRESHOLD,
+        "textNormalization": sroie.SROIE_PRIMARY_TEXT_NORMALIZATION,
         "sroieCorpusManifestSchemaVersion": (sroie.SROIE_SCORING_CORPUS_MANIFEST_SCHEMA_VERSION),
         "workerInputManifestSchemaVersion": cord.OCR_WORKER_INPUT_MANIFEST_SCHEMA_VERSION,
     }
@@ -1163,6 +1173,99 @@ def _runtime_reference(profile: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _profile_metrics(metrics: Mapping[str, Any], text_normalization: str) -> dict[str, Any]:
+    profiled = copy.deepcopy(dict(metrics))
+    per_document = profiled.get("perDocument")
+    if not isinstance(per_document, list):
+        raise AcceptanceError("The OCR metrics lack per-document rows", stage="scoring")
+    for item in per_document:
+        if not isinstance(item, dict):
+            raise AcceptanceError("An OCR metric row is invalid", stage="scoring")
+        item["textNormalization"] = text_normalization
+    profiled["textNormalization"] = text_normalization
+    return profiled
+
+
+def _per_document_bytes(metrics: Mapping[str, Any]) -> bytes:
+    per_document = metrics.get("perDocument")
+    if not isinstance(per_document, list):
+        raise AcceptanceError("The OCR metrics lack per-document rows", stage="scoring")
+    return "".join(
+        sroie_policy.canonical_json(item) + "\n" for item in per_document
+    ).encode("utf-8")
+
+
+def _rescore_backend_run(
+    run: Mapping[str, Any],
+    corpus: Any,
+    output_root: Path,
+    *,
+    backend_name: str,
+) -> dict[str, Any]:
+    try:
+        raw_output_hashes = run.get("rawOutputHashes")
+        expected_strings_sha256 = (
+            raw_output_hashes.get("stringsSha256")
+            if isinstance(raw_output_hashes, Mapping)
+            else None
+        )
+        strings_path = output_root / "strings.jsonl"
+        _, strings_bytes, _ = _read_regular_file(
+            strings_path,
+            maximum_bytes=MAX_JSONL_BYTES,
+            name="OCR strings output",
+            stage="scoring",
+        )
+        if (
+            not isinstance(expected_strings_sha256, str)
+            or _sha256_bytes(strings_bytes) != expected_strings_sha256
+        ):
+            raise AcceptanceError(
+                "The OCR strings output differs from the validated worker output",
+                stage="scoring",
+                backend=backend_name,
+            )
+        records = _parse_jsonl_bytes(
+            strings_bytes,
+            name="OCR strings output",
+            stage="scoring",
+        )
+        strict_metrics = _profile_metrics(
+            run["metrics"], sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION
+        )
+        primary_metrics = _profile_metrics(
+            sroie.score_records_case_insensitive(corpus, records),
+            sroie.SROIE_PRIMARY_TEXT_NORMALIZATION,
+        )
+        strict_per_document = _per_document_bytes(strict_metrics)
+        strict_metrics_sha256 = sroie_policy.sha256_canonical(strict_metrics)
+        strict_per_document_sha256 = hashlib.sha256(strict_per_document).hexdigest()
+        primary_metrics["caseSensitiveDiagnostics"] = {
+            "metrics": strict_metrics,
+            "metricsSha256": strict_metrics_sha256,
+            "perDocumentMetricsSha256": strict_per_document_sha256,
+            "textNormalization": sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION,
+        }
+        primary_per_document = _per_document_bytes(primary_metrics)
+        cord._atomic_write(
+            output_root / "metrics-per-document-case-sensitive.jsonl",
+            strict_per_document,
+        )
+        cord._atomic_write(output_root / "metrics-per-document.jsonl", primary_per_document)
+    except (KeyError, TypeError, ValueError, benchmark_core.BenchmarkError) as exc:
+        raise AcceptanceError(
+            "The SROIE scoring profiles could not be bound",
+            stage="scoring",
+            backend=backend_name,
+        ) from exc
+    updated = dict(run)
+    updated["textNormalization"] = sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
+    updated["metrics"] = primary_metrics
+    updated["metricsSha256"] = sroie_policy.sha256_canonical(primary_metrics)
+    updated["perDocumentMetricsSha256"] = hashlib.sha256(primary_per_document).hexdigest()
+    return updated
+
+
 def _benchmark_backend(
     frozen: FrozenCandidate,
     corpus: Any,
@@ -1173,7 +1276,7 @@ def _benchmark_backend(
 ) -> dict[str, Any]:
     runtime_name = "cpu" if backend.requested_provider == "cpu" else "directml"
     try:
-        return cord.benchmark_backend(
+        run = cord.benchmark_backend(
             backend=backend,
             quality_corpus=corpus,
             determinism_corpus=determinism_corpus,
@@ -1191,6 +1294,38 @@ def _benchmark_backend(
             timeout_seconds=timeout_seconds,
             thresholds=dict(NO_THRESHOLD_OVERRIDES),
         )
+        quality_run = _rescore_backend_run(
+            run["qualityRun"],
+            corpus,
+            root / "quality-all-100",
+            backend_name=backend.requested_provider,
+        )
+        determinism_runs = [
+            _rescore_backend_run(
+                repetition,
+                determinism_corpus,
+                root / "determinism-rows-0000-0009" / f"run-{index + 1:02d}",
+                backend_name=backend.requested_provider,
+            )
+            for index, repetition in enumerate(run["determinism"]["runs"])
+        ]
+        metric_hashes = {item["metricsSha256"] for item in determinism_runs}
+        updated = dict(run)
+        updated["textNormalization"] = sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
+        updated["stableTextNormalization"] = all(
+            item.get("textNormalization") == sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
+            for item in [quality_run, *determinism_runs]
+        )
+        updated["metrics"] = quality_run["metrics"]
+        updated["metricsSha256"] = quality_run["metricsSha256"]
+        updated["metricsDeterministic"] = len(metric_hashes) == 1
+        updated["qualityRun"] = quality_run
+        updated["determinism"] = {
+            **run["determinism"],
+            "metricsDeterministic": len(metric_hashes) == 1,
+            "runs": determinism_runs,
+        }
+        return updated
     except benchmark_core.BenchmarkError as exc:
         raise AcceptanceError(str(exc), stage=exc.stage or "backend", backend=exc.backend) from exc
 
@@ -1222,6 +1357,8 @@ def _determinism_checks(run: Mapping[str, Any], corpus: Any) -> dict[str, bool]:
         ),
         "stableProvider": run.get("stableResolvedProvider") is True,
         "stableRuntime": run.get("stableRuntime") is True,
+        "stableTextNormalization": run.get("stableTextNormalization") is True
+        and run.get("textNormalization") == sroie.SROIE_PRIMARY_TEXT_NORMALIZATION,
         "stableThreadCounts": run.get("stableResolvedThreadCounts") is True,
         "stableWorkerCounts": run.get("stableResolvedWorkerCounts") is True,
         "thresholdOverridesAbsent": run.get("qualityGatePassed") is None

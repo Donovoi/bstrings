@@ -143,6 +143,117 @@ class SroieAcceptanceTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_dataset_one_shot_ledger_name_is_stable_across_protocol_versions(self) -> None:
+        self.assertEqual(
+            "icdar2019-sroie-bffe40c26759-test-one-shot-v1.json",
+            acceptance.CONFIRMATORY_ATTEMPT_LEDGER.name,
+        )
+
+    def test_determinism_binds_the_case_insensitive_scoring_profile(self) -> None:
+        documents = tuple(SimpleNamespace(row_index=index) for index in range(10))
+        corpus = SimpleNamespace(documents=documents, selection_sha256="a" * 64)
+        repetition = {"qualityGatePassed": None}
+        run = {
+            "byteDeterministic": True,
+            "canonicalEvidenceDeterministic": True,
+            "criticalEvidenceDeterministic": True,
+            "executionProviderCountsStable": True,
+            "metricsDeterministic": True,
+            "provenancePassed": True,
+            "determinismRepetitions": acceptance.DETERMINISM_REPETITIONS,
+            "determinismRows": acceptance.DETERMINISM_DOCUMENTS,
+            "qualityGatePassed": None,
+            "stableResolvedProvider": True,
+            "stableRuntime": True,
+            "stableTextNormalization": True,
+            "textNormalization": acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION,
+            "stableResolvedThreadCounts": True,
+            "stableResolvedWorkerCounts": True,
+            "determinism": {
+                "rowIndices": list(range(10)),
+                "selectionSha256": corpus.selection_sha256,
+                "runs": [
+                    dict(repetition) for _ in range(acceptance.DETERMINISM_REPETITIONS)
+                ],
+            },
+        }
+        self.assertTrue(all(acceptance._determinism_checks(run, corpus).values()))
+        run["textNormalization"] = acceptance.sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION
+        self.assertFalse(
+            acceptance._determinism_checks(run, corpus)["stableTextNormalization"]
+        )
+
+    def test_rescore_binds_recomputable_primary_and_strict_metrics(self) -> None:
+        polygon = ((0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0))
+        source = self.root / "receipt.jpg"
+        document = acceptance.cord.CordDocument(
+            row_index=0,
+            image_id=0,
+            relative_path="images/receipt.jpg",
+            path=source,
+            length=1,
+            sha256="a" * 64,
+            annotation_sha256="b" * 64,
+            lines=(acceptance.cord.CordLine(0, "TOTAL", polygon),),
+            dontcare_polygons=(),
+            repeating_symbol_polygons=(),
+            clipped_valid_lines=0,
+            clipped_dontcare_regions=0,
+            clipped_repeating_symbol_regions=0,
+        )
+        corpus = acceptance.cord.ExtractedCorpus(
+            documents=(document,),
+            corpus_manifest=self.root / "corpus.jsonl",
+            worker_manifest=self.root / "worker.jsonl",
+            inventory=self.root / "inventory.txt",
+            corpus_manifest_sha256="c" * 64,
+            worker_manifest_sha256="d" * 64,
+            selection_sha256="e" * 64,
+        )
+        record = {
+            "attributes": {
+                "box": [[0, 0], [20, 0], [20, 10], [0, 10]],
+                "confidence": 1.0,
+                "coordinateSpace": "render-pixels",
+                "pageNumber": 1,
+            },
+            "origin": {"kind": "ocr"},
+            "recordId": "case-only",
+            "sourceFile": str(source),
+            "text": "total",
+        }
+        strict = acceptance.cord.score_records(corpus, [record])
+        output = self.root / "result"
+        output.mkdir()
+        strings_bytes = acceptance._canonical_bytes(record)
+        (output / "strings.jsonl").write_bytes(strings_bytes)
+        run = {
+            "metrics": strict,
+            "rawOutputHashes": {"stringsSha256": hashlib.sha256(strings_bytes).hexdigest()},
+        }
+        result = acceptance._rescore_backend_run(run, corpus, output, backend_name="cpu")
+        primary = result["metrics"]
+        diagnostic = primary["caseSensitiveDiagnostics"]
+        self.assertEqual(1.0, primary["micro"]["tokenF1"])
+        self.assertEqual(0.0, diagnostic["metrics"]["micro"]["tokenF1"])
+        self.assertEqual(
+            acceptance.sroie_policy.sha256_canonical(diagnostic["metrics"]),
+            diagnostic["metricsSha256"],
+        )
+        self.assertEqual(
+            hashlib.sha256(
+                (output / "metrics-per-document-case-sensitive.jsonl").read_bytes()
+            ).hexdigest(),
+            diagnostic["perDocumentMetricsSha256"],
+        )
+        self.assertEqual("total", record["text"])
+        changed = {**record, "text": "different"}
+        (output / "strings.jsonl").write_bytes(acceptance._canonical_bytes(changed))
+        with self.assertRaisesRegex(
+            acceptance.AcceptanceError, "differs from the validated worker output"
+        ):
+            acceptance._rescore_backend_run(run, corpus, output, backend_name="cpu")
+
     def test_cli_separates_train_and_postclaim_piped_test_path(self) -> None:
         common = [
             "--worker",
