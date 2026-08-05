@@ -42,8 +42,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-POSTHOC_SCHEMA_VERSION = 1
-POSTHOC_PROTOCOL = "bstrings-ICDAR2019-SROIE-repaired-holdout-posthoc-v1"
+POSTHOC_SCHEMA_VERSION = 2
+POSTHOC_PROTOCOL = "bstrings-ICDAR2019-SROIE-repaired-holdout-posthoc-v2"
 EXPECTED_SROIE_ADAPTER_PROTOCOL = "bstrings-ICDAR2019-SROIE-parquet-adapter-v3"
 ACKNOWLEDGEMENT = "POST_HOC_DIAGNOSTIC_ONLY_NOT_INDEPENDENT_ACCEPTANCE"
 ORIGINAL_TERMINAL_RESULT_SHA256 = "10d13e0e93c13c31be6515953cc8563bd576f71537200f642e08fbd050d099b3"
@@ -55,6 +55,27 @@ ORIGINAL_QUARANTINE_MARKER_SHA256 = (
     "36118acc204f0e1fbc382c32e059aad88daa67129ea391a4abd4cfe536f790b4"
 )
 EXPECTED_REPAIRED_TEST_REGIONS = 1
+EXPECTED_REPAIRED_TEST_ROW_INDICES = (142,)
+EXPECTED_CALIBRATION_SELECTED_DOCUMENTS = 616
+EXPECTED_UNCONTAMINATED_TEST_DOCUMENTS = 353
+OVERLAP_EXCLUSION_POLICY = "exclude-exact-calibration-image-overlap-v1"
+EXPECTED_CALIBRATION_OVERLAP_RECORDS = (
+    (152, 238),
+    (153, 240),
+    (155, 234),
+    (180, 453),
+    (356, 223),
+    (357, 224),
+    (359, 73),
+    (360, 80),
+)
+EXPECTED_CALIBRATION_OVERLAP_PAIRS_SHA256 = (
+    "3af1d53c59eaffa9fca834226d76d2ada6bb720107077243bbc4815572defd08"
+)
+EXPECTED_CALIBRATION_OVERLAP_IDENTITY_SHA256 = (
+    "8cf78a7f440068aa7e14d9bbe7781daeb9263450c52b2ee9c5b1b415e703ce22"
+)
+OVERLAP_ALGORITHM = "exact SHA-256 equality over decoded embedded image bytes"
 EXPECTED_REPAIR_IDENTITY = {
     "bboxRepairAuditSha256": "56eb3c67428076fc47a8a7a59d08a62496a25ee7196e8f8dd6e7c1f433849c23",
     "bboxRepairRecordsSha256": "a57d5de2e9fe2e72b5636a43e2944ea112f3bd7f428193f9979a584c1eb2ffe4",
@@ -376,7 +397,19 @@ class PosthocSealContext:
     determinism_sha256: str
     evaluations_sha256: str
     metrics_sha256: str
+    raw_output_pair_bindings_json: str
+    observed_backends_json: str
+    observed_backend_result_artifacts_json: str
+    observed_confidence_parity_json: str
     report_sha256: str
+
+
+@dataclass(frozen=True)
+class BackendRawObservations:
+    """Claims independently reconstructed from the nine private output pairs."""
+
+    raw_output_pair_bindings: dict[str, str]
+    confidence_parity: dict[str, Any]
 
 
 _INITIAL_CLAIM_KEYS = {
@@ -942,7 +975,13 @@ _POSTHOC_ARTIFACT_KEYS = frozenset(
     {
         "posthocBboxRepairAudit",
         "posthocCorpusManifest",
+        "posthocDeterminismCorpusManifest",
+        "posthocDeterminismInventory",
+        "posthocDeterminismWorkerManifest",
         "posthocDuplicateAudit",
+        "posthocEvaluationCorpusManifest",
+        "posthocEvaluationInventory",
+        "posthocEvaluationWorkerManifest",
         "posthocInventory",
         "posthocTestSnapshot",
         "posthocWorkerManifest",
@@ -950,11 +989,22 @@ _POSTHOC_ARTIFACT_KEYS = frozenset(
 )
 
 
-def _posthoc_artifact_paths(corpus: Any, snapshot: Path) -> dict[str, Path]:
+def _posthoc_artifact_paths(
+    corpus: Any,
+    snapshot: Path,
+    evaluation_corpus: Any,
+    determinism_corpus: Any,
+) -> dict[str, Path]:
     return {
         "posthocBboxRepairAudit": corpus.bbox_repair_audit,
         "posthocCorpusManifest": corpus.corpus_manifest,
+        "posthocDeterminismCorpusManifest": determinism_corpus.corpus_manifest,
+        "posthocDeterminismInventory": determinism_corpus.inventory,
+        "posthocDeterminismWorkerManifest": determinism_corpus.worker_manifest,
         "posthocDuplicateAudit": corpus.duplicate_audit,
+        "posthocEvaluationCorpusManifest": evaluation_corpus.corpus_manifest,
+        "posthocEvaluationInventory": evaluation_corpus.inventory,
+        "posthocEvaluationWorkerManifest": evaluation_corpus.worker_manifest,
         "posthocInventory": corpus.inventory,
         "posthocTestSnapshot": snapshot,
         "posthocWorkerManifest": corpus.worker_manifest,
@@ -966,6 +1016,8 @@ def _capture_posthoc_artifacts(
     *,
     evidence_root: Path,
     corpus_identity: Mapping[str, Any],
+    evaluation_corpus: Any,
+    determinism_corpus: Any,
 ) -> dict[str, dict[str, Any]]:
     if set(paths) != _POSTHOC_ARTIFACT_KEYS:
         raise _error("The post-hoc artifact set changed", stage="artifact")
@@ -980,10 +1032,20 @@ def _capture_posthoc_artifacts(
         "posthocTestSnapshot": "parquetSha256",
         "posthocWorkerManifest": "workerManifestSha256",
     }
+    view_bindings = {
+        "posthocEvaluationCorpusManifest": evaluation_corpus.corpus_manifest_sha256,
+        "posthocEvaluationWorkerManifest": evaluation_corpus.worker_manifest_sha256,
+        "posthocDeterminismCorpusManifest": determinism_corpus.corpus_manifest_sha256,
+        "posthocDeterminismWorkerManifest": determinism_corpus.worker_manifest_sha256,
+    }
     if (
         any(
             artifacts[artifact].get("sha256") != corpus_identity.get(identity_key)
             for artifact, identity_key in bindings.items()
+        )
+        or any(
+            artifacts[artifact].get("sha256") != expected_sha256
+            for artifact, expected_sha256 in view_bindings.items()
         )
         or artifacts["posthocTestSnapshot"].get("bytes")
         != acceptance.sroie_policy.TEST_BYTES
@@ -999,10 +1061,16 @@ def _recheck_posthoc_artifacts(
     *,
     evidence_root: Path,
     corpus_identity: Mapping[str, Any],
+    evaluation_corpus: Any,
+    determinism_corpus: Any,
     expected: Mapping[str, Mapping[str, Any]],
 ) -> None:
     current = _capture_posthoc_artifacts(
-        paths, evidence_root=evidence_root, corpus_identity=corpus_identity
+        paths,
+        evidence_root=evidence_root,
+        corpus_identity=corpus_identity,
+        evaluation_corpus=evaluation_corpus,
+        determinism_corpus=determinism_corpus,
     )
     if current != expected:
         raise _error("A post-hoc evidence artifact changed before publication", stage="artifact")
@@ -1042,6 +1110,355 @@ def _capture_backend_result_artifacts(
         name: acceptance._safe_artifact(path, evidence_root=phase_root)
         for name, path in paths.items()
     }
+
+
+def _capture_raw_output_pair_bindings(
+    runs: Sequence[Mapping[str, Any]],
+    phase_root: Path,
+) -> dict[str, str]:
+    providers = ("cpu", "directml", "hybrid")
+    if len(runs) != len(providers):
+        raise _error("The post-hoc backend pair set changed", stage="artifact")
+    bindings: dict[str, str] = {}
+    try:
+        for provider, backend in zip(providers, runs, strict=True):
+            determinism = backend.get("determinism") if isinstance(backend, Mapping) else None
+            repetitions = (
+                determinism.get("runs") if isinstance(determinism, Mapping) else None
+            )
+            quality = backend.get("qualityRun") if isinstance(backend, Mapping) else None
+            if (
+                not isinstance(quality, Mapping)
+                or not isinstance(repetitions, list)
+                or len(repetitions) != acceptance.DETERMINISM_REPETITIONS
+            ):
+                raise _error("A post-hoc backend pair set is incomplete", stage="artifact")
+            run_roots = [("quality-all-100", quality)]
+            run_roots.extend(
+                (
+                    f"determinism-rows-0000-0009/run-{index:02d}",
+                    repetition,
+                )
+                for index, repetition in enumerate(repetitions, start=1)
+            )
+            for relative_root, run in run_roots:
+                root = phase_root / "results" / provider / relative_root
+                actual = acceptance.benchmark_core.raw_output_pair_sha256(
+                    root / "strings.jsonl",
+                    root / "assessments.jsonl",
+                )
+                raw_hashes = run.get("rawOutputHashes")
+                if (
+                    not isinstance(raw_hashes, Mapping)
+                    or raw_hashes.get("pairSha256") != actual
+                ):
+                    raise _error(
+                        "A post-hoc raw-output pair claim is invalid",
+                        stage="artifact",
+                    )
+                bindings[f"results/{provider}/{relative_root}"] = actual
+    except (acceptance.benchmark_core.BenchmarkError, OSError) as exc:
+        raise _error(str(exc), stage="artifact") from exc
+    return bindings
+
+
+def _raw_output_pair_sha256_bytes(strings: bytes, assessments: bytes) -> str:
+    """Reproduce the worker pair digest from the exact bytes already inspected."""
+
+    digest = hashlib.sha256()
+    for label, payload in ((b"strings", strings), (b"assessments", assessments)):
+        digest.update(len(label).to_bytes(2, "big"))
+        digest.update(label)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def _capture_backend_raw_observations(
+    runs: Sequence[Mapping[str, Any]],
+    phase_root: Path,
+    *,
+    evaluation_corpus: Any,
+    determinism_corpus: Any,
+    model_pack_sha256: str,
+    cpu_runtime_sha256: str,
+    directml_runtime_sha256: str,
+    worker_sha256: str,
+) -> BackendRawObservations:
+    """Rebuild every raw-derived run claim from fixed private output roots.
+
+    The public run dictionaries supply only the measured elapsed time. All
+    evidentiary hashes, metrics, provenance, provider counts, and lane claims
+    are reconstructed from one guarded read of each output file and the sealed
+    scoring corpus. The complete public backend dictionaries are separately
+    frozen in ``PosthocSealContext`` after this check succeeds.
+    """
+
+    providers = ("cpu", "directml", "hybrid")
+    resolved_providers = ("cpu", "directml", "hybrid-directml-cpu")
+    if len(runs) != len(providers):
+        raise _error("The post-hoc backend observation set changed", stage="artifact")
+    pair_bindings: dict[str, str] = {}
+    quality_confidence: list[dict[str, list[float]]] = []
+
+    try:
+        for provider, resolved_provider, backend in zip(
+            providers, resolved_providers, runs, strict=True
+        ):
+            if not isinstance(backend, Mapping) or backend.get("requestedProvider") != provider:
+                raise _error("A post-hoc backend observation is invalid", stage="artifact")
+            quality = backend.get("qualityRun")
+            determinism = backend.get("determinism")
+            repetitions = (
+                determinism.get("runs") if isinstance(determinism, Mapping) else None
+            )
+            if (
+                not isinstance(quality, Mapping)
+                or not isinstance(repetitions, list)
+                or len(repetitions) != acceptance.DETERMINISM_REPETITIONS
+                or any(not isinstance(run, Mapping) for run in repetitions)
+            ):
+                raise _error("A post-hoc backend observation set is incomplete", stage="artifact")
+            expected_runtime_sha256 = (
+                cpu_runtime_sha256 if provider == "cpu" else directml_runtime_sha256
+            )
+            run_inputs = [("quality-all-100", quality, evaluation_corpus, True)]
+            run_inputs.extend(
+                (
+                    f"determinism-rows-0000-0009/run-{index:02d}",
+                    repetition,
+                    determinism_corpus,
+                    False,
+                )
+                for index, repetition in enumerate(repetitions, start=1)
+            )
+
+            for relative_root, run, corpus, is_quality in run_inputs:
+                root = phase_root / "results" / provider / relative_root
+                _, strings_bytes, _ = acceptance._read_regular_file(
+                    root / "strings.jsonl",
+                    maximum_bytes=acceptance.MAX_JSONL_BYTES,
+                    name="post-hoc OCR strings output",
+                    stage="artifact",
+                )
+                _, assessments_bytes, _ = acceptance._read_regular_file(
+                    root / "assessments.jsonl",
+                    maximum_bytes=acceptance.MAX_JSONL_BYTES,
+                    name="post-hoc OCR assessments output",
+                    stage="artifact",
+                )
+                _, primary_metrics_bytes, _ = acceptance._read_regular_file(
+                    root / "metrics-per-document.jsonl",
+                    maximum_bytes=acceptance.MAX_JSONL_BYTES,
+                    name="post-hoc primary per-document metrics",
+                    stage="artifact",
+                )
+                _, strict_metrics_bytes, _ = acceptance._read_regular_file(
+                    root / "metrics-per-document-case-sensitive.jsonl",
+                    maximum_bytes=acceptance.MAX_JSONL_BYTES,
+                    name="post-hoc diagnostic per-document metrics",
+                    stage="artifact",
+                )
+                records = acceptance._parse_jsonl_bytes(
+                    strings_bytes,
+                    name="post-hoc OCR strings output",
+                    stage="artifact",
+                )
+                assessments = acceptance._parse_jsonl_bytes(
+                    assessments_bytes,
+                    name="post-hoc OCR assessments output",
+                    stage="artifact",
+                )
+
+                strict_metrics = acceptance._profile_metrics(
+                    acceptance.cord.score_records(corpus, records),
+                    acceptance.sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION,
+                )
+                primary_metrics = acceptance._profile_metrics(
+                    acceptance.sroie.score_records_case_insensitive(corpus, records),
+                    acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION,
+                )
+                expected_strict_bytes = acceptance._per_document_bytes(strict_metrics)
+                strict_metrics_sha256 = acceptance.sroie_policy.sha256_canonical(
+                    strict_metrics
+                )
+                strict_per_document_sha256 = acceptance._sha256_bytes(
+                    expected_strict_bytes
+                )
+                primary_metrics["caseSensitiveDiagnostics"] = {
+                    "metrics": strict_metrics,
+                    "metricsSha256": strict_metrics_sha256,
+                    "perDocumentMetricsSha256": strict_per_document_sha256,
+                    "textNormalization": (
+                        acceptance.sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION
+                    ),
+                }
+                expected_primary_bytes = acceptance._per_document_bytes(primary_metrics)
+                if (
+                    strict_metrics_bytes != expected_strict_bytes
+                    or primary_metrics_bytes != expected_primary_bytes
+                ):
+                    raise _error(
+                        "A post-hoc per-document metric artifact is not derived from raw OCR",
+                        stage="artifact",
+                    )
+
+                (
+                    provenance_passed,
+                    provenance_errors,
+                    observed_provider,
+                    resolved_thread_counts,
+                    resolved_worker_counts,
+                ) = acceptance.cord.validate_run_provenance(
+                    records,
+                    assessments,
+                    corpus,
+                    model_pack_sha256,
+                    0,
+                )
+                raw_provenance = [
+                    value
+                    for assessment in assessments
+                    for value in (assessment,)
+                    if assessment.get("requestedProvider") != provider
+                    or assessment.get("runtimeSha256") != expected_runtime_sha256
+                ]
+                raw_provenance.extend(
+                    attributes
+                    for record in records
+                    for attributes in (record.get("attributes"),)
+                    if not isinstance(attributes, Mapping)
+                    or attributes.get("requestedProvider") != provider
+                    or attributes.get("runtimeSha256") != expected_runtime_sha256
+                )
+                if raw_provenance or observed_provider != resolved_provider:
+                    raise _error(
+                        "A post-hoc raw output changed its provider or runtime provenance",
+                        stage="artifact",
+                    )
+
+                execution_provider_counts: dict[str, int] = {}
+                for record in records:
+                    attributes = record.get("attributes")
+                    execution_provider = str(
+                        attributes.get("executionProvider", "unknown")
+                        if isinstance(attributes, Mapping)
+                        else "unknown"
+                    )
+                    execution_provider_counts[execution_provider] = (
+                        execution_provider_counts.get(execution_provider, 0) + 1
+                    )
+                execution_provider_counts = dict(sorted(execution_provider_counts.items()))
+                cpu_lane_records = execution_provider_counts.get("cpu", 0)
+                non_cpu_lane_records = sum(
+                    count
+                    for name, count in execution_provider_counts.items()
+                    if name != "cpu"
+                )
+                both_lanes = cpu_lane_records > 0 and non_cpu_lane_records > 0
+                raw_output_hashes = {
+                    "assessmentsSha256": acceptance._sha256_bytes(assessments_bytes),
+                    "pairSha256": _raw_output_pair_sha256_bytes(
+                        strings_bytes, assessments_bytes
+                    ),
+                    "stringsSha256": acceptance._sha256_bytes(strings_bytes),
+                }
+                elapsed_seconds = run.get("elapsedSeconds")
+                documents_per_second = run.get("documentsPerSecond")
+                expected_claims = {
+                    "canonicalEvidenceSha256": (
+                        acceptance.benchmark_core.canonical_evidence_sha256(
+                            records, assessments
+                        )
+                    ),
+                    "criticalEvidenceSha256": acceptance.cord.critical_evidence_sha256(
+                        records, assessments
+                    ),
+                    "executionProviderRecordCounts": execution_provider_counts,
+                    "hybridLaneRecordCoverage": {
+                        "bothLanesProducedRecords": both_lanes,
+                        "cpuLaneRecords": cpu_lane_records,
+                        "nonCpuLaneRecords": non_cpu_lane_records,
+                    },
+                    "metrics": primary_metrics,
+                    "metricsSha256": acceptance.sroie_policy.sha256_canonical(
+                        primary_metrics
+                    ),
+                    "perDocumentMetricsSha256": acceptance._sha256_bytes(
+                        expected_primary_bytes
+                    ),
+                    "provenanceErrors": list(provenance_errors),
+                    "provenancePassed": provenance_passed,
+                    "qualityGatePassed": None,
+                    "rawOutputHashes": raw_output_hashes,
+                    "requestedProvider": provider,
+                    "requestedThreads": 0,
+                    "resolvedProvider": observed_provider,
+                    "resolvedThreadCounts": resolved_thread_counts,
+                    "resolvedWorkerCounts": resolved_worker_counts,
+                    "runtimeSha256": expected_runtime_sha256,
+                    "stringRecords": len(records),
+                    "textNormalization": acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION,
+                    "throughputComparable": provider != "hybrid" or both_lanes,
+                    "workerSha256": worker_sha256,
+                }
+                if (
+                    not _finite_nonnegative(elapsed_seconds, positive=True)
+                    or not _finite_nonnegative(documents_per_second, positive=True)
+                    or not math.isclose(
+                        float(documents_per_second),
+                        len(corpus.documents) / float(elapsed_seconds),
+                        rel_tol=1e-12,
+                        abs_tol=1e-12,
+                    )
+                    or any(
+                        acceptance.sroie_policy.canonical_json(run.get(key))
+                        != acceptance.sroie_policy.canonical_json(value)
+                        for key, value in expected_claims.items()
+                    )
+                ):
+                    raise _error(
+                        "A post-hoc backend claim is not derived from raw OCR",
+                        stage="artifact",
+                    )
+
+                binding_name = f"results/{provider}/{relative_root}"
+                pair_bindings[binding_name] = raw_output_hashes["pairSha256"]
+                if is_quality:
+                    quality_confidence.append(
+                        acceptance.cord._confidence_by_critical_record(records)
+                    )
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        acceptance.AcceptanceError,
+        acceptance.benchmark_core.BenchmarkError,
+    ) as exc:
+        if isinstance(exc, acceptance.AcceptanceError):
+            raise
+        raise _error(str(exc), stage="artifact") from exc
+
+    if (
+        len(pair_bindings) != 3 * (1 + acceptance.DETERMINISM_REPETITIONS)
+        or len(quality_confidence) != 3
+    ):
+        raise _error("The post-hoc raw observation set is incomplete", stage="artifact")
+    return BackendRawObservations(
+        raw_output_pair_bindings=pair_bindings,
+        confidence_parity=acceptance.cord.confidence_parity(quality_confidence),
+    )
+
+
+def _public_json_run(run: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze a backend result in the JSON-native shape that will be published."""
+
+    value = json.loads(
+        acceptance.sroie_policy.canonical_json(acceptance._public_run(run))
+    )
+    if not isinstance(value, dict):
+        raise _error("A public post-hoc backend run is invalid", stage="report")
+    return value
 
 
 def _validate_backend_result_bindings(
@@ -1214,6 +1631,239 @@ def _load_v3_calibration(
     return context, policy, identity
 
 
+def _uncontaminated_posthoc_rows(
+    raw_calibration_sha256s: Sequence[str],
+    calibration_identities: Sequence[Mapping[str, Any]],
+    corpus: Any,
+) -> tuple[list[dict[str, Any]], tuple[int, ...]]:
+    """Freeze and exclude every exact calibration/test image overlap."""
+
+    if len(raw_calibration_sha256s) != acceptance.sroie_policy.RAW_TRAIN_ROWS or any(
+        not _is_sha256(digest) for digest in raw_calibration_sha256s
+    ):
+        raise _error("The raw calibration image identities are invalid", stage="holdout-overlap")
+    raw_calibration_by_image: dict[str, list[int]] = {}
+    for row_index, image_sha256 in enumerate(raw_calibration_sha256s):
+        raw_calibration_by_image.setdefault(image_sha256, []).append(row_index)
+
+    calibration_by_image: dict[str, int] = {}
+    selected_rows: list[int] = []
+    for identity in calibration_identities:
+        row_index = identity.get("rowIndex") if isinstance(identity, Mapping) else None
+        image_sha256 = identity.get("imageSha256") if isinstance(identity, Mapping) else None
+        if (
+            type(row_index) is not int
+            or not _is_sha256(image_sha256)
+            or image_sha256 in calibration_by_image
+        ):
+            raise _error(
+                "The selected calibration image identities are invalid",
+                stage="holdout-overlap",
+            )
+        if (
+            not 0 <= row_index < len(raw_calibration_sha256s)
+            or raw_calibration_sha256s[row_index] != image_sha256
+        ):
+            raise _error(
+                "The selected calibration identities do not bind the raw images",
+                stage="holdout-overlap",
+            )
+        calibration_by_image[image_sha256] = row_index
+        selected_rows.append(row_index)
+    if (
+        len(selected_rows) != EXPECTED_CALIBRATION_SELECTED_DOCUMENTS
+        or selected_rows != sorted(selected_rows)
+        or len(selected_rows) != len(set(selected_rows))
+    ):
+        raise _error("The selected calibration row order changed", stage="holdout-overlap")
+
+    expected_test_rows = tuple(range(acceptance.sroie_policy.RAW_TEST_ROWS))
+    actual_test_rows = tuple(document.row_index for document in corpus.documents)
+    if (
+        actual_test_rows != expected_test_rows
+        or len(corpus.source_image_sha256s) != len(expected_test_rows)
+        or any(
+            document.sha256 != corpus.source_image_sha256s[document.row_index]
+            or not _is_sha256(document.sha256)
+            for document in corpus.documents
+        )
+    ):
+        raise _error("The full post-hoc image identity changed", stage="holdout-overlap")
+
+    records: list[dict[str, Any]] = []
+    for document in corpus.documents:
+        calibration_rows = raw_calibration_by_image.get(document.sha256, [])
+        if not calibration_rows:
+            continue
+        if len(calibration_rows) != 1:
+            raise _error(
+                "A cross-split image has an ambiguous calibration identity",
+                stage="holdout-overlap",
+            )
+        train_row = calibration_rows[0]
+        if calibration_by_image.get(document.sha256) != train_row:
+            raise _error(
+                "A raw cross-split overlap is absent from the selected calibration corpus",
+                stage="holdout-overlap",
+            )
+        records.append(
+            {
+                "imageSha256": document.sha256,
+                "testRowIndex": document.row_index,
+                "trainRowIndex": train_row,
+            }
+        )
+    expected_records = [
+        {"testRowIndex": test_row, "trainRowIndex": train_row}
+        for test_row, train_row in EXPECTED_CALIBRATION_OVERLAP_RECORDS
+    ]
+    record_pairs = [
+        {
+            "testRowIndex": record["testRowIndex"],
+            "trainRowIndex": record["trainRowIndex"],
+        }
+        for record in records
+    ]
+    if (
+        record_pairs != expected_records
+        or acceptance.sroie_policy.sha256_canonical(record_pairs)
+        != EXPECTED_CALIBRATION_OVERLAP_PAIRS_SHA256
+        or acceptance.sroie_policy.sha256_canonical(records)
+        != EXPECTED_CALIBRATION_OVERLAP_IDENTITY_SHA256
+    ):
+        raise _error(
+            "The pinned calibration/test image-overlap identity changed",
+            stage="holdout-overlap",
+        )
+    excluded = {record["testRowIndex"] for record in records}
+    included = tuple(
+        document.row_index for document in corpus.documents if document.row_index not in excluded
+    )
+    expected_included = tuple(row for row in expected_test_rows if row not in excluded)
+    if (
+        included != expected_included
+        or included != tuple(sorted(included))
+        or len(included) != EXPECTED_UNCONTAMINATED_TEST_DOCUMENTS
+    ):
+        raise _error(
+            "The uncontaminated post-hoc selection changed",
+            stage="holdout-overlap",
+        )
+    return records, included
+
+
+def _repaired_row_indices(path: Path) -> tuple[int, ...]:
+    audit, _ = acceptance._strict_json(
+        path,
+        maximum_bytes=acceptance.MAX_JSONL_BYTES,
+        name="post-hoc bbox repair audit",
+    )
+    repairs = audit.get("repairs") if isinstance(audit, Mapping) else None
+    if not isinstance(repairs, list) or any(not isinstance(item, Mapping) for item in repairs):
+        raise _error("The bbox repair row identity is invalid", stage="bbox-repair-audit")
+    raw_row_indices = [item.get("rowIndex") for item in repairs]
+    if any(type(row_index) is not int for row_index in raw_row_indices):
+        raise _error("The bbox repair row identity is invalid", stage="bbox-repair-audit")
+    row_indices = tuple(sorted(set(raw_row_indices)))
+    if row_indices != EXPECTED_REPAIRED_TEST_ROW_INDICES:
+        raise _error("The bbox repair row identity changed", stage="bbox-repair-audit")
+    return row_indices
+
+
+def _public_evaluation_binding(
+    *,
+    raw_calibration_sha256s: Sequence[str],
+    calibration_identities: Sequence[Mapping[str, Any]],
+    full_corpus_identity: Mapping[str, Any],
+    full_corpus: Any,
+    evaluation_corpus: Any,
+    evaluation_identities: Sequence[Mapping[str, Any]],
+    determinism_corpus: Any,
+    determinism_identities: Sequence[Mapping[str, Any]],
+    overlap_records: Sequence[Mapping[str, Any]],
+    repaired_row_indices: Sequence[int],
+    artifacts: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    excluded_rows = [record["testRowIndex"] for record in overlap_records]
+    evaluation_rows = [document.row_index for document in evaluation_corpus.documents]
+    determinism_rows = [document.row_index for document in determinism_corpus.documents]
+    evaluation_identity_sha256 = acceptance.sroie_policy.sha256_canonical(
+        [dict(item) for item in evaluation_identities]
+    )
+    determinism_identity_sha256 = acceptance.sroie_policy.sha256_canonical(
+        [dict(item) for item in determinism_identities]
+    )
+    if (
+        evaluation_rows
+        != [
+            row
+            for row in range(acceptance.sroie_policy.RAW_TEST_ROWS)
+            if row not in set(excluded_rows)
+        ]
+        or len(evaluation_rows) != EXPECTED_UNCONTAMINATED_TEST_DOCUMENTS
+        or determinism_rows != evaluation_rows[: acceptance.DETERMINISM_DOCUMENTS]
+        or evaluation_corpus.selection_sha256 != evaluation_identity_sha256
+        or determinism_corpus.selection_sha256 != determinism_identity_sha256
+        or not set(repaired_row_indices).issubset(evaluation_rows)
+    ):
+        raise _error("The post-hoc evaluation view changed", stage="holdout-overlap")
+    return {
+        "crossSplitOverlap": {
+            "algorithm": OVERLAP_ALGORITHM,
+            "calibrationRawImageDigestsSha256": acceptance.sroie_policy.sha256_canonical(
+                [
+                    {"imageSha256": digest, "rowIndex": row_index}
+                    for row_index, digest in enumerate(raw_calibration_sha256s)
+                ]
+            ),
+            "calibrationRawImages": len(raw_calibration_sha256s),
+            "calibrationSelectedDocuments": len(calibration_identities),
+            "calibrationSelectedImageIdentitiesSha256": (
+                acceptance.sroie_policy.sha256_canonical(
+                    [dict(item) for item in calibration_identities]
+                )
+            ),
+            "overlapDocuments": len(overlap_records),
+            "overlapIdentitySha256": acceptance.sroie_policy.sha256_canonical(
+                [dict(record) for record in overlap_records]
+            ),
+            "overlapRecords": [dict(record) for record in overlap_records],
+            "perceptualSimilarityClaimed": False,
+            "testRawImageDigestsSha256": full_corpus_identity[
+                "sourceImageDigestsSha256"
+            ],
+            "testRawImages": len(full_corpus.documents),
+        },
+        "determinismView": {
+            "corpusManifestSha256": determinism_corpus.corpus_manifest_sha256,
+            "documents": len(determinism_corpus.documents),
+            "imageIdentitiesSha256": determinism_identity_sha256,
+            "inventorySha256": artifacts["posthocDeterminismInventory"]["sha256"],
+            "rowIndices": determinism_rows,
+            "selectionSha256": determinism_corpus.selection_sha256,
+            "workerManifestSha256": determinism_corpus.worker_manifest_sha256,
+        },
+        "scoringView": {
+            "corpusManifestSha256": evaluation_corpus.corpus_manifest_sha256,
+            "documents": len(evaluation_corpus.documents),
+            "excludedDocuments": len(excluded_rows),
+            "excludedRowIndices": excluded_rows,
+            "fullTestDocuments": len(full_corpus.documents),
+            "imageIdentitiesSha256": evaluation_identity_sha256,
+            "inventorySha256": artifacts["posthocEvaluationInventory"]["sha256"],
+            "overlapExclusionPolicy": OVERLAP_EXCLUSION_POLICY,
+            "parentCorpusIdentitySha256": acceptance.sroie_policy.sha256_canonical(
+                full_corpus_identity
+            ),
+            "repairedRowIndices": list(repaired_row_indices),
+            "repairedRowsIncluded": True,
+            "rowIndices": evaluation_rows,
+            "selectionSha256": evaluation_corpus.selection_sha256,
+            "workerManifestSha256": evaluation_corpus.worker_manifest_sha256,
+        },
+    }
+
+
 def _recheck_v3_calibration(
     args: argparse.Namespace,
     frozen_context: acceptance.CalibrationContext,
@@ -1349,6 +1999,7 @@ def _pre_run_binding(
     policy: acceptance.sroie_policy.ValidatedPolicy,
     identity: Mapping[str, Any],
     expected_identities: Sequence[Mapping[str, Any]],
+    evaluation_corpus: Mapping[str, Any],
     repaired_holdout: Mapping[str, Any],
     artifacts: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -1363,6 +2014,7 @@ def _pre_run_binding(
         "candidate": _public_candidate_binding(candidate_commit, runner_sha256),
         "candidateCommit": candidate_commit.commit,
         "consumedAttempt": _public_consumed_binding(consumed),
+        "evaluationCorpus": copy.deepcopy(dict(evaluation_corpus)),
         "expectedIdentitiesSha256": acceptance.sroie_policy.sha256_canonical(
             [dict(item) for item in expected_identities]
         ),
@@ -1385,12 +2037,626 @@ def _valid_public_artifact(value: Any) -> bool:
     )
 
 
+_POSTHOC_BACKEND_KEYS = frozenset(
+    {
+        "byteDeterminismEvaluated",
+        "byteDeterministic",
+        "canonicalEvidenceDeterministic",
+        "canonicalEvidenceSha256",
+        "criticalEvidenceDeterministic",
+        "criticalEvidenceSha256",
+        "determinism",
+        "determinismRepetitions",
+        "determinismRows",
+        "executionProviderCountsStable",
+        "executionProviderRecordCounts",
+        "hybridLaneRecordCoverage",
+        "metrics",
+        "metricsDeterministic",
+        "metricsSha256",
+        "provenancePassed",
+        "qualityDocumentsPerSecond",
+        "qualityElapsedSeconds",
+        "qualityGatePassed",
+        "qualityRows",
+        "qualityRun",
+        "requestedProvider",
+        "requestedThreads",
+        "resolvedProvider",
+        "resolvedThreadCounts",
+        "resolvedWorkerCounts",
+        "runtime",
+        "runtimeSha256",
+        "stableResolvedProvider",
+        "stableResolvedThreadCounts",
+        "stableResolvedWorkerCounts",
+        "stableRuntime",
+        "stableTextNormalization",
+        "textNormalization",
+        "throughputComparable",
+        "workerSha256",
+    }
+)
+_POSTHOC_RUN_KEYS = frozenset(
+    {
+        "canonicalEvidenceSha256",
+        "criticalEvidenceSha256",
+        "documentsPerSecond",
+        "elapsedSeconds",
+        "executionProviderRecordCounts",
+        "hybridLaneRecordCoverage",
+        "metrics",
+        "metricsSha256",
+        "perDocumentMetricsSha256",
+        "provenanceErrors",
+        "provenancePassed",
+        "qualityGatePassed",
+        "rawOutputHashes",
+        "requestedProvider",
+        "requestedThreads",
+        "resolvedProvider",
+        "resolvedThreadCounts",
+        "resolvedWorkerCounts",
+        "runtimeSha256",
+        "stringRecords",
+        "textNormalization",
+        "throughputComparable",
+        "workerSha256",
+    }
+)
+_POSTHOC_DETERMINISM_KEYS = frozenset(
+    {
+        "byteDeterministic",
+        "canonicalEvidenceDeterministic",
+        "criticalEvidenceDeterministic",
+        "metricsDeterministic",
+        "rowIndices",
+        "runs",
+        "selectionSha256",
+    }
+)
+_POSTHOC_RUNTIME_KEYS = frozenset(
+    {
+        "executableSha256",
+        "inventorySha256",
+        "loadPathsSha256",
+        "requestedProvider",
+        "runtimeRootsSha256",
+        "schemaVersion",
+    }
+)
+_POSTHOC_RAW_OUTPUT_KEYS = frozenset(
+    {"assessmentsSha256", "pairSha256", "stringsSha256"}
+)
+_POSTHOC_LANE_KEYS = frozenset(
+    {"bothLanesProducedRecords", "cpuLaneRecords", "nonCpuLaneRecords"}
+)
+
+
+def _finite_nonnegative(value: Any, *, positive: bool = False) -> bool:
+    return (
+        type(value) in {int, float}
+        and math.isfinite(float(value))
+        and (value > 0 if positive else value >= 0)
+    )
+
+
+def _valid_count_map(value: Any, *, positive: bool) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and (bool(value) or not positive)
+        and all(isinstance(key, str) and bool(key) for key in value)
+        and all(
+            type(count) is int and (count > 0 if positive else count >= 0)
+            for count in value.values()
+        )
+    )
+
+
+def _validate_public_backend_runs(
+    backends: Sequence[Mapping[str, Any]],
+    *,
+    expected_identity_rows: Sequence[Mapping[str, Any]],
+    evaluation_corpus: Mapping[str, Any],
+    validated_policy: acceptance.sroie_policy.ValidatedPolicy,
+    claimed_determinism_checks: Mapping[str, Mapping[str, bool]],
+    raw_output_pair_bindings: Mapping[str, str],
+) -> None:
+    """Authenticate every public quality and determinism run claim."""
+
+    provider_names = ("cpu", "directml", "hybrid")
+    resolved_names = ("cpu", "directml", "hybrid-directml-cpu")
+    scoring_view = evaluation_corpus.get("scoringView")
+    determinism_view = evaluation_corpus.get("determinismView")
+    if not isinstance(scoring_view, Mapping) or not isinstance(determinism_view, Mapping):
+        raise _error("The post-hoc backend selection binding is invalid", stage="report")
+    quality_identities = [dict(item) for item in expected_identity_rows]
+    determinism_identities = quality_identities[: acceptance.DETERMINISM_DOCUMENTS]
+    recomputed_checks: dict[str, dict[str, bool]] = {}
+
+    def validate_run(
+        run: Any,
+        *,
+        provider: str,
+        resolved: str,
+        runtime_sha256: str,
+        worker_sha256: str,
+        identities: Sequence[Mapping[str, Any]],
+        expected_pair_sha256: str | None,
+    ) -> None:
+        if not isinstance(run, Mapping) or set(run) != _POSTHOC_RUN_KEYS:
+            raise _error("A post-hoc backend run schema changed", stage="report")
+        raw_hashes = run.get("rawOutputHashes")
+        lane = run.get("hybridLaneRecordCoverage")
+        execution_counts = run.get("executionProviderRecordCounts")
+        metrics = run.get("metrics")
+        string_records = run.get("stringRecords")
+        if (
+            not isinstance(raw_hashes, Mapping)
+            or set(raw_hashes) != _POSTHOC_RAW_OUTPUT_KEYS
+            or any(not _is_sha256(raw_hashes.get(key)) for key in _POSTHOC_RAW_OUTPUT_KEYS)
+            or raw_hashes.get("pairSha256") != expected_pair_sha256
+            or not isinstance(lane, Mapping)
+            or set(lane) != _POSTHOC_LANE_KEYS
+            or type(lane.get("bothLanesProducedRecords")) is not bool
+            or type(lane.get("cpuLaneRecords")) is not int
+            or lane["cpuLaneRecords"] < 0
+            or type(lane.get("nonCpuLaneRecords")) is not int
+            or lane["nonCpuLaneRecords"] < 0
+            or not _valid_count_map(execution_counts, positive=False)
+            or type(string_records) is not int
+            or string_records < 0
+            or sum(execution_counts.values()) != string_records
+            or lane.get("cpuLaneRecords") != execution_counts.get("cpu", 0)
+            or lane.get("nonCpuLaneRecords")
+            != sum(
+                count for name, count in execution_counts.items() if name != "cpu"
+            )
+            or lane.get("cpuLaneRecords") + lane.get("nonCpuLaneRecords")
+            != string_records
+            or lane.get("bothLanesProducedRecords")
+            is not (
+                lane.get("cpuLaneRecords") > 0
+                and lane.get("nonCpuLaneRecords") > 0
+            )
+            or run.get("throughputComparable")
+            is not (provider != "hybrid" or lane.get("bothLanesProducedRecords") is True)
+            or run.get("requestedProvider") != provider
+            or run.get("resolvedProvider") != resolved
+            or run.get("requestedThreads") != 0
+            or not _valid_count_map(run.get("resolvedThreadCounts"), positive=True)
+            or not _valid_count_map(run.get("resolvedWorkerCounts"), positive=True)
+            or run.get("runtimeSha256") != runtime_sha256
+            or run.get("workerSha256") != worker_sha256
+            or not _finite_nonnegative(run.get("elapsedSeconds"), positive=True)
+            or not _finite_nonnegative(run.get("documentsPerSecond"), positive=True)
+            or not math.isclose(
+                float(run["documentsPerSecond"]),
+                len(identities) / float(run["elapsedSeconds"]),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            )
+            or run.get("qualityGatePassed") is not None
+            or type(run.get("provenancePassed")) is not bool
+            or not isinstance(run.get("provenanceErrors"), list)
+            or any(not isinstance(error, str) or not error for error in run["provenanceErrors"])
+            or run.get("provenancePassed") is not (not run.get("provenanceErrors"))
+            or run.get("textNormalization")
+            != acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
+            or not _is_sha256(run.get("canonicalEvidenceSha256"))
+            or not _is_sha256(run.get("criticalEvidenceSha256"))
+            or not isinstance(metrics, Mapping)
+            or run.get("metricsSha256")
+            != acceptance.sroie_policy.sha256_canonical(metrics)
+            or run.get("perDocumentMetricsSha256")
+            != acceptance._sha256_bytes(acceptance._per_document_bytes(metrics))
+        ):
+            raise _error("A post-hoc backend run claim is invalid", stage="report")
+        try:
+            acceptance.sroie_policy.evaluate_confirmatory(
+                validated_policy,
+                metrics,
+                expected_identities=[dict(item) for item in identities],
+            )
+        except acceptance.sroie_policy.PolicyError as exc:
+            raise _error(
+                "A post-hoc backend run metric identity is invalid",
+                stage="report",
+            ) from exc
+
+    for provider, resolved, backend in zip(
+        provider_names, resolved_names, backends, strict=True
+    ):
+        if not isinstance(backend, Mapping) or set(backend) != _POSTHOC_BACKEND_KEYS:
+            raise _error("A post-hoc backend schema changed", stage="report")
+        quality_run = backend.get("qualityRun")
+        determinism = backend.get("determinism")
+        repetitions = determinism.get("runs") if isinstance(determinism, Mapping) else None
+        runtime = backend.get("runtime")
+        if (
+            not isinstance(determinism, Mapping)
+            or set(determinism) != _POSTHOC_DETERMINISM_KEYS
+            or not isinstance(repetitions, list)
+            or len(repetitions) != acceptance.DETERMINISM_REPETITIONS
+            or not isinstance(runtime, Mapping)
+            or set(runtime) != _POSTHOC_RUNTIME_KEYS
+            or runtime.get("schemaVersion") != 1
+            or runtime.get("requestedProvider")
+            != ("cpu" if provider == "cpu" else "directml")
+            or any(
+                not _is_sha256(runtime.get(key))
+                for key in _POSTHOC_RUNTIME_KEYS
+                if key.endswith("Sha256")
+            )
+            or runtime.get("executableSha256") != backend.get("runtimeSha256")
+            or not _is_sha256(backend.get("workerSha256"))
+        ):
+            raise _error("A post-hoc backend runtime claim is invalid", stage="report")
+        validate_run(
+            quality_run,
+            provider=provider,
+            resolved=resolved,
+            runtime_sha256=backend["runtimeSha256"],
+            worker_sha256=backend["workerSha256"],
+            identities=quality_identities,
+            expected_pair_sha256=raw_output_pair_bindings.get(
+                f"results/{provider}/quality-all-100"
+            ),
+        )
+        for repetition_index, repetition in enumerate(repetitions, start=1):
+            validate_run(
+                repetition,
+                provider=provider,
+                resolved=resolved,
+                runtime_sha256=backend["runtimeSha256"],
+                worker_sha256=backend["workerSha256"],
+                identities=determinism_identities,
+                expected_pair_sha256=raw_output_pair_bindings.get(
+                    "results/"
+                    f"{provider}/determinism-rows-0000-0009/run-{repetition_index:02d}"
+                ),
+            )
+
+        all_runs = [quality_run, *repetitions]
+        pair_hashes = {run["rawOutputHashes"]["pairSha256"] for run in repetitions}
+        canonical_hashes = {run["canonicalEvidenceSha256"] for run in repetitions}
+        critical_hashes = {run["criticalEvidenceSha256"] for run in repetitions}
+        metric_hashes = {run["metricsSha256"] for run in repetitions}
+        provider_counts = {
+            acceptance.sroie_policy.canonical_json(run["executionProviderRecordCounts"])
+            for run in repetitions
+        }
+        thread_counts = {
+            acceptance.sroie_policy.canonical_json(run["resolvedThreadCounts"])
+            for run in all_runs
+        }
+        worker_counts = {
+            acceptance.sroie_policy.canonical_json(run["resolvedWorkerCounts"])
+            for run in all_runs
+        }
+        resolved_providers = {run["resolvedProvider"] for run in all_runs}
+        runtime_hashes = {run["runtimeSha256"] for run in all_runs}
+        stable_text = all(
+            run["textNormalization"]
+            == acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
+            for run in all_runs
+        )
+        expected_checks = {
+            "byteDeterministic": backend.get("byteDeterministic") is True,
+            "canonicalEvidenceDeterministic": (
+                backend.get("canonicalEvidenceDeterministic") is True
+            ),
+            "criticalEvidenceDeterministic": (
+                backend.get("criticalEvidenceDeterministic") is True
+            ),
+            "executionProviderCountsStable": (
+                backend.get("executionProviderCountsStable") is True
+            ),
+            "metricsDeterministic": backend.get("metricsDeterministic") is True,
+            "provenancePassed": backend.get("provenancePassed") is True,
+            "repetitionCountExact": (
+                backend.get("determinismRepetitions")
+                == acceptance.DETERMINISM_REPETITIONS
+            ),
+            "rowIdentitiesExact": (
+                determinism.get("rowIndices") == determinism_view.get("rowIndices")
+                and backend.get("determinismRows") == acceptance.DETERMINISM_DOCUMENTS
+            ),
+            "selectionIdentityExact": (
+                determinism.get("selectionSha256")
+                == determinism_view.get("selectionSha256")
+            ),
+            "stableProvider": backend.get("stableResolvedProvider") is True,
+            "stableRuntime": backend.get("stableRuntime") is True,
+            "stableTextNormalization": (
+                backend.get("stableTextNormalization") is True
+                and backend.get("textNormalization")
+                == acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
+            ),
+            "stableThreadCounts": backend.get("stableResolvedThreadCounts") is True,
+            "stableWorkerCounts": backend.get("stableResolvedWorkerCounts") is True,
+            "thresholdOverridesAbsent": backend.get("qualityGatePassed") is None
+            and all(run.get("qualityGatePassed") is None for run in repetitions),
+        }
+        if (
+            backend.get("requestedProvider") != provider
+            or backend.get("resolvedProvider") != resolved
+            or backend.get("requestedThreads") != 0
+            or backend.get("qualityRows") != len(quality_identities)
+            or backend.get("determinismRows") != len(determinism_identities)
+            or backend.get("determinismRepetitions")
+            != acceptance.DETERMINISM_REPETITIONS
+            or backend.get("byteDeterminismEvaluated") is not True
+            or backend.get("byteDeterministic") is not (len(pair_hashes) == 1)
+            or backend.get("canonicalEvidenceDeterministic")
+            is not (len(canonical_hashes) == 1)
+            or backend.get("criticalEvidenceDeterministic")
+            is not (len(critical_hashes) == 1)
+            or backend.get("metricsDeterministic") is not (len(metric_hashes) == 1)
+            or backend.get("executionProviderCountsStable")
+            is not (len(provider_counts) == 1)
+            or backend.get("stableResolvedThreadCounts")
+            is not (len(thread_counts) == 1)
+            or backend.get("stableResolvedWorkerCounts")
+            is not (len(worker_counts) == 1)
+            or backend.get("stableResolvedProvider")
+            is not (len(resolved_providers) == 1)
+            or backend.get("stableRuntime") is not (len(runtime_hashes) == 1)
+            or backend.get("stableTextNormalization") is not stable_text
+            or backend.get("provenancePassed")
+            is not all(run.get("provenancePassed") is True for run in all_runs)
+            or backend.get("canonicalEvidenceSha256")
+            != quality_run.get("canonicalEvidenceSha256")
+            or backend.get("criticalEvidenceSha256")
+            != quality_run.get("criticalEvidenceSha256")
+            or backend.get("metricsSha256") != quality_run.get("metricsSha256")
+            or acceptance.sroie_policy.canonical_json(backend.get("metrics"))
+            != acceptance.sroie_policy.canonical_json(quality_run.get("metrics"))
+            or backend.get("qualityGatePassed") is not None
+            or backend.get("qualityElapsedSeconds") != quality_run.get("elapsedSeconds")
+            or backend.get("qualityDocumentsPerSecond")
+            != quality_run.get("documentsPerSecond")
+            or backend.get("executionProviderRecordCounts")
+            != quality_run.get("executionProviderRecordCounts")
+            or backend.get("hybridLaneRecordCoverage")
+            != quality_run.get("hybridLaneRecordCoverage")
+            or backend.get("throughputComparable")
+            is not quality_run.get("throughputComparable")
+            or backend.get("resolvedThreadCounts")
+            != quality_run.get("resolvedThreadCounts")
+            or backend.get("resolvedWorkerCounts")
+            != quality_run.get("resolvedWorkerCounts")
+            or determinism.get("byteDeterministic")
+            is not backend.get("byteDeterministic")
+            or determinism.get("canonicalEvidenceDeterministic")
+            is not backend.get("canonicalEvidenceDeterministic")
+            or determinism.get("criticalEvidenceDeterministic")
+            is not backend.get("criticalEvidenceDeterministic")
+            or determinism.get("metricsDeterministic")
+            is not backend.get("metricsDeterministic")
+            or determinism.get("rowIndices") != determinism_view.get("rowIndices")
+            or determinism.get("selectionSha256")
+            != determinism_view.get("selectionSha256")
+        ):
+            raise _error("A post-hoc backend aggregate claim is invalid", stage="report")
+        recomputed_checks[provider] = expected_checks
+
+    if acceptance.sroie_policy.canonical_json(recomputed_checks) != (
+        acceptance.sroie_policy.canonical_json(claimed_determinism_checks)
+    ):
+        raise _error("The post-hoc determinism checks are not derived", stage="report")
+
+
+_CORPUS_IDENTITY_KEYS = frozenset(
+    {
+        *EXPECTED_REPAIR_IDENTITY,
+        "corpusManifestSha256",
+        "duplicateAuditSha256",
+        "excludedRows",
+        "imageIdentitiesSha256",
+        "parquetSha256",
+        "selectedDocuments",
+        "sourceImageDigestsSha256",
+        "sourceRows",
+        "workerManifestSha256",
+    }
+)
+_REPAIRED_HOLDOUT_KEYS = _CORPUS_IDENTITY_KEYS | {
+    "expectedRepairIdentitySha256",
+    "repairAppliedOnlyToDerivedScoringGeometry",
+    "repairIdentity",
+    "repairIdentitySha256",
+    "repairPolicy",
+    "sourceArtifactReadOnlyAndReverified",
+}
+
+
+def _validate_public_evaluation_binding(
+    value: Any,
+    *,
+    expected_identity_rows: Sequence[Mapping[str, Any]],
+    repaired: Mapping[str, Any],
+    artifacts: Mapping[str, Mapping[str, Any]],
+) -> None:
+    if not isinstance(value, Mapping) or set(value) != {
+        "crossSplitOverlap",
+        "determinismView",
+        "scoringView",
+    }:
+        raise _error("The post-hoc evaluation corpus binding changed", stage="report")
+    overlap = value.get("crossSplitOverlap")
+    scoring = value.get("scoringView")
+    determinism = value.get("determinismView")
+    if (
+        not isinstance(overlap, Mapping)
+        or set(overlap)
+        != {
+            "algorithm",
+            "calibrationRawImageDigestsSha256",
+            "calibrationRawImages",
+            "calibrationSelectedDocuments",
+            "calibrationSelectedImageIdentitiesSha256",
+            "overlapDocuments",
+            "overlapIdentitySha256",
+            "overlapRecords",
+            "perceptualSimilarityClaimed",
+            "testRawImageDigestsSha256",
+            "testRawImages",
+        }
+        or not isinstance(scoring, Mapping)
+        or set(scoring)
+        != {
+            "corpusManifestSha256",
+            "documents",
+            "excludedDocuments",
+            "excludedRowIndices",
+            "fullTestDocuments",
+            "imageIdentitiesSha256",
+            "inventorySha256",
+            "overlapExclusionPolicy",
+            "parentCorpusIdentitySha256",
+            "repairedRowIndices",
+            "repairedRowsIncluded",
+            "rowIndices",
+            "selectionSha256",
+            "workerManifestSha256",
+        }
+        or not isinstance(determinism, Mapping)
+        or set(determinism)
+        != {
+            "corpusManifestSha256",
+            "documents",
+            "imageIdentitiesSha256",
+            "inventorySha256",
+            "rowIndices",
+            "selectionSha256",
+            "workerManifestSha256",
+        }
+    ):
+        raise _error("The post-hoc evaluation corpus schema changed", stage="report")
+
+    records = overlap.get("overlapRecords")
+    expected_pairs = [
+        {"testRowIndex": test_row, "trainRowIndex": train_row}
+        for test_row, train_row in EXPECTED_CALIBRATION_OVERLAP_RECORDS
+    ]
+    if not isinstance(records, list) or any(
+        not isinstance(record, Mapping)
+        or set(record) != {"imageSha256", "testRowIndex", "trainRowIndex"}
+        or not _is_sha256(record.get("imageSha256"))
+        or type(record.get("testRowIndex")) is not int
+        or type(record.get("trainRowIndex")) is not int
+        for record in records
+    ):
+        raise _error("A post-hoc overlap identity is invalid", stage="report")
+    record_pairs = [
+        {
+            "testRowIndex": record["testRowIndex"],
+            "trainRowIndex": record["trainRowIndex"],
+        }
+        for record in records
+    ]
+    excluded_rows = [test_row for test_row, _ in EXPECTED_CALIBRATION_OVERLAP_RECORDS]
+    selected_rows = [
+        row
+        for row in range(acceptance.sroie_policy.RAW_TEST_ROWS)
+        if row not in set(excluded_rows)
+    ]
+    expected_rows = [item.get("rowIndex") for item in expected_identity_rows]
+    expected_determinism = [dict(item) for item in expected_identity_rows][
+        : acceptance.DETERMINISM_DOCUMENTS
+    ]
+    corpus_identity = {key: repaired.get(key) for key in _CORPUS_IDENTITY_KEYS}
+    if (
+        overlap.get("algorithm") != OVERLAP_ALGORITHM
+        or overlap.get("calibrationRawImages")
+        != acceptance.sroie_policy.RAW_TRAIN_ROWS
+        or overlap.get("calibrationSelectedDocuments")
+        != EXPECTED_CALIBRATION_SELECTED_DOCUMENTS
+        or overlap.get("testRawImages") != acceptance.sroie_policy.RAW_TEST_ROWS
+        or overlap.get("overlapDocuments") != len(EXPECTED_CALIBRATION_OVERLAP_RECORDS)
+        or overlap.get("perceptualSimilarityClaimed") is not False
+        or any(
+            not _is_sha256(overlap.get(key))
+            for key in (
+                "calibrationRawImageDigestsSha256",
+                "calibrationSelectedImageIdentitiesSha256",
+            )
+        )
+        or overlap.get("testRawImageDigestsSha256")
+        != repaired.get("sourceImageDigestsSha256")
+        or record_pairs != expected_pairs
+        or acceptance.sroie_policy.sha256_canonical(record_pairs)
+        != EXPECTED_CALIBRATION_OVERLAP_PAIRS_SHA256
+        or acceptance.sroie_policy.sha256_canonical(records)
+        != EXPECTED_CALIBRATION_OVERLAP_IDENTITY_SHA256
+        or overlap.get("overlapIdentitySha256")
+        != EXPECTED_CALIBRATION_OVERLAP_IDENTITY_SHA256
+        or len({record["imageSha256"] for record in records}) != len(records)
+        or scoring.get("documents") != EXPECTED_UNCONTAMINATED_TEST_DOCUMENTS
+        or scoring.get("excludedDocuments") != len(excluded_rows)
+        or scoring.get("excludedRowIndices") != excluded_rows
+        or scoring.get("fullTestDocuments") != acceptance.sroie_policy.RAW_TEST_ROWS
+        or scoring.get("overlapExclusionPolicy") != OVERLAP_EXCLUSION_POLICY
+        or scoring.get("repairedRowIndices") != list(EXPECTED_REPAIRED_TEST_ROW_INDICES)
+        or scoring.get("repairedRowsIncluded") is not True
+        or scoring.get("rowIndices") != selected_rows
+        or expected_rows != selected_rows
+        or any(
+            not isinstance(item, Mapping)
+            or set(item) != {"imageSha256", "rowIndex"}
+            or not _is_sha256(item.get("imageSha256"))
+            for item in expected_identity_rows
+        )
+        or scoring.get("imageIdentitiesSha256")
+        != acceptance.sroie_policy.sha256_canonical(
+            [dict(item) for item in expected_identity_rows]
+        )
+        or scoring.get("selectionSha256") != scoring.get("imageIdentitiesSha256")
+        or scoring.get("parentCorpusIdentitySha256")
+        != acceptance.sroie_policy.sha256_canonical(corpus_identity)
+        or determinism.get("documents") != acceptance.DETERMINISM_DOCUMENTS
+        or determinism.get("rowIndices")
+        != selected_rows[: acceptance.DETERMINISM_DOCUMENTS]
+        or determinism.get("imageIdentitiesSha256")
+        != acceptance.sroie_policy.sha256_canonical(expected_determinism)
+        or determinism.get("selectionSha256")
+        != determinism.get("imageIdentitiesSha256")
+    ):
+        raise _error("The post-hoc evaluation corpus identity changed", stage="report")
+
+    artifact_bindings = {
+        "posthocEvaluationCorpusManifest": scoring.get("corpusManifestSha256"),
+        "posthocEvaluationInventory": scoring.get("inventorySha256"),
+        "posthocEvaluationWorkerManifest": scoring.get("workerManifestSha256"),
+        "posthocDeterminismCorpusManifest": determinism.get("corpusManifestSha256"),
+        "posthocDeterminismInventory": determinism.get("inventorySha256"),
+        "posthocDeterminismWorkerManifest": determinism.get("workerManifestSha256"),
+    }
+    if any(
+        not _is_sha256(expected_sha256)
+        or artifacts.get(name, {}).get("sha256") != expected_sha256
+        for name, expected_sha256 in artifact_bindings.items()
+    ):
+        raise _error("A post-hoc evaluation input artifact changed", stage="report")
+
+
 def _validate_posthoc_report(
     report: Mapping[str, Any], seal_context: PosthocSealContext
 ) -> None:
     acceptance._validate_public_report_privacy(report)
     try:
         expected_identity_rows = json.loads(seal_context.expected_identities_json)
+        raw_output_pair_bindings = json.loads(
+            seal_context.raw_output_pair_bindings_json
+        )
+        observed_backends = json.loads(seal_context.observed_backends_json)
+        observed_backend_result_artifacts = json.loads(
+            seal_context.observed_backend_result_artifacts_json
+        )
+        observed_confidence_parity = json.loads(
+            seal_context.observed_confidence_parity_json
+        )
     except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise _error("The post-hoc identity anchor is invalid", stage="report") from exc
     if (
@@ -1405,6 +2671,28 @@ def _validate_posthoc_report(
         or any(not isinstance(item, Mapping) for item in expected_identity_rows)
         or acceptance.sroie_policy.canonical_json(expected_identity_rows)
         != seal_context.expected_identities_json
+        or not isinstance(raw_output_pair_bindings, Mapping)
+        or len(raw_output_pair_bindings)
+        != 3 * (1 + acceptance.DETERMINISM_REPETITIONS)
+        or any(
+            not isinstance(name, str)
+            or not name
+            or not _is_sha256(value)
+            for name, value in raw_output_pair_bindings.items()
+        )
+        or acceptance.sroie_policy.canonical_json(raw_output_pair_bindings)
+        != seal_context.raw_output_pair_bindings_json
+        or not isinstance(observed_backends, list)
+        or len(observed_backends) != 3
+        or any(not isinstance(item, Mapping) for item in observed_backends)
+        or acceptance.sroie_policy.canonical_json(observed_backends)
+        != seal_context.observed_backends_json
+        or not isinstance(observed_backend_result_artifacts, Mapping)
+        or acceptance.sroie_policy.canonical_json(observed_backend_result_artifacts)
+        != seal_context.observed_backend_result_artifacts_json
+        or not isinstance(observed_confidence_parity, Mapping)
+        or acceptance.sroie_policy.canonical_json(observed_confidence_parity)
+        != seal_context.observed_confidence_parity_json
         or any(
             not _is_sha256(value)
             for value in (
@@ -1479,7 +2767,7 @@ def _validate_posthoc_report(
         or not isinstance(metrics, Mapping)
         or report.get("metricsSha256") != acceptance.sroie_policy.sha256_canonical(metrics)
         or not isinstance(evidence, Mapping)
-        or report.get("documents") != acceptance.sroie_policy.RAW_TEST_ROWS
+        or report.get("documents") != EXPECTED_UNCONTAMINATED_TEST_DOCUMENTS
         or report.get("rawRows") != acceptance.sroie_policy.RAW_TEST_ROWS
         or not _is_sha256(report.get("expectedIdentitiesSha256"))
         or not isinstance(report.get("candidateCommit"), str)
@@ -1498,6 +2786,7 @@ def _validate_posthoc_report(
     cross_backend = evidence.get("crossBackendIntegrity")
     cross_checks = cross_backend.get("checks") if isinstance(cross_backend, Mapping) else None
     diagnostic = evidence.get("diagnosticPolicyComparison")
+    evaluation_corpus = evidence.get("evaluationCorpus")
     evaluations = diagnostic.get("evaluations") if isinstance(diagnostic, Mapping) else None
     provider_names = ("cpu", "directml", "hybrid")
     integrity_check_keys = {
@@ -1553,12 +2842,19 @@ def _validate_posthoc_report(
             "crossBackendIntegrity",
             "determinism",
             "diagnosticPolicyComparison",
+            "evaluationCorpus",
             "execution",
             "generatedAtUtc",
             "holdoutStatus",
             "repairedHoldout",
             "v3Calibration",
         }
+        or acceptance.sroie_policy.canonical_json(backends)
+        != seal_context.observed_backends_json
+        or acceptance.sroie_policy.canonical_json(backend_result_artifacts)
+        != seal_context.observed_backend_result_artifacts_json
+        or acceptance.sroie_policy.canonical_json(confidence)
+        != seal_context.observed_confidence_parity_json
         or not isinstance(consumed, Mapping)
         or set(consumed)
         != {
@@ -1695,9 +2991,13 @@ def _validate_posthoc_report(
         or not isinstance(holdout_status, Mapping)
         or holdout_status
         != {
+            "crossSplitExactOverlapsDetected": True,
+            "crossSplitOverlapDocuments": len(EXPECTED_CALIBRATION_OVERLAP_RECORDS),
+            "crossSplitOverlapsExcludedFromScoring": True,
             "independentHoldout": False,
             "oneShotAttemptConsumed": True,
             "posthocOnly": True,
+            "withinTestDuplicateExclusions": 0,
         }
         or not isinstance(diagnostic, Mapping)
         or set(diagnostic)
@@ -1719,6 +3019,7 @@ def _validate_posthoc_report(
             and diagnostic.get("allBackendThresholdsPassed") is True
         )
         or not isinstance(repaired, Mapping)
+        or set(repaired) != _REPAIRED_HOLDOUT_KEYS
         or repaired.get("repairPolicy") != acceptance.sroie.SROIE_BBOX_REPAIR_POLICY
         or repaired.get("repairedRegionCount") != EXPECTED_REPAIRED_TEST_REGIONS
         or repaired.get("expectedRepairIdentitySha256")
@@ -1731,6 +3032,9 @@ def _validate_posthoc_report(
         )
         or repaired.get("repairAppliedOnlyToDerivedScoringGeometry") is not True
         or repaired.get("sourceArtifactReadOnlyAndReverified") is not True
+        or repaired.get("selectedDocuments") != acceptance.sroie_policy.RAW_TEST_ROWS
+        or repaired.get("sourceRows") != acceptance.sroie_policy.RAW_TEST_ROWS
+        or repaired.get("excludedRows") != 0
         or artifacts["posthocTestSnapshot"].get("bytes")
         != acceptance.sroie_policy.TEST_BYTES
         or artifacts["posthocTestSnapshot"].get("sha256")
@@ -1746,6 +3050,21 @@ def _validate_posthoc_report(
     ):
         raise _error("The post-hoc evidence binding changed", stage="report")
 
+    _validate_public_evaluation_binding(
+        evaluation_corpus,
+        expected_identity_rows=expected_identity_rows,
+        repaired=repaired,
+        artifacts=artifacts,
+    )
+    _validate_public_backend_runs(
+        backends,
+        expected_identity_rows=expected_identity_rows,
+        evaluation_corpus=evaluation_corpus,
+        validated_policy=seal_context.validated_policy,
+        claimed_determinism_checks=determinism_checks,
+        raw_output_pair_bindings=raw_output_pair_bindings,
+    )
+
     try:
         acceptance.generic_policy.validate_utc_timestamp(evidence.get("generatedAtUtc"))
     except acceptance.generic_policy.PolicyError as exc:
@@ -1756,6 +3075,7 @@ def _validate_posthoc_report(
         "candidate": candidate,
         "candidateCommit": report.get("candidateCommit"),
         "consumedAttempt": consumed,
+        "evaluationCorpus": evaluation_corpus,
         "expectedIdentitiesSha256": report.get("expectedIdentitiesSha256"),
         "identity": identity,
         "identitySha256": report.get("identitySha256"),
@@ -1936,7 +3256,12 @@ def _recheck_publication_inputs(
     artifact_paths: Mapping[str, Path],
     artifacts: Mapping[str, Mapping[str, Any]],
     backend_result_artifacts: Mapping[str, Mapping[str, Any]],
+    backend_runs: Sequence[Mapping[str, Any]],
+    raw_output_pair_bindings: Mapping[str, str],
+    observed_confidence_parity: Mapping[str, Any],
     corpus_identity: Mapping[str, Any],
+    evaluation_corpus: Any,
+    determinism_corpus: Any,
     phase_root: Path,
 ) -> None:
     _recheck_consumed_attempt(args.original_terminal_result, consumed)
@@ -1959,9 +3284,30 @@ def _recheck_publication_inputs(
         artifact_paths,
         evidence_root=phase_root,
         corpus_identity=corpus_identity,
+        evaluation_corpus=evaluation_corpus,
+        determinism_corpus=determinism_corpus,
         expected=artifacts,
     )
     _recheck_backend_result_artifacts(phase_root, backend_result_artifacts)
+    raw_observations = _capture_backend_raw_observations(
+        backend_runs,
+        phase_root,
+        evaluation_corpus=evaluation_corpus,
+        determinism_corpus=determinism_corpus,
+        model_pack_sha256=frozen.model_pack_sha256,
+        cpu_runtime_sha256=frozen.runtimes["cpu"]["executableSha256"],
+        directml_runtime_sha256=frozen.runtimes["directml"]["executableSha256"],
+        worker_sha256=frozen.worker_sha256,
+    )
+    if raw_observations.raw_output_pair_bindings != raw_output_pair_bindings:
+        raise _error("A post-hoc raw-output pair changed before publication", stage="artifact")
+    if acceptance.sroie_policy.canonical_json(raw_observations.confidence_parity) != (
+        acceptance.sroie_policy.canonical_json(observed_confidence_parity)
+    ):
+        raise _error(
+            "The post-hoc confidence evidence changed before publication",
+            stage="artifact",
+        )
 
 
 def _record_posthoc_failure(
@@ -2010,29 +3356,26 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         parquet_sha256, repaired_source_object_id = _copy_repaired_test(
             args.repaired_test_copy, snapshot
         )
-        corpus = acceptance.sroie.extract_sroie_corpus(
+        full_corpus = acceptance.sroie.extract_sroie_corpus(
             snapshot, phase_root / "scoring-corpus", split="test"
         )
         if (
-            corpus.source_row_count != acceptance.sroie_policy.RAW_TEST_ROWS
-            or len(corpus.documents) != acceptance.sroie_policy.RAW_TEST_ROWS
-            or corpus.excluded_row_indices
-            or corpus.repaired_region_count != EXPECTED_REPAIRED_TEST_REGIONS
+            full_corpus.source_row_count != acceptance.sroie_policy.RAW_TEST_ROWS
+            or len(full_corpus.documents) != acceptance.sroie_policy.RAW_TEST_ROWS
+            or full_corpus.excluded_row_indices
+            or full_corpus.repaired_region_count != EXPECTED_REPAIRED_TEST_REGIONS
         ):
             raise _error(
                 "The complete repaired test copy was not extracted", stage="posthoc-corpus"
             )
-        acceptance._require_disjoint_source_images(
-            context.source_image_sha256s, corpus.source_image_sha256s
-        )
-        expected_identities = acceptance._expected_identities(corpus)
+        full_expected_identities = acceptance._expected_identities(full_corpus)
         repair_identity = acceptance._validate_bbox_repair_audit(
-            corpus.bbox_repair_audit,
-            corpus_manifest=corpus.corpus_manifest,
+            full_corpus.bbox_repair_audit,
+            corpus_manifest=full_corpus.corpus_manifest,
             split="test",
             expected_raw_rows=acceptance.sroie_policy.RAW_TEST_ROWS,
-            expected_identities=expected_identities,
-            expected_repair_identity=acceptance._corpus_repair_identity(corpus),
+            expected_identities=full_expected_identities,
+            expected_repair_identity=acceptance._corpus_repair_identity(full_corpus),
         )
         repair_identity_sha256 = acceptance.sroie_policy.sha256_canonical(repair_identity)
         if (
@@ -2045,10 +3388,10 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             )
         if (
             acceptance._validate_duplicate_audit(
-                corpus.duplicate_audit,
+                full_corpus.duplicate_audit,
                 split="test",
                 expected_raw_rows=acceptance.sroie_policy.RAW_TEST_ROWS,
-                expected_identities=expected_identities,
+                expected_identities=full_expected_identities,
                 expected_source_payload_identities_sha256=repair_identity[
                     "sourcePayloadIdentitiesSha256"
                 ],
@@ -2056,15 +3399,62 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                     "scoringAnnotationIdentitiesSha256"
                 ],
             )
-            != corpus.source_image_sha256s
+            != full_corpus.source_image_sha256s
         ):
             raise _error("The repaired holdout duplicate audit changed", stage="duplicate-audit")
-        corpus_identity = acceptance._corpus_identity(corpus, parquet_sha256=parquet_sha256)
-        artifact_paths = _posthoc_artifact_paths(corpus, snapshot)
+        corpus_identity = acceptance._corpus_identity(
+            full_corpus, parquet_sha256=parquet_sha256
+        )
+        repaired_row_indices = _repaired_row_indices(full_corpus.bbox_repair_audit)
+        overlap_records, included_rows = _uncontaminated_posthoc_rows(
+            context.source_image_sha256s,
+            context.expected_identities,
+            full_corpus,
+        )
+        if not set(repaired_row_indices).issubset(included_rows):
+            raise _error(
+                "The repaired test row was excluded from post-hoc scoring",
+                stage="holdout-overlap",
+            )
+        try:
+            evaluation_corpus = acceptance.cord.create_corpus_view(
+                full_corpus,
+                included_rows,
+                phase_root / "views" / "quality",
+                name="sroie-posthoc-uncontaminated-quality",
+            )
+        except acceptance.benchmark_core.BenchmarkError as exc:
+            raise _error(str(exc), stage=exc.stage or "holdout-overlap") from exc
+        expected_identities = acceptance._expected_identities(evaluation_corpus)
+        determinism = acceptance._create_determinism_corpus(
+            evaluation_corpus, phase_root / "views" / "determinism", role="posthoc"
+        )
+        determinism_identities = acceptance._expected_identities(determinism)
+        artifact_paths = _posthoc_artifact_paths(
+            full_corpus,
+            snapshot,
+            evaluation_corpus,
+            determinism,
+        )
         artifacts = _capture_posthoc_artifacts(
             artifact_paths,
             evidence_root=phase_root,
             corpus_identity=corpus_identity,
+            evaluation_corpus=evaluation_corpus,
+            determinism_corpus=determinism,
+        )
+        evaluation_binding = _public_evaluation_binding(
+            raw_calibration_sha256s=context.source_image_sha256s,
+            calibration_identities=context.expected_identities,
+            full_corpus_identity=corpus_identity,
+            full_corpus=full_corpus,
+            evaluation_corpus=evaluation_corpus,
+            evaluation_identities=expected_identities,
+            determinism_corpus=determinism,
+            determinism_identities=determinism_identities,
+            overlap_records=overlap_records,
+            repaired_row_indices=repaired_row_indices,
+            artifacts=artifacts,
         )
         repaired_holdout = _public_repaired_binding(
             corpus_identity,
@@ -2088,14 +3478,12 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             policy=policy,
             identity=identity,
             expected_identities=expected_identities,
+            evaluation_corpus=evaluation_binding,
             repaired_holdout=repaired_holdout,
             artifacts=artifacts,
         )
         pre_run_binding_sha256 = acceptance.sroie_policy.sha256_canonical(pre_run_binding)
 
-        determinism = acceptance._create_determinism_corpus(
-            corpus, phase_root / "views", role="posthoc"
-        )
         backends = (
             frozen.cpu_backend,
             frozen.directml_backend,
@@ -2104,7 +3492,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         runs = [
             acceptance._benchmark_backend(
                 frozen,
-                corpus,
+                evaluation_corpus,
                 determinism,
                 backend,
                 phase_root / "results" / backend.requested_provider,
@@ -2125,7 +3513,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             except acceptance.sroie_policy.PolicyError as exc:
                 raise _error(str(exc), stage="diagnostic-quality") from exc
         checks, confidence, determinism_checks = _posthoc_integrity(
-            args, frozen, identity, corpus, determinism, runs
+            args, frozen, identity, evaluation_corpus, determinism, runs
         )
         integrity_passed = all(checks.values())
         raw_comparison_passed = all(
@@ -2133,8 +3521,26 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         )
         comparison_passed = integrity_passed and raw_comparison_passed
 
+        public_runs = [_public_json_run(run) for run in runs]
+        raw_observations = _capture_backend_raw_observations(
+            public_runs,
+            phase_root,
+            evaluation_corpus=evaluation_corpus,
+            determinism_corpus=determinism,
+            model_pack_sha256=frozen.model_pack_sha256,
+            cpu_runtime_sha256=expected_cpu_runtime_sha256,
+            directml_runtime_sha256=expected_directml_runtime_sha256,
+            worker_sha256=expected_worker_sha256,
+        )
+        raw_output_pair_bindings = raw_observations.raw_output_pair_bindings
+        if acceptance.sroie_policy.canonical_json(raw_observations.confidence_parity) != (
+            acceptance.sroie_policy.canonical_json(confidence)
+        ):
+            raise _error(
+                "The post-hoc confidence evidence is not derived from raw OCR",
+                stage="artifact",
+            )
         backend_result_artifacts = _capture_backend_result_artifacts(phase_root)
-        public_runs = [acceptance._public_run(run) for run in runs]
         _validate_backend_result_bindings(public_runs, backend_result_artifacts)
         _recheck_publication_inputs(
             args,
@@ -2151,7 +3557,12 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             artifact_paths=artifact_paths,
             artifacts=artifacts,
             backend_result_artifacts=backend_result_artifacts,
+            backend_runs=public_runs,
+            raw_output_pair_bindings=raw_output_pair_bindings,
+            observed_confidence_parity=raw_observations.confidence_parity,
             corpus_identity=corpus_identity,
+            evaluation_corpus=evaluation_corpus,
+            determinism_corpus=determinism,
             phase_root=phase_root,
         )
 
@@ -2179,15 +3590,20 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             "crossBackendIntegrity": copy.deepcopy(cross_backend_integrity),
             "determinism": copy.deepcopy(determinism_evidence),
             "diagnosticPolicyComparison": copy.deepcopy(diagnostic_comparison),
+            "evaluationCorpus": copy.deepcopy(pre_run_binding["evaluationCorpus"]),
             "execution": {
                 "backendOrder": ["cpu", "directml", "hybrid"],
                 "threads": 0,
             },
             "generatedAtUtc": acceptance.benchmark_core.utc_timestamp(),
             "holdoutStatus": {
+                "crossSplitExactOverlapsDetected": True,
+                "crossSplitOverlapDocuments": len(overlap_records),
+                "crossSplitOverlapsExcludedFromScoring": True,
                 "independentHoldout": False,
                 "oneShotAttemptConsumed": True,
                 "posthocOnly": True,
+                "withinTestDuplicateExclusions": len(full_corpus.excluded_row_indices),
             },
             "repairedHoldout": copy.deepcopy(pre_run_binding["repairedHoldout"]),
             "v3Calibration": copy.deepcopy(pre_run_binding["v3Calibration"]),
@@ -2196,7 +3612,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             "acceptancePassed": None,
             "candidateCommit": pre_run_binding["candidateCommit"],
             "diagnosticThresholdComparisonPassed": comparison_passed,
-            "documents": len(corpus.documents),
+            "documents": len(evaluation_corpus.documents),
             "evaluationCompleted": True,
             "evaluationRole": "post-hoc-diagnostic",
             "evidence": evidence,
@@ -2211,7 +3627,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             "metrics": copy.deepcopy(runs[0]["metrics"]),
             "metricsSha256": acceptance.sroie_policy.sha256_canonical(runs[0]["metrics"]),
             "protocol": POSTHOC_PROTOCOL,
-            "rawRows": corpus.source_row_count,
+            "rawRows": full_corpus.source_row_count,
             "repairPromptedByHeldoutFailure": True,
             "runSucceeded": True,
             "schemaVersion": POSTHOC_SCHEMA_VERSION,
@@ -2241,6 +3657,16 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                 policy_comparisons
             ),
             metrics_sha256=acceptance.sroie_policy.sha256_canonical(runs[0]["metrics"]),
+            raw_output_pair_bindings_json=acceptance.sroie_policy.canonical_json(
+                raw_output_pair_bindings
+            ),
+            observed_backends_json=acceptance.sroie_policy.canonical_json(public_runs),
+            observed_backend_result_artifacts_json=(
+                acceptance.sroie_policy.canonical_json(backend_result_artifacts)
+            ),
+            observed_confidence_parity_json=acceptance.sroie_policy.canonical_json(
+                raw_observations.confidence_parity
+            ),
             report_sha256=acceptance.sroie_policy.sha256_canonical(report),
         )
         _validate_posthoc_report(report, seal_context)
@@ -2260,7 +3686,12 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             artifact_paths=artifact_paths,
             artifacts=artifacts,
             backend_result_artifacts=backend_result_artifacts,
+            backend_runs=public_runs,
+            raw_output_pair_bindings=raw_output_pair_bindings,
+            observed_confidence_parity=raw_observations.confidence_parity,
             corpus_identity=corpus_identity,
+            evaluation_corpus=evaluation_corpus,
+            determinism_corpus=determinism,
             phase_root=phase_root,
         )
         acceptance._finalize_report(output, marker, staged)
