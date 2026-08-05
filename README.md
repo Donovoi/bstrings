@@ -104,25 +104,34 @@ bundled truthfully.
 
 ## Measured OCR evidence
 
-The historical, publicly inspectable v2
-[616-document SROIE calibration](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v2-20260805-23992fc)
-is bound to source commit `23992fc75b624a3c6dab5bfbd0a4b52949133525` and
-passed that candidate's Unicode-NFC, case-insensitive gate: token F1 0.8602,
-CER 0.1156, and WER 0.2181. A full
-case-sensitive rescore of the same OCR output is retained as a diagnostic
-(0.6011 / 0.3353 / 0.4761 respectively); casefolding did not change emitted
-OCR, punctuation, digits, spacing, boxes, or evidence.
+We published the v3
+[616-document SROIE calibration](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
+as an immutable release.
+It selected 616 of 626 train rows under the frozen duplicate policy and measured
+token F1 0.8602, CER 0.1156, WER 0.2181, localization Hmean 0.9787, and exact
+end-to-end Hmean 0.6349 on CPU. This is calibration evidence, not test
+acceptance.
 
-The independent 361-document attempt did **not** produce quality metrics. It
-failed closed on one degenerate source annotation, consumed the one-shot
-ledger, and was not rerun. The immutable
+The predeclared 361-document one-shot attempt failed closed on one degenerate
+source annotation before OCR, consumed the one-shot ledger, and was not rerun.
+The immutable
 [pre-test witness](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-acceptance-v2-20260805-23992fc)
 and [terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
-preserve that outcome. This project therefore does not claim independent SROIE
-acceptance or an official RRC leaderboard result. See the
-[OCR benchmark record](docs/ocr-benchmark-2026-08-05.md) for scope and limits.
-The current v3 adapter and repair protocol still require fresh calibration;
-no v3 metric or acceptance result is claimed here.
+preserve that outcome.
+
+A later, explicitly post-hoc
+[test-split diagnostic](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2)
+audited all 361 test rows, excluded eight train/test overlaps with identical
+decoded image bytes, and scored the remaining 353 while retaining repaired
+dataset row index 142 (zero-based). CPU, DirectML, and hybrid produced identical
+aggregate and per-document scored metrics, and every backend met all 11 frozen
+numeric thresholds: token F1 0.8559, CER 0.1167, WER 0.2245, localization Hmean
+0.9785, and exact end-to-end Hmean 0.6254. The metric artifacts matched under
+both scoring profiles, but some provider-neutral OCR output records did not, so
+backend parity was not established. The diagnostic did not pass overall and is
+not an acceptance result or an official RRC leaderboard submission. See the
+[OCR benchmark record](docs/ocr-benchmark-2026-08-05.md) for the evidence
+chain, exact limits, and hashes.
 
 ## Results and evidence safety
 

@@ -226,7 +226,7 @@ and a genuinely untouched holdout, then preserve its immutable witness and
 single terminal result. Compare exact identifier recall, CER, provider
 identity, determinism, provenance, and throughput; never accept speed by
 weakening correctness. See [OCR and document analysis](ocr-and-document-analysis.md)
-and the [historical v2 record and current v3 status](ocr-benchmark-2026-08-05.md).
+and the [current OCR benchmark record](ocr-benchmark-2026-08-05.md).
 
 ## Build a complete profile
 
@@ -440,25 +440,38 @@ Evidence types are not interchangeable:
 | --- | --- |
 | `offline-profile-acceptance.json` | Per-tag acquisition, assembly, strict verification, and translation smoke for every advertised profile |
 | OCR hardware acceptance artifact | CPU/DirectML/hybrid packaged-path behavior for one source build and named host/driver |
-| Historical v2 immutable SROIE witness and terminal result | Frozen-candidate printed-receipt quality procedure and its actual one-shot disposition |
+| Immutable v3 SROIE CPU calibration | Frozen-candidate printed-receipt quality on the selected training corpus |
+| SROIE terminal and post-hoc results | The consumed one-shot disposition and later diagnostic findings; neither establishes independent acceptance |
 
-The historical SROIE v2 calibration, bound to source commit
-`23992fc75b624a3c6dab5bfbd0a4b52949133525`, passed. Its one-shot test failed
-closed on a degenerate source annotation before quality scoring. The consumed
-ledger and immutable
+The immutable CPU-only
+[v3 calibration](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
+selected 616 of 626 training documents and passed its frozen calibration gate.
+The exact metrics and artifact hashes are kept in the
+[OCR benchmark record](ocr-benchmark-2026-08-05.md).
+
+The one-shot test still failed closed on a degenerate source annotation before
+quality scoring. The consumed ledger and immutable
 [terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
-must not be replaced with a post-hoc replay. Current source uses the v3 adapter,
-policy, and acceptance schema, but fresh v3 calibration is still pending.
-Synthetic OCR tests remain packaging/regression evidence, not independent
-quality acceptance. A materially changed candidate needs a genuinely untouched
-holdout for any new independent claim.
+must not be replaced with another one-shot run. The later immutable
+[post-hoc diagnostic](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2),
+with report SHA-256
+`4129295263007d9ff8fb4da3f4cd7bbb9134262f66b73dbdd43a3ffef6dee543`,
+audited all 361 rows, excluded eight exact train/test image overlaps, and scored
+353 rows, including repaired dataset row index 142 (zero-based). Every backend
+met all 11 frozen numeric thresholds, and the aggregate and per-document scored
+metrics matched. Evidence-record integrity did not, so the diagnostic failed
+overall. It is not an acceptance or parity result.
+
+Synthetic OCR tests remain packaging/regression evidence. A materially changed
+candidate needs a genuinely untouched holdout for any new independent claim.
 
 For a future untouched holdout, keep the maintainer sequence explicit: clean
-remote commit and exact green CI; accepted calibration and derived policy;
-path-free immutable pre-test witness; isolated GitHub verification with an
-explicit `GH_TOKEN`; one ledger-claimed run; preservation of private evidence;
-and publication of only a path-free terminal result. Never make the one-shot
-command a normal tag CI job, reset its stable ledger for a protocol revision,
+remote commit and exact green CI; a calibration run that passed its frozen gate
+and its derived policy; path-free immutable pre-test witness; isolated GitHub
+verification with an explicit `GH_TOKEN`; one ledger-claimed run; preservation
+of private evidence; and publication of only a path-free terminal result.
+Never make the one-shot command a normal tag CI job, reset its stable ledger
+for a protocol revision,
 or promote an unsealed output, failed ledger, stale calibration, or synthetic
 smoke as quality acceptance.
 

@@ -120,11 +120,14 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. CPU, DirectML,
-and DirectML+CPU hybrid paths are bundled and live-validated; CUDA OCR is not
-part of the published profile. See [OCR and document analysis](ocr-and-document-analysis.md)
-for formats, exact models, language scope, performance, output coordinates,
-and GPU-contention guidance.
+page. Images are always OCR inputs when the stage is enabled. The current source
+profile defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed
+a per-path inference smoke test. Complete-kit release assets are not published
+yet, and those smokes do not establish cross-provider parity or corpus-level
+quality. CUDA OCR is not part of the profile. See
+[OCR and document analysis](ocr-and-document-analysis.md) for formats, exact
+models, language scope, performance, output coordinates, and GPU-contention
+guidance.
 
 ## Automatic language assessment
 
@@ -164,7 +167,8 @@ confidence values, decision, and source record ID.
 The complete bundle uses the official
 [Hy-MT2 7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF) and
 [Hy-MT2 1.8B](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF) GGUF repositories
-through a private local llama.cpp server. Three profile manifests are published:
+through a private local llama.cpp server. Three profile manifests are defined
+in current source:
 
 | Profile | Model | Bytes | WMT24++ chrF++ | Forensic chrF++ | Identifiers | Strings/s |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |

@@ -130,10 +130,10 @@ Cyrillic, Devanagari, or Korean coverage. For an unsupported script, retain the
 visual original and use a separately validated model/profile. Offline
 translation can only work with characters OCR recovered correctly.
 
-## Historical v2 calibration and its limits
+## Current v3 calibration and test limits
 
-Result scope: this is the published v2, commit-bound, project-defined SROIE
-Task-2-style printed-receipt evaluation on the pinned community
+Result scope: this is a commit-bound, project-defined SROIE Task-2-style
+printed-receipt evaluation on the pinned community
 [`jsdnrs/ICDAR2019-SROIE`](https://huggingface.co/datasets/jsdnrs/ICDAR2019-SROIE/tree/bffe40c26759f3376ec2b3ae9031dbba54cd587c)
 derivative. It is not an official RRC submission, KIE result, universal OCR
 score, handwriting test, or proof that the upstream model never trained on
@@ -141,36 +141,42 @@ SROIE.
 
 | Evidence | Result |
 | --- | --- |
-| Calibration population | 616 selected train documents from 626 raw rows; 10 conflicting duplicate rows excluded by the predeclared image policy |
-| Primary calibration | token F1 0.860229; CER 0.115610; WER 0.218109; localization Hmean 0.978661; exact end-to-end Hmean 0.634888 |
-| Tail calibration | macro token F1 0.857929; p10 token F1 0.784000; p90 CER 0.184987; 0.1623% of documents below 0.50 token F1 |
-| Strict diagnostic | token F1 0.601075; CER 0.335252; WER 0.476079 |
-| CPU calibration path | 616 documents in 1,292.02 s (0.4768 documents/s on that host); output and metrics deterministic in the repeated ten-document view |
-| Independent test | **No quality result.** The 361-document one-shot attempt failed closed during annotation parsing on one degenerate source box; the ledger was consumed and the test was not rerun. |
+| v3 calibration population | 616 selected train documents from 626 raw rows; 10 conflicting duplicate rows excluded by the frozen image policy |
+| v3 calibration | token F1 0.860229; CER 0.115610; WER 0.218109; localization Hmean 0.978661; exact end-to-end Hmean 0.634888 |
+| v3 CPU calibration path | 616 documents in 1,305.28 s (0.4719 documents/s on that host); output and metrics were deterministic in both repeated ten-document runs |
+| Predeclared test attempt | **No quality result.** The 361-document one-shot attempt failed closed during annotation parsing on one degenerate source box; the ledger was consumed and the test was not rerun. Eight exact train/test image overlaps were identified later. |
+| Post-hoc diagnostic population | All 361 test rows audited; eight exact train/test image overlaps excluded; 353 scored; repaired dataset row index 142 retained (zero-based) |
+| Post-hoc diagnostic | token F1 0.855862; CER 0.116711; WER 0.224485; localization Hmean 0.978510; exact end-to-end Hmean 0.625437; every backend met all 11 numeric thresholds, but the overall diagnostic failed its integrity gate |
+| Post-hoc backend speed | CPU 0.4594 documents/s; DirectML 1.2452 documents/s; hybrid 1.2319 documents/s on that host |
+| Post-hoc integrity | **Failed.** Metrics and repeated-run outputs were deterministic, but provider-neutral critical evidence was not exactly equal and confidence observations could not be structurally aligned across providers. This is not acceptance or a parity claim. |
 
-That v2 gate uses Unicode NFC plus casefold before exact comparison; whitespace
+The project gate uses Unicode NFC plus casefold before exact comparison; whitespace
 is normalized, while punctuation and token boundaries still matter. The report
 also embeds a full NFC, case-sensitive diagnostic computed from the same frozen
 OCR output. Casefolding avoids treating capitalization alone as a recognition
 failure; it is not evidence that raw case-sensitive recognition improved.
 
-The exact path-free historical v2
-[calibration report and policy](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v2-20260805-23992fc)
-are publicly inspectable. The accepted calibration report SHA-256 is
-`3b436109523d9a5caff04d662bff8c5e32ec63b1f0717297bc2acbd3574f4775`;
+The exact path-free v3
+[calibration report and policy](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
+are publicly inspectable. The calibration report SHA-256 is
+`5e6be755e913ed0d73d634f25899fe2051b1e62706b461d0a88bfd8765bccd70`;
 its frozen policy SHA-256 is
-`234b4fc4ddacf27c3358f74d0725cf77a997f32201058a54958d9ed7c8bd56f3`.
+`51c6e07d21d128b4886801a232ff3f62adcd06ae5bdd3c38002992c505262852`.
 The immutable [pre-test witness](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-acceptance-v2-20260805-23992fc)
 and [terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
-bind those artifacts to source commit
-`23992fc75b624a3c6dab5bfbd0a4b52949133525`. The terminal result is failed,
-not accepted; its failure is an evidence/protocol outcome rather than a failed
-OCR metric.
+preserve the earlier v2 one-shot chain at source commit
+`23992fc75b624a3c6dab5bfbd0a4b52949133525`; they do not turn the later v3
+calibration into a fresh test. The terminal result is failed, not accepted. The
+run stopped before OCR, so it is not a model-quality result.
 
-Current source uses the v3 adapter, policy, and acceptance schema introduced
-after that failure. It requires a fresh calibration before any v3 metric can be
-reported. The published v2 figures above remain evidence for their exact source
-commit; they are not a v3 acceptance result.
+The immutable
+[post-hoc diagnostic report](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2)
+is bound to candidate commit `81c0fb2b6393d59564645b84422bcf8f7a78e3da`;
+its SHA-256 is
+`4129295263007d9ff8fb4da3f4cd7bbb9134262f66b73dbdd43a3ffef6dee543`.
+It contains no OCR text or host paths. Its `acceptancePassed` value is null and
+its final disposition is `diagnostic-integrity-failed`, so a passing quality
+table must never be paraphrased as independent acceptance.
 
 Synthetic fixtures remain useful packaging tests, while release-specific
 DirectML acceptance remains hardware/runtime evidence. Neither substitutes for
@@ -220,6 +226,8 @@ The smoke regenerates fixed PNG/PDF fixtures, verifies both runtime inventories
 and all model/license bytes, runs CPU/DirectML/hybrid self-tests as selected,
 and requires exact recovery of the fixed forensic lines from the active
 runtime. Air-gap audit hooks and offline environment guards remain enabled.
+This is per-path packaging smoke, not cross-provider parity or SROIE quality
+evidence.
 
 The default `-OcrSmoke` provider set is CPU, DirectML, and hybrid. A generic
 hosted runner must use `-OcrSmokeProviders cpu`; DirectML/hybrid release

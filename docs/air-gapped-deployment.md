@@ -169,7 +169,7 @@ system prerequisites.
 
 ## OCR hardware choices
 
-The v1.9.0 OCR profile in current source contains two packaged runtimes. Its
+The v1.9.0 OCR profile in current source defines two runtime environments. Its
 complete-kit release assets are still pending:
 
 - a CPU-only ONNX Runtime environment, verified separately as a fallback; and
@@ -177,26 +177,38 @@ complete-kit release assets are still pending:
   CPU execution providers. Normal CPU and hybrid requests use provider-specific
   sessions in this active environment.
 
-CPU, DirectML, and DirectML+CPU hybrid paths passed live inference tests. CUDA
-OCR is not bundled or claimed by this profile, even though the general CLI
-accepts `--ocr-provider cuda` for future/custom profiles.
+CPU, DirectML, and DirectML+CPU hybrid paths passed per-path source-profile
+smoke tests. Those checks show that each path can run; they do not establish
+cross-provider equality or corpus-level OCR quality. CUDA OCR is not bundled or
+claimed by this profile, even though the general CLI accepts
+`--ocr-provider cuda` for future/custom profiles.
 
 Three evidence types answer different questions:
 
-- synthetic smoke proves that the packaged paths run and recover fixed text;
-- the historical v2 616-document SROIE calibration provides bounded
+- synthetic smoke demonstrates on fixed fixtures that the packaged paths run
+  and recover expected text;
+- the immutable v3 616-document CPU SROIE calibration provides bounded
   printed-receipt quality evidence for its frozen candidate; and
-- release-specific DirectML acceptance proves the packaged GPU path on the
-  named hardware/driver.
+- release-specific DirectML acceptance demonstrates the packaged GPU path on
+  the named hardware/driver.
 
-The historical v2 SROIE calibration, bound to source commit
-`23992fc75b624a3c6dab5bfbd0a4b52949133525`, passed that candidate's
-NFC-casefold gate. Its separate 361-document one-shot attempt failed closed on
-one degenerate source annotation before producing quality metrics. The attempt
-was consumed and was not rerun; the immutable
+The immutable CPU-only
+[v3 calibration](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-calibration-v3-20260805-e3f4567)
+selected 616 of 626 training documents and passed its frozen calibration gate.
+The exact metrics and artifact hashes are in the
+[OCR benchmark record](ocr-benchmark-2026-08-05.md).
+
+The separate 361-document one-shot test still failed closed on one degenerate
+source annotation before OCR or quality scoring. It was consumed and was not
+rerun; the immutable
 [terminal result](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-terminal-v2-20260805-23992fc)
-therefore does not establish independent acceptance. The current v3 adapter
-still requires fresh calibration. See the
+therefore does not establish independent acceptance. A later immutable
+[post-hoc diagnostic](https://github.com/Donovoi/bstrings/releases/tag/ocr-sroie-posthoc-v2-20260805-81c0fb2)
+audited all 361 rows, excluded eight exact train/test image overlaps, and scored
+353 rows, including repaired dataset row index 142 (zero-based). Every backend
+met all 11 frozen numeric thresholds, and the aggregate and per-document scored
+metrics matched. Evidence-record integrity did not, so the diagnostic failed
+overall. It is not an acceptance or parity result. See the
 [OCR benchmark record](ocr-benchmark-2026-08-05.md).
 
 Hybrid does not guarantee higher throughput, and another GPU-heavy process can
@@ -224,6 +236,9 @@ air-gapped. The translation smoke loads the exact selected GGUF and requires
 complete output plus protected-identifier retention. Recovery smoke sends a
 reviewed benign executable through Magika and FLOSS and requires its fixed
 marker.
+
+These are per-path packaging smokes, not cross-provider parity or SROIE quality
+evidence.
 
 This PowerShell verifier is an administrator/release acceptance tool. The
 normal examiner interface remains `bstrings.exe`.
