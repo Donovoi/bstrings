@@ -519,6 +519,84 @@ class SroiePosthocTests(unittest.TestCase):
         self.assertIs(keyword["stdin"], subprocess.DEVNULL)
         self.assertEqual(posthoc.GIT_TIMEOUT_SECONDS, keyword["timeout"])
 
+    def test_v3_calibration_gate_accepts_distinct_benchmark_and_adapter_protocols(
+        self,
+    ) -> None:
+        identity = {"calibrationCorpus": {}}
+        context = SimpleNamespace(
+            expected_identities=tuple(),
+            identity=identity,
+            report={
+                "acceptancePassed": True,
+                "evaluationRole": "calibration",
+                "integrityPassed": True,
+                "protocol": posthoc.acceptance.PROTOCOL,
+                "runSucceeded": True,
+                "schemaVersion": posthoc.acceptance.SCHEMA_VERSION,
+            },
+            report_sha256="a" * 64,
+            source_image_sha256s=tuple(),
+        )
+        policy = SimpleNamespace(
+            file_sha256="b" * 64,
+            value={
+                "policyId": posthoc.acceptance.sroie_policy.POLICY_ID,
+                "protocol": posthoc.acceptance.PROTOCOL,
+            },
+        )
+        args = argparse.Namespace(
+            calibration_evidence_root=self.root,
+            calibration_report=self.root / "calibration-report.json",
+            policy=self.root / "acceptance-policy.json",
+        )
+        with (
+            patch.object(
+                posthoc.acceptance,
+                "load_calibration_context",
+                return_value=context,
+            ),
+            patch.object(posthoc.acceptance, "build_identity", return_value=identity),
+            patch.object(posthoc.acceptance, "_verify_persisted_runtime_context"),
+            patch.object(
+                posthoc.acceptance.sroie_policy,
+                "validate_policy",
+                return_value=policy,
+            ),
+            patch.object(posthoc.acceptance, "_recheck_policy"),
+        ):
+            loaded_context, loaded_policy, loaded_identity = posthoc._load_v3_calibration(
+                args, SimpleNamespace()
+            )
+        self.assertIs(context, loaded_context)
+        self.assertIs(policy, loaded_policy)
+        self.assertEqual(identity, loaded_identity)
+        self.assertNotEqual(
+            posthoc.acceptance.PROTOCOL,
+            posthoc.acceptance.sroie.SROIE_PROTOCOL,
+        )
+
+        with (
+            patch.object(
+                posthoc.acceptance,
+                "load_calibration_context",
+                return_value=context,
+            ),
+            patch.object(posthoc.acceptance, "build_identity", return_value=identity),
+            patch.object(posthoc.acceptance, "_verify_persisted_runtime_context"),
+            patch.object(
+                posthoc.acceptance.sroie_policy,
+                "validate_policy",
+                return_value=policy,
+            ),
+            patch.object(posthoc.acceptance, "_recheck_policy"),
+            patch.object(posthoc.acceptance.sroie, "SROIE_PROTOCOL", "retired-v2"),
+            self.assertRaisesRegex(
+                posthoc.acceptance.AcceptanceError,
+                "accepted v3 calibration",
+            ),
+        ):
+            posthoc._load_v3_calibration(args, SimpleNamespace())
+
     def test_cross_backend_integrity_requires_all_three_equal_paths(self) -> None:
         frozen = SimpleNamespace(
             worker_sha256="1" * 64,

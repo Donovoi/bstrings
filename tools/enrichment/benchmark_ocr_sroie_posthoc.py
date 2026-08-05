@@ -44,6 +44,7 @@ from typing import Any
 
 POSTHOC_SCHEMA_VERSION = 1
 POSTHOC_PROTOCOL = "bstrings-ICDAR2019-SROIE-repaired-holdout-posthoc-v1"
+EXPECTED_SROIE_ADAPTER_PROTOCOL = "bstrings-ICDAR2019-SROIE-parquet-adapter-v3"
 ACKNOWLEDGEMENT = "POST_HOC_DIAGNOSTIC_ONLY_NOT_INDEPENDENT_ACCEPTANCE"
 ORIGINAL_TERMINAL_RESULT_SHA256 = "10d13e0e93c13c31be6515953cc8563bd576f71537200f642e08fbd050d099b3"
 ORIGINAL_TERMINAL_RESULT_ASSET = "sroie-ocr-terminal-result-v2.json"
@@ -1196,7 +1197,7 @@ def _load_v3_calibration(
     report = context.report
     if (
         acceptance.sroie_policy.POLICY_ID != "bstrings-icdar2019-sroie-train-test-ocr-v3"
-        or acceptance.PROTOCOL != acceptance.sroie.SROIE_PROTOCOL
+        or acceptance.sroie.SROIE_PROTOCOL != EXPECTED_SROIE_ADAPTER_PROTOCOL
         or report.get("evaluationRole") != "calibration"
         or report.get("acceptancePassed") is not True
         or report.get("integrityPassed") is not True
