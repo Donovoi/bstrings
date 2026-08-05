@@ -20,6 +20,30 @@ namespace bstrings;
 
 internal delegate bool LanguageDetectorAvailability(out string? error);
 
+internal sealed record OcrAnalysisSummary(
+    OcrWorkflowMode Mode,
+    OcrProvider RequestedProvider,
+    string? ResolvedProvider,
+    int RequestedThreads,
+    IReadOnlyDictionary<string, int> ResolvedThreadCounts,
+    IReadOnlyDictionary<string, int> ResolvedWorkerCounts,
+    string Engine,
+    string EngineVersion,
+    string Model,
+    string Revision,
+    string ModelSha256,
+    string RuntimeSha256,
+    string DetectorSha256,
+    string RecognizerSha256,
+    string ClassifierSha256,
+    string DictionarySha256,
+    long InputFiles,
+    long ProcessedFiles,
+    long NotApplicableFiles,
+    long Pages,
+    long StringRecords
+);
+
 internal static class AnalysisOrchestrator
 {
     private const uint FileReadAttributes = 0x80;
@@ -42,7 +66,8 @@ internal static class AnalysisOrchestrator
         CancellationToken cancellationToken = default,
         LanguageDetectorAvailability? verifyLanguageDetector = null,
         string? executingExecutablePath = null,
-        Func<string, CancellationToken, Task>? afterInputInventoryCreated = null
+        Func<string, CancellationToken, Task>? afterInputInventoryCreated = null,
+        Func<CancellationToken, Task>? beforeFinalInputVerification = null
     )
     {
         ValidateOptions(options);
@@ -53,6 +78,7 @@ internal static class AnalysisOrchestrator
         AnalysisToolchain? toolchain = null;
         var needsExternalToolchain =
             options.RecoveryMode != ExecutableRecoveryMode.Off
+            || options.OcrMode != OcrWorkflowMode.Off
             || options.TranslationMode is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All;
         var hasImplicitBundle = AnalysisToolchainLocator.HasImplicitBundleConfiguration();
         if (
@@ -68,6 +94,7 @@ internal static class AnalysisOrchestrator
                 requireRecovery: options.RecoveryMode != ExecutableRecoveryMode.Off,
                 requireTranslation: options.TranslationMode
                     is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All,
+                requireOcr: options.OcrMode != OcrWorkflowMode.Off,
                 executingExecutablePath: executingExecutablePath
             );
         }
@@ -101,6 +128,17 @@ internal static class AnalysisOrchestrator
                 toolchain.TranslationModelSha256!
             );
         }
+        OcrValidationRequirements? ocrRequirements = null;
+        if (options.OcrMode != OcrWorkflowMode.Off)
+        {
+            Console.Error.WriteLine("Preflight: verifying the bundled OCR model...");
+            ocrRequirements = OcrCompletionCore.CreateValidationRequirements(
+                toolchain!,
+                options.OcrMode,
+                options.OcrProvider,
+                options.OcrThreads
+            );
+        }
 
         PrepareOutputDirectory(outputDirectory);
         var logsDirectory = Path.Combine(outputDirectory, "logs");
@@ -128,6 +166,8 @@ internal static class AnalysisOrchestrator
         {
             var nativePath = Path.Combine(outputDirectory, "native-strings.jsonl");
             var recoveredPath = Path.Combine(outputDirectory, "recovered-strings.jsonl");
+            var ocrPath = Path.Combine(outputDirectory, "ocr-strings.jsonl");
+            var ocrAssessmentsPath = Path.Combine(outputDirectory, "ocr-assessments.jsonl");
             var rawPath = Path.Combine(outputDirectory, "raw-strings.jsonl");
             var candidatesPath = Path.Combine(outputDirectory, "translation-candidates.jsonl");
             var assessmentsPath = Path.Combine(outputDirectory, "language-assessments.jsonl");
@@ -204,6 +244,7 @@ internal static class AnalysisOrchestrator
                             nativePath,
                             outputDirectory,
                             logsDirectory,
+                            executingExecutablePath,
                             cancellationToken
                         )
                 );
@@ -293,13 +334,94 @@ internal static class AnalysisOrchestrator
                 );
             }
 
+            OcrCompletionStats? ocr = null;
+            if (options.OcrMode == OcrWorkflowMode.Off)
+            {
+                await CreateEmptyFileAtomicAsync(ocrPath, cancellationToken);
+                await CreateEmptyFileAtomicAsync(ocrAssessmentsPath, cancellationToken);
+            }
+            else
+            {
+                FileStream? ocrInventoryLease = null;
+                await RunStageAsync(
+                    "pre-OCR input inventory verification",
+                    stageSeconds,
+                    async () =>
+                        ocrInventoryLease = await InputEvidenceManifest
+                            .AcquireVerifiedInventoryLeaseAsync(
+                                inventoryPath,
+                                inputManifest!,
+                                cancellationToken
+                            )
+                );
+                try
+                {
+                    await RunStageAsync(
+                        "offline OCR",
+                        stageSeconds,
+                        () =>
+                            RunOcrAsync(
+                                options,
+                                toolchain!,
+                                inventoryPath,
+                                inputManifestPath,
+                                ocrPath,
+                                ocrAssessmentsPath,
+                                outputDirectory,
+                                logsDirectory,
+                                cancellationToken
+                            )
+                    );
+                }
+                finally
+                {
+                    if (ocrInventoryLease is not null)
+                    {
+                        await ocrInventoryLease.DisposeAsync();
+                    }
+                }
+                await RunStageAsync(
+                    "post-OCR input verification",
+                    stageSeconds,
+                    async () =>
+                    {
+                        await InputEvidenceManifest.VerifyInventoryAsync(
+                            inventoryPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
+                        await InputEvidenceManifest.VerifyAsync(
+                            inputManifestPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
+                    }
+                );
+                await RunStageAsync(
+                    "OCR provenance validation",
+                    stageSeconds,
+                    async () =>
+                        ocr = await OcrCompletionCore.ValidateAsync(
+                            inventoryPath,
+                            inputManifestPath,
+                            inputManifest!,
+                            ocrPath,
+                            ocrAssessmentsPath,
+                            outputDirectory,
+                            inputFileCount,
+                            ocrRequirements!,
+                            cancellationToken
+                        )
+                );
+            }
+
             EnrichmentMergeStats rawMerge = default;
             await RunStageAsync(
                 "raw record merge",
                 stageSeconds,
                 async () =>
                     rawMerge = await EnrichmentMergeCore.ConcatenateAsync(
-                        [nativePath, recoveredPath],
+                        [nativePath, recoveredPath, ocrPath],
                         rawPath,
                         cancellationToken
                     )
@@ -439,6 +561,28 @@ internal static class AnalysisOrchestrator
                     )
             );
 
+            if (beforeFinalInputVerification is not null)
+            {
+                await beforeFinalInputVerification(cancellationToken);
+            }
+            await RunStageAsync(
+                "final input verification",
+                stageSeconds,
+                async () =>
+                {
+                    await InputEvidenceManifest.VerifyInventoryAsync(
+                        inventoryPath,
+                        inputManifest!,
+                        cancellationToken
+                    );
+                    await InputEvidenceManifest.VerifyAsync(
+                        inputManifestPath,
+                        inputManifest!,
+                        cancellationToken
+                    );
+                }
+            );
+
             var completed = DateTimeOffset.UtcNow;
             var summary = new
             {
@@ -459,6 +603,10 @@ internal static class AnalysisOrchestrator
                 bundleIntegrity,
                 nativeStrings = rawMerge.InputRecords.Count > 0 ? rawMerge.InputRecords[0] : 0,
                 recoveredStrings = rawMerge.InputRecords.Count > 1 ? rawMerge.InputRecords[1] : 0,
+                ocrStrings = rawMerge.InputRecords.Count > 2 ? rawMerge.InputRecords[2] : 0,
+                ocr = ocr is null
+                    ? null
+                    : CreateOcrSummary(options, ocrRequirements!, ocr.Value),
                 rawStrings = rawMerge.OutputRecords,
                 translationCandidates = translationCandidateCount,
                 language = triage is null
@@ -543,10 +691,11 @@ internal static class AnalysisOrchestrator
         string outputPath,
         string workingDirectory,
         string logsDirectory,
+        string? executingExecutablePath,
         CancellationToken cancellationToken
     )
     {
-        var invocation = CurrentExecutableInvocation();
+        var invocation = CurrentExecutableInvocation(executingExecutablePath);
         var arguments = new List<string>(invocation.PrefixArguments);
         arguments.Add("--paths-from");
         arguments.Add(inventoryPath);
@@ -628,6 +777,32 @@ internal static class AnalysisOrchestrator
                 cancellationToken
             );
         }
+        if (options.OcrMode != OcrWorkflowMode.Off)
+        {
+            await ChildProcessRunner.RunAsync(
+                toolchain.OcrExecutable!,
+                ["--version"],
+                workingDirectory,
+                Path.Combine(logsDirectory, "ocr-engine-preflight.stdout.log"),
+                Path.Combine(logsDirectory, "ocr-engine-preflight.stderr.log"),
+                OfflineEnvironment(),
+                cancellationToken
+            );
+            var ocrArguments = BuildOcrPreflightArguments(
+                toolchain,
+                options.OcrProvider,
+                options.OcrThreads
+            );
+            await ChildProcessRunner.RunAsync(
+                toolchain.OcrPythonExecutable!,
+                ocrArguments,
+                workingDirectory,
+                Path.Combine(logsDirectory, "ocr-adapter-preflight.stdout.log"),
+                Path.Combine(logsDirectory, "ocr-adapter-preflight.stderr.log"),
+                OfflineEnvironment(),
+                cancellationToken
+            );
+        }
         if (
             options.TranslationMode
             is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
@@ -681,6 +856,46 @@ internal static class AnalysisOrchestrator
             OfflineEnvironment(),
             cancellationToken
         );
+    }
+
+    private static async Task RunOcrAsync(
+        AnalysisOptions options,
+        AnalysisToolchain toolchain,
+        string inventoryPath,
+        string inputManifestPath,
+        string stringsPath,
+        string assessmentsPath,
+        string workingDirectory,
+        string logsDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var arguments = BuildOcrAnalysisArguments(
+            toolchain,
+            options.OcrMode,
+            options.OcrProvider,
+            options.OcrThreads,
+            inventoryPath,
+            inputManifestPath,
+            stringsPath,
+            assessmentsPath
+        );
+
+        await ChildProcessRunner.RunAsync(
+            toolchain.OcrPythonExecutable!,
+            arguments,
+            workingDirectory,
+            Path.Combine(logsDirectory, "ocr.stdout.log"),
+            Path.Combine(logsDirectory, "ocr.stderr.log"),
+            OfflineEnvironment(),
+            cancellationToken
+        );
+        if (!File.Exists(stringsPath) || !File.Exists(assessmentsPath))
+        {
+            throw new InvalidDataException(
+                "Offline OCR completed without both required JSONL outputs."
+            );
+        }
     }
 
     private static async Task RunTranslationAsync(
@@ -743,6 +958,124 @@ internal static class AnalysisOrchestrator
     private static List<string> PythonPrefix(AnalysisToolchain toolchain) =>
         ["-I", "-B", toolchain.EnrichmentAdapter];
 
+    private static List<string> OcrPythonPrefix(AnalysisToolchain toolchain) =>
+        ["-I", "-B", toolchain.OcrAdapter!];
+
+    internal static List<string> BuildOcrPreflightArguments(
+        AnalysisToolchain toolchain,
+        OcrProvider provider,
+        int threads
+    )
+    {
+        var arguments = OcrPythonPrefix(toolchain);
+        arguments.Add("--airgap");
+        arguments.Add("--self-test");
+        AddOcrIdentityArguments(arguments, toolchain);
+        AddOcrProviderArgument(arguments, provider);
+        AddOcrThreadsArgument(arguments, threads);
+        return arguments;
+    }
+
+    internal static List<string> BuildOcrAnalysisArguments(
+        AnalysisToolchain toolchain,
+        OcrWorkflowMode mode,
+        OcrProvider provider,
+        int threads,
+        string inventoryPath,
+        string inputManifestPath,
+        string stringsPath,
+        string assessmentsPath
+    )
+    {
+        if (mode is not (OcrWorkflowMode.Auto or OcrWorkflowMode.Force))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode));
+        }
+
+        var arguments = OcrPythonPrefix(toolchain);
+        arguments.Add("--airgap");
+        arguments.Add("--paths-from");
+        arguments.Add(inventoryPath);
+        arguments.Add("--input-manifest");
+        arguments.Add(inputManifestPath);
+        arguments.Add("--output");
+        arguments.Add(stringsPath);
+        arguments.Add("--assessments-output");
+        arguments.Add(assessmentsPath);
+        AddOcrIdentityArguments(arguments, toolchain);
+        AddOcrProviderArgument(arguments, provider);
+        AddOcrThreadsArgument(arguments, threads);
+        arguments.Add("--ocr-mode");
+        arguments.Add(mode.ToString().ToLowerInvariant());
+        return arguments;
+    }
+
+    private static void AddOcrProviderArgument(
+        List<string> arguments,
+        OcrProvider provider
+    )
+    {
+        arguments.Add("--provider");
+        arguments.Add(OcrCompletionCore.ProviderArgument(provider));
+    }
+
+    private static void AddOcrThreadsArgument(List<string> arguments, int threads)
+    {
+        OcrCompletionCore.ValidateRequestedThreads(threads);
+        arguments.Add("--threads");
+        arguments.Add(threads.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private static void AddOcrIdentityArguments(
+        List<string> arguments,
+        AnalysisToolchain toolchain
+    )
+    {
+        arguments.Add("--ocr-executable");
+        arguments.Add(toolchain.OcrExecutable!);
+        arguments.Add("--ocr-engine");
+        arguments.Add(toolchain.OcrEngine!);
+        arguments.Add("--ocr-engine-version");
+        arguments.Add(toolchain.OcrEngineVersion!);
+        arguments.Add("--ocr-model-path");
+        arguments.Add(toolchain.OcrModelPath!);
+        arguments.Add("--ocr-model-id");
+        arguments.Add(toolchain.OcrModelId!);
+        arguments.Add("--ocr-model-revision");
+        arguments.Add(toolchain.OcrModelRevision!);
+        arguments.Add("--ocr-model-sha256");
+        arguments.Add(toolchain.OcrModelSha256!);
+    }
+
+    internal static OcrAnalysisSummary CreateOcrSummary(
+        AnalysisOptions options,
+        OcrValidationRequirements requirements,
+        OcrCompletionStats stats
+    ) =>
+        new(
+            options.OcrMode,
+            options.OcrProvider,
+            stats.ResolvedProvider,
+            stats.RequestedThreads,
+            stats.ResolvedThreadCounts,
+            stats.ResolvedWorkerCounts,
+            requirements.Engine,
+            requirements.EngineVersion,
+            requirements.Model,
+            requirements.Revision,
+            requirements.ModelSha256,
+            requirements.RuntimeSha256,
+            requirements.DetectorSha256,
+            requirements.RecognizerSha256,
+            requirements.ClassifierSha256,
+            requirements.DictionarySha256,
+            stats.InputFiles,
+            stats.ProcessedFiles,
+            stats.NotApplicableFiles,
+            stats.Pages,
+            stats.StringRecords
+        );
+
     private static IReadOnlyDictionary<string, string?> OfflineEnvironment() =>
         new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
@@ -753,9 +1086,13 @@ internal static class AnalysisOrchestrator
             ["NO_PROXY"] = "127.0.0.1,localhost",
         };
 
-    private static (string Executable, IReadOnlyList<string> PrefixArguments) CurrentExecutableInvocation()
+    private static (string Executable, IReadOnlyList<string> PrefixArguments) CurrentExecutableInvocation(
+        string? executingExecutablePath = null
+    )
     {
-        var processPath = Environment.ProcessPath;
+        var processPath = string.IsNullOrWhiteSpace(executingExecutablePath)
+            ? Environment.ProcessPath
+            : Path.GetFullPath(executingExecutablePath);
         if (string.IsNullOrWhiteSpace(processPath))
         {
             throw new InvalidOperationException("The current bstrings executable path is unavailable.");
@@ -807,6 +1144,11 @@ internal static class AnalysisOrchestrator
         {
             throw new ArgumentException("A results directory is required with -o.");
         }
+        if (!Enum.IsDefined(options.OcrMode) || !Enum.IsDefined(options.OcrProvider))
+        {
+            throw new ArgumentException("OCR mode or provider is invalid.");
+        }
+        OcrCompletionCore.ValidateRequestedThreads(options.OcrThreads);
         AnalysisCli.ValidateStringLengthBounds(
             options.MinimumStringLength,
             options.MaximumStringLength
@@ -1071,8 +1413,17 @@ internal static class AnalysisOrchestrator
 
     private static void VerifyTranslationModel(AnalysisToolchain toolchain)
     {
-        using var stream = new FileStream(
+        VerifyModel(
             toolchain.TranslationModelPath!,
+            toolchain.TranslationModelSha256!,
+            "Translation"
+        );
+    }
+
+    private static void VerifyModel(string modelPath, string expectedSha256, string description)
+    {
+        using var stream = new FileStream(
+            modelPath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
@@ -1080,11 +1431,11 @@ internal static class AnalysisOrchestrator
             FileOptions.SequentialScan
         );
         var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-        if (!string.Equals(actual, toolchain.TranslationModelSha256, StringComparison.Ordinal))
+        if (!string.Equals(actual, expectedSha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
-                $"Translation model SHA-256 mismatch for '{toolchain.TranslationModelPath}'. "
-                    + $"Expected {toolchain.TranslationModelSha256}, found {actual}."
+                $"{description} model SHA-256 mismatch for '{modelPath}'. "
+                    + $"Expected {expectedSha256}, found {actual}."
             );
         }
     }

@@ -180,6 +180,36 @@ public sealed class InputEvidenceManifestTests
     }
 
     [Fact]
+    public async Task Analyze_EvidenceMutationAfterProcessingFailsBeforeCompletion()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var evidence = scope.PathFor("evidence.bin");
+        var output = scope.PathFor("results");
+        const string original = "analyst@example.com";
+        await File.WriteAllTextAsync(evidence, original, cancellationToken);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            AnalysisOrchestrator.RunAsync(
+                CreateOptions(evidence, output),
+                cancellationToken,
+                executingExecutablePath: Path.Combine(AppContext.BaseDirectory, "bstrings.exe"),
+                beforeFinalInputVerification: token =>
+                    File.WriteAllTextAsync(evidence, new string('X', original.Length), token)
+            )
+        );
+
+        Assert.Contains("content changed", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SHA-256", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(Path.Combine(output, ".incomplete")));
+        Assert.False(File.Exists(Path.Combine(output, "summary.json")));
+        using var run = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(output, "run.json"), cancellationToken)
+        );
+        Assert.Equal("failed", run.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task VerifyAsync_RejectsSameLengthContentMutation()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -235,6 +265,9 @@ public sealed class InputEvidenceManifestTests
             Mask: null,
             OutputDirectory: output,
             Full: false,
+            OcrMode: OcrWorkflowMode.Off,
+            OcrProvider: OcrProvider.Auto,
+            OcrThreads: 0,
             RecoveryMode: ExecutableRecoveryMode.Off,
             TranslationMode: TranslationWorkflowMode.Off,
             LanguageDetectionMode: LanguageDetectionMode.Adaptive,

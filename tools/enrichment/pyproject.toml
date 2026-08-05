@@ -14,6 +14,10 @@ translation = [
 benchmark = [
     "sacrebleu>=2.5,<3",
 ]
+ocr-benchmark = [
+    "pyarrow==25.0.0",
+    "shapely==2.1.2",
+]
 
 [tool.ruff]
 line-length = 100

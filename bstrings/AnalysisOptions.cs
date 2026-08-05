@@ -1,5 +1,7 @@
 #nullable enable
 
+using System.Text.Json.Serialization;
+
 namespace bstrings;
 
 internal enum ExecutableRecoveryMode
@@ -7,6 +9,27 @@ internal enum ExecutableRecoveryMode
     Off,
     Auto,
     Force,
+}
+
+internal enum OcrWorkflowMode
+{
+    Off,
+    Auto,
+    Force,
+}
+
+internal enum OcrProvider
+{
+    [JsonStringEnumMemberName("auto")]
+    Auto,
+    [JsonStringEnumMemberName("cpu")]
+    Cpu,
+    [JsonStringEnumMemberName("cuda")]
+    Cuda,
+    [JsonStringEnumMemberName("directml")]
+    DirectMl,
+    [JsonStringEnumMemberName("hybrid")]
+    Hybrid,
 }
 
 internal enum TranslationWorkflowMode
@@ -23,6 +46,9 @@ internal sealed record AnalysisOptions(
     string? Mask,
     string OutputDirectory,
     bool Full,
+    OcrWorkflowMode OcrMode,
+    OcrProvider OcrProvider,
+    int OcrThreads,
     ExecutableRecoveryMode RecoveryMode,
     TranslationWorkflowMode TranslationMode,
     LanguageDetectionMode LanguageDetectionMode,

@@ -18,7 +18,7 @@ env:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
 
     steps:
       - name: Check out source
@@ -84,7 +84,6 @@ jobs:
         run: |
           python -m ruff check `
             --config tools/enrichment/pyproject.toml `
-            --extend-per-file-ignores tools/airgap/verify_network_guard.py:E402 `
             tools/enrichment `
             tools/airgap
           if ($LASTEXITCODE -ne 0) {
@@ -124,6 +123,10 @@ jobs:
           if ($failed) {
             throw 'PowerShell syntax validation failed.'
           }
+
+      - name: Test offline release evidence validation
+        shell: pwsh
+        run: ./tools/airgap/tests/Test-OfflineProfileReleaseEvidence.ps1
 
       - name: Test Magika cache-only fail-closed guard
         shell: pwsh
@@ -313,19 +316,22 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/cache@v5
         with:
-          path: ${{ runner.temp }}\bstrings-offline\downloads
-          key: bstrings-offline-${{ runner.os }}-${{ hashFiles('tools/airgap/offline-components.lock.json') }}
+          path: |
+            ${{ runner.temp }}\bstrings-offline\downloads
+            ${{ runner.temp }}\bstrings-offline\ocr-downloads
+          key: bstrings-offline-${{ runner.os }}-${{ hashFiles('tools/airgap/offline-components.lock.json', 'tools/airgap/ocr-components.lock.json') }}
 
-      - name: Build complete offline CPU bundle
+      - name: Build complete compact offline bundle
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: pwsh
-        timeout-minutes: 90
+        timeout-minutes: 150
         run: |
           $ErrorActionPreference = 'Stop'
           ./tools/airgap/Build-CompleteOfflineBundle.ps1 `
             -PublishedBstringsDirectory publish/win-x64 `
             -OutputDirectory publish/offline `
-            -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline')
+            -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline') `
+            -TranslationProfile compact
 
       - name: Revalidate the warmed offline cache without network fallback
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -338,25 +344,21 @@ jobs:
             -PublishedBstringsDirectory publish/win-x64 `
             -OutputDirectory $validationOutput `
             -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline') `
+            -TranslationProfile compact `
             -ValidateOnly
           if (Test-Path -LiteralPath $validationOutput) {
             throw 'Cache-only offline validation unexpectedly created bundle output.'
           }
 
-      - name: Package and verify exact offline CPU archive
+      - name: Verify and split the offline release packs
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: pwsh
-        timeout-minutes: 75
+        timeout-minutes: 90
         run: |
           $ErrorActionPreference = 'Stop'
           $bundleRoot = [IO.Path]::GetFullPath((Join-Path $PWD 'publish/offline'))
-          $archive = [IO.Path]::GetFullPath((Join-Path $PWD 'bstrings-win-x64-offline-cpu.zip'))
-          $checksum = $archive + '.sha256'
           if (-not [IO.File]::Exists((Join-Path $bundleRoot 'bstrings.exe'))) {
             throw 'Complete offline bundle does not have bstrings.exe at its root.'
-          }
-          if ([IO.File]::Exists($archive)) {
-            throw "Offline release archive already exists: $archive"
           }
 
           ./tools/licenses/Verify-MagikaRedistribution.ps1 `
@@ -365,46 +367,8 @@ jobs:
             -FlossExecutable (Join-Path $bundleRoot 'tools/floss/floss.exe') `
             -StagedDirectory $bundleRoot
 
-          [IO.Compression.ZipFile]::CreateFromDirectory(
-            $bundleRoot,
-            $archive,
-            [IO.Compression.CompressionLevel]::NoCompression,
-            $false
-          )
-          $archiveItem = Get-Item -LiteralPath $archive
-          if ($archiveItem.Length -ge 2000000000) {
-            throw "Offline release archive is $($archiveItem.Length) bytes; it must be below 2,000,000,000 bytes."
-          }
-          $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          [IO.File]::WriteAllText(
-            $checksum,
-            "$archiveHash  $($archiveItem.Name)`n",
-            [Text.UTF8Encoding]::new($false)
-          )
-
-          $recordedHash = ((Get-Content -LiteralPath $checksum -Raw).Trim() -split '\s+')[0]
-          $verifiedHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($recordedHash -ne $verifiedHash) {
-            throw 'The emitted offline archive checksum does not match the exact archive bytes.'
-          }
-
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'bstrings-offline-archive-verification'
-          if (Test-Path -LiteralPath $extractRoot) {
-            throw "Offline archive verification directory already exists: $extractRoot"
-          }
-          [IO.Compression.ZipFile]::ExtractToDirectory($archive, $extractRoot)
-          $bstrings = Join-Path $extractRoot 'bstrings.exe'
-          if (-not [IO.File]::Exists($bstrings)) {
-            throw 'Extracted archive does not have bstrings.exe at its root.'
-          }
-
-          & $bstrings bundle verify --bundle-root $extractRoot
-          if ($LASTEXITCODE -ne 0) {
-            throw "Root bstrings.exe bundle verification failed with exit code $LASTEXITCODE."
-          }
-
           ./tools/licenses/Verify-ManagedThirdPartyNotices.ps1 `
-            -PublishedDirectory $extractRoot `
+            -PublishedDirectory $bundleRoot `
             -CompleteBundle
 
           $env:HF_DATASETS_OFFLINE = '1'
@@ -415,54 +379,158 @@ jobs:
           $env:HTTPS_PROXY = 'http://127.0.0.1:9'
           $env:ALL_PROXY = 'http://127.0.0.1:9'
 
-          Push-Location $extractRoot
+          Push-Location $bundleRoot
           try {
-            & (Join-Path $extractRoot 'Verify-AirgapBundle.ps1') -TranslationSmoke
-            if ($LASTEXITCODE -ne 0) {
-              throw "Extracted offline full smoke failed with exit code $LASTEXITCODE."
-            }
+            & (Join-Path $bundleRoot 'Verify-AirgapBundle.ps1') `
+              -TranslationSmoke `
+              -OcrSmoke `
+              -OcrSmokeProviders cpu
           }
           finally {
             Pop-Location
           }
 
-      - name: Upload complete offline CPU package
+          $releaseTag = if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $env:GITHUB_REF_NAME
+          }
+          else {
+            "workflow-$env:GITHUB_RUN_ID"
+          }
+          $releaseBase = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/$releaseTag"
+          ./tools/airgap/New-BundlePackRelease.ps1 `
+            -BundleDirectory $bundleRoot `
+            -OutputDirectory release-packs `
+            -ReleaseAssetBaseUrl $releaseBase
+
+          $checksumRows = Get-Content -LiteralPath release-packs/SHA256SUMS.txt
+          foreach ($row in $checksumRows) {
+            if ($row -notmatch '^(?<hash>[0-9a-f]{64})  (?<name>[^/\\]+)$') {
+              throw "Invalid split-pack checksum row: $row"
+            }
+            $actual = (Get-FileHash -LiteralPath (Join-Path release-packs $Matches.name) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $Matches.hash) {
+              throw "Split-pack checksum mismatch: $($Matches.name)"
+            }
+          }
+
+      - name: Upload complete offline split packs
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
         with:
-          name: bstrings-win-x64-offline-cpu
-          path: |
-            bstrings-win-x64-offline-cpu.zip
-            bstrings-win-x64-offline-cpu.zip.sha256
+          name: bstrings-win-x64-offline-packs
+          path: release-packs/*
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
 
-  release:
+  profile-acceptance:
+    name: Accept every advertised offline profile
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
+    runs-on: [self-hosted, Windows, X64, bstrings-offline-release]
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+    concurrency:
+      group: bstrings-offline-profile-acceptance
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out the exact tagged source
+        uses: actions/checkout@v7
+
+      - name: Download core release package
+        uses: actions/download-artifact@v8
+        with:
+          name: bstrings-win-x64
+          path: ${{ runner.temp }}\bstrings-profile-input-${{ github.run_id }}-${{ github.run_attempt }}\core
+
+      - name: Download complete offline split packs
+        uses: actions/download-artifact@v8
+        with:
+          name: bstrings-win-x64-offline-packs
+          path: ${{ runner.temp }}\bstrings-profile-input-${{ github.run_id }}-${{ github.run_attempt }}\packs
+
+      - name: Acquire, assemble, verify, and smoke every profile
+        shell: pwsh
+        timeout-minutes: 330
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inputRoot = Join-Path $env:RUNNER_TEMP "bstrings-profile-input-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          ./tools/airgap/Invoke-OfflineProfileAcceptance.ps1 `
+            -CoreArchive (Join-Path $inputRoot 'core\bstrings-win-x64.zip') `
+            -PackDirectory (Join-Path $inputRoot 'packs') `
+            -WorkingDirectory (Join-Path $env:RUNNER_TEMP "bstrings-profile-work-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT") `
+            -EvidenceDirectory (Join-Path $env:RUNNER_TEMP "bstrings-profile-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT") `
+            -SourceBuildRunId $env:GITHUB_RUN_ID `
+            -SourceRunAttempt $env:GITHUB_RUN_ATTEMPT `
+            -SourceTag $env:GITHUB_REF_NAME `
+            -SourceCommit $env:GITHUB_SHA `
+            -SourceRepository $env:GITHUB_REPOSITORY
+
+      - name: Upload checked profile-acceptance evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: bstrings-offline-profile-acceptance
+          path: ${{ runner.temp }}\bstrings-profile-evidence-${{ github.run_id }}-${{ github.run_attempt }}\offline-profile-acceptance.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, profile-acceptance]
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
+      - name: Check out the exact tagged source
+        uses: actions/checkout@v7
+
       - name: Download core release package
         uses: actions/download-artifact@v8
         with:
           name: bstrings-win-x64
           path: release-assets
 
-      - name: Download complete offline CPU package
+      - name: Download complete offline split packs
         uses: actions/download-artifact@v8
         with:
-          name: bstrings-win-x64-offline-cpu
+          name: bstrings-win-x64-offline-packs
           path: release-assets
+
+      - name: Download checked profile-acceptance evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: bstrings-offline-profile-acceptance
+          path: release-assets
+
+      - name: Validate checked profile-acceptance evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/airgap/Test-OfflineProfileReleaseEvidence.ps1 `
+            -EvidencePath release-assets/offline-profile-acceptance.json `
+            -AssetDirectory release-assets `
+            -ExpectedRepository $env:GITHUB_REPOSITORY `
+            -ExpectedServerUrl $env:GITHUB_SERVER_URL `
+            -ExpectedTag $env:GITHUB_REF_NAME `
+            -ExpectedCommit $env:GITHUB_SHA `
+            -ExpectedBuildRunId $env:GITHUB_RUN_ID `
+            -ComponentLockPath tools/airgap/offline-components.lock.json
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
           files: |
             release-assets/bstrings-win-x64.zip
-            release-assets/bstrings-win-x64-offline-cpu.zip
-            release-assets/bstrings-win-x64-offline-cpu.zip.sha256
+            release-assets/bstrings-win-x64-offline-base.zip
+            release-assets/airgap-config-*.json
+            release-assets/airgap-manifest-*.json
+            release-assets/Hy-MT2-Apache-2.0-*.txt
+            release-assets/bundle-packs-*.json
+            release-assets/SHA256SUMS.txt
+            release-assets/offline-profile-acceptance.json
           generate_release_notes: true
+          fail_on_unmatched_files: true

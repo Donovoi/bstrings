@@ -1,6 +1,10 @@
 # bstrings
 
-`bstrings` is a fast forensic string extractor and pattern matcher with one-command executable recovery, offline language triage, local translation, and provenance-preserving results.
+`bstrings` extracts forensic strings, validates useful identifiers, recovers
+obfuscated strings from executables, reads text from images and PDFs, and can
+translate likely non-English text before matching it. The complete Windows
+bundle is designed for disconnected examinations: the examiner runs one
+`bstrings.exe`, with no separate Python commands or dependency installation.
 
 ## Why choose this fork?
 
@@ -10,62 +14,144 @@
 | Reviewed 33-pattern exactness at 256 MiB | **33/33** | 15/33 | 25/33 stream-comparable | 0/33 through find/RE2 |
 | Shape-correct invalid corpus | **73,480/73,480 rejected** | Regex baseline retained all | Not measured | Scanner semantics differ |
 | Pattern catalog | **51 patterns; 27-pattern `wallets` group with semantic validation** | Smaller legacy catalog | User expressions | Purpose-built scanners |
-| Enrichment and lineage | Native + FLOSS + language assessment + offline translation | None | None | Recursive decoding/carving, without this parent/child catalog pipeline |
-| Hardware paths | SIMD CPU, Rust, CUDA, and CPU+GPU hybrid | CPU | CPU | Multi-threaded CPU |
+| Enrichment | Native + [FLOSS](https://github.com/mandiant/flare-floss) + OCR + language triage + local translation | None | None | Recursive decoding/carving, without this parent/child pipeline |
+| Extraction hardware paths | SIMD CPU, Rust, optional CUDA, and CPU+GPU hybrid | CPU | CPU | Multi-threaded CPU |
 
-These are synthetic warm-cache measurements, not universal rankings. Timings counted only after exact records and offsets passed boundary and terminal tests. Read the [scale](docs/scale-benchmark-2026-08.md), [pattern/engine](docs/pattern-engine-benchmark-2026-08.md), [validity](docs/pattern-validity-review-2026-08.md), and [translation](docs/translation-benchmark-2026-08-04.md) reports before generalising them.
+These are synthetic warm-cache measurements, not universal rankings. Timings
+were accepted only after exact records and offsets passed boundary tests. Read
+the [scale](docs/scale-benchmark-2026-08.md),
+[pattern/engine](docs/pattern-engine-benchmark-2026-08.md),
+[validity](docs/pattern-validity-review-2026-08.md), and
+[translation](docs/translation-benchmark-2026-08-04.md) reports before
+generalising them.
 
-## Download, verify, run
+## Get a complete offline bundle
 
-The complete Windows x64 CPU build is currently delivered by the [Windows build workflow](https://github.com/Donovoi/bstrings/actions/workflows/dotnet-desktop.yml). After this work is merged, choose **Run workflow**, wait for all offline checks, and download the `bstrings-win-x64-offline-cpu` artifact. It contains the ZIP and its SHA-256 file. A future `v<project-version>` tag will publish those same checked files on [Releases](https://github.com/Donovoi/bstrings/releases); no new tag or release is created by this change.
+From a tagged [release](https://github.com/Donovoi/bstrings/releases), download
+the small core ZIP and one trust manifest:
 
-Extract the whole ZIP and keep its directories together. The examiner normally invokes only the root executable:
+- `bundle-packs-quality.json` — default, best measured translation quality;
+- `bundle-packs-balanced.json` — smaller Q8 model; or
+- `bundle-packs-compact.json` — smallest and fastest model.
+
+Extract the core ZIP on a connected staging machine, then let the same
+executable resume, hash-check, and assemble every required pack:
 
 ```powershell
-.\bstrings.exe bundle verify
-.\bstrings.exe analyze -d D:\carved-files --full -o D:\results\case-01
+.\bstrings.exe bundle acquire `
+  --manifest .\bundle-packs-quality.json `
+  --output C:\Tools\bstrings-quality
+
+C:\Tools\bstrings-quality\bstrings.exe bundle verify
 ```
 
-`bundle verify` fails on a missing, extra, linked, resized, or changed file. `--full` runs every bstrings analysis stage: native extraction, Magika routing, FLOSS recovery for supplied PE files, offline language assessment, selected local translation, and pattern matching. A requested stage fails instead of being silently skipped.
+Transfer the complete output directory to the air-gapped machine. Nothing is
+downloaded during examination.
 
-Important scope boundary: bstrings does not parse a filesystem or carve embedded files from a raw disk or memory image. Scan an image directly for byte strings and patterns, or mount/carve it with an appropriate forensic tool first and give bstrings the recovered files. FLOSS sees a PE only when that complete PE is supplied as a file.
+| Profile | Translation model | Model bytes | Intended use |
+| --- | --- | ---: | --- |
+| `quality` (default) | Hy-MT2-7B Q8_0 | 7,981,928,896 | Highest quality measured by this project |
+| `balanced` | Hy-MT2-1.8B Q8_0 | 1,908,528,192 | Much smaller, with higher fidelity than compact |
+| `compact` | Hy-MT2-1.8B Q4_K_M | 1,133,080,448 | Smallest transfer and lower memory use |
+
+GitHub receives one shared base pack below its 2 GB per-file limit. The
+translation model remains an immutable, size- and SHA-256-gated file from its
+official [Hy-MT2 7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF) or
+[Hy-MT2 1.8B](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF) repository.
+`bundle acquire`
+combines those parts into an ordinary complete bundle; the examiner still uses
+one executable. A version-tag release is held until quality, balanced, and
+compact have each been acquired, assembled, strictly verified, and
+translation-smoked; the release includes the
+[checked acceptance record](docs/offline-release-maintenance.md#release-ci-gates).
+
+Treat the selected `bundle-packs-*.json` as a trust input and obtain it through
+an independently trusted release channel. A checksum published beside the
+files detects corruption, but does not authenticate a publisher if an attacker
+can replace both.
 
 ## Common goals
 
-| Goal | Command |
-| --- | --- |
-| Run every bstrings stage over carved files | `bstrings.exe analyze -d D:\carved --full -o D:\results\full` |
-| Run every stage over one executable | `bstrings.exe analyze -f D:\sample.exe --full -o D:\results\sample` |
-| Detect likely non-English text, translate locally, then search | `bstrings.exe analyze -d D:\carved --translation auto --translation-policy high-recall -o D:\results\translated` |
-| Inventory language without translating | `bstrings.exe analyze -d D:\carved --translation detect-only -o D:\results\languages` |
-| Scan a raw disk or memory image for all built-in patterns | `bstrings.exe -f D:\evidence\image.raw --lr all --ro --off -s -o D:\results\image-hits.csv` |
-| Search wallet and ledger identifiers | `bstrings.exe -f D:\evidence\image.raw --lr wallets --ro --off -s -o D:\results\wallets.csv` |
+```powershell
+# Native strings, FLOSS, OCR, language triage, local translation, all patterns
+.\bstrings.exe analyze -d D:\carved --full -o D:\results\full
 
-Run `.\bstrings.exe analyze --help` for the integrated workflow or `.\bstrings.exe --help` for direct extraction/search. Directory analysis is recursive; keep the output directory outside the input tree.
+# OCR supported images/PDFs only when useful; choose the best bundled provider
+.\bstrings.exe analyze -d D:\documents --ocr auto --ocr-provider auto -o D:\results\ocr
 
-## One archive, no dependency installation
+# Render and OCR every supported PDF page, including pages with a text layer
+.\bstrings.exe analyze -f D:\evidence\scan.pdf --ocr force -o D:\results\scan
 
-The `windows-x64-cpu-q4` archive carries the self-contained .NET application, native Rust scanner, isolated CPython runtime, Magika plus app-local DirectML, standalone FLOSS, a source-built CPU llama.cpp runtime, Hy-MT2 Q4_K_M weights, and application-local Visual C++ runtime DLLs. It also carries exact dependency inventories, notices, required corresponding source, provenance, and a strict file manifest.
+# Detect likely language without translating
+.\bstrings.exe analyze -d D:\carved --translation detect-only -o D:\results\languages
 
-Nothing downloads or installs during examination. No separate .NET, Python, PowerShell module, package manager, model, Magika, FLOSS, ONNX Runtime, DirectML package, or Visual C++ runtime installation is required. The private adapter blocks non-loopback networking, model/package-manager offline modes are forced, and llama.cpp binds only to loopback with its `--offline` guard.
+# Direct byte-pattern scan of a raw disk or memory image
+.\bstrings.exe -f D:\evidence\image.raw --lr all --ro --off -s -o D:\results\image-hits.csv
+```
 
-The conservative supported baseline is Windows 11 x64 24H2 or newer. The CPU path needs no GPU. CUDA/hybrid acceleration remains optional and requires a compatible host GPU driver and a separately validated GPU runtime profile; a hardware driver cannot be truthfully bundled with the application. Reduced-PATH, extracted-archive, and hosted-runner checks exist, but pristine disconnected-VM acceptance is still pending and is not claimed here.
+Run `.\bstrings.exe analyze --help` for the integrated workflow or
+`.\bstrings.exe --help` for direct extraction/search. Directory analysis is
+recursive; keep the output directory outside the input tree.
 
-The default Q4 model keeps the complete archive below the 2 GiB GitHub asset limit. In the bounded benchmark it preserved the same 22/22 protected identifiers as Q8, ran about 44% faster, and scored about 1.2–1.3 chrF++ points lower. That is a packaging decision, not a universal quality claim.
+`--full` means every bstrings stage. It does **not** mount filesystems or carve
+embedded files from raw disk or memory images. Use an appropriate forensic
+mounting/carving tool first when that coverage is required. FLOSS receives an
+executable only when the complete executable is supplied as a file.
+
+## What is already bundled
+
+The complete Windows x64 bundle carries the self-contained .NET application,
+native Rust scanner, portable CPython runtimes, [Magika](https://github.com/google/magika),
+[FLOSS](https://github.com/mandiant/flare-floss), a CPU
+[llama.cpp](https://github.com/ggml-org/llama.cpp) runtime, the selected Hy-MT2
+model, and an OCR stack built from [RapidOCR](https://github.com/RapidAI/RapidOCR),
+[PP-OCRv6](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv6/PP-OCRv6.html),
+[PDFium](https://pdfium.googlesource.com/pdfium/),
+[OpenCV](https://github.com/opencv/opencv), and
+[ONNX Runtime](https://github.com/microsoft/onnxruntime). Models, notices,
+licenses, app-local Visual C++ runtime DLLs, dependency inventories, and the
+strict file manifest travel with it.
+
+The shipped OCR profile has live-validated CPU, DirectML, and DirectML+CPU
+hybrid paths. CUDA OCR is accepted by the general interface but is not bundled
+or claimed by this profile. An earlier bounded run found DirectML fastest, but
+current release metrics require the hardened benchmark. Other GPU-heavy work
+can exhaust graphics memory and make DirectML fail, so use `--ocr-provider cpu`
+when stability or resource isolation matters. Hosted CI checks CPU; a release
+claims DirectML and hybrid only with its separate self-hosted
+hardware-acceptance record. OCR completes before translation starts.
+
+The conservative supported baseline is Windows 11 x64 24H2 or newer. No GPU is
+required. A compatible Windows graphics driver is a host prerequisite for
+DirectML and cannot be bundled truthfully with the application.
+
+The standard complete profile deliberately ships the reviewed CPU llama.cpp
+translation runtime. Translation `cuda`/`hybrid` options require a separately
+built and accepted llama.cpp GPU profile plus a compatible host driver; they
+are not silently claimed by this bundle.
 
 ## Results and evidence safety
 
-An integrated run writes immutable input identity, original strings, language assessments, recovered/translated children, regex matches, `run.json`, and `summary.json`. A result is complete only when both status records say `complete` and no `.incomplete` marker remains. Translated matches are investigative leads; confirm consequential findings against the untranslated parent and source evidence.
+Integrated runs keep input hashes, original strings, OCR coordinates and page
+numbers, language assessments, recovered/translated children, regex matches,
+`run.json`, and `summary.json`. A run is complete only when both status records
+say `complete` and no `.incomplete` marker remains. OCR and translated matches
+are investigative leads; verify consequential findings against the original
+file, untranslated parent, and surrounding evidence.
 
 ## Detailed guides
 
 - [Air-gapped deployment and verification](docs/air-gapped-deployment.md)
-- [Offline release maintenance](docs/offline-release-maintenance.md)
+- [OCR and document analysis](docs/ocr-and-document-analysis.md)
 - [Executable recovery, language triage, and translation](docs/enrichment-pipeline.md)
 - [Output, completeness, and provenance](docs/output-and-provenance.md)
-- [Magika CLI redistribution and dependency closure](docs/magika-cli-redistribution.md)
-- [FLOSS standalone redistribution and dependency closure](docs/floss-standalone-redistribution.md)
+- [Offline release maintenance](docs/offline-release-maintenance.md)
 - [Pattern validity and false-positive controls](docs/pattern-validity-review-2026-08.md)
 - [Cryptocurrency address coverage](docs/crypto-address-coverage-2026-08.md)
+- [Magika redistribution](docs/magika-cli-redistribution.md) and
+  [FLOSS redistribution](docs/floss-standalone-redistribution.md)
 
-Developer builds require the pinned .NET/Rust toolchains and release-host tooling; examiners do not. See [offline release maintenance](docs/offline-release-maintenance.md) for build, test, packaging, and licensing steps. The project remains under its upstream terms in [LICENSE.md](LICENSE.md), with component attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Developer builds require the pinned .NET/Rust toolchains and release-host
+tools; examiners do not. The project remains under its upstream terms in
+[LICENSE.md](LICENSE.md), with component attribution in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import socket
@@ -12,7 +13,9 @@ from pathlib import Path
 ENRICHMENT_ROOT = Path(__file__).resolve().parents[1] / "enrichment"
 sys.path.insert(0, str(ENRICHMENT_ROOT))
 
-from bstrings_enrich import AirgapNetworkError, enable_airgap_mode
+bstrings_enrich = importlib.import_module("bstrings_enrich")
+AirgapNetworkError = bstrings_enrich.AirgapNetworkError
+enable_airgap_mode = bstrings_enrich.enable_airgap_mode
 
 
 def main() -> int:
@@ -48,9 +51,7 @@ def main() -> int:
             connection, _ = listener.accept()
             connection.close()
 
-    print(
-        json.dumps({"externalBlocked": True, "loopbackAllowed": True}, sort_keys=True)
-    )
+    print(json.dumps({"externalBlocked": True, "loopbackAllowed": True}, sort_keys=True))
     return 0
 
 

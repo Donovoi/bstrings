@@ -117,7 +117,7 @@ function Get-PeImports([string]$Dumpbin, [string]$Path) {
 
 $lockPath = Resolve-ExistingFile $ComponentLockPath 'Offline component lock'
 $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
-if ($lock.schemaVersion -ne 1 -or $lock.profile -ne 'windows-x64-cpu-q4') {
+if ($lock.schemaVersion -ne 1 -or $lock.profile -ne 'windows-x64-offline-v2') {
     throw "Unsupported offline component lock schema or profile: $lockPath"
 }
 $component = $lock.components.llamaCpp

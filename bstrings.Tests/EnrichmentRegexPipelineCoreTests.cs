@@ -119,6 +119,77 @@ public sealed class EnrichmentRegexPipelineCoreTests
     }
 
     [Fact]
+    public async Task ProcessAsync_LabelsOcrOriginalsAndPreservesTheirModelIdentity()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("ocr.jsonl");
+        await File.WriteAllTextAsync(
+            inputPath,
+            OcrRecord("ocr-1", "contact analyst@example.com", "revision-1"),
+            cancellationToken
+        );
+        var output = new StringWriter();
+
+        var stats = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            outputPath: null,
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            output,
+            cancellationToken
+        );
+
+        Assert.Equal(1, stats.MatchRecords);
+        using var row = JsonDocument.Parse(output.ToString());
+        Assert.Equal("derived-extractor", row.RootElement.GetProperty("evidenceClass").GetString());
+        var origin = row.RootElement.GetProperty("origin");
+        Assert.Equal("ocr", origin.GetProperty("kind").GetString());
+        Assert.Equal("fixture/ocr-model", origin.GetProperty("model").GetString());
+        Assert.Equal("revision-1", origin.GetProperty("revision").GetString());
+        Assert.Equal(new string('a', 64), origin.GetProperty("modelSha256").GetString());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TrustedStreamRejectsTranslationThatChangesOcrModelLineage()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("invalid-ocr-lineage.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                OcrRecord("ocr-1", "bonjour analyst", "revision-1"),
+                OcrTranslation("translated-1", "ocr-1", "owner@example.com", "revision-2"),
+            ],
+            cancellationToken
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                outputPath: null,
+                [("email", BuiltInPatternCatalog.Patterns["email"])],
+                new StringWriter(),
+                cancellationToken,
+                trustedParentFirstInput: true,
+                translationRequirements: new TranslationValidationRequirements(
+                    "llama.cpp",
+                    "en",
+                    "fixture/translation-model",
+                    "translation-revision",
+                    new string('b', 64)
+                )
+            )
+        );
+
+        Assert.Contains(
+            "exact sourceFile, location, and origin",
+            error.Message,
+            StringComparison.OrdinalIgnoreCase
+        );
+    }
+
+    [Fact]
     public async Task ProcessAsync_UsesBuiltInCaptureSemantics()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -242,6 +313,8 @@ public sealed class EnrichmentRegexPipelineCoreTests
     [InlineData("{\"schemaVersion\":2,\"recordType\":\"string\",\"recordId\":\"x\",\"text\":\"a@b.com\",\"sourceFile\":\"x\",\"location\":{\"kind\":\"file_offset\",\"value\":\"0x0\"},\"origin\":{\"extractor\":\"floss\",\"kind\":\"static\"}}", "schema version")]
     [InlineData("{\"schemaVersion\":1,\"recordType\":\"string\",\"recordId\":\"x\",\"sourceFile\":\"x\",\"location\":{\"kind\":\"file_offset\",\"value\":\"0x0\"},\"origin\":{\"extractor\":\"floss\",\"kind\":\"static\"}}", "usable text")]
     [InlineData("{\"schemaVersion\":1,\"recordType\":\"string\",\"recordId\":\"x\",\"text\":\"a@b.com\",\"sourceFile\":\"x\",\"location\":{\"kind\":\"file_offset\",\"value\":\"0x0\"},\"origin\":{\"extractor\":\"floss\",\"kind\":\"static\"},\"transform\":{\"kind\":\"unknown\"}}", "unsupported transform")]
+    [InlineData("{\"schemaVersion\":1,\"recordType\":\"string\",\"recordId\":\"x\",\"text\":\"a@b.com\",\"sourceFile\":\"x\",\"location\":{\"kind\":\"page_region\",\"value\":\"page=1\"},\"origin\":{\"extractor\":\"ocr\",\"kind\":\"ocr\",\"model\":\"model-only\"}}", "complete origin model")]
+    [InlineData("{\"schemaVersion\":1,\"recordType\":\"string\",\"recordId\":\"x\",\"text\":\"a@b.com\",\"sourceFile\":\"x\",\"location\":{\"kind\":\"page_region\",\"value\":\"page=1\"},\"origin\":{\"extractor\":\"ocr\",\"kind\":\"ocr\",\"model\":\"model\",\"revision\":\"rev\",\"modelSha256\":\"not-a-hash\"}}", "64-character modelSha256")]
     public async Task ProcessAsync_RejectsInvalidEvidenceRecords(string line, string expectedMessage)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -307,6 +380,67 @@ public sealed class EnrichmentRegexPipelineCoreTests
             }
         );
     }
+
+    private static string OcrRecord(string recordId, string text, string originRevision) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion = 1,
+                recordType = "string",
+                recordId,
+                text,
+                sourceFile = "document.pdf",
+                location = new { kind = "page_region", value = "page=1;x=10;y=20;w=30;h=40" },
+                origin = new
+                {
+                    extractor = "fixture-ocr",
+                    version = "1.0.0",
+                    kind = "ocr",
+                    model = "fixture/ocr-model",
+                    revision = originRevision,
+                    modelSha256 = new string('a', 64),
+                },
+            }
+        );
+
+    private static string OcrTranslation(
+        string recordId,
+        string parentRecordId,
+        string text,
+        string originRevision
+    ) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion = 1,
+                recordType = "string",
+                recordId,
+                text,
+                sourceFile = "document.pdf",
+                location = new { kind = "page_region", value = "page=1;x=10;y=20;w=30;h=40" },
+                origin = new
+                {
+                    extractor = "fixture-ocr",
+                    version = "1.0.0",
+                    kind = "ocr",
+                    model = "fixture/ocr-model",
+                    revision = originRevision,
+                    modelSha256 = new string('a', 64),
+                },
+                parentRecordId,
+                transform = new
+                {
+                    kind = "translation",
+                    engine = "llama.cpp",
+                    engineVersion = "fixture",
+                    model = "fixture/translation-model",
+                    revision = "translation-revision",
+                    modelSha256 = new string('b', 64),
+                    targetLanguage = "en",
+                    outcome = "translated",
+                },
+            }
+        );
 
     private sealed class TemporaryDirectory : IDisposable
     {

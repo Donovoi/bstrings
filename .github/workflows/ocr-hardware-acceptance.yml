@@ -1,0 +1,199 @@
+name: OCR DirectML hardware acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Build-workflow run ID containing the core and offline-pack artifacts
+        required: true
+        type: number
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: bstrings-ocr-hardware-${{ inputs.source_run_id }}
+  cancel-in-progress: false
+
+jobs:
+  accept-directml:
+    name: CPU, DirectML, and hybrid acceptance
+    runs-on: [self-hosted, Windows, X64, bstrings-directml]
+    timeout-minutes: 180
+
+    steps:
+      - name: Validate the selected build run ID
+        shell: pwsh
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:SOURCE_RUN_ID -notmatch '^[1-9][0-9]*$') {
+            throw 'source_run_id must be a positive numeric GitHub Actions run ID.'
+          }
+
+      - name: Download core artifact from the selected build
+        uses: actions/download-artifact@v8
+        with:
+          name: bstrings-win-x64
+          path: ${{ runner.temp }}\bstrings-hardware-input-${{ github.run_id }}-${{ github.run_attempt }}\core
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Download offline packs from the selected build
+        uses: actions/download-artifact@v8
+        with:
+          name: bstrings-win-x64-offline-packs
+          path: ${{ runner.temp }}\bstrings-hardware-input-${{ github.run_id }}-${{ github.run_attempt }}\packs
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Assemble the exact compact bundle
+        id: assemble
+        shell: pwsh
+        timeout-minutes: 90
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $inputRoot = Join-Path $env:RUNNER_TEMP "bstrings-hardware-input-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $workRoot = Join-Path $env:RUNNER_TEMP "bstrings-hardware-work-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $workRoot) {
+            throw "Hardware acceptance work directory already exists: $workRoot"
+          }
+          [IO.Directory]::CreateDirectory($workRoot) | Out-Null
+
+          $coreArchives = @(
+            Get-ChildItem -LiteralPath (Join-Path $inputRoot 'core') -Recurse -File `
+              -Filter 'bstrings-win-x64.zip'
+          )
+          if ($coreArchives.Count -ne 1) {
+            throw "Expected one core ZIP, found $($coreArchives.Count)."
+          }
+          $coreRoot = Join-Path $workRoot 'core'
+          [IO.Compression.ZipFile]::ExtractToDirectory($coreArchives[0].FullName, $coreRoot)
+          $coreExecutable = Join-Path $coreRoot 'bstrings.exe'
+          if (-not (Test-Path -LiteralPath $coreExecutable -PathType Leaf)) {
+            throw 'The selected core artifact has no root bstrings.exe.'
+          }
+
+          $packsRoot = Join-Path $inputRoot 'packs'
+          $trustManifest = Get-ChildItem -LiteralPath $packsRoot -Recurse -File `
+            -Filter 'bundle-packs-compact.json'
+          if (@($trustManifest).Count -ne 1) {
+            throw 'Expected one compact split-pack trust manifest.'
+          }
+          $packCache = Join-Path $workRoot 'pack-cache'
+          [IO.Directory]::CreateDirectory($packCache) | Out-Null
+          $cacheInputs = [ordered]@{
+            'bstrings-win-x64-offline-base.zip' = 'base.zip'
+            'airgap-config-compact.json' = 'configuration.file'
+            'Hy-MT2-Apache-2.0-compact.txt' = 'translation-license.file'
+            'airgap-manifest-compact.json' = 'airgap-manifest.file'
+          }
+          foreach ($sourceName in $cacheInputs.Keys) {
+            $source = @(Get-ChildItem -LiteralPath $packsRoot -Recurse -File -Filter $sourceName)
+            if ($source.Count -ne 1) {
+              throw "Expected one hardware-acceptance pack input named $sourceName."
+            }
+            Copy-Item -LiteralPath $source[0].FullName `
+              -Destination (Join-Path $packCache $cacheInputs[$sourceName])
+          }
+
+          $bundleRoot = Join-Path $workRoot 'bundle'
+          & $coreExecutable bundle acquire `
+            --manifest $trustManifest.FullName `
+            --cache $packCache `
+            --output $bundleRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Compact bundle acquisition failed with exit code $LASTEXITCODE."
+          }
+          & (Join-Path $bundleRoot 'bstrings.exe') bundle verify --bundle-root $bundleRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Assembled compact bundle verification failed with exit code $LASTEXITCODE."
+          }
+          "bundle_root=$bundleRoot" >> $env:GITHUB_OUTPUT
+          "trust_manifest=$($trustManifest.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Run real CPU, DirectML, and hybrid OCR acceptance
+        shell: pwsh
+        timeout-minutes: 60
+        env:
+          BUNDLE_ROOT: ${{ steps.assemble.outputs.bundle_root }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleRoot = $env:BUNDLE_ROOT
+          Push-Location $bundleRoot
+          try {
+            & (Join-Path $bundleRoot 'Verify-AirgapBundle.ps1') `
+              -OcrSmoke `
+              -OcrSmokeProviders @('cpu', 'directml', 'hybrid')
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Record hardware acceptance evidence
+        id: evidence
+        shell: pwsh
+        env:
+          BUNDLE_ROOT: ${{ steps.assemble.outputs.bundle_root }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          TRUST_MANIFEST: ${{ steps.assemble.outputs.trust_manifest }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleRoot = $env:BUNDLE_ROOT
+          $evidenceRoot = Join-Path $env:RUNNER_TEMP "bstrings-ocr-hardware-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $evidenceRoot) {
+            throw "Hardware evidence directory already exists: $evidenceRoot"
+          }
+          [IO.Directory]::CreateDirectory($evidenceRoot) | Out-Null
+          $controllers = @()
+          try {
+            $controllers = @(
+              Get-CimInstance Win32_VideoController | ForEach-Object {
+                [ordered]@{
+                  name = [string]$_.Name
+                  driverVersion = [string]$_.DriverVersion
+                }
+              }
+            )
+          }
+          catch {
+            $controllers = @([ordered]@{ name = 'unavailable'; driverVersion = 'unavailable' })
+          }
+          $manifestPath = Join-Path $bundleRoot 'airgap-manifest.json'
+          $ocrLockPath = Join-Path $bundleRoot 'ocr-components.lock.json'
+          $trustManifestPath = $env:TRUST_MANIFEST
+          if (-not (Test-Path -LiteralPath $trustManifestPath -PathType Leaf)) {
+            throw 'The selected split-pack trust manifest is unavailable for evidence recording.'
+          }
+          $record = [ordered]@{
+            schemaVersion = 1
+            status = 'passed'
+            classification = 'synthetic-hardware-acceptance'
+            generatedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+            sourceBuildRunId = $env:SOURCE_RUN_ID
+            hardwareWorkflowRunId = $env:GITHUB_RUN_ID
+            hardwareWorkflowRunAttempt = $env:GITHUB_RUN_ATTEMPT
+            providers = @('cpu', 'directml', 'hybrid-directml-cpu')
+            bundlePackTrustManifestSha256 = (Get-FileHash -LiteralPath $trustManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            airgapManifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            ocrComponentLockSha256 = (Get-FileHash -LiteralPath $ocrLockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            videoControllers = $controllers
+          }
+          $evidencePath = Join-Path $evidenceRoot 'ocr-hardware-acceptance.json'
+          [IO.File]::WriteAllText(
+            $evidencePath,
+            ($record | ConvertTo-Json -Depth 6) + "`n",
+            [Text.UTF8Encoding]::new($false)
+          )
+          "evidence_root=$evidenceRoot" >> $env:GITHUB_OUTPUT
+
+      - name: Upload hardware acceptance evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: bstrings-ocr-hardware-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.evidence.outputs.evidence_root }}\ocr-hardware-acceptance.json
+          if-no-files-found: error
+          retention-days: 90

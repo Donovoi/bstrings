@@ -21,14 +21,20 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$VisualCppRuntimeDirectory,
     [Parameter(Mandatory = $true)]
+    [string]$OcrComponentsDirectory,
+    [Parameter(Mandatory = $true)]
     [string]$TranslationModelRevision,
-    [string]$TranslationModelId = 'tencent/Hy-MT2-1.8B-GGUF',
+    [ValidateSet('quality', 'balanced', 'compact')]
+    [string]$TranslationProfile = 'quality',
+    [ValidateSet('cpu', 'directml', 'hybrid')]
+    [string[]]$OcrSelfTestProviders = @('cpu'),
+    [string]$TranslationModelId = 'tencent/Hy-MT2-7B-GGUF',
     [string]$BstringsExecutable = 'bstrings.exe',
     [string]$PythonExecutable = 'python.exe',
     [string]$MagikaExecutable = 'magika.exe',
     [string]$FlossExecutable = 'floss.exe',
     [string]$LlamaServerExecutable = 'llama-server.exe',
-    [string]$TranslationModel = 'Hy-MT2-1.8B-Q4_K_M.gguf',
+    [string]$TranslationModel = 'HY-MT2-7B-Q8_0.gguf',
     [string]$ComponentLockPath,
     [string]$RapidsPythonDirectory,
     [string]$RapidsPythonExecutable = 'python.exe',
@@ -41,6 +47,17 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$resolvedOcrSelfTestProviders = @(
+    $OcrSelfTestProviders | ForEach-Object { $_.ToLowerInvariant() }
+)
+if (
+    $resolvedOcrSelfTestProviders.Count -lt 1 -or
+    @($resolvedOcrSelfTestProviders | Sort-Object -Unique).Count -ne
+        $resolvedOcrSelfTestProviders.Count -or
+    'cpu' -notin $resolvedOcrSelfTestProviders
+) {
+    throw 'OcrSelfTestProviders must contain cpu and may add each hardware provider once.'
+}
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $defaultComponentLock = Join-Path $PSScriptRoot 'offline-components.lock.json'
 if ([string]::IsNullOrWhiteSpace($ComponentLockPath)) {
@@ -173,7 +190,7 @@ $resolvedComponentLock = Resolve-ChildFile `
     (Split-Path -Leaf $ComponentLockPath) `
     'Offline component lock'
 $componentLock = Get-Content -LiteralPath $resolvedComponentLock -Raw | ConvertFrom-Json
-if ($componentLock.schemaVersion -ne 1 -or $componentLock.profile -ne 'windows-x64-cpu-q4') {
+if ($componentLock.schemaVersion -ne 1 -or $componentLock.profile -ne 'windows-x64-offline-v2') {
     throw "Unsupported offline component lock schema or profile: $resolvedComponentLock"
 }
 $requiredComponents = @('python', 'magika', 'floss', 'llamaCpp', 'translationModel')
@@ -188,7 +205,7 @@ if (
     [string]$llamaLock.sourceCommit -notmatch '^[0-9a-f]{40}$' -or
     [string]$llamaLock.sourceTag -ne [string]$llamaLock.version
 ) {
-    throw 'The CPU/Q4 component lock must pin a full llama.cpp source commit and matching tag.'
+    throw 'The offline component lock must pin a full llama.cpp source commit and matching tag.'
 }
 $magikaRedistributionLock = $componentLock.components.magika.redistribution
 if (
@@ -203,7 +220,7 @@ if (
     [long]$magikaRedistributionLock.stagedFiles -lt 1 -or
     [long]$magikaRedistributionLock.stagedBytes -lt 1
 ) {
-    throw 'The CPU/Q4 component lock has an invalid Magika redistribution overlay.'
+    throw 'The offline component lock has an invalid Magika redistribution overlay.'
 }
 $magikaInventoryPath = Resolve-ChildFile `
     $repoRoot `
@@ -233,7 +250,7 @@ if (
     [long]$flossRedistributionLock.stagedFiles -lt 1 -or
     [long]$flossRedistributionLock.stagedBytes -lt 1
 ) {
-    throw 'The CPU/Q4 component lock has an invalid FLOSS redistribution overlay.'
+    throw 'The offline component lock has an invalid FLOSS redistribution overlay.'
 }
 $flossInventoryPath = Resolve-ChildFile `
     $repoRoot `
@@ -252,15 +269,82 @@ $flossVerifyScript = Resolve-ChildFile `
     $repoRoot `
     ([string]$flossRedistributionLock.verifyScript) `
     'FLOSS redistribution verifier'
-$modelLock = $componentLock.components.translationModel
+$translationProfileNames = @($componentLock.translationProfiles.PSObject.Properties.Name)
+if (
+    [string]$componentLock.defaultTranslationProfile -ne 'quality' -or
+    (@($translationProfileNames | Sort-Object) -join '|') -cne 'balanced|compact|quality'
+) {
+    throw 'The offline component lock must define quality, balanced, and compact translation profiles with quality as default.'
+}
+$modelLock = $componentLock.translationProfiles.$TranslationProfile
+if ($null -eq $modelLock) {
+    throw "Translation profile is not present in the component lock: $TranslationProfile"
+}
+$componentLock.components.translationModel = $modelLock
 if (
     $TranslationModel -ne $modelLock.fileName -or
     $TranslationModelId -ne $modelLock.modelId -or
     $TranslationModelRevision -ne $modelLock.revision
 ) {
-    throw 'The requested translation model name, ID, or revision does not match the pinned CPU/Q4 component lock.'
+    throw 'The requested translation model name, ID, or revision does not match the selected translation profile.'
 }
 $componentLockHash = (Get-FileHash -LiteralPath $resolvedComponentLock -Algorithm SHA256).Hash.ToLowerInvariant()
+$resolvedOcrComponentLock = Resolve-ChildFile `
+    (Join-Path $repoRoot 'tools\airgap') `
+    'ocr-components.lock.json' `
+    'OCR component lock'
+$ocrComponentLock = Get-Content -LiteralPath $resolvedOcrComponentLock -Raw | ConvertFrom-Json
+if (
+    [int]$ocrComponentLock.schemaVersion -ne 1 -or
+    [string]$ocrComponentLock.profile -ne 'windows-x64-ocr-cpu-directml-v1'
+) {
+    throw "Unsupported OCR component lock schema or profile: $resolvedOcrComponentLock"
+}
+
+function Assert-OcrSelfTest(
+    [string]$Python,
+    [string]$Worker,
+    [string]$ModelPack,
+    [object]$OcrLock,
+    [string]$RequestedProvider,
+    [string]$ExpectedProvider,
+    [string]$Name
+) {
+    $probeOutput = (& $Python -I -B $Worker `
+        --airgap `
+        --self-test `
+        --ocr-executable $Python `
+        --ocr-engine rapidocr `
+        --ocr-engine-version 3.9.2 `
+        --ocr-model-path $ModelPack `
+        --ocr-model-id ([string]$OcrLock.modelPack.modelId) `
+        --ocr-model-revision ([string]$OcrLock.modelPack.revision) `
+        --ocr-model-sha256 ([string]$OcrLock.modelPack.sha256) `
+        --provider $RequestedProvider 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Name self-test failed with exit code ${LASTEXITCODE}: $probeOutput"
+    }
+    try {
+        $probe = $probeOutput | ConvertFrom-Json
+    }
+    catch {
+        throw "$Name self-test did not emit one JSON result: $probeOutput"
+    }
+    if (
+        [int]$probe.schemaVersion -ne 1 -or
+        [string]$probe.status -ne 'ok' -or
+        [string]$probe.engine -ne 'rapidocr' -or
+        [string]$probe.engineVersion -ne '3.9.2' -or
+        [string]$probe.model -ne [string]$OcrLock.modelPack.modelId -or
+        [string]$probe.revision -ne [string]$OcrLock.modelPack.revision -or
+        [string]$probe.modelSha256 -ne [string]$OcrLock.modelPack.sha256 -or
+        [string]$probe.provider -ne $ExpectedProvider
+    ) {
+        throw "$Name self-test identity or resolved provider did not match its lock: $probeOutput"
+    }
+    Write-Host "$Name self-test passed as $ExpectedProvider."
+}
+$ocrComponentLockHash = (Get-FileHash -LiteralPath $resolvedOcrComponentLock -Algorithm SHA256).Hash.ToLowerInvariant()
 
 $sources = [ordered]@{
     bstrings = Resolve-RequiredDirectory $PublishedBstringsDirectory 'Published bstrings directory'
@@ -278,6 +362,7 @@ $sources = [ordered]@{
     visualCppRuntime = Resolve-RequiredDirectory `
         $VisualCppRuntimeDirectory `
         'Visual C++ x64 app-local runtime directory'
+    ocr = Resolve-RequiredDirectory $OcrComponentsDirectory 'Staged OCR components directory'
 }
 $system32 = [IO.Path]::GetFullPath(
     (Join-Path ([Environment]::GetFolderPath('Windows')) 'System32')
@@ -300,6 +385,105 @@ $sourceMagika = Resolve-ChildFile $sources.magika $MagikaExecutable 'Magika exec
 $sourceFloss = Resolve-ChildFile $sources.floss $FlossExecutable 'FLOSS executable'
 $sourceLlama = Resolve-ChildFile $sources.llama $LlamaServerExecutable 'llama.cpp server'
 $sourceModel = Resolve-ChildFile $sources.model $TranslationModel 'Translation model'
+$sourceOcrLock = Resolve-ChildFile $sources.ocr 'ocr-components.lock.json' 'Staged OCR component lock'
+$sourceOcrInventory = Resolve-ChildFile `
+    $sources.ocr `
+    'licenses/ocr-runtime-files.json' `
+    'Staged OCR runtime file inventory'
+$sourceOcrLicenseInventory = Resolve-ChildFile `
+    $sources.ocr `
+    'licenses/ocr-runtime-win-x64.json' `
+    'Staged OCR license inventory'
+$sourceOcrActivePython = Resolve-ChildFile `
+    $sources.ocr `
+    'runtime/ocr-directml/python.exe' `
+    'Active DirectML OCR Python runtime'
+$sourceOcrCpuPython = Resolve-ChildFile `
+    $sources.ocr `
+    'runtime/ocr-cpu/python.exe' `
+    'Alternate CPU-only OCR Python runtime'
+$sourceOcrModel = Resolve-ChildFile `
+    $sources.ocr `
+    'models/ocr/ocr-model-pack.json' `
+    'OCR model-pack manifest'
+$sourceOcrWorker = Resolve-ChildFile `
+    (Join-Path $repoRoot 'tools\enrichment') `
+    'bstrings_ocr.py' `
+    'OCR worker'
+if (
+    (Get-FileHash -LiteralPath $sourceOcrLock -Algorithm SHA256).Hash.ToLowerInvariant() -ne
+    $ocrComponentLockHash
+) {
+    throw 'The staged OCR component lock differs from the reviewed repository lock.'
+}
+Assert-ExactFile `
+    $sourceOcrModel `
+    ([long]$ocrComponentLock.modelPack.bytes) `
+    ([string]$ocrComponentLock.modelPack.sha256) `
+    'OCR model-pack manifest'
+$ocrRuntimeInventory = Get-Content -LiteralPath $sourceOcrInventory -Raw | ConvertFrom-Json
+if (
+    [int]$ocrRuntimeInventory.schemaVersion -ne 1 -or
+    [string]$ocrRuntimeInventory.profile -ne [string]$ocrComponentLock.profile -or
+    [string]$ocrRuntimeInventory.componentLockSha256 -ne $ocrComponentLockHash
+) {
+    throw 'Staged OCR runtime inventory does not identify the reviewed OCR component lock.'
+}
+$repositoryOcrLicenseInventory = Resolve-ChildFile `
+    (Join-Path $repoRoot 'licenses') `
+    'ocr-runtime-win-x64.json' `
+    'Reviewed OCR license inventory'
+if (
+    (Get-FileHash -LiteralPath $sourceOcrLicenseInventory -Algorithm SHA256).Hash -cne
+    (Get-FileHash -LiteralPath $repositoryOcrLicenseInventory -Algorithm SHA256).Hash
+) {
+    throw 'Staged OCR license inventory differs from the reviewed repository inventory.'
+}
+$ocrRuntimeDllNames = @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'msvcp140_1.dll')
+foreach ($runtimeName in @('cpu', 'directml')) {
+    $rows = @($ocrRuntimeInventory.runtimeFiles.$runtimeName)
+    if ($rows.Count -lt 1) {
+        throw "Staged OCR runtime inventory contains no $runtimeName files."
+    }
+    $lockedRelativePaths = @($rows | ForEach-Object { [string]$_.path })
+    foreach ($row in $rows) {
+        $runtimeFile = Resolve-ChildFile `
+            (Join-Path $sources.ocr "runtime\ocr-$runtimeName") `
+            ([string]$row.path) `
+            "Staged $runtimeName OCR runtime file"
+        Assert-ExactFile `
+            $runtimeFile `
+            ([long]$row.bytes) `
+            ([string]$row.sha256) `
+            "Staged $runtimeName OCR runtime file"
+    }
+    $unexpectedRuntimeFiles = @(
+        Get-ChildItem `
+            -LiteralPath (Join-Path $sources.ocr "runtime\ocr-$runtimeName") `
+            -Recurse `
+            -File | Where-Object {
+                $relative = $_.FullName.Substring(
+                    (Join-Path $sources.ocr "runtime\ocr-$runtimeName").Length + 1
+                ).Replace('\', '/')
+                $lockedRelativePaths -notcontains $relative -and
+                $ocrRuntimeDllNames -notcontains $_.Name
+            }
+    )
+    if ($unexpectedRuntimeFiles.Count -ne 0) {
+        throw "Staged $runtimeName OCR runtime contains unreviewed files: $($unexpectedRuntimeFiles.FullName -join ', ')"
+    }
+}
+foreach ($license in $ocrComponentLock.supplementalLicenses) {
+    $licensePath = Resolve-ChildFile `
+        (Join-Path $sources.ocr 'licenses\ocr-runtime') `
+        ([string]$license.fileName) `
+        "Supplemental OCR license $($license.id)"
+    Assert-ExactFile `
+        $licensePath `
+        ([long]$license.bytes) `
+        ([string]$license.sha256) `
+        "Supplemental OCR license $($license.id)"
+}
 foreach ($sourceName in $sources.Keys) {
     Assert-NoReparsePoints $sources[$sourceName] "$sourceName source directory"
 }
@@ -435,7 +619,7 @@ Assert-ExactFile `
     $sourceModel `
     ([long]$modelLock.bytes) `
     ([string]$modelLock.sha256) `
-    'Pinned Hy-MT2 Q4 model'
+    'Pinned Hy-MT2 translation model'
 
 $componentSources = @{
     python = $sources.python
@@ -529,7 +713,9 @@ foreach ($runtimeDll in $runtimeDlls) {
         $sources.python,
         $sources.magika,
         $sources.floss,
-        $sources.llama
+        $sources.llama,
+        (Join-Path $sources.ocr 'runtime\ocr-cpu'),
+        (Join-Path $sources.ocr 'runtime\ocr-directml')
     )) {
         $appLocalRuntime = Resolve-ChildFile `
             $componentDirectory `
@@ -625,6 +811,31 @@ Assert-VersionProbe `
     '--offline' `
     'llama.cpp offline guard' `
     $sources.llama
+foreach ($provider in $resolvedOcrSelfTestProviders) {
+    $expectedProvider = switch ($provider) {
+        'cpu' { 'cpu' }
+        'directml' { 'directml' }
+        'hybrid' { 'hybrid-directml-cpu' }
+    }
+    Assert-OcrSelfTest `
+        $sourceOcrActivePython `
+        $sourceOcrWorker `
+        $sourceOcrModel `
+        $ocrComponentLock `
+        $provider `
+        $expectedProvider `
+        "Active OCR $provider path"
+}
+if ('cpu' -in $resolvedOcrSelfTestProviders -or 'hybrid' -in $resolvedOcrSelfTestProviders) {
+    Assert-OcrSelfTest `
+        $sourceOcrCpuPython `
+        $sourceOcrWorker `
+        $sourceOcrModel `
+        $ocrComponentLock `
+        'cpu' `
+        'cpu' `
+        'Alternate CPU-only OCR runtime'
+}
 
 if ($RapidsPythonDirectory) {
     $sources.rapids = Resolve-RequiredDirectory $RapidsPythonDirectory 'RAPIDS Python directory'
@@ -650,6 +861,7 @@ $bundleDocumentNames = @(
     'enrichment-pipeline.md',
     'floss-standalone-redistribution.md',
     'magika-cli-redistribution.md',
+    'ocr-and-document-analysis.md',
     'offline-release-maintenance.md',
     'output-and-provenance.md',
     'pattern-engine-benchmark-2026-08.md',
@@ -721,12 +933,15 @@ try {
         'FLOSS redistribution overlay'
     Copy-DirectoryContents $sources.llama (Join-Path $output 'runtime\llama')
     Copy-DirectoryContents $sources.model (Join-Path $output 'models\hy-mt2')
+    Merge-ExactOverlay $sources.ocr $output 'OCR runtime, model, and notice overlay'
     foreach ($childRuntimeDirectory in @(
         $output,
         (Join-Path $output 'runtime\python'),
         (Join-Path $output 'tools\magika'),
         (Join-Path $output 'tools\floss'),
-        (Join-Path $output 'runtime\llama')
+        (Join-Path $output 'runtime\llama'),
+        (Join-Path $output 'runtime\ocr-cpu'),
+        (Join-Path $output 'runtime\ocr-directml')
     )) {
         foreach ($runtimeDll in $runtimeDlls) {
             Copy-Item `
@@ -745,10 +960,16 @@ try {
     [IO.Directory]::CreateDirectory((Join-Path $output 'tools\enrichment')) | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\enrichment\bstrings_enrich.py') `
         -Destination (Join-Path $output 'tools\enrichment\bstrings_enrich.py')
+    foreach ($name in @('bstrings_ocr.py', 'benchmark_ocr.py')) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot "tools\enrichment\$name") `
+            -Destination (Join-Path $output "tools\enrichment\$name")
+    }
     [IO.Directory]::CreateDirectory((Join-Path $output 'tools\airgap')) | Out-Null
     foreach ($name in @(
         'airgap_manifest.py',
+        'generate_ocr_smoke_fixtures.py',
         'verify_network_guard.py',
+        'Verify-OcrRuntime.ps1',
         'Verify-MarkdownLinks.ps1',
         'smoke-evidence.txt'
     )) {
@@ -758,6 +979,13 @@ try {
     Copy-DirectoryContents `
         $fixtureSourceDirectory `
         (Join-Path $output 'tools\airgap\fixtures')
+    $ocrFixtureDirectory = Join-Path $output 'tools\airgap\fixtures\ocr'
+    & (Join-Path $output 'runtime\ocr-directml\python.exe') -I -B `
+        (Join-Path $output 'tools\airgap\generate_ocr_smoke_fixtures.py') `
+        --output $ocrFixtureDirectory
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not generate the bundled synthetic OCR image and scanned-PDF fixtures.'
+    }
     [IO.Directory]::CreateDirectory((Join-Path $output 'tools\licenses')) | Out-Null
     Copy-Item `
         -LiteralPath $magikaVerifyScript `
@@ -817,6 +1045,32 @@ try {
         Copy-Item -LiteralPath $sourceLicense `
             -Destination (Join-Path $bundleLicenses $upstreamLicenseDestinations[$componentName])
     }
+    $translationLicenseDestinations = [ordered]@{
+        quality = 'Hy-MT2-7B-Apache-2.0.txt'
+        balanced = 'Hy-MT2-1.8B-Apache-2.0.txt'
+        compact = 'Hy-MT2-1.8B-Apache-2.0.txt'
+    }
+    $copiedTranslationLicenses = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($profileName in $translationProfileNames) {
+        $destinationName = $translationLicenseDestinations[$profileName]
+        if (-not $copiedTranslationLicenses.Add($destinationName)) {
+            continue
+        }
+        $profileLicense = $componentLock.translationProfiles.$profileName.license
+        $sourceLicense = Resolve-ChildFile `
+            $sources.model `
+            ([string]$profileLicense.fileName) `
+            "$profileName translation profile license"
+        Assert-ExactFile `
+            $sourceLicense `
+            ([long]$profileLicense.bytes) `
+            ([string]$profileLicense.sha256) `
+            "$profileName translation profile license"
+        Copy-Item -LiteralPath $sourceLicense `
+            -Destination (Join-Path $bundleLicenses $destinationName)
+    }
     Copy-DirectoryContents `
         (Join-Path $sources.llama 'notices\llama.cpp') `
         (Join-Path $bundleLicenses 'llama.cpp')
@@ -841,6 +1095,7 @@ try {
     $config = [ordered]@{
         schemaVersion = 1
         bundleProfile = [string]$componentLock.profile
+        translationProfile = $TranslationProfile
         componentLock = 'offline-components.lock.json'
         componentLockSha256 = $componentLockHash
         visualCppRuntime = [ordered]@{
@@ -851,7 +1106,9 @@ try {
                 'runtime/python',
                 'tools/magika',
                 'tools/floss',
-                'runtime/llama'
+                'runtime/llama',
+                'runtime/ocr-cpu',
+                'runtime/ocr-directml'
             )
             files = $runtimeInventory
         }
@@ -893,6 +1150,22 @@ try {
             revision = $TranslationModelRevision
             sha256 = $modelHash
         }
+        ocr = [ordered]@{
+            pythonExecutable = 'runtime/ocr-directml/python.exe'
+            executable = 'runtime/ocr-directml/python.exe'
+            adapter = 'tools/enrichment/bstrings_ocr.py'
+            engine = 'rapidocr'
+            engineVersion = '3.9.2'
+            activeRuntime = 'directml-with-cpu-provider'
+            alternateCpuRuntime = 'runtime/ocr-cpu/python.exe'
+            assemblySelfTestProviders = @($resolvedOcrSelfTestProviders)
+            model = [ordered]@{
+                path = 'models/ocr/ocr-model-pack.json'
+                id = [string]$ocrComponentLock.modelPack.modelId
+                revision = [string]$ocrComponentLock.modelPack.revision
+                sha256 = [string]$ocrComponentLock.modelPack.sha256
+            }
+        }
         rapidsPythonExecutable = if ($sources.Contains('rapids')) {
             "runtime/rapids-python/$($RapidsPythonExecutable -replace '\\', '/')"
         } else {
@@ -900,10 +1173,11 @@ try {
         }
         madladModel = $madladConfig
     }
-    $config | ConvertTo-Json -Depth 6 |
+    $config | ConvertTo-Json -Depth 8 |
         Set-Content -LiteralPath (Join-Path $output 'airgap-config.json') -Encoding utf8
 
-    [IO.File]::Delete($incomplete)
+    & (Join-Path $output 'tools\airgap\Verify-OcrRuntime.ps1') -BundleDirectory $output
+
     $manifest = Join-Path $output 'airgap-manifest.json'
     $bundlePython = Join-Path (Join-Path $output 'runtime\python') $PythonExecutable
     $manifestTool = Join-Path $output 'tools\airgap\airgap_manifest.py'
@@ -918,9 +1192,12 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw 'Could not create the air-gap bundle manifest.'
         }
-        & $bundlePython -I $manifestTool verify --root $output --manifest $manifest
+        & $bundlePython -I $manifestTool verify `
+            --root $output `
+            --manifest $manifest `
+            --allow-incomplete-marker
         if ($LASTEXITCODE -ne 0) {
-            throw 'The newly created air-gap bundle did not verify.'
+            throw 'The newly created air-gap bundle did not pass builder-only Python verification.'
         }
     }
     finally {
@@ -935,13 +1212,20 @@ try {
             "$output$([IO.Path]::PathSeparator)$(Join-Path $env:SystemRoot 'System32')",
             'Process'
         )
-        & $bundleBstrings bundle verify --bundle-root $output
+        & $bundleBstrings bundle verify `
+            --bundle-root $output `
+            --allow-incomplete-marker
         if ($LASTEXITCODE -ne 0) {
-            throw 'The bundled bstrings executable did not verify the newly created air-gap bundle.'
+            throw 'The bundled bstrings executable did not pass builder-only bundle verification.'
         }
     }
     finally {
         [Environment]::SetEnvironmentVariable('PATH', $originalPath, 'Process')
+    }
+
+    [IO.File]::Delete($incomplete)
+    if ($null -ne (Get-Item -LiteralPath $incomplete -Force -ErrorAction SilentlyContinue)) {
+        throw 'Could not remove the completed air-gap bundle marker.'
     }
 
     $totals = Get-ChildItem -LiteralPath $output -Recurse -File |

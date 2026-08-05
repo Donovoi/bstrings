@@ -23,6 +23,15 @@ internal sealed record AnalysisToolchain(
     BundleIntegrity BundleIntegrity,
     string PythonExecutable,
     string EnrichmentAdapter,
+    string? OcrPythonExecutable,
+    string? OcrExecutable,
+    string? OcrAdapter,
+    string? OcrEngine,
+    string? OcrEngineVersion,
+    string? OcrModelPath,
+    string? OcrModelId,
+    string? OcrModelRevision,
+    string? OcrModelSha256,
     string? MagikaExecutable,
     string? FlossExecutable,
     string? LlamaServer,
@@ -45,6 +54,8 @@ internal static class AnalysisToolchainLocator
     private const string FlossUrl = "https://github.com/mandiant/flare-floss/releases";
     private const string LlamaUrl = "https://github.com/ggml-org/llama.cpp/releases";
     private const string ModelUrl = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF";
+    private const string OcrUrl =
+        "https://github.com/Donovoi/bstrings/actions/workflows/dotnet-desktop.yml";
 
     internal static bool HasImplicitBundleConfiguration() =>
         HasImplicitBundleConfiguration(
@@ -75,6 +86,7 @@ internal static class AnalysisToolchainLocator
         bool requireExplicitBundle,
         bool requireRecovery = true,
         bool requireTranslation = true,
+        bool requireOcr = false,
         string? executingExecutablePath = null
     )
     {
@@ -158,11 +170,34 @@ internal static class AnalysisToolchainLocator
         var model = requireTranslation
             ? RequiredObject(root, "translationModel", configurationPath)
             : default;
+        var ocr = requireOcr ? RequiredObject(root, "ocr", configurationPath) : default;
+        var ocrModel = requireOcr
+            ? RequiredObject(ocr, "model", configurationPath)
+            : default;
         return new AnalysisToolchain(
             bundleRoot,
             bundleIntegrity,
             RequiredFile(bundleRoot, RequiredText(root, "pythonExecutable", configurationPath), "portable Python", "https://www.python.org/downloads/windows/"),
             RequiredFile(bundleRoot, RequiredText(root, "enrichmentAdapter", configurationPath), "bstrings enrichment adapter", "https://github.com/Donovoi/bstrings"),
+            requireOcr
+                ? RequiredFile(bundleRoot, RequiredText(ocr, "pythonExecutable", configurationPath), "OCR Python runtime", OcrUrl)
+                : null,
+            requireOcr
+                ? RequiredFile(bundleRoot, RequiredText(ocr, "executable", configurationPath), "OCR executable", OcrUrl)
+                : null,
+            requireOcr
+                ? RequiredFile(bundleRoot, RequiredText(ocr, "adapter", configurationPath), "OCR adapter", OcrUrl)
+                : null,
+            requireOcr ? RequiredText(ocr, "engine", configurationPath) : null,
+            requireOcr ? RequiredText(ocr, "engineVersion", configurationPath) : null,
+            requireOcr
+                ? RequiredFile(bundleRoot, RequiredText(ocrModel, "path", configurationPath), "OCR model pack", OcrUrl)
+                : null,
+            requireOcr ? RequiredText(ocrModel, "id", configurationPath) : null,
+            requireOcr ? RequiredText(ocrModel, "revision", configurationPath) : null,
+            requireOcr
+                ? ValidateSha256(RequiredText(ocrModel, "sha256", configurationPath), configurationPath)
+                : null,
             requireRecovery
                 ? RequiredFile(bundleRoot, RequiredText(root, "magikaExecutable", configurationPath), "Magika", MagikaUrl)
                 : null,
@@ -343,7 +378,7 @@ internal static class AnalysisToolchainLocator
         )
         {
             throw new InvalidDataException(
-                $"'{configurationPath}' contains an invalid translation model SHA-256."
+                $"'{configurationPath}' contains an invalid model SHA-256."
             );
         }
         return value.ToLowerInvariant();

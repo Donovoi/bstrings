@@ -17,6 +17,15 @@ licenses/floss-v3.1.1/** -text whitespace=-trailing-space
 # This public benchmark selection manifest is hashed byte-for-byte.
 tools/enrichment/cord-v2-train-selection-v1.json -text whitespace=-trailing-space
 
+# These OCR acceptance sources are included in benchmark identities by their
+# exact bytes. Disable platform line-ending conversion so reports and policies
+# remain verifiable after a fresh Windows or Linux checkout.
+tools/enrichment/benchmark_ocr*.py -text whitespace=-trailing-space
+tools/enrichment/bstrings_ocr.py -text whitespace=-trailing-space
+tools/enrichment/cord-v2-train-confirmatory-attempt-v1.json* -text whitespace=-trailing-space
+tools/enrichment/generate_cord_selection.py -text whitespace=-trailing-space
+tools/enrichment/ocr_acceptance_policy.py -text whitespace=-trailing-space
+
 
 ###############################################################################
 # Set default behavior for command prompt diff.

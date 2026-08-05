@@ -96,6 +96,7 @@ class CordSelectionTests(unittest.TestCase):
     def test_checked_in_manifest_matches_preregistration(self) -> None:
         path = Path(__file__).resolve().parents[1] / "cord-v2-train-selection-v1.json"
         raw = path.read_bytes()
+        self.assertEqual(124_181, len(raw))
         self.assertEqual(
             "4deb7deec2a5ee69e182c9030ef0e1dee5bdf5960a2f9bec9ba5f404293fd6e1",
             hashlib.sha256(raw).hexdigest(),

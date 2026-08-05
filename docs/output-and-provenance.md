@@ -24,16 +24,17 @@ The existence of an output file is not proof that a scan finished.
 - A nonzero exit, a remaining `.incomplete` marker, an adapter error, or a model
   hash mismatch makes the affected result incomplete. Retain it for diagnosis,
   but do not report it as a completed examination.
-- Copy or archive a completed integrated result directory as a unit so
-  language assessments, parents, translated children, and regex hits do not
-  become separated.
+- Copy or archive a completed integrated result directory as a unit so OCR
+  assessments, language assessments, parents, translated children, and regex
+  hits do not become separated.
 
 The workflow writes `input-files.txt` and `input-manifest.jsonl` once, before
 extraction. The manifest records each canonical path, byte length, and SHA-256;
 `run.json` and `summary.json` record the manifest filename, its own SHA-256, and
 the content-hash algorithm instead of embedding a potentially huge path array.
-Both native extraction and executable recovery consume the fixed inventory, so
-a recursive directory is not independently re-enumerated by each stage.
+Native extraction, executable recovery, and OCR consume the same fixed
+inventory, so a recursive directory is not independently re-enumerated by each
+stage.
 
 When analysis uses the complete offline bundle, `run.json` and `summary.json`
 also contain the same `bundleIntegrity` object. It records the bundle manifest
@@ -46,14 +47,14 @@ stop the run.
 This proves which manifest governed the toolchain used for the examination. It
 is an integrity record, not publisher authentication or code signing.
 
-Input content is hashed while the manifest is created and verified again after
-native extraction. A recovery run verifies it once more after Magika/FLOSS.
-That means two complete input-hash reads without recovery and three with it.
-The cost is visible in `stageSeconds`; it is the price of refusing to combine
-results from different file versions. Existing junctions and other reparse
-points in the evidence or result path are refused, aliases are canonicalized,
-results inside the evidence or verified bundle are refused, and recursive inventory
-creation does not traverse reparse-point children.
+Input content is hashed while the manifest is created and verified around and
+after requested external stages. OCR also compares applicable input length and
+SHA-256 with that manifest and checks that the file did not change while it was
+open. The additional reads are visible in `stageSeconds`; they are the price of
+refusing to combine results from different file versions. Existing junctions
+and other reparse points in the evidence or result path are refused, aliases
+are canonicalized, results inside the evidence or verified bundle are refused,
+and recursive inventory creation does not traverse reparse-point children.
 
 This protection assumes a controlled examination host. It does not attempt to
 defend against another local process that can replace already checked
@@ -68,7 +69,7 @@ handle-relative I/O beyond this workflow's threat model.
 | --- | --- | --- |
 | Text | Reading native strings quickly | Cannot carry full enrichment lineage |
 | CSV | Native strings or regex hits with familiar columns | A filename ending in `.csv` selects it; it cannot represent the complete parent/child record graph |
-| JSONL | Enrichment, translation, language assessments, and attributed regex matches | Use this when provenance matters; one JSON object is stored per line |
+| JSONL | Enrichment, OCR, translation, language assessments, and attributed regex matches | Use this when provenance matters; one JSON object is stored per line |
 
 On the original direct extraction/search interface, `--off` retains source byte
 offsets and `--ro` returns the regex-matched range rather than the complete
@@ -93,6 +94,8 @@ Normalized JSONL string records use schema version 1. A record carries a stable
 | `file_offset` | A byte position in the source file or image |
 | `program_counter` | A FLOSS stack/tight-string recovery location in executable code |
 | `virtual_address` | A FLOSS decoded-string address in the executable's address space |
+| `image_region` | A page/frame number and pixel-space OCR bounding box |
+| `page_region` | A PDF page and either PDF-point or rendered-pixel region |
 
 Do not present a program counter or virtual address as a raw file offset. A
 translated child inherits its parent's location for attribution; that does not
@@ -103,12 +106,32 @@ mean the translated characters existed at that location in the evidence bytes.
 | Evidence class | Meaning |
 | --- | --- |
 | `byte-native` | The text maps to source bytes and a file offset |
-| `derived-extractor` | FLOSS reconstructed the text through language, stack, tight-loop, or decoding analysis |
+| `derived-extractor` | FLOSS reconstructed the text, OCR recognized it from pixels, or PDFium extracted a document text layer |
 | `derived-translation` | A local translation model produced the text from an identified parent record |
 
 Derived evidence can create strong leads, but it is not interchangeable with a
-byte-native finding. Confirm consequential translated matches against their
-untranslated parent and surrounding source evidence.
+byte-native finding. Confirm consequential OCR and translated matches against
+their page/parent and surrounding source evidence.
+
+## OCR records and assessments
+
+When OCR is enabled, `ocr-strings.jsonl` contains `pdf-text` and `ocr` string
+records. PDF text-layer rows use PDF-point coordinates. Raster rows retain the
+page/frame number, pixel bounding box, confidence, rendered-raster SHA-256 and
+DPI, model-pack/component hashes, runtime hash, requested/resolved provider,
+and source file length/SHA-256.
+
+`ocr-assessments.jsonl` contains one row per fixed-inventory input, including
+`not-applicable` rows. Each assessment records status, pages, rendered pages,
+PDF-text/OCR record counts, engine/model/revision/hash, component hashes,
+runtime/provider, source identity, mode, and enforced air-gap state. The .NET
+orchestrator independently checks record cardinality, source identity, page and
+coordinate bounds, model/runtime/provider identity, parent ordering, and the
+assessment totals before merging OCR strings into downstream processing.
+
+OCR is not byte recovery. A box points to the visual location from which a
+model inferred text; inspect that page when a finding matters. See
+[OCR and document analysis](ocr-and-document-analysis.md).
 
 ## Language assessments
 
@@ -158,5 +181,6 @@ matters to attribution or reporting.
 ## Related guides
 
 - [Extractor, language-triage, and translation enrichment](enrichment-pipeline.md)
+- [OCR and document analysis](ocr-and-document-analysis.md)
 - [Air-gapped deployment and verification](air-gapped-deployment.md)
 - [Built-in pattern validity and false-positive controls](pattern-validity-review-2026-08.md)

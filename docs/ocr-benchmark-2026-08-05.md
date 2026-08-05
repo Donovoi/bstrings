@@ -30,6 +30,11 @@ establish that CORD was absent from upstream private training data. The result
 tests this project's frozen integration and generalization procedure, not
 upstream dataset non-contamination.
 
+[CORD](https://github.com/clovaai/cord) contains 1,000 Indonesian receipt
+samples and is used under
+[CC-BY-4.0](https://github.com/clovaai/cord/blob/master/LICENSE-CC-BY). Every
+claim below remains scoped to that printed-receipt corpus.
+
 Image-column-only checks found no shared image SHA-256 between train, test, and
 validation. The 800 train rows contain 798 unique image hashes. Identical images
 must never be divided across roles. The split algorithm groups rows by the
@@ -51,7 +56,7 @@ canonical JSON identities are:
 For those three identities, the relevant entries array is serialized as UTF-8
 JSON with keys sorted, separators `,` and `:`, no insignificant whitespace,
 and no trailing newline, then hashed with SHA-256. The manifest file itself is
-also bound by its whole-file SHA-256,
+also bound at exactly 124,181 bytes by its whole-file SHA-256,
 `4deb7deec2a5ee69e182c9030ef0e1dee5bdf5960a2f9bec9ba5f404293fd6e1`.
 Duplicate images count as separate rows for aggregate and tail metrics, but
 remain in the same role. When ground truth is first opened, duplicate image
@@ -67,20 +72,77 @@ The candidate is RapidOCR 3.9.2 with the immutable PP-OCRv6 medium detector and
 recognizer plus the RapidOCR orientation classifier. The model-pack manifest
 SHA-256 is
 `b3b683eb29ec09e9da835e09fb4470792af7702cfc6cee40f2725c232d258534`.
-The worker, scorer, protocol, scoring constants, model revisions, corpus and
-worker manifests, full runtime inventories, selection manifest, and the exact
-PyArrow, Shapely, and GEOS versions must be frozen and hashed before
-calibration. A change to any of them invalidates the policy and requires a new
-calibration run.
+The worker, scorer, protocol, scoring constants, model revisions, calibration
+corpus/worker manifests, confirmatory image-input/worker manifests, full
+runtime inventories, selection manifest, and the exact PyArrow, Shapely, and
+GEOS versions must be frozen and hashed before calibration. The complete train
+shards bind the still-blind confirmatory annotations. Before policy issuance,
+the application layer must not convert confirmatory ground-truth values to
+Python, parse them, score them, log or expose them, or publish annotation hashes
+or label-derived counts. Each 200-row shard is one Parquet row group, so PyArrow
+may transiently materialize interleaved ground-truth column pages while the
+calibration labels are read. The harness skips those confirmatory rows without
+Python conversion or parser access. Only after the project-global one-shot
+ledger is claimed may it convert and parse those annotations, verify
+duplicate-image annotations, and bind the resulting scoring-corpus manifest
+into the final report. A change to a frozen input invalidates the policy and
+requires a new calibration run, but it does not reset the global one-shot
+ledger.
 
-The calibration role is run once with the CPU backend and production automatic
-thread policy. The confirmatory role is run once as the complete CPU,
-DirectML, and DirectML+CPU hybrid release matrix. Provider text, boxes,
+The frozen generic runner `tools/enrichment/benchmark_ocr.py` has SHA-256
+`b79cd6997201585798a72af26ca1d5d886c0d1b2909d5c31b01e806259d0e49a`.
+The frozen CORD scorer `tools/enrichment/benchmark_ocr_cord.py` has SHA-256
+`ec43081f7d7b61394fa88e5285ad8764653101b4ae4256ff4d3653f99e79795d`.
+The acceptance report also records and binds the wrapper and policy-module
+hashes from the exact committed source used for the run.
+
+The calibration role receives one full CPU quality pass with production
+automatic thread policy plus the fixed repeated ten-document determinism view.
+The confirmatory role receives one full quality pass per CPU, DirectML, and
+DirectML+CPU hybrid backend plus that same per-backend determinism view.
+Provider text, boxes,
 normalized critical assessment fields, and aggregate metrics must agree
 exactly; provider, runtime, thread, worker, record-ID, and confidence fields are
 excluded from that normalized comparison. Confidence may differ by at most
 `0.0001` per aligned record. Each backend must also be byte-deterministic across
 its repeated ten-document determinism view.
+
+### Runtime identity and isolation
+
+"Full runtime inventory" has a literal scope here. For each benchmark, CPU,
+and DirectML interpreter, the preimage covers the deduplicated `sys.prefix`,
+`sys.base_prefix`, and every load-bearing entry returned by the isolated
+interpreter's `sys.path`. Each root records its roles and a sorted relative
+POSIX-path list containing the byte length and SHA-256 of every regular file.
+The root digest is the SHA-256 of the canonical JSON files array without a
+trailing newline. An ordered load-path map proves which inventoried root covers
+each isolated `sys.path` entry, and the executable's relative path, length, and
+SHA-256 must resolve to one of those rows. A load-path entry that does not exist
+is recorded as `missing` only when it resolves inside an otherwise fixed,
+inventoried root; it contributes no load-bearing role. An unreadable,
+reparse-point, or uncovered root fails closed. The complete metadata preimage is
+also hashed and persisted as one canonical JSON artifact per profile; backend
+repetition records contain only compact digest references.
+
+The DirectML profile additionally binds the provider probe, the System32
+DirectML/D3D/DXGI DLL byte hashes and version identities, and privacy-normalized
+display-adapter/driver identity. It fails closed if Windows, the required
+provider, a required system DLL, CIM inventory, or a usable adapter is absent.
+Absolute runtime roots, usernames, hostnames, and raw PnP identifiers are not
+written to the canonical metadata.
+
+The acceptance interpreter itself must be launched with `-I -B`. It loads the
+frozen sibling modules by compiling one captured source-byte buffer per file,
+binds those loaded-byte hashes, and never adds `tools/enrichment` or the caller's
+working directory to `sys.path`. Before lazy scorer imports, it replaces the
+process environment with a minimal offline allowlist, changes to a fresh empty
+temporary directory, and on Windows enables safe default DLL search with only
+the interpreter and System32 directories added explicitly. Worker processes use
+the same isolated-interpreter, sanitized-environment, and controlled-working-
+directory contract. The effective policy is recorded without local absolute
+paths. Calibration persists the three complete preimages before OCR starts;
+confirmation verifies them before claiming the global ledger, and both phases
+regenerate and compare the complete inventories after their runs.
 
 ## Absolute quality floors
 
@@ -148,20 +210,110 @@ Confirmatory output may be generated once after the policy is frozen. If it
 fails, that is the result. A scorer, model, preprocessing, threshold, or worker
 change prompted by its metrics makes the 200 rows development data; the same
 rows cannot then be rerun and presented as independent confirmation. Execution
-failure may be retried only if the attempt is recorded, all frozen input and
-executable hashes are identical, no evidence-derived record or metric from the
-failed attempt was inspected or used, and partial artifacts are quarantined
-rather than accepted. The recorded cause must be unrelated to evidence content.
+failure also consumes this 200-row role: the project-global ledger rejects
+every later claim, including after a failed or quarantined attempt. Investigate
+the recorded cause and preserve the quarantine evidence, but do not describe a
+later run over these rows as this protocol's independent confirmation.
 
 Run success, evidence-integrity/parity success, and quality acceptance are
 separate report fields. A completed run is not automatically an accepted
 release.
 
+## Running the frozen protocol
+
+Before calibration, the code, selection manifest, and preregistration document
+must be in a clean committed state that is already anchored to the remote.
+Record the immutable commit ID and preferably a signed release-candidate tag;
+require the relevant CI checks to pass on that exact object. Do not calibrate
+from an uncommitted worktree. The worker, wrapper, scorer, policy module,
+selection, model pack, runtime files, and dependencies must not change between
+calibration and confirmation. A regenerated policy or report does not authorize
+any such change.
+
+Treat publication as separate evidence events. First preserve the accepted
+calibration report, derived policy, calibration evidence tree, recorded source
+commit/tag, and their hashes as one immutable evidence commit or release
+artifact. Only then authorize the one-shot confirmation. Preserve the global
+attempt ledger, final confirmatory report, quarantine material if any, and their
+hashes as a second evidence commit or release artifact. Do not fold a source
+repair into either evidence publication.
+
+Use absolute paths for every input and output. The wrapper captures relative
+arguments before entering its controlled empty working directory, but absolute
+paths remove that ambiguity. Replace only the example roots below; keep the
+flags, four-shard order, and separate CPU/DirectML interpreters unchanged.
+
+```powershell
+$BenchmarkPython = 'C:\ABSOLUTE\benchmark-runtime\python.exe'
+$CpuPython = 'C:\ABSOLUTE\cpu-runtime\Scripts\python.exe'
+$DirectMlPython = 'C:\ABSOLUTE\directml-runtime\Scripts\python.exe'
+$Repo = 'C:\ABSOLUTE\bstrings'
+$Evidence = 'D:\ABSOLUTE\ocr-acceptance'
+$Dataset = 'D:\ABSOLUTE\cord-v2-train'
+$Wrapper = "$Repo\tools\enrichment\benchmark_ocr_acceptance.py"
+$Selection = "$Repo\tools\enrichment\cord-v2-train-selection-v1.json"
+$Worker = "$Repo\tools\enrichment\bstrings_ocr.py"
+$ModelPack = 'D:\ABSOLUTE\ocr-model-pack\ocr-model-pack.json'
+$Shard0 = "$Dataset\train-00000-of-00004-b4aaeceff1d90ecb.parquet"
+$Shard1 = "$Dataset\train-00001-of-00004-7dbbe248962764c5.parquet"
+$Shard2 = "$Dataset\train-00002-of-00004-688fe1305a55e5cc.parquet"
+$Shard3 = "$Dataset\train-00003-of-00004-2d0cd200555ed7fd.parquet"
+```
+
+Then run calibration:
+
+```powershell
+& $BenchmarkPython -I -B $Wrapper calibration `
+  --parquet $Shard0 --parquet $Shard1 --parquet $Shard2 --parquet $Shard3 `
+  --selection-manifest $Selection --worker $Worker --model-pack $ModelPack `
+  --cpu-python $CpuPython --directml-python $DirectMlPython `
+  --work-directory "$Evidence\calibration-work" `
+  --output "$Evidence\calibration-report.json" `
+  --policy-output "$Evidence\ocr-acceptance-policy.json"
+```
+
+The report stores only stable paths relative to the calibration evidence root.
+For the command above that root is
+`D:\ABSOLUTE\ocr-acceptance\calibration-work\calibration`; keep it with the
+report and policy. Confirmation requires it explicitly:
+
+```powershell
+& $BenchmarkPython -I -B $Wrapper confirmatory `
+  --parquet $Shard0 --parquet $Shard1 --parquet $Shard2 --parquet $Shard3 `
+  --selection-manifest $Selection --worker $Worker --model-pack $ModelPack `
+  --cpu-python $CpuPython --directml-python $DirectMlPython `
+  --work-directory "$Evidence\confirmatory-work" `
+  --output "$Evidence\confirmatory-report.json" `
+  --calibration-report "$Evidence\calibration-report.json" `
+  --calibration-evidence-root "$Evidence\calibration-work\calibration" `
+  --policy "$Evidence\ocr-acceptance-policy.json"
+```
+
+Do not use the confirmatory command as a dry run. It atomically creates the
+project-global ledger
+`tools/enrichment/cord-v2-train-confirmatory-attempt-v1.json` before opening
+confirmatory labels. That canonical claim is deliberately not ignored and a
+failed or quarantined attempt does not become reusable merely by recalibrating,
+moving files, deleting work output, or changing a candidate. Preserve the
+ledger and any quarantine record as evidence.
+
+After a successful two-phase report/ledger commit, independently verify their
+binding with the same isolated benchmark interpreter:
+
+```powershell
+& $BenchmarkPython -I -B $Wrapper verify-completed `
+  --report "$Evidence\confirmatory-report.json"
+```
+
 ## Development observations
 
-The bare PaddleOCR-VL 1.6 GGUF path is not promoted. On the already-development
-CORD validation rows 0-19 it produced 82.6% token recall but only 7.3%
-precision (13.4% F1), with long repeated/hallucinated output on many receipts.
-That experiment is a model-screening result, not a comparison against the
-confirmatory corpus. The full official PaddleOCR-VL pipeline may behave
-differently and would require its own frozen candidate and clean holdout.
+A component-only, third-party PaddleOCR-VL 1.6 GGUF path is not promoted. On
+the already-development CORD validation rows 0-19 it produced 82.6% token
+recall but only 7.3% precision (13.4% F1), with long repeated/hallucinated
+output on many receipts. That experiment did not run the official
+[PaddleOCR-VL pipeline](https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PaddleOCR-VL.html),
+which combines layout analysis, per-element VLM recognition, and ordered
+merging; upstream explicitly warns that the VLM component alone can hallucinate
+excess text. This is a component-screening result, not a comparison against the
+confirmatory corpus. The official pipeline would require its own frozen
+candidate, complete provenance, and clean holdout.
