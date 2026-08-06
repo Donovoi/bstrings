@@ -3,7 +3,7 @@
 The application version lives in `bstrings/bstrings.csproj`:
 
 ```xml
-<Version>1.9.1</Version>
+<Version>1.9.2</Version>
 ```
 
 The project uses `MAJOR.MINOR.PATCH`:
@@ -51,9 +51,9 @@ FLOSS recovery smokes. The exact procedure is in
 [offline release maintenance](docs/offline-release-maintenance.md). Create a
 release tag only from a commit whose full `master` workflow has passed.
 
-## Create v1.9.1 when its gates pass
+## Create v1.9.2 when its gates pass
 
-v1.9.1 is the version prepared by this source tree. Confirm that the exact
+v1.9.2 is the version prepared by this source tree. Confirm that the exact
 candidate commit is green and that the version has not already been tagged
 before creating the release tag.
 
@@ -61,8 +61,8 @@ Use exactly `v<MAJOR.MINOR.PATCH>`, with no suffix, and make it match the one
 `Version` value in `bstrings/bstrings.csproj`:
 
 ```powershell
-git tag v1.9.1
-git push origin v1.9.1
+git tag v1.9.2
+git push origin v1.9.2
 ```
 
 The workflow rejects a mismatched tag before installing build toolchains or
@@ -72,7 +72,7 @@ reviewable build artifacts without creating a release. Only an exact matching
 pushed tag can start the final release job, and publication remains blocked
 until every required profile gate passes.
 
-The v1.9.1 release job publishes:
+The v1.9.2 release job publishes:
 
 - `Install-BstringsQuality.ps1`;
 - `bstrings-win-x64.zip`;
@@ -87,7 +87,7 @@ The workflow separately retains `offline-profile-acceptance.json` as an
 internal Actions gate artifact. The release job validates it against the exact
 tagged build, but it is not a public Release download.
 
-The human release body is [`docs/releases/v1.9.1.md`](docs/releases/v1.9.1.md).
+The human release body is [`docs/releases/v1.9.2.md`](docs/releases/v1.9.2.md).
 Keep its download names, commands, profiles, and boundaries synchronized with
 the workflow before tagging. Keep
 [`docs/releases/v1.9.0.md`](docs/releases/v1.9.0.md) unchanged as the historical

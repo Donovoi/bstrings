@@ -29,7 +29,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.1'
+  $tag = 'v1.9.2'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -50,7 +50,16 @@ this pinned, checksum-verified installer bootstrap:
   }
   Invoke-WebRequest $url -OutFile .\Install-BstringsQuality.ps1 -UseBasicParsing
   $expected = ([string]$asset[0].digest).Substring(7)
-  $actual = (Get-FileHash .\Install-BstringsQuality.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+  $installer = Get-Item -LiteralPath .\Install-BstringsQuality.ps1 -Force
+  $stream = [IO.File]::OpenRead($installer.FullName)
+  try {
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+      $actual = ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+    }
+    finally { $hasher.Dispose() }
+  }
+  finally { $stream.Dispose() }
   if ($actual -CNE $expected) { throw 'Installer SHA-256 mismatch.' }
   powershell.exe -NoProfile -ExecutionPolicy Bypass `
     -File .\Install-BstringsQuality.ps1 -ReleaseTag $tag

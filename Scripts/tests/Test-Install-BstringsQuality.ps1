@@ -7,7 +7,14 @@ $ErrorActionPreference = 'Stop'
 $installerPath = [IO.Path]::GetFullPath(
     (Join-Path $PSScriptRoot '..\Install-BstringsQuality.ps1')
 )
-$releaseTag = 'v1.9.1'
+$installerSource = [IO.File]::ReadAllText($installerPath)
+if ($installerSource -cmatch '(?m)\bGet-FileHash\b') {
+    throw 'The quality installer must not depend on Get-FileHash.'
+}
+if ($installerSource -cnotmatch '\[Security\.Cryptography\.SHA256\]::Create\(\)') {
+    throw 'The quality installer must hash through the .NET SHA-256 API.'
+}
+$releaseTag = 'v1.9.2'
 $testBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot = Join-Path $testBase (
     'bstrings-quality-installer-test-' + [Guid]::NewGuid().ToString('N')
@@ -314,9 +321,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         request_path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         with request_log.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(request_path + "\n")
-        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v1.9.1"):
+        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v1.9.2"):
             candidate = root / "release.json"
-        elif "/Donovoi/bstrings/releases/download/v1.9.1/" in request_path:
+        elif "/Donovoi/bstrings/releases/download/v1.9.2/" in request_path:
             name = pathlib.PurePosixPath(request_path).name
             candidate = root / name
         else:
