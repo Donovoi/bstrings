@@ -13,101 +13,28 @@ Microsoft's [.NET supported-Windows table](https://learn.microsoft.com/en-us/dot
 CPU analysis needs no GPU. DirectML uses the host's D3D12/DXGI stack and a
 compatible graphics driver; those operating-system components are not bundled.
 
-| Download | Purpose |
-| --- | --- |
-| Core ZIP | Scanner, Rust engine, and `bundle acquire` client. Useful alone for direct/native extraction and pattern search. |
-| Complete offline kit | The directory created by `bundle acquire`. It adds [Magika](https://github.com/google/magika), [FLOSS](https://github.com/mandiant/flare-floss), OCR, language detection, and local translation. |
+## Install on a connected staging machine
 
-Release assets are the ingredients; the assembled directory is what you
-transfer offline. “One executable” means one user interface. Its adjacent
-models and runtimes are still required and must remain beside it.
+On a connected staging machine, start in the directory where you want
+`.\bstrings-quality`. The installer needs no administrator rights and requires
+at least 30 GiB free on the volume holding its install and cache. It installs
+the complete quality profile.
 
-## Choose a translation profile
-
-Every profile gets the same scanner, OCR, FLOSS, Magika, and reporting tools.
-Only the local translation model changes.
-
-| Profile | Exact model | Bytes | Selection guidance |
-| --- | --- | ---: | --- |
-| `quality` | Hy-MT2-7B Q8_0 | 7,981,928,896 | Default; best measured translation quality |
-| `balanced` | Hy-MT2-1.8B Q8_0 | 1,908,528,192 | Smaller transfer and memory footprint |
-| `compact` | Hy-MT2-1.8B Q4_K_M | 1,133,080,448 | Smallest and fastest of the three |
-
-The quality model is the default because it scored 62.6786 WMT24++ chrF++ and
-92.8310 forensic chrF++ in the final strict gate, retained 22/22 protected
-identifiers, and produced 10/10 expected pattern matches with no false positive
-or false negative. The smaller models remain useful operational choices. See
-the [translation benchmark](translation-benchmark-2026-08-04.md) for the exact
-corpus, pins, results, and limits.
-
-## Acquire and assemble on a connected machine
-
-Download v1.9.0 from the
-[GitHub Releases page](https://github.com/Donovoi/bstrings/releases). Use only
-assets from the same version. Maintainers producing those assets should follow
-[offline release maintenance](offline-release-maintenance.md).
-
-A complete-kit release contains:
-
-- `bstrings-win-x64.zip`, a small self-contained core that provides the
-  acquisition command;
-- one shared `bstrings-win-x64-offline-base.zip`, kept below GitHub's 2 GB
-  per-file limit;
-- profile-specific configuration, license, manifest, and trust-manifest files;
-  and
-- `SHA256SUMS.txt`.
-
-The large model is not mirrored into a GitHub asset. Its exact immutable
-official URL, byte count, and SHA-256 are in the profile trust manifest.
-
-On the connected staging machine:
-
-1. Download and extract `bstrings-win-x64.zip`.
-2. Download exactly one `bundle-packs-<profile>.json` from the same tagged
-   release.
-3. Preserve that trust manifest through your approved publisher-verification
-   procedure.
-4. Run `bundle acquire` from the extracted core:
+Use the [pinned, checksum-verified bootstrap](../README.md#get-started) for
+`Install-BstringsQuality.ps1`. The installer handles the downloads, resumable
+cache, assembly, and final strict verification. A failed run keeps verified
+cache data for the next attempt; a successful default run removes its
+temporary cache.
 
 ```powershell
-.\bstrings.exe bundle acquire `
-  --manifest C:\Downloads\bundle-packs-quality.json `
-  --output C:\Tools\bstrings-quality
-
-C:\Tools\bstrings-quality\bstrings.exe bundle verify
+.\bstrings-quality\bstrings.exe bundle verify
+.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved-files --full -o D:\results\case-01
 ```
 
-`bundle acquire` supports resumed HTTPS downloads. It streams each pack into a
-bounded temporary file, rejects overlong data, verifies exact length and
-SHA-256, caches only verified bytes, safely extracts the shared ZIP, adds the
-profile files, and checks the finished strict manifest. The output directory
-must be new; an interrupted run leaves verified cached packs available for a
-retry.
-
-The default cache is beside the trust manifest under
-`bundle-pack-cache/<profile>`. To place it elsewhere:
-
-```powershell
-.\bstrings.exe bundle acquire `
-  --manifest C:\Downloads\bundle-packs-balanced.json `
-  --cache D:\bstrings-pack-cache\balanced `
-  --output D:\Tools\bstrings-balanced
-```
-
-For an organization that acquires packs through another approved downloader,
-place the exact verified bytes under the cache names `base.zip`,
-`configuration.file`, `translation-license.file`, `airgap-manifest.file`, and
-`translation-model.file`, then assemble without networking:
-
-```powershell
-.\bstrings.exe bundle assemble `
-  --manifest D:\transfer\bundle-packs-compact.json `
-  --cache D:\transfer\verified-cache `
-  --output D:\Tools\bstrings-compact
-```
-
-`assemble` still verifies every cached pack before use. It is not a bypass for
-the trust manifest or hashes.
+Transfer the entire verified `bstrings-quality` directory to the disconnected
+workstation, then run `bundle verify` there again before case work. “One
+executable” means one user interface; keep the adjacent models, runtimes,
+tools, licences, configuration, and manifests with it.
 
 ## Transfer and verify offline
 
@@ -155,8 +82,8 @@ The `windows-x64-offline-v2` base carries:
   licenses; and
 - application-local Visual C++ runtime DLLs and a strict file manifest.
 
-The selected Hy-MT2 model and its canonical license are added during profile
-assembly. Exact URLs, lengths, hashes, revisions, runtime inventories, and
+The installer adds the quality Hy-MT2-7B Q8_0 model and its canonical licence.
+Exact URLs, lengths, hashes, revisions, runtime inventories, and
 license inputs are frozen in `offline-components.lock.json` and
 `ocr-components.lock.json` inside the bundle.
 
@@ -168,7 +95,7 @@ system prerequisites.
 
 ## OCR hardware choices
 
-The v1.9.0 OCR profile defines two runtime environments:
+The v1.9.1 OCR profile defines two runtime environments:
 
 - a CPU-only ONNX Runtime environment, verified separately as a fallback; and
 - the active DirectML ONNX Runtime environment, which exposes both DirectML and
@@ -248,9 +175,9 @@ should accept their actual workstation image under their own controls.
 
 ## Integrity, authenticity, and operational boundaries
 
-- The internal manifest and adjacent `SHA256SUMS.txt` prove byte consistency,
-  not publisher identity. Independently authenticate the selected
-  `bundle-packs-*.json`; it anchors the hashes used by acquisition.
+- The internal manifest and release checksums prove byte consistency, not
+  publisher identity. Authenticate the GitHub release through the
+  organization's normal trusted process.
 - A driver is host and operating-system software. It cannot be made a truthful
   application-local dependency. CPU remains the no-GPU path.
 - The standard complete profile's llama.cpp translation runtime is CPU-only.

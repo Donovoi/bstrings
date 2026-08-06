@@ -44,10 +44,9 @@ internal sealed record AnalysisToolchain(
 internal static class AnalysisToolchainLocator
 {
     private const string OfflineBundleAcquisition =
-        "Download bstrings-win-x64.zip, SHA256SUMS.txt, and "
-        + "bundle-packs-quality.json from the same GitHub Release, verify the core ZIP, "
-        + "then run 'bstrings.exe bundle acquire --manifest bundle-packs-quality.json "
-        + "--output <directory>': https://github.com/Donovoi/bstrings/releases/latest";
+        "Use the checked Install-BstringsQuality.ps1 asset from the latest GitHub Release "
+        + "to install and verify the complete quality kit: "
+        + "https://github.com/Donovoi/bstrings/blob/v1.9.1/README.md#get-started";
 
     private const string ConfigurationFileName = "airgap-config.json";
     private const string MagikaUrl = "https://github.com/google/magika#command-line-tool";

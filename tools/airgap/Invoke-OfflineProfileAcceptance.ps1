@@ -260,6 +260,7 @@ if ($freeBytesAtStart -lt $MinimumFreeBytes) {
 $profiles = @('quality', 'balanced', 'compact')
 $releaseAssetNames = [Collections.Generic.List[string]]::new()
 $releaseAssetNames.Add('bstrings-win-x64-offline-base.zip')
+$releaseAssetNames.Add('Install-BstringsQuality.ps1')
 foreach ($profile in $profiles) {
     $releaseAssetNames.Add("airgap-config-$profile.json")
     $releaseAssetNames.Add("Hy-MT2-Apache-2.0-$profile.txt")

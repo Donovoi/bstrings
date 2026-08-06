@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -258,6 +259,92 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn("canonical Hugging Face repository ID", validator)
 
         self.assertIn("translationModelUrl = [string]$modelPack.url", script)
+
+    def test_quality_installer_is_version_pinned_and_release_gated(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        project = (repo_root / "bstrings" / "bstrings.csproj").read_text(encoding="utf-8")
+        version_match = re.search(r"<Version>([0-9]+\.[0-9]+\.[0-9]+)</Version>", project)
+        self.assertIsNotNone(version_match)
+        version = version_match.group(1)
+
+        installer_path = repo_root / "Scripts" / "Install-BstringsQuality.ps1"
+        installer_test_path = (
+            repo_root / "Scripts" / "tests" / "Test-Install-BstringsQuality.ps1"
+        )
+        self.assertTrue(installer_path.is_file())
+        self.assertTrue(installer_test_path.is_file())
+        installer = installer_path.read_text(encoding="utf-8")
+        self.assertRegex(
+            installer,
+            rf"\[string\]\$ReleaseTag\s*=\s*['\"]v{re.escape(version)}['\"]",
+        )
+        self.assertIn("Join-Path (Get-Location).Path 'bstrings-quality'", installer)
+        self.assertIn("bundle-packs-quality.json", installer)
+        self.assertNotIn("bundle-packs-balanced.json", installer)
+        self.assertNotIn("bundle-packs-compact.json", installer)
+        self.assertIn("SHA256SUMS.txt", installer)
+        self.assertIn("bstrings-win-x64.zip", installer)
+
+        workflow = (
+            repo_root / ".github" / "workflows" / "dotnet-desktop.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Test quality installer with Windows PowerShell 5.1", workflow)
+        self.assertIn("Test quality installer with PowerShell 7", workflow)
+        self.assertIn(
+            "-InstallerScript (Join-Path $PWD 'Scripts\\Install-BstringsQuality.ps1')",
+            workflow,
+        )
+        self.assertIn("release-assets/Install-BstringsQuality.ps1", workflow)
+
+        pack_builder = (
+            repo_root / "tools" / "airgap" / "New-BundlePackRelease.ps1"
+        ).read_text(encoding="utf-8")
+        acceptance = (
+            repo_root / "tools" / "airgap" / "Invoke-OfflineProfileAcceptance.ps1"
+        ).read_text(encoding="utf-8")
+        release_validator = (
+            repo_root / "tools" / "airgap" / "Test-OfflineProfileReleaseEvidence.ps1"
+        ).read_text(encoding="utf-8")
+        for source in (pack_builder, acceptance, release_validator):
+            self.assertIn("Install-BstringsQuality.ps1", source)
+
+    def test_public_getting_started_path_is_installer_only(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        public_paths = (
+            repo_root / "README.md",
+            repo_root / "CORE_RELEASE_README.md",
+            repo_root / "docs" / "air-gapped-deployment.md",
+            repo_root / "docs" / "releases" / "v1.9.1.md",
+        )
+        public_sources = {
+            path: path.read_text(encoding="utf-8") for path in public_paths
+        }
+
+        readme = public_sources[repo_root / "README.md"]
+        self.assertIn("## Why use it?", readme)
+        self.assertIn("## Get started", readme)
+        self.assertEqual(
+            ["## Why use it?", "## Get started"],
+            re.findall(r"^## .+$", readme, flags=re.MULTILINE),
+        )
+        project = (repo_root / "bstrings" / "bstrings.csproj").read_text(
+            encoding="utf-8"
+        )
+        version_match = re.search(
+            r"<Version>([0-9]+\.[0-9]+\.[0-9]+)</Version>", project
+        )
+        self.assertIsNotNone(version_match)
+        self.assertRegex(
+            readme,
+            rf"\$tag\s*=\s*['\"]v{re.escape(version_match.group(1))}['\"]",
+        )
+        self.assertIn("-ReleaseTag $tag", readme)
+
+        for path, source in public_sources.items():
+            self.assertIn("Install-BstringsQuality.ps1", source, path)
+            self.assertNotIn("bundle acquire", source, path)
+            self.assertNotIn("bundle assemble", source, path)
+            self.assertNotIn("bundle-packs-", source, path)
 
     def test_visual_cpp_overlay_refreshes_ocr_inventory_before_bundle_validation(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]

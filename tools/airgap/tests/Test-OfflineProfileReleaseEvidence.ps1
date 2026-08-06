@@ -269,6 +269,8 @@ try {
 
     $packAssetNames = [Collections.Generic.List[string]]::new()
     $packAssetNames.Add('bstrings-win-x64-offline-base.zip')
+    Write-Utf8 (Join-Path $assetRoot 'Install-BstringsQuality.ps1') "# synthetic installer`n"
+    $packAssetNames.Add('Install-BstringsQuality.ps1')
     foreach ($profile in $profiles) {
         $packAssetNames.Add("airgap-config-$profile.json")
         $packAssetNames.Add("Hy-MT2-Apache-2.0-$profile.txt")

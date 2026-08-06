@@ -202,7 +202,7 @@ public sealed class AnalysisToolchainTests
     }
 
     [Fact]
-    public void Locate_MissingConfigurationPointsToTheReleaseBundleAcquisitionFlow()
+    public void Locate_MissingConfigurationPointsToTheReleaseInstaller()
     {
         using var scope = new TemporaryDirectory();
         var previousBundle = Environment.GetEnvironmentVariable("BSTRINGS_AIRGAP_BUNDLE");
@@ -218,17 +218,22 @@ public sealed class AnalysisToolchainTests
             );
 
             Assert.Contains(
-                "bundle-packs-quality.json",
+                "Install-BstringsQuality.ps1",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );
             Assert.Contains(
+                "github.com/Donovoi/bstrings/blob/v1.9.1/README.md#get-started",
+                error.Message,
+                StringComparison.OrdinalIgnoreCase
+            );
+            Assert.DoesNotContain(
                 "bundle acquire",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );
-            Assert.Contains(
-                "github.com/Donovoi/bstrings/releases/latest",
+            Assert.DoesNotContain(
+                "bundle-packs-quality.json",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );

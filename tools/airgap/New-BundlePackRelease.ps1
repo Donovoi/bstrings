@@ -8,6 +8,8 @@ param(
     [string]$ReleaseAssetBaseUrl,
     [Parameter(Mandatory = $true)]
     [string]$CoreReleaseArchive,
+    [Parameter(Mandatory = $true)]
+    [string]$InstallerScript,
     [string]$ComponentLockPath,
     [switch]$SkipAssemblyTest
 )
@@ -29,6 +31,18 @@ $lockPath = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $ComponentLockPath
 $lockItem = Get-Item -LiteralPath $lockPath -Force
 if (($lockItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw "Offline component lock must not be a link or reparse point: $lockPath"
+}
+$installerScriptPath = [IO.Path]::GetFullPath($InstallerScript)
+$installerScriptItem = Get-Item -LiteralPath $installerScriptPath -Force -ErrorAction Stop
+if (
+    $installerScriptItem.PSIsContainer -or
+    ($installerScriptItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+    [long]$installerScriptItem.Length -lt 1
+) {
+    throw "Quality installer must be a non-empty physical file: $installerScriptPath"
+}
+if ($installerScriptItem.Name -cne 'Install-BstringsQuality.ps1') {
+    throw "Quality installer must use the exact public asset name Install-BstringsQuality.ps1: $installerScriptPath"
 }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $output) {
@@ -383,6 +397,12 @@ foreach ($profileName in @('quality', 'balanced', 'compact')) {
         airgapManifestSha256 = $profileManifestIdentity.sha256
     })
 }
+
+[IO.File]::Copy(
+    $installerScriptItem.FullName,
+    (Join-Path $output 'Install-BstringsQuality.ps1'),
+    $false
+)
 
 $checksumInputByName = [Collections.Generic.Dictionary[string, string]]::new(
     [StringComparer]::OrdinalIgnoreCase
