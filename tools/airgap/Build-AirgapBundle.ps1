@@ -862,6 +862,7 @@ $bundleDocumentNames = @(
     'floss-standalone-redistribution.md',
     'magika-cli-redistribution.md',
     'ocr-and-document-analysis.md',
+    'ocr-benchmark-2026-08-05.md',
     'offline-release-maintenance.md',
     'output-and-provenance.md',
     'pattern-engine-benchmark-2026-08.md',
@@ -869,11 +870,20 @@ $bundleDocumentNames = @(
     'scale-benchmark-2026-08.md',
     'translation-benchmark-2026-08-04.md'
 )
+$bundleReleaseDocumentNames = @(
+    'v1.9.0.md'
+)
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `
         (Join-Path $repoRoot 'docs') `
         $documentName `
         "Bundled document $documentName"
+}
+foreach ($documentName in $bundleReleaseDocumentNames) {
+    $null = Resolve-ChildFile `
+        (Join-Path $repoRoot 'docs\releases') `
+        $documentName `
+        "Bundled release document $documentName"
 }
 
 $fixtureSourceDirectory = Join-Path $PSScriptRoot 'fixtures'
@@ -1010,6 +1020,15 @@ try {
             $documentName `
             "Bundled document $documentName"
         Copy-Item -LiteralPath $document -Destination $bundleDocs
+    }
+    $bundleReleaseDocs = Join-Path $bundleDocs 'releases'
+    [IO.Directory]::CreateDirectory($bundleReleaseDocs) | Out-Null
+    foreach ($documentName in $bundleReleaseDocumentNames) {
+        $document = Resolve-ChildFile `
+            (Join-Path $repoRoot 'docs\releases') `
+            $documentName `
+            "Bundled release document $documentName"
+        Copy-Item -LiteralPath $document -Destination $bundleReleaseDocs
     }
     Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') `
         -Destination (Join-Path $output 'README.md')

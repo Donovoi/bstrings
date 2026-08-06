@@ -15,7 +15,28 @@ $root = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $BundleDirectory).Path
     [IO.Path]::AltDirectorySeparatorChar
 )
 $rootPrefix = $root + [IO.Path]::DirectorySeparatorChar
-$markdownFiles = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.md' -Force)
+# First-party user documentation lives at the bundle root and beneath docs/. Runtime
+# and license trees contain upstream Markdown whose relative links target source-tree
+# files that are intentionally not redistributed; their bytes are verified separately.
+$markdownFiles = [Collections.Generic.List[IO.FileInfo]]::new()
+foreach ($markdownFile in Get-ChildItem -LiteralPath $root -File -Filter '*.md' -Force) {
+    $markdownFiles.Add($markdownFile)
+}
+$documentationRoot = Join-Path $root 'docs'
+if (Test-Path -LiteralPath $documentationRoot) {
+    if (-not (Test-Path -LiteralPath $documentationRoot -PathType Container)) {
+        throw "Bundled documentation path is not a directory: $documentationRoot"
+    }
+    foreach ($markdownFile in Get-ChildItem `
+        -LiteralPath $documentationRoot `
+        -Recurse `
+        -File `
+        -Filter '*.md' `
+        -Force) {
+        $markdownFiles.Add($markdownFile)
+    }
+}
+$markdownFiles = @($markdownFiles | Sort-Object -Property FullName -Unique)
 $checkedLinks = 0
 $failures = [Collections.Generic.List[string]]::new()
 
