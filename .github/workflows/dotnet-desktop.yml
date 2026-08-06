@@ -132,6 +132,14 @@ jobs:
         shell: pwsh
         run: ./Scripts/tests/Test-Install-BstringsQuality.ps1
 
+      - name: Test README installer bootstrap with Windows PowerShell 5.1
+        shell: powershell
+        run: .\Scripts\tests\Test-ReadmeBootstrap.ps1
+
+      - name: Test README installer bootstrap with PowerShell 7
+        shell: pwsh
+        run: ./Scripts/tests/Test-ReadmeBootstrap.ps1
+
       - name: Test offline release evidence validation
         shell: pwsh
         run: ./tools/airgap/tests/Test-OfflineProfileReleaseEvidence.ps1
