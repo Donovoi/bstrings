@@ -4,12 +4,13 @@ This guide is for maintainers of the Windows x64 release. Examiners should use
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-## v1.9.0 release process and asset set
+## v1.9.1 release process and asset set
 
-The exact v1.9.0 project-version tag publishes the asset set below after every
+The exact v1.9.1 project-version tag publishes the asset set below after every
 required gate passes. Do not combine a core ZIP with manifests from another
 version.
 
+- `Install-BstringsQuality.ps1`, the quality-only, connected-stage installer;
 - `bstrings-win-x64.zip`, the self-contained core scanner and split-pack
   acquisition client;
 - `bstrings-win-x64-offline-base.zip`, the shared application/runtime/OCR base;
@@ -23,18 +24,51 @@ The tag- and commit-bound `offline-profile-acceptance.json` remains an internal
 Actions gate artifact. The release job validates it, but does not publish it as
 a user download.
 
-The workflow uses [`releases/v1.9.0.md`](releases/v1.9.0.md) as the human
+The workflow uses [`releases/v1.9.1.md`](releases/v1.9.1.md) as the human
 release body. Review it against the final filenames, profile identities, and
 known boundaries before tagging.
 
 | Item | Release asset? | Role |
 | --- | --- | --- |
+| Quality installer | Yes | Safely acquires and verifies the complete quality profile in one operation |
 | Core ZIP | Yes | Scanner and acquisition client |
 | Shared base ZIP | Yes | Common runtimes, OCR, recovery tools, and manifests |
 | Profile files/trust manifest | Yes | Select and authenticate one translation profile |
 | Profile acceptance evidence | No; internal Actions artifact | Blocks publication unless every advertised profile passes |
 | Immutable translation model | No; acquired from its pinned official source | Large external pack named by the trust manifest |
 | Complete offline kit | No; assembled locally | Directory transferred to the disconnected host |
+
+## Quality installer release contract
+
+`Scripts/Install-BstringsQuality.ps1` is published unchanged as
+`Install-BstringsQuality.ps1`. `SHA256SUMS.txt` must contain exactly one
+lowercase SHA-256 row for it alongside every other public release asset. The
+README bootstrap uses GitHub's exact-tag API for `v1.9.1`, rejects a draft or
+prerelease, downloads the installer and checksum list as physical files from
+that release, and verifies the installer before launching `powershell.exe
+-File`; the release body links users to that canonical flow. Never document or
+offer a web response piped into `Invoke-Expression`.
+
+The installer is deliberately narrow:
+
+- default release tag: `v1.9.1`;
+- default destination: `.\bstrings-quality` under the caller's current
+  directory;
+- quality profile only;
+- at least 30 GiB free on the install/cache volume;
+- no administrator requirement;
+- exact GitHub release metadata and canonical asset URLs;
+- checksum verification for the installer, core ZIP, and quality trust
+  manifest, followed by the existing strict pack and final-bundle verification;
+- three acquisition attempts by default; and
+- deletion of its script-owned versioned cache only after success, with failed
+  cache state retained for a resumable retry.
+
+Supported controls are `-ReleaseTag`, `-DestinationDirectory`,
+`-InstallerCacheDirectory`, `-KeepCache`, and `-AcquireAttempts`. Do not weaken
+the exact-tag, checksum, path-containment, free-space, or final-verification
+checks for convenience. `-KeepCache` retains the default script-owned cache;
+an explicitly supplied cache directory is user-owned and is always retained.
 
 The shared base must remain smaller than 2,000,000,000 bytes. This conservative
 project ceiling stays below GitHub's strict 2 GiB per-release-file limit,
@@ -130,7 +164,7 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 
 ## Build and test the self-contained core
 
-The v1.9.0 release process uses
+The v1.9.1 release process uses
 [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
 repository-pinned Rust toolchain:
 
@@ -339,6 +373,7 @@ smokes pass:
   -BundleDirectory .\publish\offline-compact `
   -OutputDirectory .\release-packs `
   -CoreReleaseArchive .\bstrings-win-x64.zip `
+  -InstallerScript .\Scripts\Install-BstringsQuality.ps1 `
   -ReleaseAssetBaseUrl 'https://github.com/Donovoi/bstrings/releases/download/vX.Y.Z'
 ```
 
@@ -351,7 +386,8 @@ The script:
 3. generates exact configuration, canonical license, final manifest, and trust
    manifest files for quality, balanced, and compact;
 4. points each model file pack to its immutable official URL and exact hash;
-5. writes `SHA256SUMS.txt` covering the core ZIP and every split-pack asset; and
+5. stages the exact quality installer and writes `SHA256SUMS.txt` covering the
+   installer, core ZIP, and every split-pack asset; and
 6. locally assembles and verifies the template profile unless
    `-SkipAssemblyTest` is deliberately supplied.
 
@@ -374,8 +410,9 @@ complete bundle and reviewed locks.
 
 Ordinary pushes and pull requests run Rust format/Clippy/tests, .NET
 restore/build/tests/publish, Python unit tests/Ruff/bytecode compilation,
-PowerShell parser checks, lock dry-runs, and core packaging. Version tags and
-manual dispatches additionally:
+PowerShell parser checks, the quality-installer suite under Windows PowerShell
+5.1 and PowerShell 7, lock dry-runs, and core packaging. Version tags and manual
+dispatches additionally:
 
 - cache exact ordinary and OCR downloads keyed by both lock files;
 - build a compact complete bundle from connected inputs;

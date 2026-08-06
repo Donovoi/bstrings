@@ -294,6 +294,7 @@ if ([IO.Path]::GetFileName($resolvedEvidence) -cne 'offline-profile-acceptance.j
 $profiles = @('quality', 'balanced', 'compact')
 $packAssetNames = [Collections.Generic.List[string]]::new()
 $packAssetNames.Add('bstrings-win-x64-offline-base.zip')
+$packAssetNames.Add('Install-BstringsQuality.ps1')
 foreach ($profile in $profiles) {
     $packAssetNames.Add("airgap-config-$profile.json")
     $packAssetNames.Add("Hy-MT2-Apache-2.0-$profile.txt")
