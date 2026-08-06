@@ -128,6 +128,10 @@ jobs:
         shell: pwsh
         run: ./tools/airgap/tests/Test-OfflineProfileReleaseEvidence.ps1
 
+      - name: Test bundled Markdown-link validation
+        shell: pwsh
+        run: ./tools/airgap/tests/Test-MarkdownLinks.ps1
+
       - name: Test Magika cache-only fail-closed guard
         shell: pwsh
         run: ./tools/licenses/Test-MagikaCacheOnlyGuard.ps1
