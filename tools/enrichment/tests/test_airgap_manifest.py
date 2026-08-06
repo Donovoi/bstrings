@@ -259,6 +259,27 @@ class AirgapManifestTests(unittest.TestCase):
 
         self.assertIn("translationModelUrl = [string]$modelPack.url", script)
 
+    def test_visual_cpp_overlay_refreshes_ocr_inventory_before_bundle_validation(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        script = (repo_root / "tools" / "airgap" / "Build-CompleteOfflineBundle.ps1").read_text(
+            encoding="utf-8"
+        )
+        overlay_index = script.index("$runtimeStageResult = @(")
+        refresh_index = script.index("refresh-inventory `", overlay_index)
+        runtime_source_index = script.index(
+            "--visual-cpp-runtime $resolvedVisualCppRuntime", refresh_index
+        )
+        reparse_check_index = script.index(
+            "Assert-NoReparsePoints $stagingRoot 'Offline component staging directory'",
+            refresh_index,
+        )
+        bundle_index = script.index("& $builder", reparse_check_index)
+
+        self.assertLess(overlay_index, refresh_index)
+        self.assertLess(refresh_index, runtime_source_index)
+        self.assertLess(runtime_source_index, reparse_check_index)
+        self.assertLess(reparse_check_index, bundle_index)
+
 
 if __name__ == "__main__":
     unittest.main()

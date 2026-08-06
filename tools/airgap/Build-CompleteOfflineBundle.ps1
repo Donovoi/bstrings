@@ -557,6 +557,9 @@ $llamaBuilder = Resolve-ExistingFile `
 $ocrBuilder = Resolve-ExistingFile `
     (Join-Path $PSScriptRoot 'Build-OcrComponents.ps1') `
     'Pinned offline OCR component builder'
+$ocrStagingHelper = Resolve-ExistingFile `
+    (Join-Path $PSScriptRoot 'stage_ocr_components.py') `
+    'OCR runtime-inventory helper'
 $runtimeInspectionParameters = @{
     ComponentLockPath = $lockPath
     InspectOnly = $true
@@ -869,6 +872,12 @@ try {
         @($runtimeStageResult[0].destinations).Count -ne 7
     ) {
         throw 'Visual C++ runtime staging helper did not verify all seven app-local destinations.'
+    }
+    & python -I -B $ocrStagingHelper refresh-inventory `
+        --output $staged.ocr `
+        --visual-cpp-runtime $resolvedVisualCppRuntime
+    if ($LASTEXITCODE -ne 0) {
+        throw "OCR runtime-inventory refresh failed with exit code $LASTEXITCODE."
     }
     Assert-NoReparsePoints $stagingRoot 'Offline component staging directory'
 

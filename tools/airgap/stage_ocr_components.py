@@ -27,6 +27,12 @@ WINDOWS_RESERVED_NAMES = {
     *(f"com{number}" for number in range(1, 10)),
     *(f"lpt{number}" for number in range(1, 10)),
 }
+VISUAL_CPP_RUNTIME_FILES = (
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+)
 
 
 class StageError(RuntimeError):
@@ -546,6 +552,161 @@ def file_rows(root: Path, *, notices_only: bool = False) -> list[dict[str, Any]]
     return rows
 
 
+def is_link_or_junction(path: Path) -> bool:
+    return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
+
+
+def require_physical_tree(path: Path, description: str) -> Path:
+    if not path.is_dir() or is_link_or_junction(path):
+        raise StageError(f"{description} must be a physical directory: {path}")
+    resolved = path.resolve(strict=True)
+    for child in resolved.rglob("*"):
+        if is_link_or_junction(child):
+            raise StageError(f"{description} contains a link or junction: {child}")
+    return resolved
+
+
+def file_row_map(value: object, description: str) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise StageError(f"{description} must be a non-empty array")
+    rows: dict[str, dict[str, Any]] = {}
+    for raw_row in value:
+        row = require_object(raw_row, f"{description} row")
+        if set(row) != {"path", "bytes", "sha256"}:
+            raise StageError(f"{description} row has an unsupported schema")
+        relative = validate_relative_path(
+            require_text(row.get("path"), f"{description} path"),
+            f"{description} path",
+        ).as_posix()
+        if type(row.get("bytes")) is not int or row["bytes"] < 0:
+            raise StageError(f"{description} bytes must be a non-negative integer")
+        require_sha256(row.get("sha256"), f"{description} sha256")
+        key = relative.casefold()
+        if key in rows:
+            raise StageError(f"{description} contains a duplicate path: {relative}")
+        rows[key] = row
+    return rows
+
+
+def refresh_runtime_inventory(output: Path, visual_cpp_runtime: Path) -> dict[str, int]:
+    root = require_physical_tree(output, "OCR component output")
+    runtime_source = require_physical_tree(
+        visual_cpp_runtime,
+        "Visual C++ app-local runtime source",
+    )
+    runtime_source_rows: dict[str, dict[str, Any]] = {}
+    for filename in VISUAL_CPP_RUNTIME_FILES:
+        source = runtime_source / filename
+        if not source.is_file() or is_link_or_junction(source):
+            raise StageError(f"Visual C++ runtime source file is missing: {source}")
+        if source.stat().st_size < 1:
+            raise StageError(f"Visual C++ runtime source file is empty: {source}")
+        runtime_source_rows[filename.casefold()] = {
+            "path": filename,
+            "bytes": source.stat().st_size,
+            "sha256": sha256_file(source),
+        }
+    inventory_path = root / "licenses" / "ocr-runtime-files.json"
+    if not inventory_path.is_file() or is_link_or_junction(inventory_path):
+        raise StageError(f"OCR runtime inventory must be a physical file: {inventory_path}")
+    inventory = require_object(
+        json.loads(inventory_path.read_text(encoding="utf-8")),
+        "OCR runtime inventory",
+    )
+    expected_keys = {
+        "schemaVersion",
+        "profile",
+        "componentLockSha256",
+        "runtimes",
+        "modelPack",
+        "runtimeFiles",
+        "noticeFiles",
+    }
+    if set(inventory) != expected_keys or inventory.get("schemaVersion") != SCHEMA_VERSION:
+        raise StageError("OCR runtime inventory has an unsupported schema")
+    require_text(inventory.get("profile"), "OCR runtime inventory profile")
+    require_sha256(
+        inventory.get("componentLockSha256"),
+        "OCR runtime inventory componentLockSha256",
+    )
+    runtimes = require_object(inventory.get("runtimes"), "OCR runtime identities")
+    runtime_files = require_object(inventory.get("runtimeFiles"), "OCR runtime files")
+    notice_files = require_object(inventory.get("noticeFiles"), "OCR notice files")
+    if any(set(value) != {"cpu", "directml"} for value in (runtimes, runtime_files, notice_files)):
+        raise StageError("OCR runtime inventory must contain exactly cpu and directml runtimes")
+    require_object(inventory.get("modelPack"), "OCR model-pack identity")
+
+    counts: dict[str, int] = {}
+    for name in ("cpu", "directml"):
+        runtime_root = require_physical_tree(
+            root / "runtime" / f"ocr-{name}",
+            f"{name} OCR runtime",
+        )
+        recorded_files = file_row_map(
+            inventory["runtimeFiles"][name],
+            f"recorded {name} OCR runtime files",
+        )
+        recorded_notices = file_row_map(
+            inventory["noticeFiles"][name],
+            f"recorded {name} OCR notice files",
+        )
+        current_files = file_row_map(
+            file_rows(runtime_root),
+            f"current {name} OCR runtime files",
+        )
+        current_notices = file_row_map(
+            file_rows(runtime_root, notices_only=True),
+            f"current {name} OCR notice files",
+        )
+        runtime_keys = {filename.casefold() for filename in VISUAL_CPP_RUNTIME_FILES}
+        recorded_non_runtime = {
+            key: row for key, row in recorded_files.items() if key not in runtime_keys
+        }
+        expected_current_keys = set(recorded_non_runtime) | runtime_keys
+        if set(current_files) != expected_current_keys:
+            raise StageError(
+                f"{name} OCR runtime changed outside the approved Visual C++ overlay"
+            )
+        for key, recorded_row in recorded_non_runtime.items():
+            if current_files[key] != recorded_row:
+                raise StageError(
+                    f"{name} OCR runtime file changed outside the approved overlay: "
+                    f"{recorded_row['path']}"
+                )
+        if current_notices != recorded_notices:
+            raise StageError(f"{name} OCR notice inventory changed during the Visual C++ overlay")
+        if not set(recorded_notices).issubset(recorded_non_runtime):
+            raise StageError(f"{name} OCR notice inventory is not part of its runtime inventory")
+        for key, expected_row in runtime_source_rows.items():
+            if current_files[key] != expected_row:
+                raise StageError(
+                    f"{name} OCR Visual C++ runtime differs from the verified source: "
+                    f"{expected_row['path']}"
+                )
+        inventory["runtimeFiles"][name] = sorted(
+            [*recorded_non_runtime.values(), *runtime_source_rows.values()],
+            key=lambda row: row["path"].casefold(),
+        )
+        counts[name] = len(inventory["runtimeFiles"][name])
+
+    payload = canonical_json_bytes(inventory)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{inventory_path.name}.",
+        suffix=".tmp",
+        dir=inventory_path.parent,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, inventory_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    return counts
+
+
 def copy_governance_files(
     lock_path: Path,
     inventory_source: Path,
@@ -640,6 +801,9 @@ def parse_arguments() -> argparse.Namespace:
     derive = subparsers.add_parser("derive-dictionary")
     derive.add_argument("--source", type=Path, required=True)
     derive.add_argument("--output", type=Path, required=True)
+    refresh = subparsers.add_parser("refresh-inventory")
+    refresh.add_argument("--output", type=Path, required=True)
+    refresh.add_argument("--visual-cpp-runtime", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -648,6 +812,14 @@ def main() -> int:
     try:
         if args.command == "derive-dictionary":
             derive_dictionary(args.source.resolve(strict=True), args.output.resolve())
+        elif args.command == "refresh-inventory":
+            counts = refresh_runtime_inventory(args.output, args.visual_cpp_runtime)
+            print(
+                json.dumps(
+                    {"output": str(args.output.resolve()), "runtimeFiles": counts},
+                    sort_keys=True,
+                )
+            )
         else:
             stage(args)
         return 0
