@@ -25,32 +25,37 @@ Open PowerShell in the directory where you want `bstrings-quality`, then run
 this pinned, checksum-verified installer bootstrap:
 
 ```powershell
-$tag = 'v1.9.1'
-$repo = 'Donovoi/bstrings'
-$headers = @{
-  Accept = 'application/vnd.github+json'
-  'X-GitHub-Api-Version' = '2022-11-28'
-  'User-Agent' = 'bstrings-installer-bootstrap'
+& {
+  Set-StrictMode -Version Latest
+  $ErrorActionPreference = 'Stop'
+
+  $tag = 'v1.9.1'
+  $repo = 'Donovoi/bstrings'
+  $headers = @{
+    Accept = 'application/vnd.github+json'
+    'X-GitHub-Api-Version' = '2022-11-28'
+    'User-Agent' = 'bstrings-installer-bootstrap'
+  }
+  $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/tags/$tag" `
+    -Headers $headers -UseBasicParsing
+  $asset = @($release.assets | Where-Object { $_.name -CEQ 'Install-BstringsQuality.ps1' })
+  $url = "https://github.com/$repo/releases/download/$tag/Install-BstringsQuality.ps1"
+  if ($release.tag_name -CNE $tag -or $release.draft -or $release.prerelease -or
+      $asset.Count -ne 1 -or $asset[0].browser_download_url -CNE $url -or
+      ([string]$asset[0].digest) -CNotMatch '^sha256:[0-9a-f]{64}$') {
+    throw 'The exact published installer asset could not be authenticated.'
+  }
+  if (Test-Path .\Install-BstringsQuality.ps1) {
+    throw 'Refusing to overwrite the existing installer file.'
+  }
+  Invoke-WebRequest $url -OutFile .\Install-BstringsQuality.ps1 -UseBasicParsing
+  $expected = ([string]$asset[0].digest).Substring(7)
+  $actual = (Get-FileHash .\Install-BstringsQuality.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actual -CNE $expected) { throw 'Installer SHA-256 mismatch.' }
+  powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File .\Install-BstringsQuality.ps1 -ReleaseTag $tag
+  if ($LASTEXITCODE -ne 0) { throw "Installer failed with exit code $LASTEXITCODE" }
 }
-$release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/tags/$tag" `
-  -Headers $headers -UseBasicParsing
-$asset = @($release.assets | Where-Object { $_.name -CEQ 'Install-BstringsQuality.ps1' })
-$url = "https://github.com/$repo/releases/download/$tag/Install-BstringsQuality.ps1"
-if ($release.tag_name -CNE $tag -or $release.draft -or $release.prerelease -or
-    $asset.Count -ne 1 -or $asset[0].browser_download_url -CNE $url -or
-    ([string]$asset[0].digest) -CNotMatch '^sha256:[0-9a-f]{64}$') {
-  throw 'The exact published installer asset could not be authenticated.'
-}
-if (Test-Path .\Install-BstringsQuality.ps1) {
-  throw 'Refusing to overwrite the existing installer file.'
-}
-Invoke-WebRequest $url -OutFile .\Install-BstringsQuality.ps1 -UseBasicParsing
-$expected = ([string]$asset[0].digest).Substring(7)
-$actual = (Get-FileHash .\Install-BstringsQuality.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -CNE $expected) { throw 'Installer SHA-256 mismatch.' }
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .\Install-BstringsQuality.ps1 -ReleaseTag $tag
-if ($LASTEXITCODE -ne 0) { throw "Installer failed with exit code $LASTEXITCODE" }
 ```
 
 The installer creates and verifies `.\bstrings-quality`. Run a complete analysis
