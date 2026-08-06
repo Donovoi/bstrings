@@ -25,6 +25,12 @@ if ($bootstrap -cnotmatch "(?m)^  Set-StrictMode -Version Latest\r?$") {
 if ($bootstrap -cnotmatch '(?m)^  \$ErrorActionPreference = ''Stop''\r?$') {
     throw 'The README installer bootstrap must stop on command errors.'
 }
+if ($bootstrap -cmatch '(?m)\bGet-FileHash\b') {
+    throw 'The README installer bootstrap must not depend on Get-FileHash.'
+}
+if ($bootstrap -cnotmatch '\[Security\.Cryptography\.SHA256\]::Create\(\)') {
+    throw 'The README installer bootstrap must hash through the .NET SHA-256 API.'
+}
 
 $tokens = $null
 $parseErrors = $null
@@ -94,4 +100,104 @@ if ($script:installerLaunches -ne 0) {
     throw "The bootstrap attempted $script:installerLaunches installer launch(es) after lookup failure."
 }
 
-Write-Host 'README installer bootstrap fail-fast test passed.'
+$script:releaseLookups = 0
+$script:downloads = 0
+$script:installerLaunches = 0
+$script:getFileHashCalls = 0
+$script:installerPayload = [Text.Encoding]::UTF8.GetBytes("synthetic installer`n")
+$payloadHasher = [Security.Cryptography.SHA256]::Create()
+try {
+    $script:installerDigest = (
+        [BitConverter]::ToString($payloadHasher.ComputeHash($script:installerPayload))
+    ).Replace('-', '').ToLowerInvariant()
+}
+finally {
+    $payloadHasher.Dispose()
+}
+
+function Invoke-RestMethod {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [object]$Uri,
+        [hashtable]$Headers,
+        [switch]$UseBasicParsing
+    )
+    $script:releaseLookups++
+    return [pscustomobject]@{
+        tag_name = 'v1.9.2'
+        draft = $false
+        prerelease = $false
+        assets = @(
+            [pscustomobject]@{
+                name = 'Install-BstringsQuality.ps1'
+                browser_download_url = 'https://github.com/Donovoi/bstrings/releases/download/v1.9.2/Install-BstringsQuality.ps1'
+                digest = "sha256:$script:installerDigest"
+            }
+        )
+    }
+}
+
+function Invoke-WebRequest {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [object]$Uri,
+        [string]$OutFile,
+        [switch]$UseBasicParsing
+    )
+    $script:downloads++
+    $resolvedOutFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+        $OutFile
+    )
+    [IO.File]::WriteAllBytes($resolvedOutFile, $script:installerPayload)
+}
+
+function powershell.exe {
+    $script:installerLaunches++
+    $script:LASTEXITCODE = 0
+}
+
+function Get-FileHash {
+    $script:getFileHashCalls++
+    throw 'Get-FileHash must not be called by the README bootstrap.'
+}
+
+$successRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'bstrings-readme-bootstrap-test-' + [Guid]::NewGuid().ToString('N')
+)
+[IO.Directory]::CreateDirectory($successRoot) | Out-Null
+try {
+    Push-Location $successRoot
+    try {
+        & $scriptBlock
+    }
+    finally {
+        Pop-Location
+    }
+    if ($script:releaseLookups -ne 1 -or $script:downloads -ne 1) {
+        throw 'The successful bootstrap did not perform exactly one lookup and one download.'
+    }
+    if ($script:installerLaunches -ne 1) {
+        throw "Expected one installer launch, found $script:installerLaunches."
+    }
+    if ($script:getFileHashCalls -ne 0) {
+        throw 'The successful bootstrap called Get-FileHash.'
+    }
+    $downloadedInstaller = Join-Path $successRoot 'Install-BstringsQuality.ps1'
+    if (-not (Test-Path -LiteralPath $downloadedInstaller -PathType Leaf)) {
+        throw 'The successful bootstrap did not download into the current PowerShell directory.'
+    }
+}
+finally {
+    $resolvedSuccessRoot = [IO.Path]::GetFullPath($successRoot)
+    if (
+        [IO.Path]::GetFileName($resolvedSuccessRoot) -notmatch
+            '^bstrings-readme-bootstrap-test-[0-9a-f]{32}$'
+    ) {
+        throw "Refusing to remove unexpected README bootstrap test path: $resolvedSuccessRoot"
+    }
+    [IO.Directory]::Delete($resolvedSuccessRoot, $true)
+}
+
+Write-Host 'README installer bootstrap tests passed.'

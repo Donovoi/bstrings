@@ -223,7 +223,7 @@ public sealed class AnalysisToolchainTests
                 StringComparison.OrdinalIgnoreCase
             );
             Assert.Contains(
-                "github.com/Donovoi/bstrings/blob/v1.9.1/README.md#get-started",
+                "github.com/Donovoi/bstrings/blob/v1.9.2/README.md#get-started",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );

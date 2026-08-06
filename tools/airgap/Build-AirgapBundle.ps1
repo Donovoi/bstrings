@@ -871,7 +871,7 @@ $bundleDocumentNames = @(
     'translation-benchmark-2026-08-04.md'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.1.md'
+    'v1.9.2.md'
 )
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `

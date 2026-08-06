@@ -95,7 +95,7 @@ system prerequisites.
 
 ## OCR hardware choices
 
-The v1.9.1 OCR profile defines two runtime environments:
+The v1.9.2 OCR profile defines two runtime environments:
 
 - a CPU-only ONNX Runtime environment, verified separately as a fallback; and
 - the active DirectML ONNX Runtime environment, which exposes both DirectML and

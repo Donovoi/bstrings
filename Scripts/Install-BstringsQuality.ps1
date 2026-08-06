@@ -2,7 +2,7 @@
 param(
     [string]$DestinationDirectory = (Join-Path (Get-Location).Path 'bstrings-quality'),
     [string]$InstallerCacheDirectory,
-    [string]$ReleaseTag = 'v1.9.1',
+    [string]$ReleaseTag = 'v1.9.2',
     [switch]$KeepCache,
     [ValidateRange(1, 10)]
     [int]$AcquireAttempts = 3,
@@ -18,7 +18,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$expectedReleaseTag = 'v1.9.1'
+$expectedReleaseTag = 'v1.9.2'
 $repository = 'Donovoi/bstrings'
 $qualityManifestName = 'bundle-packs-quality.json'
 $coreArchiveName = 'bstrings-win-x64.zip'
@@ -166,7 +166,19 @@ function Get-LowerSha256([string]$Path, [string]$Name) {
     if ([long]$item.Length -lt 1) {
         throw "$Name must not be empty: $Path"
     }
-    return (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $stream = [IO.File]::OpenRead($item.FullName)
+    try {
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try {
+            return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+        }
+        finally {
+            $hasher.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Get-RequiredAsset([object]$Release, [string]$FileName, [long]$MaximumBytes) {

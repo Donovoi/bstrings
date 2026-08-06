@@ -1,8 +1,8 @@
-# bstrings v1.9.1 Windows x64 core component
+# bstrings v1.9.2 Windows x64 core component
 
 This ZIP is an installer component, not the complete offline kit. Normal users
 should follow the single `Install-BstringsQuality.ps1`
-[quality installer](https://github.com/Donovoi/bstrings/blob/v1.9.1/README.md#get-started),
+[quality installer](https://github.com/Donovoi/bstrings/blob/v1.9.2/README.md#get-started),
 which downloads, assembles, and verifies every required runtime, model, tool,
 licence, and manifest.
 
