@@ -3,7 +3,7 @@
 The application version lives in `bstrings/bstrings.csproj`:
 
 ```xml
-<Version>1.9.3</Version>
+<Version>1.9.4</Version>
 ```
 
 The project uses `MAJOR.MINOR.PATCH`:
@@ -92,8 +92,8 @@ The full workflow separately retains `offline-profile-acceptance.json` as an
 internal Actions gate artifact. The release job validates it against the exact
 tagged build, but it is not a public Release download.
 
-For v1.9.3 the Windows-core release body is
-[`docs/releases/v1.9.3.md`](docs/releases/v1.9.3.md). Keep historical release
+For v1.9.4 the Windows-core release body is
+[`docs/releases/v1.9.4.md`](docs/releases/v1.9.4.md). Keep historical release
 documents unchanged. Before promoting a version to the full quality/offline
 asset set, update its installer pin, documentation inventory, human release
 body, and all profile-specific acceptance evidence.

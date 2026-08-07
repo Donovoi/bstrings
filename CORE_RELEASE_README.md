@@ -1,4 +1,4 @@
-# bstrings v1.9.3 Windows x64 core component
+# bstrings v1.9.4 Windows x64 core component
 
 This ZIP is an installer component, not the complete offline kit. Normal users
 should follow the single `Install-BstringsQuality.ps1`

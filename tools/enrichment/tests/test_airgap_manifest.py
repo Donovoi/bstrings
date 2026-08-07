@@ -305,6 +305,11 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn('$tag = "v$($versions[0])"', core_release_workflow)
         self.assertIn("bstrings-win-x64.zip", core_release_workflow)
         self.assertNotIn("Install-BstringsQuality.ps1", core_release_workflow)
+        prepared_index = core_release_workflow.index(
+            'Write-Host "Prepared Windows release $tag for $env:RELEASE_SHA."'
+        )
+        success_index = core_release_workflow.index("exit 0", prepared_index)
+        self.assertLess(prepared_index, success_index)
 
         pack_builder = (
             repo_root / "tools" / "airgap" / "New-BundlePackRelease.ps1"
