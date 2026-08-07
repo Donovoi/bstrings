@@ -3,7 +3,7 @@
 The application version lives in `bstrings/bstrings.csproj`:
 
 ```xml
-<Version>1.9.2</Version>
+<Version>1.9.3</Version>
 ```
 
 The project uses `MAJOR.MINOR.PATCH`:
@@ -24,11 +24,17 @@ The helper updates the project file locally:
 
 Review the diff and commit it like any other change. Commit-message keywords do
 not change the version, and CI never writes a version commit back to the
-repository. The helper changes only the project file. Before a release, also
-update the exact tag pinned by `Scripts/Install-BstringsQuality.ps1`, the
-release document selected by `tools/airgap/Build-AirgapBundle.ps1`, and the
-versioned user documentation. CI rejects an installer tag that differs from
-the project version.
+repository. The helper changes only the project file.
+
+Pull requests and direct `master` pushes that change product, test, build,
+packaging, installer, or workflow code must advance this version. CI compares
+the change's base and head with `tools/release/Assert-CodeVersion.ps1`, rejects
+a reused release tag, and permits documentation-only changes without a bump.
+
+The automatic Windows-core channel does not change the quality installer's
+pinned tag. Update `Scripts/Install-BstringsQuality.ps1`, its tests, the
+air-gap release document inventory, and versioned user documentation only when
+preparing a new fully gated quality/offline release.
 
 ## Validate before tagging
 
@@ -51,28 +57,27 @@ FLOSS recovery smokes. The exact procedure is in
 [offline release maintenance](docs/offline-release-maintenance.md). Create a
 release tag only from a commit whose full `master` workflow has passed.
 
-## Create v1.9.2 when its gates pass
+## Automatic Windows x64 core release
 
-v1.9.2 is the version prepared by this source tree. Confirm that the exact
-candidate commit is green and that the version has not already been tagged
-before creating the release tag.
+Every successful `Build and test` push run on `master` is followed by
+`Publish Windows release`. The release workflow checks out the exact tested
+commit, reads the project version, and is a no-op when that version is already
+published. For a new version it downloads the `bstrings-win-x64` artifact from
+that exact successful run, extracts and verifies its required files, creates a
+SHA-256 checksum list, and publishes `v<MAJOR.MINOR.PATCH>` with only:
 
-Use exactly `v<MAJOR.MINOR.PATCH>`, with no suffix, and make it match the one
-`Version` value in `bstrings/bstrings.csproj`:
+- `bstrings-win-x64.zip`; and
+- `SHA256SUMS.txt`.
 
-```powershell
-git tag v1.9.2
-git push origin v1.9.2
-```
+The workflow runs only for a successful same-repository `master` push. It does
+not execute pull-request code with a write token, does not use a personal
+access token, and refuses to retarget an existing tag. Reruns are idempotent
+when the release already exists.
 
-The workflow rejects a mismatched tag before installing build toolchains or
-starting the multi-gigabyte release path. Pull requests and ordinary pushes
-build a temporary core artifact. A manual workflow dispatch produces
-reviewable build artifacts without creating a release. Only an exact matching
-pushed tag can start the final release job, and publication remains blocked
-until every required profile gate passes.
+## Full quality/offline release
 
-The v1.9.2 release job publishes:
+The larger quality/offline release remains separately gated. Its release job
+publishes:
 
 - `Install-BstringsQuality.ps1`;
 - `bstrings-win-x64.zip`;
@@ -83,15 +88,15 @@ The v1.9.2 release job publishes:
 - `bundle-packs-{quality,balanced,compact}.json`;
 - `SHA256SUMS.txt`, which covers the installer and every other public asset.
 
-The workflow separately retains `offline-profile-acceptance.json` as an
+The full workflow separately retains `offline-profile-acceptance.json` as an
 internal Actions gate artifact. The release job validates it against the exact
 tagged build, but it is not a public Release download.
 
-The human release body is [`docs/releases/v1.9.2.md`](docs/releases/v1.9.2.md).
-Keep its download names, commands, profiles, and boundaries synchronized with
-the workflow before tagging. Keep
-[`docs/releases/v1.9.0.md`](docs/releases/v1.9.0.md) unchanged as the historical
-v1.9.0 note.
+For v1.9.3 the Windows-core release body is
+[`docs/releases/v1.9.3.md`](docs/releases/v1.9.3.md). Keep historical release
+documents unchanged. Before promoting a version to the full quality/offline
+asset set, update its installer pin, documentation inventory, human release
+body, and all profile-specific acceptance evidence.
 
 GitHub Releases are the product channel. Keep only usable program/download,
 installation, license, checksum, manifest, and release-verification assets

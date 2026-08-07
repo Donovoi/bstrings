@@ -1,0 +1,172 @@
+name: Publish Windows release
+
+on:
+  workflow_run:
+    workflows: ["Build and test"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Publish tested Windows x64 artifact
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'master' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: bstrings-windows-release
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Check out the exact tested master commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the release identity
+        id: release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_SHA -notmatch '^[0-9a-f]{40}$') {
+            throw "Invalid tested commit identity: $env:RELEASE_SHA"
+          }
+          if ((git rev-parse HEAD) -cne $env:RELEASE_SHA) {
+            throw 'The checked-out commit differs from the successful build commit.'
+          }
+
+          [xml]$project = Get-Content -LiteralPath bstrings/bstrings.csproj -Raw
+          $versions = @(
+            $project.SelectNodes('/Project/PropertyGroup/Version') |
+              ForEach-Object { [string]$_.InnerText } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+              Select-Object -Unique
+          )
+          if ($versions.Count -ne 1 -or $versions[0] -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw 'Expected exactly one stable MAJOR.MINOR.PATCH project Version.'
+          }
+
+          $tag = "v$($versions[0])"
+          $null = & gh release view $tag --repo $env:RELEASE_REPOSITORY --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            "publish=false" >> $env:GITHUB_OUTPUT
+            "tag=$tag" >> $env:GITHUB_OUTPUT
+            Write-Host "$tag is already published; this run is idempotently complete."
+            return
+          }
+
+          $null = & gh api "repos/$env:RELEASE_REPOSITORY/git/ref/tags/$tag" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Tag $tag exists without a published release; refusing to retarget it."
+          }
+
+          "publish=true" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Prepared Windows release $tag for $env:RELEASE_SHA."
+
+      - name: Download the exact successful build artifact
+        if: steps.release.outputs.publish == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: bstrings-win-x64
+          path: release-assets
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Verify and checksum the Windows package
+        if: steps.release.outputs.publish == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = [IO.Path]::GetFullPath('release-assets/bstrings-win-x64.zip')
+          if (-not [IO.File]::Exists($archive) -or (Get-Item -LiteralPath $archive).Length -le 0) {
+            throw 'The successful build did not provide a non-empty Windows release archive.'
+          }
+
+          $verifyRoot = Join-Path $env:RUNNER_TEMP 'bstrings-windows-release-verification'
+          [IO.Compression.ZipFile]::ExtractToDirectory($archive, $verifyRoot)
+          foreach ($required in @('bstrings.exe', 'README.md', 'LICENSE.md', 'THIRD_PARTY_NOTICES.md')) {
+            if (-not [IO.File]::Exists((Join-Path $verifyRoot $required))) {
+              throw "Windows release archive is missing $required."
+            }
+          }
+
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText(
+            (Join-Path (Split-Path -Parent $archive) 'SHA256SUMS.txt'),
+            "$hash  bstrings-win-x64.zip`n",
+            [Text.UTF8Encoding]::new($false)
+          )
+          Write-Host "Verified bstrings-win-x64.zip ($hash)."
+
+      - name: Create the Windows GitHub release
+        if: steps.release.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $notes = @'
+          Automated Windows x64 core release from the exact artifact produced by
+          the successful master build. The ZIP is self-contained and includes the
+          product, required runtime files, licenses, notices, and core README.
+
+          This automatic channel intentionally publishes the Windows core only.
+          The larger quality/offline kit retains its separate acceptance gates.
+          '@
+          & gh release create $env:RELEASE_TAG `
+            'release-assets/bstrings-win-x64.zip#Windows x64 self-contained core' `
+            'release-assets/SHA256SUMS.txt#SHA-256 checksums' `
+            --repo $env:RELEASE_REPOSITORY `
+            --target $env:RELEASE_SHA `
+            --title "bstrings $env:RELEASE_TAG - Windows x64" `
+            --notes $notes `
+            --generate-notes `
+            --latest
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub release creation failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Verify the published release identity and assets
+        if: steps.release.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = & gh release view $env:RELEASE_TAG `
+            --repo $env:RELEASE_REPOSITORY `
+            --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
+          if (
+            $release.tagName -cne $env:RELEASE_TAG -or
+            $release.isDraft -or
+            $release.isPrerelease
+          ) {
+            throw 'The published Windows release identity or state is invalid.'
+          }
+          $assetNames = @($release.assets | ForEach-Object { [string]$_.name } | Sort-Object)
+          $expected = @('bstrings-win-x64.zip', 'SHA256SUMS.txt') | Sort-Object
+          if (($assetNames -join "`n") -cne ($expected -join "`n")) {
+            throw "Unexpected Windows release assets: $($assetNames -join ', ')"
+          }
+          Write-Host "Published and verified $env:RELEASE_TAG."
