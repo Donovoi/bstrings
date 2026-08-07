@@ -20,6 +20,10 @@ public struct GpuHitPosition
 
 internal sealed class GpuStringScanner : IDisposable
 {
+    internal const int MaximumParallelLaneCount = 2;
+    internal static int ParallelLaneCount =>
+        Math.Min(MaximumParallelLaneCount, Math.Max(1, Environment.ProcessorCount));
+
     private readonly Context _context;
     private readonly Accelerator _accelerator;
     private readonly Action<
@@ -82,7 +86,7 @@ internal sealed class GpuStringScanner : IDisposable
             ArrayView1D<int, Stride1D.Dense>,
             int
         >(FindUnicodeHitsKernel);
-        var laneCount = Math.Min(2, Math.Max(1, Environment.ProcessorCount));
+        var laneCount = ParallelLaneCount;
         _laneSemaphore = new SemaphoreSlim(laneCount, laneCount);
         for (var index = 0; index < laneCount; index++)
         {

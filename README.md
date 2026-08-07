@@ -10,6 +10,9 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 
 - One recursive workflow combines native extraction, validated patterns,
   FLOSS, OCR, language triage, offline translation, and provenance.
+- Completed analysis writes a filterable `findings.tsv`, exact pattern and
+  feature histograms, and a self-contained HTML pattern visualization while
+  retaining the authoritative JSONL evidence graph.
 - The quality kit includes its runtimes, models, tools, licences, and strict
   manifest, so case work does not depend on Python, a package manager, or the
   internet.
@@ -80,7 +83,9 @@ run `bundle verify` again before examining evidence.
 
 Detailed guidance: [air-gapped deployment](docs/air-gapped-deployment.md),
 [analysis and translation](docs/enrichment-pipeline.md), and
-[outputs and provenance](docs/output-and-provenance.md).
+[outputs and provenance](docs/output-and-provenance.md). The forensic report
+contract and its bulk_extractor/Timeline Explorer design evidence are recorded
+in [forensic reporting](docs/forensic-reporting-2026-08.md).
 
 The project remains under its upstream terms in [LICENSE.md](LICENSE.md), with
 component attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

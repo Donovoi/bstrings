@@ -108,6 +108,18 @@ public class ProcessingBackendCoreTests
     }
 
     [Fact]
+    public void GpuParallelLaneCount_UsesTheSharedBoundedPolicy()
+    {
+        Assert.Equal(
+            Math.Min(
+                GpuStringScanner.MaximumParallelLaneCount,
+                Math.Max(1, Environment.ProcessorCount)
+            ),
+            GpuStringScanner.ParallelLaneCount
+        );
+    }
+
+    [Fact]
     public void CudaScanner_MatchesCpuAcrossRangesOffsetsAndBoundaries_WhenAvailable()
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);

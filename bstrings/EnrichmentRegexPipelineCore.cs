@@ -18,6 +18,7 @@ internal static class EnrichmentRegexPipelineCore
     internal const int CurrentSchemaVersion = 1;
     internal const int MaxJsonLineCharacters = 16 * 1024 * 1024;
     internal const int MaxNativeTextCharacters = 2 * 1024 * 1024;
+    internal const int MatchContextCharacters = 160;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -209,6 +210,7 @@ internal static class EnrichmentRegexPipelineCore
                 }
 
                 var parsedHit = new ParsedHit(record.Text!, record.Text!, record.Location?.Value ?? string.Empty);
+                int[]? lineStarts = null;
                 foreach (var (name, pattern, regex) in compiledPatterns)
                 {
                     IEnumerable<RegexOutputRecord> matches;
@@ -224,11 +226,25 @@ internal static class EnrichmentRegexPipelineCore
                         );
                         foreach (var match in matches)
                         {
+                            var context = CreateContext(
+                                record.Text!,
+                                match.DataStart,
+                                match.DataLength
+                            );
                             var outputRecord = new EnrichmentRegexMatchRecord
                             {
                                 PatternName = name,
                                 Pattern = pattern,
                                 Match = match.DataFound,
+                                MatchStart = match.DataStart,
+                                MatchLength = match.DataLength,
+                                MatchLine = GetRecordLine(
+                                    record.Text!,
+                                    match.DataStart,
+                                    ref lineStarts
+                                ),
+                                ContextStart = context.Start,
+                                Context = context.Value,
                                 SourceRecordId = record.RecordId,
                                 SourceFile = record.SourceFile,
                                 Location = record.Location,
@@ -283,6 +299,50 @@ internal static class EnrichmentRegexPipelineCore
                 catch (UnauthorizedAccessException) { }
             }
         }
+    }
+
+    private static (int Start, string Value) CreateContext(
+        string text,
+        int matchStart,
+        int matchLength
+    )
+    {
+        if (matchStart < 0 || matchStart > text.Length)
+        {
+            return (-1, string.Empty);
+        }
+
+        var safeLength = Math.Clamp(matchLength, 0, text.Length - matchStart);
+        var start = Math.Max(0, matchStart - MatchContextCharacters);
+        var end = Math.Min(
+            text.Length,
+            matchStart + safeLength + MatchContextCharacters
+        );
+        return (start, text[start..end]);
+    }
+
+    private static int GetRecordLine(string text, int matchStart, ref int[]? lineStarts)
+    {
+        if (matchStart < 0 || matchStart > text.Length)
+        {
+            return 0;
+        }
+
+        if (lineStarts is null)
+        {
+            var starts = new List<int> { 0 };
+            for (var index = 0; index < text.Length; index++)
+            {
+                if (text[index] == '\n')
+                {
+                    starts.Add(index + 1);
+                }
+            }
+            lineStarts = starts.ToArray();
+        }
+
+        var found = Array.BinarySearch(lineStarts, matchStart);
+        return found >= 0 ? found + 1 : ~found;
     }
 
     private static List<(string name, string pattern, Regex regex)> CompilePatterns(

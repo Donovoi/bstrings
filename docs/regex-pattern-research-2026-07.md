@@ -96,14 +96,33 @@ The review did more than add names to the catalog:
 - URI userinfo and full URI candidates reject malformed RFC 3986 percent
   escapes; full URIs also reject malformed bracketed IPv6 and IPvFuture hosts.
 
-## Patterns deliberately left out
+## 7 August forensic-reporting follow-up
+
+The later reporting review added PII and forensic-artifact candidates for
+international phone numbers, checksum-valid Canadian SINs, labelled and
+calendar-valid dates of birth, MOD-97-valid IBANs, VINs, credential
+assignments, browser credential-store fields/profile paths, and high-value
+Registry paths for persistence, user activity, USB, execution, network, and
+system identity.
+
+JWT is no longer regex-only. The regex supplies a bounded compact-token
+candidate and the semantic validator requires canonical Base64URL segments,
+JSON object claims, a nonempty `alg`, and the applicable three-part JWS or
+five-part JWE structure. It deliberately does not verify a signature, key,
+issuer, audience, lifetime, or decrypt ciphertext, so the report calls it a
+structurally valid candidate rather than an authenticated token. This follows
+the decoding/validation sequence in [RFC 7519 section 7.2](https://www.rfc-editor.org/rfc/rfc7519#section-7.2).
+
+The browser and Registry patterns are discovery aids for extracted strings.
+They do not replace a browser-database parser, DPAPI/key-store processing, or a
+binary Registry-hive parser. Their descriptions and report classifications
+preserve that boundary.
+
+## Patterns still deliberately left out
 
 Some shapes are useful as a first-pass hunt but too weak for a default
 "this is what the value is" pattern.
 
-- **JWT:** [RFC 7519 validation](https://www.rfc-editor.org/rfc/rfc7519#section-7.2)
-  requires Base64URL decoding and JOSE/JSON checks across JWS, JWE, and nested
-  forms. A dotted-token regex cannot validate a JWT.
 - **AWS and GitHub tokens:** provider formats evolve, and the fixed lengths
   copied into many public regex lists are not stable contracts.
 - **MD5, SHA-1, and generic secrets:** the shapes are common enough to create

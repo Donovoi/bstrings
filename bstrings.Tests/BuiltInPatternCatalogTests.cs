@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Xunit;
 
@@ -108,6 +109,54 @@ public class BuiltInPatternCatalogTests
             ["reg_path"] = new(
                 @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows",
                 @"HKEY_LOCAL_MACHINE\NOT_A_HIVE\Microsoft"
+            ),
+            ["intlPhone"] = new("call +61 412 345 678 now", "call +01 234 567 890 now"),
+            ["canadian_sin"] = new("SIN: 046 454 286", "SIN: 046 454 287"),
+            ["dob"] = new("DOB: 1990-02-28", "DOB: 1990-02-30"),
+            ["iban"] = new(
+                "account DE89 3704 0044 0532 0130 00 ready",
+                "account DE89 3704 0044 0532 0130 01 ready"
+            ),
+            ["vin"] = new("VIN 1HGCM82633A004352 ready", "VIN 1HGCM82633I004352 ready"),
+            ["jwt"] = new(
+                "token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c end",
+                "token abc.def.ghi end"
+            ),
+            ["credential_assignment"] = new(
+                "password=correct-horse-battery",
+                "password=x"
+            ),
+            ["browser_credential_field"] = new(
+                "column encryptedPassword present",
+                "column displayName present"
+            ),
+            ["browser_profile_path"] = new(
+                @"C:\Users\Case\AppData\Local\Google\Chrome\User Data\Default\Login Data",
+                @"C:\Users\Case\Documents\Login Data"
+            ),
+            ["reg_persistence"] = new(
+                @"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Updater",
+                @"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer"
+            ),
+            ["reg_user_activity"] = new(
+                @"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{GUID}",
+                @"HKCU\Software\Microsoft\Windows\CurrentVersion\Policies"
+            ),
+            ["reg_usb"] = new(
+                @"HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR\Disk&Ven_Test",
+                @"HKLM\SYSTEM\CurrentControlSet\Enum\PCI"
+            ),
+            ["reg_execution"] = new(
+                @"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache",
+                @"HKLM\SYSTEM\CurrentControlSet\Control\Lsa"
+            ),
+            ["reg_network"] = new(
+                @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles\{GUID}",
+                @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+            ),
+            ["reg_system_identity"] = new(
+                @"HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
+                @"HKLM\SYSTEM\CurrentControlSet\Control\Power"
             ),
             ["b64"] = new(["token=SGVsbG8="], ["token=abcd", "token=SGVsbG9="]),
             ["bitlocker"] = new(
@@ -323,7 +372,7 @@ public class BuiltInPatternCatalogTests
                     regex.IsMatch(positive),
                     $"{definition.Name} missed positive witness: {positive}"
                 );
-                Assert.NotEmpty(
+                Assert.True(
                     RegexOutputCore.CreateRecords(
                         new ParsedHit(positive, positive, string.Empty),
                         definition.Name,
@@ -331,7 +380,8 @@ public class BuiltInPatternCatalogTests
                         regexOutput: true,
                         sourceFile: "corpus.bin",
                         patternType: "Regex"
-                    )
+                    ).Any(),
+                    $"{definition.Name} failed semantic validation for positive witness: {positive}"
                 );
             }
             foreach (var negative in corpus.Negatives)
@@ -375,6 +425,56 @@ public class BuiltInPatternCatalogTests
                 );
             }
         }
+    }
+
+    [Fact]
+    public void RegistryArtifactPatterns_StopBeforeValueSeparatorsAndCommands()
+    {
+        const string input =
+            @"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Updater = C:\Tools\update.exe";
+        var definition = BuiltInPatternCatalog.ByName["reg_persistence"];
+        var regex = RegexOutputCore.GetOrCreateRegex(definition.Name, definition.Pattern);
+
+        var record = Assert.Single(
+            RegexOutputCore.CreateRecords(
+                new ParsedHit(input, input, string.Empty),
+                definition.Name,
+                regex,
+                regexOutput: true,
+                sourceFile: "registry.txt",
+                patternType: "Regex"
+            )
+        );
+
+        Assert.Equal(
+            @"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Updater",
+            record.DataFound
+        );
+    }
+
+    [Fact]
+    public void JwtValidator_DistinguishesCompactStructureFromAuthentication()
+    {
+        var definition = BuiltInPatternCatalog.ByName["jwt"];
+        var noneHeader = Base64Url("{\"alg\":\"none\"}");
+        var signedHeader = Base64Url("{\"alg\":\"HS256\"}");
+        var claims = Base64Url("{\"sub\":\"123\"}");
+        var arrayClaims = Base64Url("[\"not\",\"claims\"]");
+        var jweHeader = Base64Url("{\"alg\":\"dir\",\"enc\":\"A256GCM\"}");
+
+        Assert.True(BuiltInSemanticValidator.IsValid(definition, $"{noneHeader}.{claims}."));
+        Assert.True(BuiltInSemanticValidator.IsValid(definition, $"{signedHeader}.{claims}.AQ"));
+        Assert.True(
+            BuiltInSemanticValidator.IsValid(definition, $"{jweHeader}..AQ.AQ.AQ")
+        );
+        Assert.False(BuiltInSemanticValidator.IsValid(definition, $"{signedHeader}.{claims}."));
+        Assert.False(BuiltInSemanticValidator.IsValid(definition, $"{noneHeader}.{claims}.AQ"));
+        Assert.False(
+            BuiltInSemanticValidator.IsValid(definition, $"{signedHeader}.{arrayClaims}.AQ")
+        );
+        Assert.False(
+            BuiltInSemanticValidator.IsValid(definition, $"{signedHeader}.{claims}.AB")
+        );
     }
 
     [Fact]
@@ -989,6 +1089,12 @@ public class BuiltInPatternCatalogTests
             RegexParallelismPolicy.Choose(hitCount, patternCount, processorCount)
         );
     }
+
+    private static string Base64Url(string value) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(value))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
 
     private static IEnumerable<string> GenerateStrings(
         IReadOnlyList<char> alphabet,

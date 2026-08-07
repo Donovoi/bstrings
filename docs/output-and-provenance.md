@@ -70,12 +70,60 @@ handle-relative I/O beyond this workflow's threat model.
 | Text | Reading native strings quickly | Cannot carry full enrichment lineage |
 | CSV | Native strings or regex hits with familiar columns | A filename ending in `.csv` selects it; it cannot represent the complete parent/child record graph |
 | JSONL | Enrichment, OCR, translation, language assessments, and attributed regex matches | Use this when provenance matters; one JSON object is stored per line |
+| TSV | Filtering completed findings and histograms in spreadsheet/forensic viewers | A projection of `regex-matches.jsonl`; escaped text must be interpreted using the rules below |
+| HTML | Viewing the pattern-count chart without another application | Summary visualization only; it is not an evidence record |
 
 On the original direct extraction/search interface, `--off` retains source byte
 offsets and `--ro` returns the regex-matched range rather than the complete
 surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
+
+Every completed integrated `analyze` run also projects these review files:
+
+- `findings.tsv`: one physical row per regex match with pattern metadata,
+  match and bounded context, source path, artifact/browser classification,
+  typed location, record-relative line, engine/model lineage, decoder chain,
+  evidence class, validation method, IDs, and retained attributes;
+- `pattern-histogram.tsv`: one row for every requested pattern, including
+  zero-count patterns, with evidence-class and source-file counts;
+- `feature-histogram.tsv`: exact `(pattern, matched feature)` counts using a
+  bulk_extractor-style `n=<count>` display column; and
+- `pattern-histogram.html`: a self-contained visual comparison of requested
+  pattern volume.
+
+TSV files are UTF-8 with a byte-order mark and a header row. Tabs, carriage
+returns, line feeds, and other C0 controls inside values are escaped as `\t`,
+`\r`, `\n`, or `\uXXXX`, so every finding remains on exactly one physical
+line. Ordinary backslashes are preserved, which keeps Windows paths readable.
+The `.tsv` extension is intentional: the current Timeline Explorer generic
+CSV/TSV plugin selects a tab delimiter for that extension. JSONL remains the
+authoritative parent/child evidence graph; TSV is the denormalized filtering
+surface.
+
+The legacy direct form (`bstrings.exe -f ... --lr ... -o <file>`) still writes
+one flat extraction file for scripting compatibility. To obtain the enriched
+report set for the same native-only examination, use a result directory:
+
+```powershell
+.\bstrings.exe analyze -f D:\evidence\memory.raw `
+  -o D:\results\memory-strings `
+  --recover-executable-strings off --ocr off --translation off --lr all
+```
+
+`analyze` records native byte offsets automatically; its structured stage log
+replaces the legacy `--trace` console diagnostics. Use `--full` when FLOSS,
+PDF/OCR, language, and translation enrichment are wanted as well.
+
+`RecordLineNumber` is relative to the extracted string record, not necessarily
+the source file. `MatchStart` is likewise a UTF-16 character index inside that
+record, while the typed `Location` retains the source byte/address/region
+coordinate. `SourceLineNumber` is populated only when an extractor
+explicitly supplies one. PDF/OCR page and region coordinates remain in their
+dedicated/location columns. Browser credential fields and profile paths are
+artifact candidates, not a claim that an encrypted browser password was
+decrypted. Registry hits are string candidates; bstrings does not structurally
+parse binary Registry hives.
 
 The integrated JSONL path caps native text at 2 Mi characters and rejects any
 serialized JSONL line above 16 Mi characters. Language triage batches by both

@@ -8,6 +8,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Numerics;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Xml;
 
 namespace bstrings;
@@ -86,6 +88,10 @@ internal static class BuiltInSemanticValidator
             BuiltInValidationKind.XmlElement => IsWellFormedXmlElement(candidate),
             BuiltInValidationKind.UriUserInfo => HasValidPercentEncoding(candidate),
             BuiltInValidationKind.AbsoluteUri => IsValidAbsoluteUri(candidate),
+            BuiltInValidationKind.Jwt => IsValidJwt(candidate),
+            BuiltInValidationKind.Iban => IsValidIban(candidate),
+            BuiltInValidationKind.CanadianSin => HasValidLuhnChecksum(candidate, 9, 9),
+            BuiltInValidationKind.DateOfBirth => IsValidDateOfBirth(candidate),
             _ => false,
         };
     }
@@ -188,7 +194,14 @@ internal static class BuiltInSemanticValidator
         return domainLength is > 0 and <= 253 && candidate.Length <= 254;
     }
 
-    private static bool HasValidLuhnChecksum(ReadOnlySpan<char> candidate)
+    private static bool HasValidLuhnChecksum(ReadOnlySpan<char> candidate) =>
+        HasValidLuhnChecksum(candidate, 13, 19);
+
+    private static bool HasValidLuhnChecksum(
+        ReadOnlySpan<char> candidate,
+        int minimumDigits,
+        int maximumDigits
+    )
     {
         var sum = 0;
         var digitCount = 0;
@@ -221,7 +234,227 @@ internal static class BuiltInSemanticValidator
             doubleDigit = !doubleDigit;
         }
 
-        return digitCount is >= 13 and <= 19 && sum % 10 == 0;
+        return digitCount >= minimumDigits && digitCount <= maximumDigits && sum % 10 == 0;
+    }
+
+    private static bool IsValidJwt(ReadOnlySpan<char> candidate)
+    {
+        var segments = candidate.ToString().Split('.', StringSplitOptions.None);
+        if (segments.Length == 3)
+        {
+            if (
+                !TryDecodeCanonicalBase64Url(segments[0], allowEmpty: false, out var header)
+                || !TryDecodeCanonicalBase64Url(segments[1], allowEmpty: false, out var payload)
+                || !TryGetJsonStringProperty(header, "alg", out var algorithm)
+                || !IsJsonObject(payload)
+            )
+            {
+                return false;
+            }
+
+            var unsecured = algorithm.Equals("none", StringComparison.Ordinal);
+            return unsecured
+                ? segments[2].Length == 0
+                : TryDecodeCanonicalBase64Url(
+                    segments[2],
+                    allowEmpty: false,
+                    out _
+                );
+        }
+
+        if (segments.Length != 5)
+        {
+            return false;
+        }
+        if (
+            !TryDecodeCanonicalBase64Url(segments[0], allowEmpty: false, out var protectedHeader)
+            || !TryGetJsonStringProperty(protectedHeader, "alg", out _)
+            || !TryGetJsonStringProperty(protectedHeader, "enc", out _)
+        )
+        {
+            return false;
+        }
+
+        return TryDecodeCanonicalBase64Url(segments[1], allowEmpty: true, out _)
+            && TryDecodeCanonicalBase64Url(segments[2], allowEmpty: false, out _)
+            && TryDecodeCanonicalBase64Url(segments[3], allowEmpty: false, out _)
+            && TryDecodeCanonicalBase64Url(segments[4], allowEmpty: false, out _);
+    }
+
+    private static bool TryDecodeCanonicalBase64Url(
+        string value,
+        bool allowEmpty,
+        out byte[] decoded
+    )
+    {
+        decoded = [];
+        if (value.Length == 0)
+        {
+            return allowEmpty;
+        }
+        if (value.Length % 4 == 1)
+        {
+            return false;
+        }
+        foreach (var character in value)
+        {
+            if (
+                character is not (>= 'A' and <= 'Z')
+                    and not (>= 'a' and <= 'z')
+                    and not (>= '0' and <= '9')
+                    and not '-'
+                    and not '_'
+            )
+            {
+                return false;
+            }
+        }
+
+        var standard = value.Replace('-', '+').Replace('_', '/');
+        standard += new string('=', (4 - standard.Length % 4) % 4);
+        try
+        {
+            decoded = Convert.FromBase64String(standard);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        var canonical = Convert.ToBase64String(decoded)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return string.Equals(canonical, value, StringComparison.Ordinal);
+    }
+
+    private static bool TryGetJsonStringProperty(
+        ReadOnlySpan<byte> json,
+        string name,
+        out string value
+    )
+    {
+        value = string.Empty;
+        try
+        {
+            using var document = JsonDocument.Parse(json.ToArray());
+            if (
+                document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty(name, out var property)
+                || property.ValueKind != JsonValueKind.String
+            )
+            {
+                return false;
+            }
+            value = property.GetString() ?? string.Empty;
+            return value.Length > 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsJsonObject(ReadOnlySpan<byte> json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json.ToArray());
+            return document.RootElement.ValueKind == JsonValueKind.Object;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsValidIban(ReadOnlySpan<char> candidate)
+    {
+        Span<char> compact = stackalloc char[34];
+        var length = 0;
+        foreach (var character in candidate)
+        {
+            if (character == ' ')
+            {
+                continue;
+            }
+            if (length >= compact.Length)
+            {
+                return false;
+            }
+            compact[length++] = char.ToUpperInvariant(character);
+        }
+        var iban = compact[..length];
+        if (
+            iban.Length is < 15 or > 34
+            || iban[0] is < 'A' or > 'Z'
+            || iban[1] is < 'A' or > 'Z'
+            || iban[2] is < '0' or > '9'
+            || iban[3] is < '0' or > '9'
+        )
+        {
+            return false;
+        }
+
+        var remainder = 0;
+        for (var pass = 0; pass < 2; pass++)
+        {
+            var start = pass == 0 ? 4 : 0;
+            var end = pass == 0 ? iban.Length : 4;
+            for (var index = start; index < end; index++)
+            {
+                var character = iban[index];
+                if (character is >= '0' and <= '9')
+                {
+                    remainder = ((remainder * 10) + character - '0') % 97;
+                }
+                else if (character is >= 'A' and <= 'Z')
+                {
+                    var value = character - 'A' + 10;
+                    remainder = ((remainder * 10) + (value / 10)) % 97;
+                    remainder = ((remainder * 10) + (value % 10)) % 97;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+        }
+        return remainder == 1;
+    }
+
+    private static bool IsValidDateOfBirth(ReadOnlySpan<char> candidate)
+    {
+        string[] formats =
+        [
+            "yyyy-MM-dd", "yyyy-M-d", "yyyy/MM/dd", "yyyy/M/d",
+            "MM/dd/yyyy", "M/d/yyyy", "MM-dd-yyyy", "M-d-yyyy",
+            "dd/MM/yyyy", "d/M/yyyy", "dd-MM-yyyy", "d-M-yyyy",
+        ];
+        DateOnly date = default;
+        var parsed = false;
+        foreach (var format in formats)
+        {
+            if (
+                DateOnly.TryParseExact(
+                    candidate,
+                    format,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out date
+                )
+            )
+            {
+                parsed = true;
+                break;
+            }
+        }
+        if (!parsed)
+        {
+            return false;
+        }
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        return date.Year >= 1900 && date <= today;
     }
 
     private static bool HasCanonicalBase64Padding(ReadOnlySpan<char> candidate)
