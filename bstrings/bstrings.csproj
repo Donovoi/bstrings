@@ -9,7 +9,7 @@
     <Product>bstrings</Product>
     <Description>Extract strings with parallel CPU, CUDA, hybrid CPU/GPU, and optional RAPIDS-assisted regex processing</Description>
     <Copyright>Eric Zimmerman</Copyright>
-    <Version>1.9.5</Version>
+    <Version>1.9.6</Version>
     <RuntimeFrameworkVersion>10.0.10</RuntimeFrameworkVersion>
     <IsPackable>false</IsPackable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

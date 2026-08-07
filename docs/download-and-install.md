@@ -2,7 +2,7 @@
 
 ## Current release
 
-[bstrings v1.9.5](https://github.com/Donovoi/bstrings/releases/tag/v1.9.5)
+[bstrings v1.9.6](https://github.com/Donovoi/bstrings/releases/tag/v1.9.6)
 is the complete Windows x64 release. Its quality installer assembles one
 verified offline directory containing the current native scanner and reporting
 code together with FLOSS, Magika, OCR, language detection, and local
@@ -10,7 +10,7 @@ translation assets.
 
 | Installation | Included | Intended use |
 | --- | --- | --- |
-| Complete `bstrings-quality` kit | Every v1.9.5 stage, runtime, model, licence, manifest, all 66 patterns, TSV reports, and histograms | Normal and air-gapped forensic analysis |
+| Complete `bstrings-quality` kit | Every v1.9.6 stage, runtime, model, licence, manifest, all 66 patterns, TSV reports, and histograms | Normal and air-gapped forensic analysis |
 | Core ZIP only | Native CPU/Rust/CUDA/hybrid extraction, current patterns, native-only JSONL/TSV reports, and histograms | Small native-only installation or diagnostics |
 
 Do not combine executables, manifests, packs, tools, or models from different
@@ -24,8 +24,8 @@ Requirements: Windows 11 x64, a connected staging machine, and at least
 required. DirectML OCR requires a compatible Windows GPU/driver stack; CPU OCR
 and native CPU extraction remain available without a GPU.
 
-Run the [safe pinned installer bootstrap from the v1.9.5
-README](https://github.com/Donovoi/bstrings/blob/v1.9.5/README.md#get-started)
+Run the [safe pinned installer bootstrap from the v1.9.6
+README](https://github.com/Donovoi/bstrings/blob/v1.9.6/README.md#get-started)
 verbatim. Do not pipe a downloaded script into `Invoke-Expression`. The
 bootstrap authenticates the exact GitHub release and installer digest before
 launching the installer. The installer then downloads, resumes, assembles, and
@@ -37,7 +37,7 @@ Verify the completed bundle before use:
 .\bstrings-quality\bstrings.exe bundle verify
 ```
 
-Run every v1.9.5 stage over one file:
+Run every v1.9.6 stage over one file:
 
 ```powershell
 .\bstrings-quality\bstrings.exe analyze `
@@ -86,7 +86,7 @@ network connection is required during examination.
 
 Use this smaller path only when native extraction and the current report set
 are sufficient. Open PowerShell in the directory where the new
-`bstrings-v1.9.5` directory should be created, then run this exact-tag,
+`bstrings-v1.9.6` directory should be created, then run this exact-tag,
 API-digest-verified download:
 
 ```powershell
@@ -94,10 +94,10 @@ API-digest-verified download:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.5'
+  $tag = 'v1.9.6'
   $repo = 'Donovoi/bstrings'
   $archiveName = 'bstrings-win-x64.zip'
-  $destination = Join-Path (Get-Location) 'bstrings-v1.9.5'
+  $destination = Join-Path (Get-Location) 'bstrings-v1.9.6'
   if ((Test-Path -LiteralPath $archiveName) -or
       (Test-Path -LiteralPath $destination)) {
     throw 'Refusing to overwrite the archive or destination.'
@@ -135,7 +135,7 @@ asset. Use the integrated native-only path when the filterable report set is
 wanted:
 
 ```powershell
-.\bstrings-v1.9.5\bstrings.exe analyze `
+.\bstrings-v1.9.6\bstrings.exe analyze `
   -f "C:\evidence\memory.raw" `
   -o "C:\results\memory-native" `
   --recover-executable-strings off `
@@ -149,7 +149,7 @@ The legacy command below writes one flat output file instead of the integrated
 TSV/histogram report set:
 
 ```powershell
-.\bstrings-v1.9.5\bstrings.exe `
+.\bstrings-v1.9.6\bstrings.exe `
   -f "C:\evidence\memory.raw" `
   --lr all --ro --off --trace `
   -o "C:\results\memory-hits.csv"

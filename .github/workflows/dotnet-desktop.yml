@@ -593,6 +593,8 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
+          # The automatic master workflow stages this tag as a draft. Keeping
+          # draft unset here publishes only after every accepted asset uploads.
           name: bstrings ${{ github.ref_name }}
           body_path: docs/releases/${{ github.ref_name }}.md
           files: |
@@ -606,3 +608,46 @@ jobs:
             release-assets/SHA256SUMS.txt
           generate_release_notes: false
           fail_on_unmatched_files: true
+          overwrite_files: true
+          preserve_order: true
+
+      - name: Verify the published immutable release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = & gh release view $env:GITHUB_REF_NAME `
+            --repo $env:GITHUB_REPOSITORY `
+            --json tagName,isDraft,isImmutable,isPrerelease,assets | ConvertFrom-Json
+          if (
+            $release.tagName -cne $env:GITHUB_REF_NAME -or
+            $release.isDraft -or
+            -not $release.isImmutable -or
+            $release.isPrerelease
+          ) {
+            throw 'The published complete release identity or state is invalid.'
+          }
+          $actual = @($release.assets | ForEach-Object { [string]$_.name } | Sort-Object)
+          $expected = @(
+            'airgap-config-balanced.json'
+            'airgap-config-compact.json'
+            'airgap-config-quality.json'
+            'airgap-manifest-balanced.json'
+            'airgap-manifest-compact.json'
+            'airgap-manifest-quality.json'
+            'bstrings-win-x64-offline-base.zip'
+            'bstrings-win-x64.zip'
+            'bundle-packs-balanced.json'
+            'bundle-packs-compact.json'
+            'bundle-packs-quality.json'
+            'Hy-MT2-Apache-2.0-balanced.txt'
+            'Hy-MT2-Apache-2.0-compact.txt'
+            'Hy-MT2-Apache-2.0-quality.txt'
+            'Install-BstringsQuality.ps1'
+            'SHA256SUMS.txt'
+          ) | Sort-Object
+          if (($actual -join "`n") -cne ($expected -join "`n")) {
+            throw "Published release asset set mismatch: $($actual -join ', ')"
+          }
+          Write-Host "Published and verified complete release $env:GITHUB_REF_NAME."

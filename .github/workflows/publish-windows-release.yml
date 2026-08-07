@@ -1,4 +1,4 @@
-name: Publish Windows release
+name: Stage Windows release draft
 
 on:
   workflow_run:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    name: Publish tested Windows x64 artifact
+    name: Stage tested Windows x64 draft
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
@@ -61,26 +61,80 @@ jobs:
           }
 
           $tag = "v$($versions[0])"
-          $null = & gh release view $tag --repo $env:RELEASE_REPOSITORY --json tagName 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            "publish=false" >> $env:GITHUB_OUTPUT
+          $releaseJson = & gh release view $tag `
+            --repo $env:RELEASE_REPOSITORY `
+            --json tagName,isDraft,isImmutable,isPrerelease,assets 2>$null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          $tagRefJson = & gh api "repos/$env:RELEASE_REPOSITORY/git/ref/tags/$tag" 2>$null
+          $tagExists = $LASTEXITCODE -eq 0
+          if ($tagExists) {
+            $tagRef = $tagRefJson | ConvertFrom-Json
+            if (
+              [string]$tagRef.ref -cne "refs/tags/$tag" -or
+              [string]$tagRef.object.type -cne 'commit' -or
+              [string]$tagRef.object.sha -cne $env:RELEASE_SHA
+            ) {
+              throw "Tag $tag does not identify the exact tested master commit."
+            }
+          }
+
+          if ($releaseExists) {
+            if (-not $tagExists) {
+              throw "Release $tag exists without its exact Git tag."
+            }
+            $release = $releaseJson | ConvertFrom-Json
+            if ($release.tagName -cne $tag -or $release.isPrerelease) {
+              throw "Existing release $tag has an unexpected identity or state."
+            }
+            if ($release.isDraft) {
+              if ($release.isImmutable) {
+                throw "Draft release $tag unexpectedly reports immutable state."
+              }
+              $assetNames = @($release.assets | ForEach-Object { [string]$_.name } | Sort-Object)
+              $expected = @('bstrings-win-x64.zip', 'SHA256SUMS.txt') | Sort-Object
+              if (($assetNames -join "`n") -cne ($expected -join "`n")) {
+                throw "Existing draft $tag has unexpected assets: $($assetNames -join ', ')"
+              }
+              Write-Host "$tag is already staged as the exact core draft."
+            } else {
+              Write-Host "$tag is already published; this run is idempotently complete."
+            }
+            "stage=false" >> $env:GITHUB_OUTPUT
             "tag=$tag" >> $env:GITHUB_OUTPUT
-            Write-Host "$tag is already published; this run is idempotently complete."
             return
           }
 
-          $null = & gh api "repos/$env:RELEASE_REPOSITORY/git/ref/tags/$tag" 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            throw "Tag $tag exists without a published release; refusing to retarget it."
-          }
-
-          "publish=true" >> $env:GITHUB_OUTPUT
+          "stage=true" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
-          Write-Host "Prepared Windows release $tag for $env:RELEASE_SHA."
+          "tag_exists=$($tagExists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          Write-Host "Prepared Windows release draft $tag for $env:RELEASE_SHA."
           exit 0
 
+      - name: Create the exact tested version tag
+        if: steps.release.outputs.stage == 'true' && steps.release.outputs.tag_exists != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $created = & gh api --method POST "repos/$env:RELEASE_REPOSITORY/git/refs" `
+            -f ref="refs/tags/$env:RELEASE_TAG" `
+            -f sha="$env:RELEASE_SHA" | ConvertFrom-Json
+          if (
+            [string]$created.ref -cne "refs/tags/$env:RELEASE_TAG" -or
+            [string]$created.object.type -cne 'commit' -or
+            [string]$created.object.sha -cne $env:RELEASE_SHA
+          ) {
+            throw 'GitHub created an unexpected release tag identity.'
+          }
+          Write-Host "Created $env:RELEASE_TAG at $env:RELEASE_SHA."
+
       - name: Download the exact successful build artifact
-        if: steps.release.outputs.publish == 'true'
+        if: steps.release.outputs.stage == 'true'
         uses: actions/download-artifact@v8
         with:
           name: bstrings-win-x64
@@ -90,7 +144,7 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
 
       - name: Verify and checksum the Windows package
-        if: steps.release.outputs.publish == 'true'
+        if: steps.release.outputs.stage == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -115,8 +169,8 @@ jobs:
           )
           Write-Host "Verified bstrings-win-x64.zip ($hash)."
 
-      - name: Create the Windows GitHub release
-        if: steps.release.outputs.publish == 'true'
+      - name: Create the Windows GitHub release draft
+        if: steps.release.outputs.stage == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -126,28 +180,25 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $notes = @'
-          Automated Windows x64 core release from the exact artifact produced by
-          the successful master build. The ZIP is self-contained and includes the
-          product, required runtime files, licenses, notices, and core README.
-
-          This automatic channel intentionally publishes the Windows core only.
-          The larger quality/offline kit retains its separate acceptance gates.
+          Draft Windows x64 release staged from the exact artifact produced by
+          the successful master build. The complete tagged release workflow must
+          replace these preliminary core/checksum assets with its accepted build,
+          add every offline profile asset, and publish this draft exactly once.
           '@
           & gh release create $env:RELEASE_TAG `
             'release-assets/bstrings-win-x64.zip#Windows x64 self-contained core' `
             'release-assets/SHA256SUMS.txt#SHA-256 checksums' `
             --repo $env:RELEASE_REPOSITORY `
-            --target $env:RELEASE_SHA `
+            --verify-tag `
             --title "bstrings $env:RELEASE_TAG - Windows x64" `
             --notes $notes `
-            --generate-notes `
-            --latest
+            --draft
           if ($LASTEXITCODE -ne 0) {
-            throw "GitHub release creation failed with exit code $LASTEXITCODE."
+            throw "GitHub release-draft creation failed with exit code $LASTEXITCODE."
           }
 
-      - name: Verify the published release identity and assets
-        if: steps.release.outputs.publish == 'true'
+      - name: Verify the staged release identity and assets
+        if: steps.release.outputs.stage == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -157,17 +208,18 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $release = & gh release view $env:RELEASE_TAG `
             --repo $env:RELEASE_REPOSITORY `
-            --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
+            --json tagName,isDraft,isImmutable,isPrerelease,assets | ConvertFrom-Json
           if (
             $release.tagName -cne $env:RELEASE_TAG -or
-            $release.isDraft -or
+            -not $release.isDraft -or
+            $release.isImmutable -or
             $release.isPrerelease
           ) {
-            throw 'The published Windows release identity or state is invalid.'
+            throw 'The staged Windows release identity or state is invalid.'
           }
           $assetNames = @($release.assets | ForEach-Object { [string]$_.name } | Sort-Object)
           $expected = @('bstrings-win-x64.zip', 'SHA256SUMS.txt') | Sort-Object
           if (($assetNames -join "`n") -cne ($expected -join "`n")) {
             throw "Unexpected Windows release assets: $($assetNames -join ', ')"
           }
-          Write-Host "Published and verified $env:RELEASE_TAG."
+          Write-Host "Staged and verified draft $env:RELEASE_TAG."
