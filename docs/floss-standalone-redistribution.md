@@ -1,5 +1,10 @@
 # FLOSS v3.1.1 offline redistribution
 
+Distribution status: this reviewed FLOSS payload is included in the complete
+v1.9.5 quality kit. It is not included in the standalone core ZIP. Do not copy
+it between versioned installations; use the verified quality installer
+described in the [download guide](download-and-install.md).
+
 The Windows x64 offline bundle carries
 [Mandiant FLARE FLOSS v3.1.1](https://github.com/mandiant/flare-floss/releases/tag/v3.1.1)
 as its unchanged upstream `floss.exe`, together with a byte-pinned inventory,

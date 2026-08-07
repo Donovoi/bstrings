@@ -1,5 +1,10 @@
 # Enrichment pipeline
 
+This document describes the integrated workflow in current source and the
+complete v1.9.5 quality release. See
+[download and installation](download-and-install.md) before choosing a command,
+and never combine assets from different versions.
+
 The integrated workflow finds useful text through several complementary paths,
 then applies one pattern catalog without losing where each string came from:
 
@@ -15,20 +20,24 @@ input inventory and SHA-256 identity
   -> completion and provenance validation
 ```
 
-The normal examiner interface is one command:
+When a complete version-matched quality bundle is installed, the examiner
+interface is one command:
 
 ```powershell
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete bundle contains every worker, runtime, model, and dependency. It
-does not ask the user to install or invoke Python, [Magika](https://github.com/google/magika),
+The complete v1.9.5 bundle contains every worker, runtime, model, and dependency
+published for that version. It does not ask the user to install or invoke
+Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
 [RapidOCR](https://github.com/RapidAI/RapidOCR), or
 [llama.cpp](https://github.com/ggml-org/llama.cpp) separately. It downloads
 nothing during examination.
 
-`--full` means every bstrings stage. It does not parse a filesystem or carve
+`--full` means every bstrings stage available in the installed version. It does
+not upgrade an older bundle or import features from another channel. It also
+does not parse a filesystem or carve
 embedded files from a raw disk or memory image. Mount or carve the image first
 when filesystem-level or embedded-executable/document coverage is required.
 The direct scanner can search raw image bytes, but FLOSS requires a complete
@@ -121,7 +130,7 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.2 profile
+page. Images are always OCR inputs when the stage is enabled. The v1.9.5 profile
 defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
 per-path inference smoke test. Those smokes do not establish cross-provider
 parity or corpus-level quality. CUDA OCR is not part of the profile. See

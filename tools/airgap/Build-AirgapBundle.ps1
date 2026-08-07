@@ -858,6 +858,7 @@ $null = Resolve-ChildFile `
 $bundleDocumentNames = @(
     'air-gapped-deployment.md',
     'crypto-address-coverage-2026-08.md',
+    'download-and-install.md',
     'enrichment-pipeline.md',
     'floss-standalone-redistribution.md',
     'forensic-reporting-2026-08.md',
@@ -876,7 +877,7 @@ $bundleBenchmarkResultNames = @(
     'forensic-report-projection-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.2.md'
+    'v1.9.5.md'
 )
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `

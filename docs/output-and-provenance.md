@@ -1,6 +1,11 @@
 # Output, completion, and provenance
 
-The normal complete workflow writes a result set from one command:
+The complete v1.9.5 quality kit produces native, FLOSS, OCR, language, and
+translation records together with the current JSONL, TSV, and histogram report
+set. See [download and installation](download-and-install.md).
+
+With a complete version-matched quality bundle, the full enrichment workflow
+writes a result set from one command:
 
 ```powershell
 bstrings.exe analyze -d carved-files --full -o results
@@ -79,7 +84,8 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-Every completed integrated `analyze` run also projects these review files:
+In current source and v1.9.5, every completed integrated `analyze` run
+also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,
   match and bounded context, source path, artifact/browser classification,

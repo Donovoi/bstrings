@@ -8,11 +8,17 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 
 ## Why use it?
 
-- One recursive workflow combines native extraction, validated patterns,
-  FLOSS, OCR, language triage, offline translation, and provenance.
+- One recursive workflow combines native CPU/Rust/CUDA/hybrid extraction,
+  validated patterns, FLOSS, OCR, language triage, offline translation, and
+  provenance.
 - Completed analysis writes a filterable `findings.tsv`, exact pattern and
   feature histograms, and a self-contained HTML pattern visualization while
   retaining the authoritative JSONL evidence graph.
+- The 66-pattern catalogue includes PII, credentials, structurally validated
+  JWT candidates, browser artifacts, high-value Registry paths, and crypto
+  address families alongside the original forensic patterns.
+- Automatic extraction measures eligible CPU, GPU, and hybrid backends and
+  selects an accelerator only when it projects a worthwhile win.
 - The quality kit includes its runtimes, models, tools, licences, and strict
   manifest, so case work does not depend on Python, a package manager, or the
   internet.
@@ -21,6 +27,8 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 
 ## Get started
 
+The complete Windows x64 quality/offline release is
+[v1.9.5](https://github.com/Donovoi/bstrings/releases/tag/v1.9.5).
 Requirements: Windows 11 x64, a connected staging machine, and at least
 **30 GiB free**. Administrator rights are not required.
 
@@ -32,7 +40,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.2'
+  $tag = 'v1.9.5'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -70,18 +78,25 @@ this pinned, checksum-verified installer bootstrap:
 }
 ```
 
-The installer creates and verifies `.\bstrings-quality`. Run a complete analysis
-with:
+The installer creates and verifies `.\bstrings-quality`. Run a complete
+analysis with:
 
 ```powershell
 .\bstrings-quality\bstrings.exe bundle verify
 .\bstrings-quality\bstrings.exe analyze -d D:\evidence -o D:\results --full
 ```
 
+`--full` runs native extraction, executable recovery, OCR, language assessment,
+local translation, all 66 built-in patterns, and the TSV/histogram reporting
+stage. It does not mount filesystems or carve embedded files from raw disk or
+memory images; mount or carve those images first when file-level FLOSS and OCR
+coverage is required.
+
 For an air-gapped workstation, copy the whole `bstrings-quality` directory and
 run `bundle verify` again before examining evidence.
 
-Detailed guidance: [air-gapped deployment](docs/air-gapped-deployment.md),
+Detailed guidance: [download and installation](docs/download-and-install.md),
+[air-gapped deployment](docs/air-gapped-deployment.md),
 [analysis and translation](docs/enrichment-pipeline.md), and
 [outputs and provenance](docs/output-and-provenance.md). The forensic report
 contract and its bulk_extractor/Timeline Explorer design evidence are recorded

@@ -2,6 +2,10 @@
 
 Date: 7 August 2026
 
+Availability note: these projections are in current source and the complete
+v1.9.5 quality release, including runs that also use FLOSS, OCR, and
+translation. See [download and installation](download-and-install.md).
+
 ## Outcome
 
 Integrated `bstrings analyze` now keeps `regex-matches.jsonl` as the
