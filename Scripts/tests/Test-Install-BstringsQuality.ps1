@@ -14,7 +14,7 @@ if ($installerSource -cmatch '(?m)\bGet-FileHash\b') {
 if ($installerSource -cnotmatch '\[Security\.Cryptography\.SHA256\]::Create\(\)') {
     throw 'The quality installer must hash through the .NET SHA-256 API.'
 }
-$releaseTag = 'v1.9.6'
+$releaseTag = 'v1.9.7'
 $testBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot = Join-Path $testBase (
     'bstrings-quality-installer-test-' + [Guid]::NewGuid().ToString('N')
@@ -321,9 +321,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         request_path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         with request_log.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(request_path + "\n")
-        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v1.9.6"):
+        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v1.9.7"):
             candidate = root / "release.json"
-        elif "/Donovoi/bstrings/releases/download/v1.9.6/" in request_path:
+        elif "/Donovoi/bstrings/releases/download/v1.9.7/" in request_path:
             name = pathlib.PurePosixPath(request_path).name
             candidate = root / name
         else:
@@ -741,6 +741,10 @@ try {
         -UseDefaultReleaseTag
     $success = Invoke-Installer $successArguments $successEnvironment
     Assert-True $success.Succeeded "The synthetic quality installation failed: $($success.Text)"
+    Assert-True ($success.Text -cmatch 'Progress: quality installer: 0\.0% \(starting\)') `
+        'The installer did not report its starting percentage.'
+    Assert-True ($success.Text -cmatch 'Progress: quality installer: 100\.0% \(complete\)') `
+        'The installer did not report completion at 100 percent.'
     Assert-True (Test-Path -LiteralPath (Join-Path $successDestination 'quality-profile.txt') -PathType Leaf) `
         'The successful installation did not publish the quality marker.'
     Assert-PathAbsent $successCache 'A successful default installation did not clean its installer cache.'

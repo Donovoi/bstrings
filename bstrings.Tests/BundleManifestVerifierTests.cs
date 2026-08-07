@@ -33,6 +33,29 @@ public sealed class BundleManifestVerifierTests
     }
 
     [Fact]
+    public void Verify_ReportsMonotonicByteProgressThroughCompletion()
+    {
+        using var scope = new TemporaryBundle();
+        scope.WriteFile("tools/tool.exe", "tool");
+        scope.WriteFile("models/model.gguf", "model");
+        BundleManifestTestFixture.Write(scope.Root);
+        var updates = new List<(long Completed, long Total)>();
+
+        BundleManifestVerifier.Verify(
+            scope.Root,
+            progress: (completed, total) => updates.Add((completed, total))
+        );
+
+        Assert.NotEmpty(updates);
+        Assert.Equal((0, 9), updates[0]);
+        Assert.Equal((9, 9), updates[^1]);
+        Assert.All(updates, update => Assert.Equal(9, update.Total));
+        Assert.True(updates.Zip(updates.Skip(1)).All(pair =>
+            pair.First.Completed <= pair.Second.Completed
+        ));
+    }
+
+    [Fact]
     public void Verify_RejectsSameLengthContentTampering()
     {
         using var scope = new TemporaryBundle();

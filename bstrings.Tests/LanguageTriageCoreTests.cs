@@ -106,6 +106,53 @@ public sealed class LanguageTriageCoreTests
     }
 
     [Fact]
+    public async Task ProcessAsync_RejectsIdentifierOnlyTextBeforeLanguageDetection()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        var candidatesPath = scope.PathFor("candidates.jsonl");
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        await File.WriteAllTextAsync(
+            inputPath,
+            CreateRecord("synthetic-token", "$SYNTH_TOKEN001"),
+            cancellationToken
+        );
+        var detectorCalled = false;
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            detectorCalled = true;
+            result = new LanguageDetectionResult("es", 0.99, 0.01, 0.01, false);
+            error = null;
+            return true;
+        };
+
+        var stats = await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            candidatesPath,
+            assessmentsPath,
+            CreateOptions(policy: LanguageTriagePolicy.HighRecall),
+            cancellationToken,
+            detector
+        );
+
+        Assert.False(detectorCalled);
+        Assert.Equal(1, stats.NonLinguisticRecords);
+        Assert.Equal(0, stats.TranslationCandidates);
+        Assert.Empty(await File.ReadAllLinesAsync(candidatesPath, cancellationToken));
+        using var assessment = JsonDocument.Parse(
+            (await File.ReadAllLinesAsync(assessmentsPath, cancellationToken)).Single()
+        );
+        Assert.Equal("non-linguistic", assessment.RootElement.GetProperty("decision").GetString());
+    }
+
+    [Fact]
     public async Task ProcessAsync_UsesUnicodeScalarLengthsForEligibility()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

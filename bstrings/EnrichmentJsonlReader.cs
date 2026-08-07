@@ -14,7 +14,8 @@ namespace bstrings;
 internal readonly record struct EnrichmentJsonlLine(
     long LineNumber,
     string Json,
-    EnrichmentStringRecord Record
+    EnrichmentStringRecord Record,
+    long StreamPosition
 );
 
 internal static class EnrichmentJsonlReader
@@ -91,7 +92,7 @@ internal static class EnrichmentJsonlReader
                     pending.Clear();
                     if (!string.IsNullOrWhiteSpace(line))
                     {
-                        yield return Parse(line, lineNumber);
+                        yield return Parse(line, lineNumber, stream.Position);
                     }
                 }
             }
@@ -106,7 +107,7 @@ internal static class EnrichmentJsonlReader
                 var line = pending.ToString();
                 if (!string.IsNullOrWhiteSpace(line))
                 {
-                    yield return Parse(line, lineNumber);
+                    yield return Parse(line, lineNumber, stream.Position);
                 }
             }
         }
@@ -131,7 +132,11 @@ internal static class EnrichmentJsonlReader
         }
     }
 
-    private static EnrichmentJsonlLine Parse(string line, long lineNumber)
+    private static EnrichmentJsonlLine Parse(
+        string line,
+        long lineNumber,
+        long streamPosition
+    )
     {
         EnrichmentStringRecord record;
         try
@@ -149,6 +154,6 @@ internal static class EnrichmentJsonlReader
         }
 
         EnrichmentRegexPipelineCore.ValidateRecord(record, lineNumber);
-        return new EnrichmentJsonlLine(lineNumber, line, record);
+        return new EnrichmentJsonlLine(lineNumber, line, record, streamPosition);
     }
 }

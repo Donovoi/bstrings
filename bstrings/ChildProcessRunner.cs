@@ -38,7 +38,8 @@ internal static class ChildProcessRunner
         string stdoutLogPath,
         string stderrLogPath,
         IReadOnlyDictionary<string, string?>? environment = null,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<string>? lineObserver = null
     )
     {
         return await RunAsync(
@@ -49,7 +50,8 @@ internal static class ChildProcessRunner
             stderrLogPath,
             environment,
             CreateLogWriter,
-            cancellationToken
+            cancellationToken,
+            lineObserver
         );
     }
 
@@ -61,7 +63,8 @@ internal static class ChildProcessRunner
         string stderrLogPath,
         IReadOnlyDictionary<string, string?>? environment,
         Func<string, StreamWriter> logWriterFactory,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<string>? lineObserver = null
     )
     {
         ArgumentNullException.ThrowIfNull(logWriterFactory);
@@ -123,13 +126,15 @@ internal static class ChildProcessRunner
             process.StandardOutput,
             stdoutWriter,
             stdoutTail,
-            cancellationToken
+            cancellationToken,
+            lineObserver
         );
         var stderrTask = DrainAsync(
             process.StandardError,
             stderrWriter,
             stderrTail,
-            cancellationToken
+            cancellationToken,
+            lineObserver
         );
 
         try
@@ -200,12 +205,14 @@ internal static class ChildProcessRunner
         StreamReader reader,
         StreamWriter writer,
         Queue<string> tail,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action<string>? lineObserver
     )
     {
         while (await reader.ReadLineAsync(cancellationToken) is { } line)
         {
             await writer.WriteLineAsync(line.AsMemory(), cancellationToken);
+            lineObserver?.Invoke(line);
             if (tail.Count == TailCapacity)
             {
                 tail.Dequeue();

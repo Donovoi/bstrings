@@ -2,7 +2,7 @@
 param(
     [string]$DestinationDirectory = (Join-Path (Get-Location).Path 'bstrings-quality'),
     [string]$InstallerCacheDirectory,
-    [string]$ReleaseTag = 'v1.9.6',
+    [string]$ReleaseTag = 'v1.9.7',
     [switch]$KeepCache,
     [ValidateRange(1, 10)]
     [int]$AcquireAttempts = 3,
@@ -18,7 +18,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$expectedReleaseTag = 'v1.9.6'
+$expectedReleaseTag = 'v1.9.7'
 $repository = 'Donovoi/bstrings'
 $qualityManifestName = 'bundle-packs-quality.json'
 $coreArchiveName = 'bstrings-win-x64.zip'
@@ -33,6 +33,14 @@ $ownedCache = $false
 $cacheRoot = $null
 $destination = $null
 $destinationParent = $null
+
+function Write-InstallerProgress([double]$Percent, [string]$Activity) {
+    if ($Percent -lt 0 -or $Percent -gt 100 -or [string]::IsNullOrWhiteSpace($Activity)) {
+        throw 'Installer progress requires a percentage from 0 through 100 and an activity.'
+    }
+    $formatted = $Percent.ToString('F1', [Globalization.CultureInfo]::InvariantCulture)
+    Write-Host "Progress: quality installer: $formatted% ($Activity)"
+}
 
 function Get-FullPath([string]$Path, [string]$Name) {
     if ([string]::IsNullOrWhiteSpace($Path)) {
@@ -670,6 +678,7 @@ $previousProgressPreference = $ProgressPreference
 $ProgressPreference = 'SilentlyContinue'
 
 try {
+    Write-InstallerProgress 0 'starting'
     if (-not $AllowLoopbackHttpForTesting) {
         [Net.ServicePointManager]::SecurityProtocol =
             [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -678,6 +687,7 @@ try {
         -UseBasicParsing `
         -Uri $ReleaseApiUri `
         -Headers $script:webHeaders
+    Write-InstallerProgress 5 'release metadata authenticated'
     if (
         [string]$release.tag_name -cne $ReleaseTag -or
         [bool]$release.draft -or
@@ -705,6 +715,7 @@ try {
     ) {
         throw 'The running installer does not match its GitHub release API digest.'
     }
+    Write-InstallerProgress 10 'installer authenticated'
 
     $checksumPath = Receive-VerifiedAsset $checksumAsset $releaseAssetCache
     $checksums = Read-ChecksumMap $checksumPath
@@ -715,6 +726,7 @@ try {
     if ((Get-LowerSha256 $selfPath 'Running installer') -cne $selfChecksum) {
         throw 'The running installer does not match SHA256SUMS.txt.'
     }
+    Write-InstallerProgress 15 'release checksums authenticated'
 
     $coreArchivePath = Receive-VerifiedAsset $coreAsset $releaseAssetCache
     if ((Get-LowerSha256 $coreArchivePath 'Core release archive') -cne (
@@ -722,15 +734,18 @@ try {
     )) {
         throw 'The core release archive does not match SHA256SUMS.txt.'
     }
+    Write-InstallerProgress 20 'core runtime downloaded and verified'
     $qualityManifestPath = Receive-VerifiedAsset $qualityManifestAsset $releaseAssetCache
     if ((Get-LowerSha256 $qualityManifestPath 'Quality trust manifest') -cne (
         Get-RequiredChecksum $checksums $qualityManifestName
     )) {
         throw 'The quality trust manifest does not match SHA256SUMS.txt.'
     }
+    Write-InstallerProgress 25 'quality manifest downloaded and verified'
 
     $trustIdentity = Get-TrustManifestIdentity $qualityManifestPath
     $coreRuntime = Expand-VerifiedCore $coreArchivePath $cacheRoot
+    Write-InstallerProgress 30 'authenticated core runtime ready'
 
     if ($null -ne $existingDestination) {
         Assert-InstalledManifest $destination $trustIdentity.AirgapManifestSha256
@@ -739,6 +754,7 @@ try {
             $destination `
             'Trusted-core verification of the existing quality bundle'
         $installationSucceeded = $true
+        Write-InstallerProgress 95 'existing quality bundle verified'
         Write-Host "The existing bstrings quality kit is complete and verified: $destination"
     }
     else {
@@ -769,6 +785,7 @@ try {
         if ($lastAcquireExit -ne 0) {
             throw "Bundle acquisition failed after $AcquireAttempts attempt(s); last exit code: $lastAcquireExit."
         }
+        Write-InstallerProgress 85 'quality bundle acquired and assembled'
         Assert-PhysicalItem $destination 'New quality bundle' $true | Out-Null
         Assert-InstalledManifest $destination $trustIdentity.AirgapManifestSha256
         $installedExecutable = Join-Path $destination 'bstrings.exe'
@@ -778,6 +795,7 @@ try {
             $destination `
             'Final installed quality-bundle verification'
         $installationSucceeded = $true
+        Write-InstallerProgress 95 'installed quality bundle verified'
         Write-Host "bstrings quality kit installed and verified: $destination"
     }
 
@@ -808,6 +826,7 @@ try {
     else {
         Write-Host "Verified installer cache retained: $cacheRoot"
     }
+    Write-InstallerProgress 100 'complete'
     Write-Host "Run: $destination\bstrings.exe analyze -d <input> --full -o <output>"
 }
 catch {

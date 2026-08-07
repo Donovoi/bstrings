@@ -8,7 +8,7 @@ version-matched quality bundle, the full enrichment workflow is:
 bstrings.exe analyze -f evidence.raw --full -o results
 ```
 
-The currently published complete quality bundle is v1.9.6. See
+The currently published complete quality bundle is v1.9.7. See
 [download and installation](../docs/download-and-install.md) before treating
 this example as a distribution command.
 

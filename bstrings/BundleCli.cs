@@ -60,10 +60,13 @@ internal static class BundleCli
         {
             try
             {
+                var percentage = new ConsolePercentageProgress();
                 var root = result.GetValue(bundleRootOption) ?? AppContext.BaseDirectory;
                 var verification = BundleManifestVerifier.Verify(
                     root,
-                    result.GetValue(allowIncompleteMarkerOption)
+                    result.GetValue(allowIncompleteMarkerOption),
+                    (completed, total) =>
+                        percentage.Report("bundle verification", completed, total, "bytes")
                 );
                 Console.WriteLine(
                     $"Bundle verification passed: {verification.FileCount:N0} files, "
@@ -133,26 +136,36 @@ internal static class BundleCli
         }
 
         acquireCommand.SetAction(async result =>
+        {
+            var percentage = new ConsolePercentageProgress();
             await ExecutePackActionAsync(cancellationToken =>
                 BundlePackInstaller.AcquireAndAssembleAsync(
                     result.GetValue(acquireManifestOption),
                     result.GetValue(acquireCacheOption),
                     result.GetValue(acquireOutputOption)!,
-                    cancellationToken
+                    cancellationToken,
+                    progress: (activity, completed, total) =>
+                        percentage.Report(activity, completed, total, "bytes")
                 )
-            )
+            );
+        }
         );
         assembleCommand.SetAction(async result =>
+        {
+            var percentage = new ConsolePercentageProgress();
             await ExecutePackActionAsync(cancellationToken =>
                 Task.FromResult(
                     BundlePackInstaller.Assemble(
                         result.GetValue(assembleManifestOption),
                         result.GetValue(assembleCacheOption),
                         result.GetValue(assembleOutputOption)!,
-                        cancellationToken
+                        cancellationToken,
+                        (activity, completed, total) =>
+                            percentage.Report(activity, completed, total, "bytes")
                     )
                 )
-            )
+            );
+        }
         );
 
         var bundleCommand = new Command("bundle")

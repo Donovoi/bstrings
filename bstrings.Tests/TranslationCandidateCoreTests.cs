@@ -12,6 +12,7 @@ public sealed class TranslationCandidateCoreTests
         using var scope = new TemporaryDirectory();
         var input = scope.PathFor("raw.jsonl");
         var output = scope.PathFor("candidates.jsonl");
+        var progress = new List<(long Completed, long Total)>();
         await File.WriteAllLinesAsync(
             input,
             [
@@ -20,6 +21,7 @@ public sealed class TranslationCandidateCoreTests
                 Original("latin", "hello"),
                 Original("cyrillic", "Привет"),
                 Original("astral", "\U00010400ab"),
+                Original("identifier", "$SYNTH_TOKEN001"),
                 Original("long", "abcdefghijk"),
             ],
             cancellationToken
@@ -30,10 +32,11 @@ public sealed class TranslationCandidateCoreTests
             output,
             minimumCharacters: 3,
             maximumCharacters: 10,
-            cancellationToken
+            cancellationToken,
+            (completed, total) => progress.Add((completed, total))
         );
 
-        Assert.Equal(new TranslationCandidateStats(6, 3), stats);
+        Assert.Equal(new TranslationCandidateStats(7, 3), stats);
         var ids = new List<string>();
         foreach (var line in await File.ReadAllLinesAsync(output, cancellationToken))
         {
@@ -41,6 +44,43 @@ public sealed class TranslationCandidateCoreTests
             ids.Add(document.RootElement.GetProperty("recordId").GetString()!);
         }
         Assert.Equal(["latin", "cyrillic", "astral"], ids);
+        Assert.Equal((0, new FileInfo(input).Length), progress[0]);
+        Assert.Equal((new FileInfo(input).Length, new FileInfo(input).Length), progress[^1]);
+        Assert.True(progress.Zip(progress.Skip(1)).All(pair =>
+            pair.First.Completed <= pair.Second.Completed
+        ));
+    }
+
+    [Fact]
+    public async Task FilterEligibleAsync_RejectsIdentifierOnlyMachineTokens()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var input = scope.PathFor("raw.jsonl");
+        var output = scope.PathFor("candidates.jsonl");
+        await File.WriteAllLinesAsync(
+            input,
+            [
+                Original("single", "$SYNTH_TOKEN001"),
+                Original("multiple", "$SYNTH_TOKEN001 $SYNTH_TOKEN002"),
+                Original("natural", "hola mundo"),
+            ],
+            cancellationToken
+        );
+
+        var stats = await TranslationCandidateCore.FilterEligibleAsync(
+            input,
+            output,
+            minimumCharacters: 3,
+            maximumCharacters: 100,
+            cancellationToken
+        );
+
+        Assert.Equal(new TranslationCandidateStats(3, 1), stats);
+        using var candidate = JsonDocument.Parse(
+            Assert.Single(await File.ReadAllLinesAsync(output, cancellationToken))
+        );
+        Assert.Equal("natural", candidate.RootElement.GetProperty("recordId").GetString());
     }
 
     [Fact]

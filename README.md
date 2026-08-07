@@ -28,7 +28,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.6](https://github.com/Donovoi/bstrings/releases/tag/v1.9.6).
+[v1.9.7](https://github.com/Donovoi/bstrings/releases/tag/v1.9.7).
 Requirements: Windows 11 x64, a connected staging machine, and at least
 **30 GiB free**. Administrator rights are not required.
 
@@ -40,7 +40,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.6'
+  $tag = 'v1.9.7'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -85,6 +85,11 @@ analysis with:
 .\bstrings-quality\bstrings.exe bundle verify
 .\bstrings-quality\bstrings.exe analyze -d D:\evidence -o D:\results --full
 ```
+
+Installer, bundle, direct extraction, and integrated-analysis commands print
+percentage completion. Integrated analysis combines stage progress with
+measured byte or record progress for long-running work. Percentages are
+completed work units, not elapsed-time estimates.
 
 `--full` runs native extraction, executable recovery, OCR, language assessment,
 local translation, all 66 built-in patterns, and the TSV/histogram reporting
