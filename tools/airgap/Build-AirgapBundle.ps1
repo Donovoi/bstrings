@@ -860,6 +860,7 @@ $bundleDocumentNames = @(
     'crypto-address-coverage-2026-08.md',
     'enrichment-pipeline.md',
     'floss-standalone-redistribution.md',
+    'forensic-reporting-2026-08.md',
     'magika-cli-redistribution.md',
     'ocr-and-document-analysis.md',
     'ocr-benchmark-2026-08-05.md',
@@ -870,6 +871,10 @@ $bundleDocumentNames = @(
     'scale-benchmark-2026-08.md',
     'translation-benchmark-2026-08-04.md'
 )
+$bundleBenchmarkResultNames = @(
+    'forensic-pattern-catalog-2026-08.csv',
+    'forensic-report-projection-2026-08.csv'
+)
 $bundleReleaseDocumentNames = @(
     'v1.9.2.md'
 )
@@ -878,6 +883,12 @@ foreach ($documentName in $bundleDocumentNames) {
         (Join-Path $repoRoot 'docs') `
         $documentName `
         "Bundled document $documentName"
+}
+foreach ($resultName in $bundleBenchmarkResultNames) {
+    $null = Resolve-ChildFile `
+        (Join-Path $repoRoot 'benchmarks\results') `
+        $resultName `
+        "Bundled benchmark result $resultName"
 }
 foreach ($documentName in $bundleReleaseDocumentNames) {
     $null = Resolve-ChildFile `
@@ -1020,6 +1031,15 @@ try {
             $documentName `
             "Bundled document $documentName"
         Copy-Item -LiteralPath $document -Destination $bundleDocs
+    }
+    $bundleBenchmarkResults = Join-Path $output 'benchmarks\results'
+    [IO.Directory]::CreateDirectory($bundleBenchmarkResults) | Out-Null
+    foreach ($resultName in $bundleBenchmarkResultNames) {
+        $result = Resolve-ChildFile `
+            (Join-Path $repoRoot 'benchmarks\results') `
+            $resultName `
+            "Bundled benchmark result $resultName"
+        Copy-Item -LiteralPath $result -Destination $bundleBenchmarkResults
     }
     $bundleReleaseDocs = Join-Path $bundleDocs 'releases'
     [IO.Directory]::CreateDirectory($bundleReleaseDocs) | Out-Null

@@ -72,6 +72,13 @@ try {
             -LiteralPath (Join-Path $repoRoot "docs\$documentName") `
             -Destination $bundleDocs
     }
+    $bundleBenchmarkResults = Join-Path $builderBundle 'benchmarks\results'
+    [IO.Directory]::CreateDirectory($bundleBenchmarkResults) | Out-Null
+    foreach ($resultName in Get-LiteralArrayAssignment $builder 'bundleBenchmarkResultNames') {
+        Copy-Item `
+            -LiteralPath (Join-Path $repoRoot "benchmarks\results\$resultName") `
+            -Destination $bundleBenchmarkResults
+    }
     foreach ($documentName in Get-LiteralArrayAssignment $builder 'bundleReleaseDocumentNames') {
         Copy-Item `
             -LiteralPath (Join-Path $repoRoot "docs\releases\$documentName") `
