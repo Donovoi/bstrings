@@ -262,11 +262,6 @@ class AirgapManifestTests(unittest.TestCase):
 
     def test_quality_installer_is_version_pinned_and_release_gated(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]
-        project = (repo_root / "bstrings" / "bstrings.csproj").read_text(encoding="utf-8")
-        version_match = re.search(r"<Version>([0-9]+\.[0-9]+\.[0-9]+)</Version>", project)
-        self.assertIsNotNone(version_match)
-        version = version_match.group(1)
-
         installer_path = repo_root / "Scripts" / "Install-BstringsQuality.ps1"
         installer_test_path = (
             repo_root / "Scripts" / "tests" / "Test-Install-BstringsQuality.ps1"
@@ -274,10 +269,17 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertTrue(installer_path.is_file())
         self.assertTrue(installer_test_path.is_file())
         installer = installer_path.read_text(encoding="utf-8")
-        self.assertRegex(
+        default_tag_match = re.search(
+            r"\[string\]\$ReleaseTag\s*=\s*['\"](v[0-9]+\.[0-9]+\.[0-9]+)['\"]",
             installer,
-            rf"\[string\]\$ReleaseTag\s*=\s*['\"]v{re.escape(version)}['\"]",
         )
+        expected_tag_match = re.search(
+            r"\$expectedReleaseTag\s*=\s*['\"](v[0-9]+\.[0-9]+\.[0-9]+)['\"]",
+            installer,
+        )
+        self.assertIsNotNone(default_tag_match)
+        self.assertIsNotNone(expected_tag_match)
+        self.assertEqual(default_tag_match.group(1), expected_tag_match.group(1))
         self.assertIn("Join-Path (Get-Location).Path 'bstrings-quality'", installer)
         self.assertIn("bundle-packs-quality.json", installer)
         self.assertNotIn("bundle-packs-balanced.json", installer)
@@ -295,6 +297,14 @@ class AirgapManifestTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("release-assets/Install-BstringsQuality.ps1", workflow)
+
+        core_release_workflow = (
+            repo_root / ".github" / "workflows" / "publish-windows-release.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("bstrings/bstrings.csproj", core_release_workflow)
+        self.assertIn('$tag = "v$($versions[0])"', core_release_workflow)
+        self.assertIn("bstrings-win-x64.zip", core_release_workflow)
+        self.assertNotIn("Install-BstringsQuality.ps1", core_release_workflow)
 
         pack_builder = (
             repo_root / "tools" / "airgap" / "New-BundlePackRelease.ps1"
@@ -327,16 +337,17 @@ class AirgapManifestTests(unittest.TestCase):
             ["## Why use it?", "## Get started"],
             re.findall(r"^## .+$", readme, flags=re.MULTILINE),
         )
-        project = (repo_root / "bstrings" / "bstrings.csproj").read_text(
+        installer = (repo_root / "Scripts" / "Install-BstringsQuality.ps1").read_text(
             encoding="utf-8"
         )
-        version_match = re.search(
-            r"<Version>([0-9]+\.[0-9]+\.[0-9]+)</Version>", project
+        quality_tag_match = re.search(
+            r"\$expectedReleaseTag\s*=\s*['\"](v[0-9]+\.[0-9]+\.[0-9]+)['\"]",
+            installer,
         )
-        self.assertIsNotNone(version_match)
+        self.assertIsNotNone(quality_tag_match)
         self.assertRegex(
             readme,
-            rf"\$tag\s*=\s*['\"]v{re.escape(version_match.group(1))}['\"]",
+            rf"\$tag\s*=\s*['\"]{re.escape(quality_tag_match.group(1))}['\"]",
         )
         self.assertIn("-ReleaseTag $tag", readme)
 

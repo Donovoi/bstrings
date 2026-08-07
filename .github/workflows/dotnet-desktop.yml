@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Require an exact project-version release tag
         if: startsWith(github.ref, 'refs/tags/')
@@ -30,8 +32,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           [xml]$project = Get-Content -LiteralPath 'bstrings/bstrings.csproj' -Raw
-          $versions = @($project.Project.PropertyGroup.Version | ForEach-Object {
-            [string]$_
+          $versions = @($project.SelectNodes('/Project/PropertyGroup/Version') | ForEach-Object {
+            [string]$_.InnerText
           } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
           if ($versions.Count -ne 1) {
             throw "Expected exactly one project Version, found $($versions.Count)."
@@ -40,6 +42,23 @@ jobs:
           if ($env:GITHUB_REF_NAME -cne $expectedTag) {
             throw "Release tag '$env:GITHUB_REF_NAME' must exactly match project version '$expectedTag'."
           }
+
+      - name: Require a release version bump for code changes
+        if: >-
+          github.event_name == 'pull_request' ||
+          (github.event_name == 'push' && github.ref == 'refs/heads/master')
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          ./tools/release/Assert-CodeVersion.ps1
+          -BaseRevision $env:BASE_SHA
+          -HeadRevision $env:HEAD_SHA
+
+      - name: Test release version policy
+        shell: pwsh
+        run: ./tools/release/tests/Test-CodeVersionPolicy.ps1
 
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v6
