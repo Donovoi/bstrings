@@ -1,39 +1,46 @@
 # bstrings
 
-`bstrings` finds and validates useful forensic strings. Depending on the
-installed release channel it can also recover obfuscated strings with
-[FLOSS](https://github.com/mandiant/flare-floss), identify files with
-[Magika](https://github.com/google/magika), perform OCR, detect language, and
-translate locally before applying the same pattern catalogue.
+`bstrings` finds and validates useful forensic strings, recovers obfuscated
+strings with [FLOSS](https://github.com/mandiant/flare-floss), identifies files
+with [Magika](https://github.com/google/magika), performs OCR, detects language,
+and translates locally before applying the same pattern catalogue. The complete
+Windows kit runs offline through one interface: `bstrings.exe`.
 
-## Published Windows downloads
+## Why use it?
 
-The two published Windows channels currently have different versions and
-capabilities. There is not yet one supported download containing their combined
-feature set.
+- One recursive workflow combines native CPU/Rust/CUDA/hybrid extraction,
+  validated patterns, FLOSS, OCR, language triage, offline translation, and
+  provenance.
+- Completed analysis writes a filterable `findings.tsv`, exact pattern and
+  feature histograms, and a self-contained HTML pattern visualization while
+  retaining the authoritative JSONL evidence graph.
+- The 66-pattern catalogue includes PII, credentials, structurally validated
+  JWT candidates, browser artifacts, high-value Registry paths, and crypto
+  address families alongside the original forensic patterns.
+- Automatic extraction measures eligible CPU, GPU, and hybrid backends and
+  selects an accelerator only when it projects a worthwhile win.
+- The quality kit includes its runtimes, models, tools, licences, and strict
+  manifest, so case work does not depend on Python, a package manager, or the
+  internet.
+- Downloads and the finished installation are checked by exact size and
+  SHA-256 before use.
 
-| Channel | Published version | Included | Not included |
-| --- | --- | --- | --- |
-| Latest Windows x64 core | [v1.9.4](https://github.com/Donovoi/bstrings/releases/tag/v1.9.4) | Native CPU/Rust/CUDA/hybrid extraction, measured backend selection, 66 built-in patterns, expanded match provenance, TSV reports, and histograms | FLOSS, Magika, OCR runtimes/models, and local translation assets |
-| Complete quality/offline kit | [v1.9.2](https://github.com/Donovoi/bstrings/releases/tag/v1.9.2) | Native extraction, FLOSS, Magika, OCR, language triage, local translation, runtimes, models, licences, and strict bundle verification | The v1.9.4 backend/reporting changes and patterns added after v1.9.2 |
+## Get started
 
-Do not combine a core ZIP with manifests, packs, or tools from another version.
-Use the [download and installation guide](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md) to
-choose and verify the correct channel.
-
-## Complete enrichment kit currently available
-
+The complete Windows x64 quality/offline release is
+[v1.9.5](https://github.com/Donovoi/bstrings/releases/tag/v1.9.5).
 Requirements: Windows 11 x64, a connected staging machine, and at least
-**30 GiB free**. Administrator rights are not required. Open PowerShell in the
-directory where you want `bstrings-quality`, then run this explicitly v1.9.2,
-checksum-verified installer bootstrap:
+**30 GiB free**. Administrator rights are not required.
+
+Open PowerShell in the directory where you want `bstrings-quality`, then run
+this pinned, checksum-verified installer bootstrap:
 
 ```powershell
 & {
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.2'
+  $tag = 'v1.9.5'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -71,39 +78,24 @@ checksum-verified installer bootstrap:
 }
 ```
 
-It creates and verifies `.\bstrings-quality`. Then run:
+The installer creates and verifies `.\bstrings-quality`. Run a complete
+analysis with:
 
 ```powershell
 .\bstrings-quality\bstrings.exe bundle verify
 .\bstrings-quality\bstrings.exe analyze -d D:\evidence -o D:\results --full
 ```
 
-`--full` enables native extraction, executable recovery, OCR, language
-assessment, local translation, and all patterns present in that bundle. It does
-not add the v1.9.4 reporting or pattern changes to a v1.9.2 installation.
+`--full` runs native extraction, executable recovery, OCR, language assessment,
+local translation, all 66 built-in patterns, and the TSV/histogram reporting
+stage. It does not mount filesystems or carve embedded files from raw disk or
+memory images; mount or carve those images first when file-level FLOSS and OCR
+coverage is required.
 
-For an air-gapped workstation, copy the whole verified `bstrings-quality`
-directory and run `bundle verify` again before examining evidence.
+For an air-gapped workstation, copy the whole `bstrings-quality` directory and
+run `bundle verify` again before examining evidence.
 
-## Latest core: native analysis and forensic reports
-
-Download and verify `bstrings-win-x64.zip` from the
-[v1.9.4 release](https://github.com/Donovoi/bstrings/releases/tag/v1.9.4), then
-extract the whole archive into a new directory. A native-only integrated run is:
-
-```powershell
-.\bstrings.exe analyze -f D:\evidence\memory.raw `
-  -o D:\results\memory-strings `
-  --recover-executable-strings off --ocr off --translation off `
-  --lr all --processor auto
-```
-
-This workflow writes the authoritative JSONL evidence graph plus
-`findings.tsv`, `pattern-histogram.tsv`, `feature-histogram.tsv`, and
-`pattern-histogram.html`. The legacy direct `-f`/`-d` interface remains
-available when a flat strings or regex file is preferred.
-
-Detailed guidance: [download and installation](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md),
+Detailed guidance: [download and installation](docs/download-and-install.md),
 [air-gapped deployment](docs/air-gapped-deployment.md),
 [analysis and translation](docs/enrichment-pipeline.md), and
 [outputs and provenance](docs/output-and-provenance.md). The forensic report

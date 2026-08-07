@@ -3,7 +3,7 @@
 The application version lives in `bstrings/bstrings.csproj`:
 
 ```xml
-<Version>1.9.4</Version>
+<Version>1.9.5</Version>
 ```
 
 The project uses `MAJOR.MINOR.PATCH`:
@@ -12,20 +12,18 @@ The project uses `MAJOR.MINOR.PATCH`:
 - bump `MINOR` for a compatible feature; and
 - bump `MAJOR` for a breaking change.
 
-## Current published channels
+## Current release
 
-The latest automatic Windows core is v1.9.4. The latest complete
-quality/offline release is v1.9.2. These are separate version-bound products,
-not packs that can be combined. The core contains current native extraction,
-backend selection, patterns, and reports; the quality release contains the
-older version's complete FLOSS, OCR, language, and translation bundle. See
+v1.9.5 is the complete Windows x64 quality/offline release. Its release assets
+contain the current core plus the version-matched installer, offline base,
+profile manifests, licences, and trust metadata needed to assemble and verify
+every advertised profile. See
 [download and installation](docs/download-and-install.md) for the user-facing
 feature matrix.
 
-Documentation-only changes after a release may clarify this boundary on
-`master`, but they do not mutate an existing tag or its archived ZIP. A new
-version and successful build are required to publish a replacement core asset;
-a new full quality release additionally requires all offline acceptance gates.
+Tags and published assets remain immutable in identity. A new version and
+successful build are required to publish a replacement core; a new complete
+quality release additionally requires every offline acceptance gate.
 
 ## Change the version
 
@@ -107,8 +105,14 @@ The full workflow separately retains `offline-profile-acceptance.json` as an
 internal Actions gate artifact. The release job validates it against the exact
 tagged build, but it is not a public Release download.
 
-For v1.9.4 the Windows-core release body is
-[`docs/releases/v1.9.4.md`](docs/releases/v1.9.4.md). Keep historical release
+After the automatic channel creates the tested version tag and core release,
+manually dispatch `Build and test` with that tag as the selected ref. The
+tag-ref dispatch rebuilds from the same commit, runs the compact bundle and
+all-profile acceptance gates, then promotes the existing release to this full
+asset set. Dispatching against a branch cannot publish a full release.
+
+For v1.9.5 the complete release body is
+[`docs/releases/v1.9.5.md`](docs/releases/v1.9.5.md). Keep historical release
 documents unchanged. Before promoting a version to the full quality/offline
 asset set, update its installer pin, documentation inventory, human release
 body, and all profile-specific acceptance evidence.

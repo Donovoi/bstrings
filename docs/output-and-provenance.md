@@ -1,11 +1,8 @@
 # Output, completion, and provenance
 
-Output availability depends on the installed release channel. The v1.9.4 core
-produces the current native-only JSONL, TSV, and histogram report set when the
-optional enrichment stages are disabled. The complete v1.9.2 quality kit adds
-FLOSS, OCR, language, and translation records but predates the v1.9.4 TSV and
-histogram projection. No published package currently produces both in one run.
-See [download and installation](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md).
+The complete v1.9.5 quality kit produces native, FLOSS, OCR, language, and
+translation records together with the current JSONL, TSV, and histogram report
+set. See [download and installation](download-and-install.md).
 
 With a complete version-matched quality bundle, the full enrichment workflow
 writes a result set from one command:
@@ -87,7 +84,7 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-In current source and the v1.9.4 core, every completed integrated `analyze` run
+In current source and v1.9.5, every completed integrated `analyze` run
 also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,

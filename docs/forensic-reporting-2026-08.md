@@ -2,11 +2,9 @@
 
 Date: 7 August 2026
 
-Availability note: these projections are in current source and the v1.9.4 core
-release. The separately published complete quality kit remains v1.9.2 and does
-not contain this reporting stage. A single published bundle combining these
-reports with FLOSS, OCR, and translation is not yet available; see
-[download and installation](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md).
+Availability note: these projections are in current source and the complete
+v1.9.5 quality release, including runs that also use FLOSS, OCR, and
+translation. See [download and installation](download-and-install.md).
 
 ## Outcome
 

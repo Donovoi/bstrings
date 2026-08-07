@@ -1,19 +1,17 @@
 # Offline release maintenance
 
 This guide is for maintainers of the Windows x64 release. Examiners should use
-[download and installation](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md) and
+[download and installation](download-and-install.md) and
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-Current publication status: v1.9.4 is the automatic Windows core release, while
-v1.9.2 remains the latest fully gated quality/offline release. The sections
-below intentionally preserve the v1.9.2 asset contract until a newer full
-quality release is prepared and accepted. Do not relabel those assets as
-v1.9.4 or combine them with the v1.9.4 core.
+Current publication status: v1.9.5 is the fully gated Windows x64
+quality/offline release. Its automatic core artifact and complete asset set are
+bound to the same tag and commit. Do not combine them with another version.
 
-## v1.9.2 release process and asset set
+## v1.9.5 release process and asset set
 
-The exact v1.9.2 project-version tag publishes the asset set below after every
+The exact v1.9.5 project-version tag publishes the asset set below after every
 required gate passes. Do not combine a core ZIP with manifests from another
 version.
 
@@ -31,7 +29,7 @@ The tag- and commit-bound `offline-profile-acceptance.json` remains an internal
 Actions gate artifact. The release job validates it, but does not publish it as
 a user download.
 
-The workflow uses [`releases/v1.9.2.md`](releases/v1.9.2.md) as the human
+The workflow uses [`releases/v1.9.5.md`](releases/v1.9.5.md) as the human
 release body. Review it against the final filenames, profile identities, and
 known boundaries before tagging.
 
@@ -50,7 +48,7 @@ known boundaries before tagging.
 `Scripts/Install-BstringsQuality.ps1` is published unchanged as
 `Install-BstringsQuality.ps1`. `SHA256SUMS.txt` must contain exactly one
 lowercase SHA-256 row for it alongside every other public release asset. The
-README bootstrap uses GitHub's exact-tag API for `v1.9.2`, rejects a draft or
+README bootstrap uses GitHub's exact-tag API for `v1.9.5`, rejects a draft or
 prerelease, downloads the installer and checksum list as physical files from
 that release, and verifies the installer before launching `powershell.exe
 -File`; the release body links users to that canonical flow. Never document or
@@ -58,7 +56,7 @@ offer a web response piped into `Invoke-Expression`.
 
 The installer is deliberately narrow:
 
-- default release tag: `v1.9.2`;
+- default release tag: `v1.9.5`;
 - default destination: `.\bstrings-quality` under the caller's current
   directory;
 - quality profile only;
@@ -171,7 +169,7 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 
 ## Build and test the self-contained core
 
-The v1.9.2 release process uses
+The v1.9.5 release process uses
 [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
 repository-pinned Rust toolchain:
 
@@ -428,6 +426,15 @@ dispatches additionally:
 - generate and checksum split packs;
 - locally assemble/verify the compact pack; and
 - retain the generated artifacts for the next gate.
+
+For a complete release, first merge only after the `master` build succeeds.
+The automatic Windows release workflow publishes the tested core and creates
+the exact project-version tag. Then manually dispatch `Build and test` with
+that tag—not `master`—as the selected ref. A tag-ref dispatch satisfies the
+tag-only conditions below, rebuilds the core from the same immutable commit,
+runs every offline gate, and promotes the existing core release to the complete
+asset set and release body. A branch-ref dispatch builds packs only as review
+artifacts and cannot publish them.
 
 An exact tag then queues `profile-acceptance` on
 `[self-hosted, Windows, X64, bstrings-offline-release]`. That runner must have
