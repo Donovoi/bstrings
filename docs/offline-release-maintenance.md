@@ -5,13 +5,13 @@ This guide is for maintainers of the Windows x64 release. Examiners should use
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-Current publication status: v1.9.5 is the fully gated Windows x64
+Current publication status: v1.9.6 is the fully gated Windows x64
 quality/offline release. Its automatic core artifact and complete asset set are
 bound to the same tag and commit. Do not combine them with another version.
 
-## v1.9.5 release process and asset set
+## v1.9.6 release process and asset set
 
-The exact v1.9.5 project-version tag publishes the asset set below after every
+The exact v1.9.6 project-version tag publishes the asset set below after every
 required gate passes. Do not combine a core ZIP with manifests from another
 version.
 
@@ -29,7 +29,7 @@ The tag- and commit-bound `offline-profile-acceptance.json` remains an internal
 Actions gate artifact. The release job validates it, but does not publish it as
 a user download.
 
-The workflow uses [`releases/v1.9.5.md`](releases/v1.9.5.md) as the human
+The workflow uses [`releases/v1.9.6.md`](releases/v1.9.6.md) as the human
 release body. Review it against the final filenames, profile identities, and
 known boundaries before tagging.
 
@@ -48,7 +48,7 @@ known boundaries before tagging.
 `Scripts/Install-BstringsQuality.ps1` is published unchanged as
 `Install-BstringsQuality.ps1`. `SHA256SUMS.txt` must contain exactly one
 lowercase SHA-256 row for it alongside every other public release asset. The
-README bootstrap uses GitHub's exact-tag API for `v1.9.5`, rejects a draft or
+README bootstrap uses GitHub's exact-tag API for `v1.9.6`, rejects a draft or
 prerelease, downloads the installer and checksum list as physical files from
 that release, and verifies the installer before launching `powershell.exe
 -File`; the release body links users to that canonical flow. Never document or
@@ -56,7 +56,7 @@ offer a web response piped into `Invoke-Expression`.
 
 The installer is deliberately narrow:
 
-- default release tag: `v1.9.5`;
+- default release tag: `v1.9.6`;
 - default destination: `.\bstrings-quality` under the caller's current
   directory;
 - quality profile only;
@@ -169,7 +169,7 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 
 ## Build and test the self-contained core
 
-The v1.9.5 release process uses
+The v1.9.6 release process uses
 [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
 repository-pinned Rust toolchain:
 
@@ -428,13 +428,15 @@ dispatches additionally:
 - retain the generated artifacts for the next gate.
 
 For a complete release, first merge only after the `master` build succeeds.
-The automatic Windows release workflow publishes the tested core and creates
-the exact project-version tag. Then manually dispatch `Build and test` with
-that tag—not `master`—as the selected ref. A tag-ref dispatch satisfies the
-tag-only conditions below, rebuilds the core from the same immutable commit,
-runs every offline gate, and promotes the existing core release to the complete
-asset set and release body. A branch-ref dispatch builds packs only as review
-artifacts and cannot publish them.
+The automatic Windows release workflow creates the exact project-version tag,
+verifies the tested core, and stages that core plus its checksum in a private
+draft release. Then manually dispatch `Build and test` with that tag—not
+`master`—as the selected ref. A tag-ref dispatch satisfies the tag-only
+conditions below, rebuilds the core from the same commit, runs every offline
+gate, replaces the preliminary draft assets with the accepted tagged build,
+adds the complete asset set and release body, and publishes the draft exactly
+once. GitHub then makes the tag and assets immutable. A branch-ref dispatch
+builds packs only as review artifacts and cannot publish them.
 
 An exact tag then queues `profile-acceptance` on
 `[self-hosted, Windows, X64, bstrings-offline-release]`. That runner must have
@@ -479,7 +481,10 @@ verification, or failed translation smoke blocks publication. This all-profile
 gate runs for every version tag, so quality and balanced model/revision changes
 cannot reach a release on compact-only evidence.
 
-Release artifacts use fixed names and remain immutable. For a failed tag run,
+Release artifacts use fixed names and become immutable only after the complete
+draft is published. Never publish the preliminary core draft: GitHub does not
+permit assets to be added to a release that was published while immutable
+releases were enabled. For a failed tag run,
 choose **Re-run failed jobs**, not **Re-run all jobs**. Re-running a successful
 artifact-producing job under the same workflow run would try to upload an
 already existing name and must fail rather than overwrite reviewed bytes. If an

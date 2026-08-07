@@ -225,6 +225,11 @@ class AirgapManifestTests(unittest.TestCase):
         publication = release[release.index("Create GitHub release") :]
         self.assertIn("body_path: docs/releases/${{ github.ref_name }}.md", publication)
         self.assertIn("generate_release_notes: false", publication)
+        self.assertIn("overwrite_files: true", publication)
+        self.assertIn("preserve_order: true", publication)
+        self.assertIn("Verify the published immutable release", publication)
+        self.assertIn("-not $release.isImmutable", publication)
+        self.assertIn("Published release asset set mismatch", publication)
         self.assertNotIn("offline-profile-acceptance.json", publication)
 
         script = (repo_root / "tools" / "airgap" / "Invoke-OfflineProfileAcceptance.ps1").read_text(
@@ -305,8 +310,14 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn('$tag = "v$($versions[0])"', core_release_workflow)
         self.assertIn("bstrings-win-x64.zip", core_release_workflow)
         self.assertNotIn("Install-BstringsQuality.ps1", core_release_workflow)
+        self.assertIn("Create the exact tested version tag", core_release_workflow)
+        self.assertIn('-f ref="refs/tags/$env:RELEASE_TAG"', core_release_workflow)
+        self.assertIn("--verify-tag", core_release_workflow)
+        self.assertIn("--draft", core_release_workflow)
+        self.assertIn("-not $release.isDraft", core_release_workflow)
+        self.assertIn("$release.isImmutable", core_release_workflow)
         prepared_index = core_release_workflow.index(
-            'Write-Host "Prepared Windows release $tag for $env:RELEASE_SHA."'
+            'Write-Host "Prepared Windows release draft $tag for $env:RELEASE_SHA."'
         )
         success_index = core_release_workflow.index("exit 0", prepared_index)
         self.assertLess(prepared_index, success_index)
@@ -329,7 +340,7 @@ class AirgapManifestTests(unittest.TestCase):
             repo_root / "README.md",
             repo_root / "CORE_RELEASE_README.md",
             repo_root / "docs" / "air-gapped-deployment.md",
-            repo_root / "docs" / "releases" / "v1.9.5.md",
+            repo_root / "docs" / "releases" / "v1.9.6.md",
         )
         public_sources = {
             path: path.read_text(encoding="utf-8") for path in public_paths

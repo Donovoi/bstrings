@@ -1,6 +1,6 @@
 # Output, completion, and provenance
 
-The complete v1.9.5 quality kit produces native, FLOSS, OCR, language, and
+The complete v1.9.6 quality kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
 
@@ -84,7 +84,7 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-In current source and v1.9.5, every completed integrated `analyze` run
+In current source and v1.9.6, every completed integrated `analyze` run
 also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,

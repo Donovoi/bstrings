@@ -3,7 +3,7 @@
 The application version lives in `bstrings/bstrings.csproj`:
 
 ```xml
-<Version>1.9.5</Version>
+<Version>1.9.6</Version>
 ```
 
 The project uses `MAJOR.MINOR.PATCH`:
@@ -14,7 +14,7 @@ The project uses `MAJOR.MINOR.PATCH`:
 
 ## Current release
 
-v1.9.5 is the complete Windows x64 quality/offline release. Its release assets
+v1.9.6 is the complete Windows x64 quality/offline release. Its release assets
 contain the current core plus the version-matched installer, offline base,
 profile manifests, licences, and trust metadata needed to assemble and verify
 every advertised profile. See
@@ -70,14 +70,15 @@ FLOSS recovery smokes. The exact procedure is in
 [offline release maintenance](docs/offline-release-maintenance.md). Create a
 release tag only from a commit whose full `master` workflow has passed.
 
-## Automatic Windows x64 core release
+## Automatic Windows x64 release draft
 
 Every successful `Build and test` push run on `master` is followed by
-`Publish Windows release`. The release workflow checks out the exact tested
+`Stage Windows release draft`. The workflow checks out the exact tested
 commit, reads the project version, and is a no-op when that version is already
-published. For a new version it downloads the `bstrings-win-x64` artifact from
-that exact successful run, extracts and verifies its required files, creates a
-SHA-256 checksum list, and publishes `v<MAJOR.MINOR.PATCH>` with only:
+staged or published. For a new version it creates the exact immutable-candidate
+tag, downloads the `bstrings-win-x64` artifact from that successful run,
+extracts and verifies its required files, creates a SHA-256 checksum list, and
+stages a private draft containing only:
 
 - `bstrings-win-x64.zip`; and
 - `SHA256SUMS.txt`.
@@ -85,7 +86,9 @@ SHA-256 checksum list, and publishes `v<MAJOR.MINOR.PATCH>` with only:
 The workflow runs only for a successful same-repository `master` push. It does
 not execute pull-request code with a write token, does not use a personal
 access token, and refuses to retarget an existing tag. Reruns are idempotent
-when the release already exists.
+when the exact draft or published release already exists. The preliminary core
+draft is not a user download channel; it remains mutable only until the full
+workflow replaces its assets and publishes it once.
 
 ## Full quality/offline release
 
@@ -105,14 +108,16 @@ The full workflow separately retains `offline-profile-acceptance.json` as an
 internal Actions gate artifact. The release job validates it against the exact
 tagged build, but it is not a public Release download.
 
-After the automatic channel creates the tested version tag and core release,
+After the automatic channel creates the tested version tag and core draft,
 manually dispatch `Build and test` with that tag as the selected ref. The
 tag-ref dispatch rebuilds from the same commit, runs the compact bundle and
-all-profile acceptance gates, then promotes the existing release to this full
-asset set. Dispatching against a branch cannot publish a full release.
+all-profile acceptance gates, replaces the preliminary draft assets, adds this
+full asset set, and publishes the draft exactly once. GitHub then makes the tag
+and assets immutable. Dispatching against a branch cannot publish a full
+release.
 
-For v1.9.5 the complete release body is
-[`docs/releases/v1.9.5.md`](docs/releases/v1.9.5.md). Keep historical release
+For v1.9.6 the complete release body is
+[`docs/releases/v1.9.6.md`](docs/releases/v1.9.6.md). Keep historical release
 documents unchanged. Before promoting a version to the full quality/offline
 asset set, update its installer pin, documentation inventory, human release
 body, and all profile-specific acceptance evidence.
