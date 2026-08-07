@@ -68,6 +68,13 @@ public sealed class EnrichmentRegexPipelineCoreTests
         try
         {
             Assert.Equal("analyst@example.com", rows[0].RootElement.GetProperty("match").GetString());
+            Assert.Equal(8, rows[0].RootElement.GetProperty("matchStart").GetInt32());
+            Assert.Equal(19, rows[0].RootElement.GetProperty("matchLength").GetInt32());
+            Assert.Equal(1, rows[0].RootElement.GetProperty("matchLine").GetInt32());
+            Assert.Equal(
+                "contact analyst@example.com",
+                rows[0].RootElement.GetProperty("context").GetString()
+            );
             Assert.Equal("byte-native", rows[0].RootElement.GetProperty("evidenceClass").GetString());
             Assert.Equal("raw-1", rows[0].RootElement.GetProperty("sourceRecordId").GetString());
             Assert.Equal("0x2A", rows[0].RootElement.GetProperty("location").GetProperty("value").GetString());
@@ -214,6 +221,37 @@ public sealed class EnrichmentRegexPipelineCoreTests
 
         using var row = JsonDocument.Parse(output.ToString());
         Assert.Equal("analyst", row.RootElement.GetProperty("match").GetString());
+    }
+
+    [Fact]
+    public async Task ProcessAsync_AssignsEndMatchAfterTrailingNewlineToEmptySecondLine()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("line.jsonl");
+        await File.WriteAllTextAsync(
+            inputPath,
+            "{\"schemaVersion\":1,\"recordType\":\"string\",\"recordId\":\"line-1\","
+                + "\"text\":\"first\\n\",\"sourceFile\":\"sample.txt\","
+                + "\"location\":{\"kind\":\"file_offset\",\"value\":\"0x0\"},"
+                + "\"origin\":{\"extractor\":\"bstrings\",\"kind\":\"static\"}}",
+            cancellationToken
+        );
+        var output = new StringWriter();
+
+        var stats = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            outputPath: null,
+            [("end", @"\z")],
+            output,
+            cancellationToken
+        );
+
+        Assert.Equal(1, stats.MatchRecords);
+        using var row = JsonDocument.Parse(output.ToString());
+        Assert.Equal(6, row.RootElement.GetProperty("matchStart").GetInt32());
+        Assert.Equal(0, row.RootElement.GetProperty("matchLength").GetInt32());
+        Assert.Equal(2, row.RootElement.GetProperty("matchLine").GetInt32());
     }
 
     [Fact]

@@ -174,6 +174,10 @@ internal static class AnalysisOrchestrator
             var translationsPath = Path.Combine(outputDirectory, "translated-strings.jsonl");
             var enrichedPath = Path.Combine(outputDirectory, "enriched-strings.jsonl");
             var matchesPath = Path.Combine(outputDirectory, "regex-matches.jsonl");
+            var findingsPath = Path.Combine(outputDirectory, "findings.tsv");
+            var patternHistogramPath = Path.Combine(outputDirectory, "pattern-histogram.tsv");
+            var featureHistogramPath = Path.Combine(outputDirectory, "feature-histogram.tsv");
+            var visualizationPath = Path.Combine(outputDirectory, "pattern-histogram.html");
 
             await RunStageAsync(
                 "input inventory",
@@ -561,6 +565,22 @@ internal static class AnalysisOrchestrator
                     )
             );
 
+            ForensicReportStats report = default;
+            await RunStageAsync(
+                "forensic report projection",
+                stageSeconds,
+                async () =>
+                    report = await ForensicReportCore.WriteAsync(
+                        matchesPath,
+                        findingsPath,
+                        patternHistogramPath,
+                        featureHistogramPath,
+                        visualizationPath,
+                        patterns,
+                        cancellationToken
+                    )
+            );
+
             if (beforeFinalInputVerification is not null)
             {
                 await beforeFinalInputVerification(cancellationToken);
@@ -629,6 +649,16 @@ internal static class AnalysisOrchestrator
                 enrichedStrings = enrichedMerge.OutputRecords,
                 regexPatterns = patterns.Count,
                 regexMatches = matches.MatchRecords,
+                forensicReports = new
+                {
+                    findings = Path.GetFileName(findingsPath),
+                    findingRows = report.FindingRows,
+                    patternHistogram = Path.GetFileName(patternHistogramPath),
+                    patternRows = report.PatternRows,
+                    featureHistogram = Path.GetFileName(featureHistogramPath),
+                    featureRows = report.FeatureRows,
+                    visualization = Path.GetFileName(visualizationPath),
+                },
                 stageSeconds,
             };
             await WriteJsonAtomicAsync(

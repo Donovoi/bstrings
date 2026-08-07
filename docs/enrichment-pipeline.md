@@ -11,6 +11,7 @@ input inventory and SHA-256 identity
   -> language assessment
   -> selected local translation
   -> built-in and custom regex matching
+  -> filterable TSV reports and exact histograms
   -> completion and provenance validation
 ```
 
@@ -277,6 +278,8 @@ The important result files are:
 - `ocr-assessments.jsonl` and `language-assessments.jsonl`;
 - `translated-strings.jsonl`, `enriched-strings.jsonl`, and
   `regex-matches.jsonl`;
+- `findings.tsv`, `pattern-histogram.tsv`, `feature-histogram.tsv`, and
+  `pattern-histogram.html`;
 - `input-manifest.jsonl`, `run.json`, and `summary.json`; and
 - `.incomplete` while work is still in progress.
 

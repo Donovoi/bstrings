@@ -102,6 +102,51 @@ job.
 
 See the [reviewed results and limitations](../docs/scale-benchmark-2026-08.md).
 
+## CPU/GPU backend crossover
+
+`Invoke-BackendCrossoverBenchmark.ps1` runs the current Release CLI in CPU,
+GPU, and hybrid modes against `ScaleCorpusGenerator` fixtures. Mode order is
+rotated. Every run must reproduce the complete marker multiset, including the
+terminal record, and all backends must have the same canonical output hash.
+The harness also records process CPU time, peak working set, throughput, and
+sampled NVIDIA utilization, memory, power, and SM clock data.
+
+```powershell
+.\benchmarks\Invoke-BackendCrossoverBenchmark.ps1 `
+  -DataRoot C:\bench\backend-crossover `
+  -BstringsDll .\bstrings\bin\Release\net10.0\bstrings.dll `
+  -RunRoot C:\bench\backend-crossover-run `
+  -Tiers 1g,2g,4g,8g,16g,32g `
+  -Modes cpu,gpu,hybrid `
+  -Repetitions 3 `
+  -IncludeUnicode `
+  -VerifyHashes
+```
+
+The run root must not already exist. Use an ASCII-only pass and a combined
+ASCII/UTF-16LE pass before changing automatic backend policy. See the
+[reviewed crossover result](../docs/backend-crossover-2026-08.md).
+
+## Forensic report projection
+
+`ForensicReportBenchmark` measures the bounded JSONL-to-TSV/histogram stage in
+isolation. It generates synthetic attributed matches outside the timed region,
+runs several rounds, and rejects a measurement unless finding rows, column
+widths, zero-count pattern retention, and exact distinct-feature counts all
+match expectations.
+
+```powershell
+dotnet run --project .\benchmarks\ForensicReportBenchmark -c Release -- `
+  --records 100000 `
+  --distinct-features 10000 `
+  --rounds 5 `
+  --output C:\bench\forensic-report.csv
+```
+
+The harness deletes its own per-round report files after validation. The CSV
+retains elapsed time, rows/s, input/output bytes, process peak working set, and
+the exactness result.
+
 ## Pattern-by-pattern benchmark
 
 `PatternCorpusGenerator` creates a separate, deterministic file for every
@@ -110,10 +155,11 @@ witnesses, SHA-256, and every expected value/offset pair. Positive records are
 placed inside segments, across each segment boundary, and next to EOF. Negative
 witnesses are present but must never appear in tool output.
 
-Generator version 4 covers the current 51-pattern catalog, including every
-member of the `wallets` group. Older checked-in comparison reports remain
-explicitly labeled as 33-pattern snapshots so their totals are not mistaken
-for current catalog coverage.
+Generator version 5 covers the current 66-pattern catalog, including every
+member of the `wallets`, `pii`, `credentials`, `browser`, and `registry`
+groups. Older checked-in comparison reports remain explicitly labeled as
+33- or 51-pattern snapshots so their totals are not mistaken for current
+catalog coverage.
 
 ```powershell
 dotnet run --project .\benchmarks\PatternCorpusGenerator -c Release -- `

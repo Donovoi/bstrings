@@ -503,7 +503,7 @@ public static partial class Program
         var lrOpt = new Option<string>("--lr")
         {
             Description =
-                "Only return regex matches. Accepts built-in names separated by commas, 'wallets', a custom regex, or 'all'",
+                "Only return regex matches. Accepts built-in names, groups (pii, credentials, browser, registry, wallets), a custom regex, or 'all'",
         };
         var fsOpt = new Option<string>("--fs")
         {
@@ -938,7 +938,7 @@ public static partial class Program
 
             Console.WriteLine();
             Log.Information(
-                "Pass a name or group from this list to --lr, for example: --lr wallets\r\n"
+                "Pass names or groups from this list to --lr, for example: --lr pii,credentials\r\n"
             );
 
             return;
@@ -1245,13 +1245,11 @@ public static partial class Program
                     : null;
             Func<List<string>, List<string>> literalBatchTransform =
                 literalBatchFilter is null ? null : literalBatchFilter.TransformBatch;
-            var canStreamRegexResults =
+            var canStreamRegexResultsWithQuietOutput =
                 sw is not null
                 && o.Length > 0
                 && regexPatterns.Count > 0
                 && off
-                && s
-                && q
                 && !sa
                 && !sl
                 && string.IsNullOrWhiteSpace(ls)
@@ -1259,6 +1257,32 @@ public static partial class Program
                 && string.IsNullOrWhiteSpace(fr)
                 && !useRapids
                 && !forceRapids;
+            var canStreamRegexResults = canStreamRegexResultsWithQuietOutput && s && q;
+            if (
+                (_debug || trace)
+                && canStreamRegexResultsWithQuietOutput
+                && !canStreamRegexResults
+            )
+            {
+                if (!s && !q)
+                {
+                    Console.Error.WriteLine(
+                        "Regex streaming fast path is disabled by console hits and progress output. Add -s -q to use bounded file-only streaming."
+                    );
+                }
+                else if (!s)
+                {
+                    Console.Error.WriteLine(
+                        "Regex streaming fast path is disabled because hits are also being written to the console. Add -s for file-only output."
+                    );
+                }
+                else if (!q)
+                {
+                    Console.Error.WriteLine(
+                        "Regex streaming fast path is disabled while progress output is enabled. Add -q to use bounded streaming output."
+                    );
+                }
+            }
             var requiresPostProcessing =
                 isCsvOutput
                 || sa
@@ -1329,7 +1353,7 @@ public static partial class Program
             );
             var processingMode = calibration.Mode;
 
-            if (!q && _debug)
+            if (_debug || trace)
             {
                 Console.Error.WriteLine(
                     $"Selected {processingMode.ToString().ToLowerInvariant()} extraction for '{currentFile}'."
@@ -1930,7 +1954,7 @@ public static partial class Program
             }
         }
 
-        if (_debug)
+        if (_debug || trace)
         {
             Console.Error.WriteLine(
                 $"Extraction work split: CPU {processingBackend.CpuChunks:N0} chunk(s), CUDA {processingBackend.GpuChunks:N0} chunk(s)."
@@ -3121,7 +3145,7 @@ public static partial class Program
                 ? ChunkSizingCore.SelectParallelChunkSizeMB(
                     Math.Min(128, cpuChunkSize),
                     fileSizeBytes,
-                    targetConcurrency: 2,
+                    targetConcurrency: GpuStringScanner.ParallelLaneCount,
                     chunksPerWorker: 4
                 )
                 : ChunkSizingCore.SelectOptimalChunkSize(
@@ -3408,7 +3432,7 @@ public static partial class Program
         {
             var gpuWorkers =
                 _processingMode is ProcessingMode.Gpu or ProcessingMode.Hybrid
-                    ? Math.Min(2, _maxConcurrency)
+                    ? Math.Min(GpuStringScanner.ParallelLaneCount, _maxConcurrency)
                     : 0;
             var cpuWorkers = _processingMode switch
             {

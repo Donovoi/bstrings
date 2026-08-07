@@ -65,6 +65,77 @@ internal static class PatternWitnessCatalog
                 @"HKEY_LOCAL_MACHINE\NOT_A_HIVE\Microsoft",
                 @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows"
             ),
+            ["intlPhone"] = new(
+                "+61 412 345 678",
+                "+01 234 567 890",
+                "+61 412 345 678"
+            ),
+            ["canadian_sin"] = new(
+                "SIN: 046 454 286",
+                "SIN: 046 454 287",
+                "046 454 286"
+            ),
+            ["dob"] = new("DOB: 1990-02-28", "DOB: 1990-02-30", "1990-02-28"),
+            ["iban"] = new(
+                "DE89 3704 0044 0532 0130 00",
+                "DE89 3704 0044 0532 0130 01",
+                "DE89 3704 0044 0532 0130 00"
+            ),
+            ["vin"] = new(
+                "1HGCM82633A004352",
+                "1HGCM82633I004352",
+                "1HGCM82633A004352"
+            ),
+            ["jwt"] = new(
+                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+                "abc.def.ghi",
+                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+            ),
+            ["credential_assignment"] = new(
+                "password=correct-horse-battery",
+                "password=x",
+                "correct-horse-battery"
+            ),
+            ["browser_credential_field"] = new(
+                "encryptedPassword",
+                "displayName",
+                "encryptedPassword"
+            ),
+            ["browser_profile_path"] = new(
+                @"C:\Users\Case\AppData\Local\Google\Chrome\User Data\Default\Login Data",
+                @"C:\Users\Case\Documents\Login Data",
+                @"C:\Users\Case\AppData\Local\Google\Chrome\User Data\Default\Login Data"
+            ),
+            ["reg_persistence"] = new(
+                @"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Updater",
+                @"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer",
+                @"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Updater"
+            ),
+            ["reg_user_activity"] = new(
+                @"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{GUID}",
+                @"HKCU\Software\Microsoft\Windows\CurrentVersion\Policies",
+                @"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{GUID}"
+            ),
+            ["reg_usb"] = new(
+                @"HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR\Disk&Ven_Test",
+                @"HKLM\SYSTEM\CurrentControlSet\Enum\PCI",
+                @"HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR\Disk&Ven_Test"
+            ),
+            ["reg_execution"] = new(
+                @"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache",
+                @"HKLM\SYSTEM\CurrentControlSet\Control\Lsa",
+                @"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache"
+            ),
+            ["reg_network"] = new(
+                @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles\{GUID}",
+                @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts",
+                @"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles\{GUID}"
+            ),
+            ["reg_system_identity"] = new(
+                @"HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
+                @"HKLM\SYSTEM\CurrentControlSet\Control\Power",
+                @"HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation"
+            ),
             ["b64"] = new("SGVsbG8=", "SGVsbG9=", "SGVsbG8="),
             ["bitlocker"] = new(
                 "001155-002310-003465-004620-005775-006930-008085-009240",

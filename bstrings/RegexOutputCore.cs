@@ -15,7 +15,9 @@ internal readonly record struct RegexOutputRecord(
     string DataFound,
     string SourceFile,
     string Offset,
-    string PatternType
+    string PatternType,
+    int DataStart = -1,
+    int DataLength = 0
 );
 
 internal static class RegexOutputCore
@@ -83,7 +85,9 @@ internal static class RegexOutputCore
                         parsedHit.Data.Substring(candidate.Start, candidate.Length),
                         sourceFile,
                         parsedHit.Offset,
-                        patternType
+                        patternType,
+                        candidate.Start,
+                        candidate.Length
                     );
                 }
 
@@ -104,7 +108,9 @@ internal static class RegexOutputCore
                         parsedHit.Data,
                         sourceFile,
                         parsedHit.Offset,
-                        patternType
+                        patternType,
+                        0,
+                        parsedHit.Data.Length
                     );
                 }
 
@@ -124,6 +130,7 @@ internal static class RegexOutputCore
                 )
             )
             {
+                var searchStart = 0;
                 foreach (
                     var dataFound in GetUrlValuesWithFallback(
                         parsedHit.Data,
@@ -136,12 +143,30 @@ internal static class RegexOutputCore
                     {
                         continue;
                     }
+                    var candidateStart = parsedHit.Data.IndexOf(
+                        dataFound,
+                        searchStart,
+                        StringComparison.Ordinal
+                    );
+                    if (candidateStart < 0)
+                    {
+                        candidateStart = parsedHit.Data.IndexOf(
+                            dataFound,
+                            StringComparison.Ordinal
+                        );
+                    }
+                    if (candidateStart >= 0)
+                    {
+                        searchStart = candidateStart + dataFound.Length;
+                    }
                     yield return new RegexOutputRecord(
                         patternName,
                         dataFound,
                         sourceFile,
                         parsedHit.Offset,
-                        patternType
+                        patternType,
+                        candidateStart,
+                        dataFound.Length
                     );
                 }
 
@@ -170,7 +195,9 @@ internal static class RegexOutputCore
                     dataFound,
                     sourceFile,
                     parsedHit.Offset,
-                    patternType
+                    patternType,
+                    candidateStart,
+                    candidateLength
                 );
             }
 
@@ -182,7 +209,9 @@ internal static class RegexOutputCore
             parsedHit.Data,
             sourceFile,
             parsedHit.Offset,
-            patternType
+            patternType,
+            0,
+            parsedHit.Data.Length
         );
     }
 

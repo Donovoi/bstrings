@@ -36,6 +36,10 @@ internal enum BuiltInValidationKind
     XmlElement,
     UriUserInfo,
     AbsoluteUri,
+    Jwt,
+    Iban,
+    CanadianSin,
+    DateOfBirth,
 }
 
 internal sealed record BuiltInPatternDefinition(
@@ -224,6 +228,143 @@ internal static class BuiltInPatternCatalog
             @"\b(?:(?:HKEY_LOCAL_MACHINE|HKLM|HKEY_CURRENT_USER|HKCU|HKEY_CLASSES_ROOT|HKCR|HKEY_USERS|HKU|HKEY_CURRENT_CONFIG|HKCC)\\)?(?:SAM|SECURITY|SOFTWARE|SYSTEM)(?:\\[A-Za-z0-9_. (){}-]+)*\b",
             "https://learn.microsoft.com/windows/win32/sysinfo/registry-hives",
             Options: RegexOptions.IgnoreCase
+        ),
+        new(
+            "intlPhone",
+            "Finds international E.164-style phone-number candidates with 8 to 15 digits",
+            @"(?<![0-9+])\+[1-9][0-9](?:[ .()/-]?[0-9]){6,13}(?![0-9])",
+            "https://www.itu.int/rec/T-REC-E.164",
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 64
+        ),
+        new(
+            "canadian_sin",
+            "Finds labelled Canadian Social Insurance Numbers that pass the Luhn checksum",
+            @"(?<![A-Za-z0-9])[Ss][Ii][Nn]\s*[:=]?\s*(?<sin>(?:[0-9][ -]?){8}[0-9])(?![ -]?[0-9])",
+            "https://www.canada.ca/en/employment-social-development/services/sin/reports/code-of-practice.html",
+            UseNonBacktracking: false,
+            OutputGroup: "sin",
+            BoundedRetryOverlap: 64,
+            Validation: BuiltInValidationKind.CanadianSin
+        ),
+        new(
+            "dob",
+            "Finds labelled date-of-birth values with calendar validation",
+            @"(?<![A-Za-z0-9])(?:[Dd][Oo][Bb]|[Dd]ate[ _-]?[Oo]f[ _-]?[Bb]irth|[Bb]irth[ _-]?[Dd]ate)\s*[:=]\s*(?<dob>(?:(?:19|20)[0-9]{2}[-/](?:0?[1-9]|1[0-2])[-/](?:0?[1-9]|[12][0-9]|3[01])|(?:0?[1-9]|1[0-2])[-/](?:0?[1-9]|[12][0-9]|3[01])[-/](?:19|20)[0-9]{2}))(?![0-9])",
+            "https://pages.nist.gov/800-63-4/sp800-63a.html",
+            UseNonBacktracking: false,
+            OutputGroup: "dob",
+            BoundedRetryOverlap: 96,
+            Validation: BuiltInValidationKind.DateOfBirth
+        ),
+        new(
+            "iban",
+            "Finds IBAN candidates that pass the ISO 13616 MOD-97 check",
+            @"(?<![A-Za-z0-9])(?<iban>(?:[A-Za-z]{2}[0-9]{2}[A-Za-z0-9]{11,30}|[A-Za-z]{2}[0-9]{2}(?: [A-Za-z0-9]{4}){2,7}(?: [A-Za-z0-9]{1,4})?))(?![A-Za-z0-9])",
+            "https://www.iso.org/standard/81090.html",
+            UseNonBacktracking: false,
+            OutputGroup: "iban",
+            BoundedRetryOverlap: 96,
+            Validation: BuiltInValidationKind.Iban
+        ),
+        new(
+            "vin",
+            "Finds 17-character vehicle identification number candidates excluding I, O, and Q",
+            @"(?<![A-Za-z0-9])[A-HJ-NPR-Za-hj-npr-z0-9]{17}(?![A-Za-z0-9])",
+            "https://www.nhtsa.gov/sites/nhtsa.gov/files/documents/vin_final_rule_april_2008.pdf",
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 32
+        ),
+        new(
+            "jwt",
+            "Finds structurally valid compact JWT candidates; signatures and decryption are not verified",
+            @"(?<![A-Za-z0-9_-])(?:[A-Za-z0-9_-]{2,2048}\.[A-Za-z0-9_-]{2,16384}\.[A-Za-z0-9_-]{0,8192}|[A-Za-z0-9_-]{2,2048}\.[A-Za-z0-9_-]{0,8192}\.[A-Za-z0-9_-]{2,8192}\.[A-Za-z0-9_-]{2,32768}\.[A-Za-z0-9_-]{2,8192})(?![A-Za-z0-9_.-])",
+            "https://www.rfc-editor.org/rfc/rfc7519#section-7.2",
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 72 * 1024,
+            Validation: BuiltInValidationKind.Jwt
+        ),
+        new(
+            "credential_assignment",
+            "Finds plaintext credential-like assignment candidates; surrounding context is required for interpretation",
+            """(?<![A-Za-z0-9_])(?:[Pp]assword|[Pp]asswd|[Pp]wd|[Aa][Pp][Ii][_-]?[Kk]ey|[Ss]ecret|[Aa]ccess[_-]?[Tt]oken|[Rr]efresh[_-]?[Tt]oken)\s*[:=]\s*["']?(?<credential>[^\s"',;}{]{4,2048})""",
+            "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/04-Testing_for_Weak_Encryption",
+            UseNonBacktracking: false,
+            OutputGroup: "credential",
+            BoundedRetryOverlap: 4096
+        ),
+        new(
+            "browser_credential_field",
+            "Finds browser credential-store field names; this indicates an artifact schema, not a decrypted password",
+            @"(?<![A-Za-z0-9_])(?:origin_url|action_url|signon_realm|username_value|password_value|encryptedUsername|encryptedPassword|httpRealm|formSubmitURL)(?![A-Za-z0-9_])",
+            "https://source.chromium.org/chromium/chromium/src/+/main:components/password_manager/core/browser/login_database.cc",
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 64
+        ),
+        new(
+            "browser_profile_path",
+            "Finds Chromium and Firefox credential/profile artifact path candidates",
+            """(?<![A-Za-z0-9])(?<browser_path>[A-Za-z]:\\Users\\[^\\\x00\r\n]{1,128}\\AppData\\(?:Local\\(?:Google\\Chrome|Microsoft\\Edge|BraveSoftware\\Brave-Browser|Chromium)\\User Data\\(?:Default|Profile [0-9]+)\\(?:Login Data|Local State|History|Cookies|Web Data)|Roaming\\Mozilla\\Firefox\\Profiles\\[^\\\x00\r\n]{1,128}\\(?:logins\.json|key4\.db|places\.sqlite|cookies\.sqlite)))(?![A-Za-z0-9])""",
+            "https://source.chromium.org/chromium/chromium/src/+/main:docs/user_data_dir.md",
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            OutputGroup: "browser_path",
+            BoundedRetryOverlap: 1024
+        ),
+        new(
+            "reg_persistence",
+            "Finds Windows Registry persistence key path candidates for Run, Winlogon, and services",
+            @"(?<![A-Za-z0-9_])(?:(?:HKEY_LOCAL_MACHINE|HKLM|HKEY_CURRENT_USER|HKCU)\\)?(?:(?:SOFTWARE\\Microsoft\\Windows(?: NT)?\\CurrentVersion\\(?:Run|RunOnce|Winlogon))|(?:SYSTEM\\CurrentControlSet\\Services))(?:\\[^\\\x00\r\n\t=;|]{0,127}[^\s\\\x00=;|]){0,8}(?![A-Za-z0-9_])",
+            "https://learn.microsoft.com/windows/win32/setupapi/run-and-runonce-registry-keys",
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 1024
+        ),
+        new(
+            "reg_user_activity",
+            "Finds high-value Windows Registry user-activity key path candidates",
+            @"(?<![A-Za-z0-9_])(?:(?:HKEY_CURRENT_USER|HKCU)\\)?Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\(?:UserAssist|RecentDocs|TypedPaths|RunMRU|ComDlg32|WordWheelQuery|MountPoints2|BagMRU|Bags)(?:\\[^\\\x00\r\n\t=;|]{0,127}[^\s\\\x00=;|]){0,8}(?![A-Za-z0-9_])",
+            "https://learn.microsoft.com/windows/win32/shell/known-folders",
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 1024
+        ),
+        new(
+            "reg_usb",
+            "Finds Windows Registry USBSTOR and mounted-device key path candidates",
+            @"(?<![A-Za-z0-9_])(?:(?:HKEY_LOCAL_MACHINE|HKLM)\\)?SYSTEM\\(?:CurrentControlSet\\Enum\\USBSTOR|MountedDevices)(?:\\[^\\\x00\r\n\t=;|]{0,127}[^\s\\\x00=;|]){0,8}(?![A-Za-z0-9_])",
+            "https://learn.microsoft.com/windows-hardware/drivers/install/identifiers-for-usb-devices",
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 1024
+        ),
+        new(
+            "reg_execution",
+            "Finds Windows Registry execution-evidence key path candidates for AppCompatCache, BAM/DAM, and Amcache",
+            @"(?<![A-Za-z0-9_])(?:(?:HKEY_LOCAL_MACHINE|HKLM)\\)?(?:(?:SYSTEM\\CurrentControlSet\\Control\\Session Manager\\AppCompatCache)|(?:SYSTEM\\CurrentControlSet\\Services\\[BbDd]am\\State\\UserSettings)|(?:SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags)|(?:Amcache\\Root))(?:\\[^\\\x00\r\n\t=;|]{0,127}[^\s\\\x00=;|]){0,8}(?![A-Za-z0-9_])",
+            "https://learn.microsoft.com/windows/win32/devnotes/application-compatibility-database",
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 1024
+        ),
+        new(
+            "reg_network",
+            "Finds Windows Registry network-profile and interface key path candidates",
+            @"(?<![A-Za-z0-9_])(?:(?:HKEY_LOCAL_MACHINE|HKLM)\\)?SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkList\\(?:Profiles|Signatures)(?:\\[^\\\x00\r\n\t=;|]{0,127}[^\s\\\x00=;|]){0,8}(?![A-Za-z0-9_])",
+            "https://learn.microsoft.com/windows/win32/api/netlistmgr/",
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 1024
+        ),
+        new(
+            "reg_system_identity",
+            "Finds Windows Registry host, timezone, and user-profile identity key path candidates",
+            @"(?<![A-Za-z0-9_])(?:(?:HKEY_LOCAL_MACHINE|HKLM)\\)?(?:SYSTEM\\CurrentControlSet\\Control\\(?:ComputerName|TimeZoneInformation)|SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList)(?:\\[^\\\x00\r\n\t=;|]{0,127}[^\s\\\x00=;|]){0,8}(?![A-Za-z0-9_])",
+            "https://learn.microsoft.com/windows/win32/sysinfo/registry-hives",
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 1024
         ),
         new(
             "b64",
@@ -585,6 +726,25 @@ internal static class BuiltInPatternCatalog
                     "ton", "litecoin", "avalanche", "move_address", "near", "bittensor", "hedera",
                     "canton_party", "provenance_scope", "dashcoin2", "aeon", "bytecoin",
                     "dashcoin", "fantomcoin", "sumokoin",
+                ],
+                ["pii"] =
+                [
+                    "email", "usPhone", "intlPhone", "ssn", "canadian_sin", "dob",
+                    "cc", "iban", "zip", "vin",
+                ],
+                ["credentials"] =
+                [
+                    "urlUser", "jwt", "credential_assignment", "browser_credential_field",
+                    "bitlocker", "pem_private_key",
+                ],
+                ["browser"] =
+                [
+                    "browser_profile_path", "browser_credential_field",
+                ],
+                ["registry"] =
+                [
+                    "reg_path", "reg_persistence", "reg_user_activity", "reg_usb",
+                    "reg_execution", "reg_network", "reg_system_identity",
                 ],
             }
         );

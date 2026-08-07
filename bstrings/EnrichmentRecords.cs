@@ -94,6 +94,11 @@ internal sealed record EnrichmentRegexMatchRecord
     public string PatternName { get; init; } = string.Empty;
     public string Pattern { get; init; } = string.Empty;
     public string Match { get; init; } = string.Empty;
+    public int MatchStart { get; init; } = -1;
+    public int MatchLength { get; init; }
+    public int MatchLine { get; init; }
+    public int ContextStart { get; init; } = -1;
+    public string? Context { get; init; }
     public string SourceRecordId { get; init; } = string.Empty;
     public string SourceFile { get; init; } = string.Empty;
     public EnrichmentLocation? Location { get; init; }

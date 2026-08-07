@@ -828,8 +828,8 @@ public class SearchCoreTests
     [Fact]
     public void BuiltInPatternCatalog_ContainsExpectedInventory()
     {
-        Assert.Equal(51, BuiltInPatternCatalog.Descriptions.Count);
-        Assert.Equal(51, BuiltInPatternCatalog.Patterns.Count);
+        Assert.Equal(66, BuiltInPatternCatalog.Descriptions.Count);
+        Assert.Equal(66, BuiltInPatternCatalog.Patterns.Count);
         Assert.Equal(
             BuiltInPatternCatalog.Descriptions.Keys.OrderBy(key => key),
             BuiltInPatternCatalog.Patterns.Keys.OrderBy(key => key)
@@ -1306,6 +1306,26 @@ public class SearchCoreTests
         Assert.Equal(2, chunks[1].BoundaryCrossingOffset);
         Assert.True(chunks[1].SuppressLeadingFragment);
         Assert.False(chunks[1].SuppressTrailingFragment);
+    }
+
+    [Theory]
+    [InlineData("pii")]
+    [InlineData("credentials")]
+    [InlineData("browser")]
+    [InlineData("registry")]
+    public void ParseRegexPatternsWithNames_ExpandsForensicGroups(string groupName)
+    {
+        var patterns = SearchCore.ParseRegexPatternsWithNames(
+            groupName,
+            BuiltInPatternCatalog.Patterns,
+            BuiltInPatternCatalog.Groups
+        );
+
+        Assert.Equal(BuiltInPatternCatalog.Groups[groupName].Count, patterns.Count);
+        Assert.All(
+            BuiltInPatternCatalog.Groups[groupName],
+            member => Assert.Contains(patterns, pattern => pattern.name == member)
+        );
     }
 
     [Fact]
