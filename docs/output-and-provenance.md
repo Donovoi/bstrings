@@ -1,6 +1,14 @@
 # Output, completion, and provenance
 
-The normal complete workflow writes a result set from one command:
+Output availability depends on the installed release channel. The v1.9.4 core
+produces the current native-only JSONL, TSV, and histogram report set when the
+optional enrichment stages are disabled. The complete v1.9.2 quality kit adds
+FLOSS, OCR, language, and translation records but predates the v1.9.4 TSV and
+histogram projection. No published package currently produces both in one run.
+See [download and installation](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md).
+
+With a complete version-matched quality bundle, the full enrichment workflow
+writes a result set from one command:
 
 ```powershell
 bstrings.exe analyze -d carved-files --full -o results
@@ -79,7 +87,8 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-Every completed integrated `analyze` run also projects these review files:
+In current source and the v1.9.4 core, every completed integrated `analyze` run
+also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,
   match and bounded context, source path, artifact/browser classification,

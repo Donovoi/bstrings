@@ -19,7 +19,7 @@ output look complete.
   discarding matches.
 
 Plain, unsorted extraction can stream directly to disk. Literal targets are
-compiled once into a .NET 9 multi-string `SearchValues` matcher and applied to
+compiled once into a .NET 10 multi-string `SearchValues` matcher and applied to
 each bounded batch, before global deduplication. Operations that need a complete
 view of the remaining hits—such as sorting and regex workflows outside the
 streaming path—may still need more memory.
@@ -64,10 +64,14 @@ deadline, the input is replayed from the beginning with the non-backtracking
 engine, so the output is complete and contains no retry duplicates. Longer
 strings go directly to the non-backtracking engine.
 
-The catalog contains 33 patterns. The 2026 review added `cve`,
-`pem_private_key`, `named_pipe`, `onion_v3`, `ethereum`, and `sha256`, and
-tightened boundaries in many older patterns. Details and primary sources are in
-[the regex review](docs/regex-pattern-research-2026-07.md).
+The catalog contains 66 patterns. The first 2026 review added `cve`,
+`pem_private_key`, `named_pipe`, `onion_v3`, `ethereum`, and `sha256`, then the
+wallet review and forensic-reporting follow-up expanded coverage for additional
+crypto networks, credentials, tokens, PII, browser artifacts, and registry
+analysis leads. Details, primary sources, validators, and historical counts are
+in [the regex review](docs/regex-pattern-research-2026-07.md),
+[crypto coverage](docs/crypto-address-coverage-2026-08.md), and
+[forensic reporting](docs/forensic-reporting-2026-08.md).
 
 ## RAPIDS is optional and narrow by design
 

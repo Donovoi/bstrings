@@ -3,9 +3,11 @@
 Date: 4 August 2026
 
 Scope note: this report preserves the original 33-pattern review and its exact
-benchmark totals. The catalog was subsequently expanded to 51 patterns. See the
-[top-50 crypto address coverage review](crypto-address-coverage-2026-08.md) for
-the 18 additions, their validators, current research, and new test evidence.
+benchmark totals. The catalog was subsequently expanded first to 51 patterns
+and then to 66 in v1.9.4. See the
+[top-50 crypto address coverage review](crypto-address-coverage-2026-08.md) and
+[forensic reporting review](forensic-reporting-2026-08.md) for the later
+additions, validators, research, and test evidence.
 
 ## Short version
 

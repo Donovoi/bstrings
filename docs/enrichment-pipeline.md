@@ -1,5 +1,12 @@
 # Enrichment pipeline
 
+This document describes the integrated workflow in current source. The latest
+published package containing every enrichment runtime and model is the v1.9.2
+quality kit; the v1.9.4 release contains the newer core/reporting code but not
+the external enrichment assets. No published package currently contains both.
+See [download and installation](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md) before choosing a
+command, and never combine assets from the two versions.
+
 The integrated workflow finds useful text through several complementary paths,
 then applies one pattern catalog without losing where each string came from:
 
@@ -15,20 +22,24 @@ input inventory and SHA-256 identity
   -> completion and provenance validation
 ```
 
-The normal examiner interface is one command:
+When a complete version-matched quality bundle is installed, the examiner
+interface is one command:
 
 ```powershell
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete bundle contains every worker, runtime, model, and dependency. It
+The complete v1.9.2 bundle contains every worker, runtime, model, and dependency
+published for that version. It
 does not ask the user to install or invoke Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
 [RapidOCR](https://github.com/RapidAI/RapidOCR), or
 [llama.cpp](https://github.com/ggml-org/llama.cpp) separately. It downloads
 nothing during examination.
 
-`--full` means every bstrings stage. It does not parse a filesystem or carve
+`--full` means every bstrings stage available in the installed version. It does
+not upgrade an older bundle or import features from another channel. It also
+does not parse a filesystem or carve
 embedded files from a raw disk or memory image. Mount or carve the image first
 when filesystem-level or embedded-executable/document coverage is required.
 The direct scanner can search raw image bytes, but FLOSS requires a complete

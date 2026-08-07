@@ -1,5 +1,10 @@
 # OCR and document analysis
 
+OCR is currently distributed in the complete v1.9.2 quality kit, not in the
+v1.9.4 core ZIP. The commands in this guide require a verified, version-matched
+quality bundle. See [download and installation](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md); do not
+copy v1.9.2 OCR assets into a v1.9.4 core directory.
+
 The integrated OCR stage turns text from supported images and PDFs into normal
 bstrings child records. Those records retain source hashes, page/frame numbers,
 coordinates, confidence, render identity, engine/model identity, and execution
@@ -11,8 +16,8 @@ manifest-covered component and is not a separate user command.
 
 ## Use it
 
-`--full` enables OCR in automatic mode and asks the verified bundle to select a
-provider:
+In the v1.9.2 quality kit, `--full` enables OCR in automatic mode and asks the
+verified bundle to select a provider:
 
 ```powershell
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\full

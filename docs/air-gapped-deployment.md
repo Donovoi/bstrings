@@ -1,12 +1,18 @@
 # Air-gapped deployment
 
-The complete Windows x64 kit built from current source is prepared on a
-connected staging machine, verified, then copied as a directory to the
+The latest published complete Windows x64 quality kit is v1.9.2. It is prepared
+on a connected staging machine, verified, then copied as a directory to the
 disconnected workstation. During an examination, the user runs only the root
 `bstrings.exe`: no package manager, Python command, model hub, service
 installation, or network access is needed.
 PowerShell is only the shell displaying the examples below; normal users do not
 run a Python script or package-manager command.
+
+The v1.9.4 release is a separate core-only channel with newer backend,
+reporting, and pattern features but without the enrichment runtimes and models.
+No complete v1.9.4 quality kit is currently published. See
+[download and installation](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md) for the exact feature
+boundary, and do not mix files or manifests between versions.
 
 The conservative supported baseline is Windows 11 x64 24H2 or newer, following
 Microsoft's [.NET supported-Windows table](https://learn.microsoft.com/en-us/dotnet/core/install/windows).
@@ -20,10 +26,11 @@ On a connected staging machine, start in the directory where you want
 at least 30 GiB free on the volume holding its install and cache. It installs
 the complete quality profile.
 
-Use the [pinned, checksum-verified bootstrap](../README.md#get-started) for
-`Install-BstringsQuality.ps1`. The installer handles the downloads, resumable
-cache, assembly, and final strict verification. A failed run keeps verified
-cache data for the next attempt; a successful default run removes its
+Use the [pinned, checksum-verified v1.9.2
+bootstrap](https://github.com/Donovoi/bstrings/blob/v1.9.2/README.md#get-started)
+for `Install-BstringsQuality.ps1`. The installer handles the downloads,
+resumable cache, assembly, and final strict verification. A failed run keeps
+verified cache data for the next attempt; a successful default run removes its
 temporary cache.
 
 ```powershell
@@ -51,9 +58,11 @@ On the disconnected workstation:
 ```
 
 `bundle verify` rejects a missing, extra, linked, resized, or SHA-256-mismatched
-file. `analyze --full` runs native extraction, executable recovery, OCR,
-language assessment, local translation, and every built-in pattern. A requested
-stage fails instead of being silently skipped.
+file. In the v1.9.2 quality kit, `analyze --full` runs native extraction,
+executable recovery, OCR, language assessment, local translation, and every
+built-in pattern published in that version. A requested stage fails instead of
+being silently skipped. The command does not add v1.9.4 reports or patterns to
+the older installation.
 
 `--full` does not parse filesystems or carve embedded files from a raw disk or
 memory image. Mount or carve an image with an appropriate forensic tool when

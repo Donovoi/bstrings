@@ -1,5 +1,11 @@
 # Magika CLI in the offline bundle
 
+Distribution status: this reviewed Magika payload is included in the complete
+v1.9.2 quality kit. It is not included in the v1.9.4 core ZIP. Examiners should
+use the version-matched installer in the
+[download guide](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md),
+not copy the runtime into another release.
+
 The complete offline bundle includes the reviewed
 [Magika CLI 1.1.0](https://github.com/google/magika/releases/tag/cli%2Fv1.1.0)
 Windows x64 executable and its app-local DirectML 1.15.4 runtime. An end user

@@ -12,6 +12,21 @@ The project uses `MAJOR.MINOR.PATCH`:
 - bump `MINOR` for a compatible feature; and
 - bump `MAJOR` for a breaking change.
 
+## Current published channels
+
+The latest automatic Windows core is v1.9.4. The latest complete
+quality/offline release is v1.9.2. These are separate version-bound products,
+not packs that can be combined. The core contains current native extraction,
+backend selection, patterns, and reports; the quality release contains the
+older version's complete FLOSS, OCR, language, and translation bundle. See
+[download and installation](docs/download-and-install.md) for the user-facing
+feature matrix.
+
+Documentation-only changes after a release may clarify this boundary on
+`master`, but they do not mutate an existing tag or its archived ZIP. A new
+version and successful build are required to publish a replacement core asset;
+a new full quality release additionally requires all offline acceptance gates.
+
 ## Change the version
 
 The helper updates the project file locally:

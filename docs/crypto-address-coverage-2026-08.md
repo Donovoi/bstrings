@@ -1,9 +1,16 @@
 # Crypto address coverage review — 4 August 2026
 
+Historical scope note: this review records the 51-pattern catalog as it existed
+on 4 August. The v1.9.4 forensic-reporting follow-up expanded the catalog to 66
+patterns; the measurements and top-50 mapping below intentionally remain tied
+to their dated 51-pattern corpus. See
+[forensic reporting](forensic-reporting-2026-08.md) for the later additions.
+
 ## Result
 
-The built-in catalog now has 51 patterns, including a 27-pattern `wallets`
-group. Eighteen new address or on-ledger identifier families were added after
+At the time of this review, the built-in catalog had 51 patterns, including a
+27-pattern `wallets` group. Eighteen new address or on-ledger identifier
+families were added after
 mapping the current market-cap top 50 to the networks that actually serialize
 their accounts and assets. This is deliberately not “one regex per token”:
 USDT, USDC, DAI, SHIB, PAXG, and most other tokens use the address format of

@@ -1,8 +1,15 @@
 # Offline release maintenance
 
 This guide is for maintainers of the Windows x64 release. Examiners should use
+[download and installation](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md) and
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
+
+Current publication status: v1.9.4 is the automatic Windows core release, while
+v1.9.2 remains the latest fully gated quality/offline release. The sections
+below intentionally preserve the v1.9.2 asset contract until a newer full
+quality release is prepared and accepted. Do not relabel those assets as
+v1.9.4 or combine them with the v1.9.4 core.
 
 ## v1.9.2 release process and asset set
 

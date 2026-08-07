@@ -1,5 +1,11 @@
 # Offline translation selection gate — 2026-08-04, updated 2026-08-06
 
+Distribution status: the accepted translation profiles are published through
+the complete v1.9.2 quality channel. They are not included in the v1.9.4 core
+ZIP. This document preserves the dated selection evidence; current acquisition
+instructions are in the
+[download guide](https://github.com/Donovoi/bstrings/blob/master/docs/download-and-install.md).
+
 This is a developer/research reproduction record. Examiners normally use the
 integrated `bstrings.exe analyze -d carved-files --full -o results` workflow;
 they do not need to invoke Python or the benchmark runner. A raw image must be
