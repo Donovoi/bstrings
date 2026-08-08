@@ -48,7 +48,7 @@ failed or cancelled run; retain it for diagnosis and choose a new output path.
 - automatic Magika-routed FLOSS recovery;
 - automatic PDF text extraction and OCR;
 - adaptive language detection and high-recall translation selection; and
-- offline translation with the installed profile.
+- offline translation with the single installed 7B Q8_0 quality profile.
 
 An explicit stage choice overrides the corresponding full default. For
 example, this keeps reporting and the complete pattern catalogue but disables
@@ -119,6 +119,7 @@ Long-running user operations report percentage completion:
 
 - `Progress: analysis:` is the overall planned-stage fraction;
 - native extraction reports chunks and strings;
+- Magika/FLOSS recovery and OCR report completed inventory files;
 - language triage and translation filtering report bytes;
 - offline translation reports completed candidate records; and
 - downloads, pack hashing, assembly, and bundle verification report bytes or

@@ -3,7 +3,7 @@
 The application version lives in `bstrings/bstrings.csproj`:
 
 ```xml
-<Version>1.9.9</Version>
+<Version>1.9.10</Version>
 ```
 
 The project uses `MAJOR.MINOR.PATCH`:
@@ -14,10 +14,10 @@ The project uses `MAJOR.MINOR.PATCH`:
 
 ## Current release
 
-v1.9.9 is the complete Windows x64 quality/offline release. Its release assets
+v1.9.10 is the complete Windows x64 quality/offline release. Its release assets
 contain the current core plus the version-matched installer, offline base,
-profile manifests, licences, and trust metadata needed to assemble and verify
-every advertised profile. See
+quality manifest, licence, and trust metadata needed to assemble and verify the
+single advertised Full profile. See
 [download and installation](docs/download-and-install.md) for the user-facing
 feature matrix.
 
@@ -63,7 +63,7 @@ The workflow additionally checks Rust formatting/lints/tests, Python
 lint/compilation/tests, PowerShell syntax, third-party inventories, the
 self-contained publish, the quality installer under Windows PowerShell 5.1 and
 PowerShell 7, and the integrated offline smoke. A manual dispatch or release
-tag also builds the complete CPU/Q4 archive, revalidates its warmed
+tag also builds the complete CPU/7B-Q8 archive, revalidates its warmed
 cache without network fallback, enforces the archive-size/checksum boundary,
 extracts the exact ZIP, verifies its manifest, and runs the CPU translation and
 FLOSS recovery smokes. The exact procedure is in
@@ -98,10 +98,10 @@ publishes:
 - `Install-BstringsQuality.ps1`;
 - `bstrings-win-x64.zip`;
 - `bstrings-win-x64-offline-base.zip`;
-- `airgap-config-{quality,balanced,compact}.json`;
-- `airgap-manifest-{quality,balanced,compact}.json`;
-- `Hy-MT2-Apache-2.0-{quality,balanced,compact}.txt`;
-- `bundle-packs-{quality,balanced,compact}.json`;
+- `airgap-config-quality.json`;
+- `airgap-manifest-quality.json`;
+- `Hy-MT2-Apache-2.0-quality.txt`;
+- `bundle-packs-quality.json`;
 - `SHA256SUMS.txt`, which covers the installer and every other public asset.
 
 The full workflow separately retains `offline-profile-acceptance.json` as an
@@ -110,17 +110,17 @@ tagged build, but it is not a public Release download.
 
 After the automatic channel creates the tested version tag and core draft,
 manually dispatch `Build and test` with that tag as the selected ref. The
-tag-ref dispatch rebuilds from the same commit, runs the compact bundle and
-all-profile acceptance gates, replaces the preliminary draft assets, adds this
+tag-ref dispatch rebuilds from the same commit, runs the complete quality bundle
+and its acceptance gates, replaces the preliminary draft assets, adds this
 full asset set, and publishes the draft exactly once. GitHub then makes the tag
 and assets immutable. Dispatching against a branch cannot publish a full
 release.
 
-For v1.9.9 the complete release body is
-[`docs/releases/v1.9.9.md`](docs/releases/v1.9.9.md). Keep historical release
+For v1.9.10 the complete release body is
+[`docs/releases/v1.9.10.md`](docs/releases/v1.9.10.md). Keep historical release
 documents unchanged. Before promoting a version to the full quality/offline
 asset set, update its installer pin, documentation inventory, human release
-body, and all profile-specific acceptance evidence.
+body, and the quality-profile acceptance evidence.
 
 GitHub Releases are the product channel. Keep only usable program/download,
 installation, license, checksum, manifest, and release-verification assets

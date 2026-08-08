@@ -5,13 +5,13 @@ This guide is for maintainers of the Windows x64 release. Examiners should use
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-Current publication status: v1.9.9 is the fully gated Windows x64
+Current publication status: v1.9.10 is the fully gated Windows x64
 quality/offline release. Its automatic core artifact and complete asset set are
 bound to the same tag and commit. Do not combine them with another version.
 
-## v1.9.9 release process and asset set
+## v1.9.10 release process and asset set
 
-The exact v1.9.9 project-version tag publishes the asset set below after every
+The exact v1.9.10 project-version tag publishes the asset set below after every
 required gate passes. Do not combine a core ZIP with manifests from another
 version.
 
@@ -19,17 +19,17 @@ version.
 - `bstrings-win-x64.zip`, the self-contained core scanner and split-pack
   acquisition client;
 - `bstrings-win-x64-offline-base.zip`, the shared application/runtime/OCR base;
-- `airgap-config-{quality,balanced,compact}.json`;
-- `airgap-manifest-{quality,balanced,compact}.json`;
-- `Hy-MT2-Apache-2.0-{quality,balanced,compact}.txt`;
-- `bundle-packs-{quality,balanced,compact}.json`;
+- `airgap-config-quality.json`;
+- `airgap-manifest-quality.json`;
+- `Hy-MT2-Apache-2.0-quality.txt`;
+- `bundle-packs-quality.json`;
 - `SHA256SUMS.txt`.
 
 The tag- and commit-bound `offline-profile-acceptance.json` remains an internal
 Actions gate artifact. The release job validates it, but does not publish it as
 a user download.
 
-The workflow uses [`releases/v1.9.9.md`](releases/v1.9.9.md) as the human
+The workflow uses [`releases/v1.9.10.md`](releases/v1.9.10.md) as the human
 release body. Review it against the final filenames, profile identities, and
 known boundaries before tagging.
 
@@ -38,8 +38,8 @@ known boundaries before tagging.
 | Quality installer | Yes | Safely acquires and verifies the complete quality profile in one operation |
 | Core ZIP | Yes | Scanner and acquisition client |
 | Shared base ZIP | Yes | Common runtimes, OCR, recovery tools, and manifests |
-| Profile files/trust manifest | Yes | Select and authenticate one translation profile |
-| Profile acceptance evidence | No; internal Actions artifact | Blocks publication unless every advertised profile passes |
+| Quality files/trust manifest | Yes | Select and authenticate the one translation model |
+| Profile acceptance evidence | No; internal Actions artifact | Blocks publication unless the quality profile passes |
 | Immutable translation model | No; acquired from its pinned official source | Large external pack named by the trust manifest |
 | Complete offline kit | No; assembled locally | Directory transferred to the disconnected host |
 
@@ -48,7 +48,7 @@ known boundaries before tagging.
 `Scripts/Install-BstringsQuality.ps1` is published unchanged as
 `Install-BstringsQuality.ps1`. `SHA256SUMS.txt` must contain exactly one
 lowercase SHA-256 row for it alongside every other public release asset. The
-README bootstrap uses GitHub's exact-tag API for `v1.9.9`, rejects a draft or
+README bootstrap uses GitHub's exact-tag API for `v1.9.10`, rejects a draft or
 prerelease, downloads the installer to a unique physical temporary file, and
 verifies its API digest before replacing an existing physical installer and
 launching `powershell.exe -File`. Failed authentication preserves the previous
@@ -58,7 +58,7 @@ response piped into `Invoke-Expression`.
 
 The installer is deliberately narrow:
 
-- default release tag: `v1.9.9`;
+- default release tag: `v1.9.10`;
 - default destination: `.\bstrings-quality` under the caller's current
   directory;
 - quality profile only;
@@ -83,8 +83,8 @@ The shared base must remain smaller than 2,000,000,000 bytes. This conservative
 project ceiling stays below GitHub's strict 2 GiB per-release-file limit,
 documented in [About releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases#about-releases).
 
-Large translation models are immutable external file packs. Each profile trust
-manifest records the official HTTPS URL, exact byte length, SHA-256, target
+The translation model is an immutable external file pack. Its trust manifest
+records the official HTTPS URL, exact byte length, SHA-256, target
 path, profile configuration, canonical license, shared-base identity, and final
 air-gap manifest. The integrated `bstrings.exe bundle acquire` command resumes,
 verifies, caches, assembles, and verifies these parts. This keeps every GitHub
@@ -114,16 +114,12 @@ plan. It uses profile `windows-x64-offline-v2`, defaults to `quality`, and pins:
 | FLOSS | Official [v3.1.1](https://github.com/mandiant/flare-floss/releases/tag/v3.1.1) standalone Windows ZIP |
 | llama.cpp | Source ZIP for tag `b10248`, commit `e8e06f78e253a98a739b8ae4c6b661b357249ce4` |
 | Quality translation | Hy-MT2-7B Q8_0, revision `707464294cf5b2a5a69982855020858ed58cf1d1` |
-| Balanced translation | Hy-MT2-1.8B Q8_0, revision `1cd5208700acedef4ef93019b6cfc148b8522d45` |
-| Compact translation | Hy-MT2-1.8B Q4_K_M, the same immutable 1.8B revision |
 
 Exact model identities are:
 
 | Profile | Filename | Bytes | SHA-256 |
 | --- | --- | ---: | --- |
 | `quality` | `HY-MT2-7B-Q8_0.gguf` | 7,981,928,896 | `58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0` |
-| `balanced` | `Hy-MT2-1.8B-Q8_0.gguf` | 1,908,528,192 | `5c3fe0b1408a5ceb0143184ef247b11b579c525f4b02b060e6c851bb76fef1a4` |
-| `compact` | `Hy-MT2-1.8B-Q4_K_M.gguf` | 1,133,080,448 | `dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699` |
 
 Filename case matters: the official 7B repository uses uppercase
 `HY-MT2-7B-Q8_0.gguf`. The lock uses immutable model revisions and a separately
@@ -165,15 +161,14 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
 [llama.cpp](https://github.com/ggml-org/llama.cpp),
-[Hy-MT2 7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF) and
-[Hy-MT2 1.8B](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF),
+[Hy-MT2 7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF),
 [RapidOCR](https://github.com/RapidAI/RapidOCR),
 [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), and
 [ONNX Runtime](https://github.com/microsoft/onnxruntime).
 
 ## Build and test the self-contained core
 
-The v1.9.9 release process uses
+The v1.9.10 release process uses
 [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
 repository-pinned Rust toolchain:
 
@@ -297,8 +292,9 @@ On a connected Windows release host:
   -TranslationProfile quality
 ```
 
-Use `balanced` or `compact` to build the other model profile. The output
-directory must not already exist. The working directory retains exact verified
+`quality` is the only accepted value; the option remains explicit so generated
+configuration and acceptance records retain a stable profile identity. The
+output directory must not already exist. The working directory retains exact verified
 downloads for resumable CI caching. `-KeepStaging` retains extracted temporary
 inputs for diagnostics and is not the release default.
 
@@ -310,9 +306,9 @@ can be passed:
 ```powershell
 .\tools\airgap\Build-CompleteOfflineBundle.ps1 `
   -PublishedBstringsDirectory .\publish\win-x64 `
-  -OutputDirectory .\publish\offline-compact `
+  -OutputDirectory .\publish\offline-quality `
   -WorkingDirectory D:\bstrings-release-staging `
-  -TranslationProfile compact `
+  -TranslationProfile quality `
   -VisualCppRuntimeDirectory 'C:\approved-redist\x64\Microsoft.VC14x.CRT'
 ```
 
@@ -373,13 +369,11 @@ pre-package directory is insufficient.
 
 ## Create split release packs
 
-CI builds a complete compact profile as the template because it is the smallest
-model that can be exercised economically on the hosted runner. After the full
-smokes pass:
+CI builds the complete quality profile. After the full smokes pass:
 
 ```powershell
 .\tools\airgap\New-BundlePackRelease.ps1 `
-  -BundleDirectory .\publish\offline-compact `
+  -BundleDirectory .\publish\offline-quality `
   -OutputDirectory .\release-packs `
   -CoreReleaseArchive .\bstrings-win-x64.zip `
   -InstallerScript .\Scripts\Install-BstringsQuality.ps1 `
@@ -391,21 +385,19 @@ The script:
 1. verifies the complete input bundle with its own root executable;
 2. creates one deterministic no-compression shared-base ZIP excluding the
    selected configuration, canonical model license, final manifest, and all
-   profile model paths;
-3. generates exact configuration, canonical license, final manifest, and trust
-   manifest files for quality, balanced, and compact;
+   translation-model path;
+3. generates the exact quality configuration, canonical license, final
+   manifest, and trust manifest;
 4. points each model file pack to its immutable official URL and exact hash;
 5. stages the exact quality installer and writes `SHA256SUMS.txt` covering the
    installer, core ZIP, and every split-pack asset; and
 6. locally assembles and verifies the template profile unless
    `-SkipAssemblyTest` is deliberately supplied.
 
-The local assembly test must remain enabled in release CI. Because the CI
-template is compact, that test proves the shared layout plus compact profile.
-It is not sufficient evidence for the other two profiles. The tag-only profile
+The local assembly test must remain enabled in release CI. The tag-only profile
 acceptance job separately acquires, assembles, verifies, and translation-smokes
-quality, balanced, and compact from their generated trust manifests before the
-release job can start.
+the quality profile from its generated trust manifest before the release job
+can start.
 
 The pack generator refuses output inside the verified input bundle and leaves
 an `.incomplete` marker if any generation, checksum, or local-assembly step
@@ -424,11 +416,11 @@ PowerShell parser checks, the quality-installer suite under Windows PowerShell
 dispatches additionally:
 
 - cache exact ordinary and OCR downloads keyed by both lock files;
-- build a compact complete bundle from connected inputs;
+- build the complete quality bundle from connected inputs;
 - revalidate the warmed cache with no network fallback;
 - run real translation and CPU OCR smokes under dead external proxies;
 - generate and checksum split packs;
-- locally assemble/verify the compact pack; and
+- locally assemble/verify the quality pack; and
 - retain the generated artifacts for the next gate.
 
 For a complete release, first merge only after the `master` build succeeds.
@@ -451,14 +443,13 @@ It must also have at least 30,000,000,000 free bytes and enough CPU/RAM for the
 Actions and the immutable official model URLs. The job uses the core and split
 packs from the same workflow run, preloads the release-owned packs, and runs
 `bundle acquire`, assembled `bundle verify`, and the full offline translation
-smoke for quality, balanced, and compact. Profiles are processed sequentially
-so verified temporary model/bundle copies can be removed within a path-checked
-per-run work directory.
+smoke for the quality profile. Verified temporary model/bundle copies are
+removed within a path-checked per-run work directory.
 
-Only after all three pass does the job write and upload
+Only after it passes does the job write and upload
 `offline-profile-acceptance.json` as an internal workflow artifact. It records
 the tag, commit, build run and positive acceptance attempt, core archive
-identity, exact release-pack inventory, checksum-file identity, and each
+identity, exact release-pack inventory, checksum-file identity, and the
 profile's trust manifest, final manifest, configuration, license, model ID,
 revision, size, and hash. The release job depends on both `build` and
 `profile-acceptance`. Before publishing,
@@ -481,9 +472,8 @@ must be positive but is intentionally not required to equal the release job's
 current attempt: GitHub can rerun only a failed downstream release job while
 safely reusing immutable acceptance evidence from the same workflow run.
 A missing runner, failed download, failed hash, failed assembly, failed strict
-verification, or failed translation smoke blocks publication. This all-profile
-gate runs for every version tag, so quality and balanced model/revision changes
-cannot reach a release on compact-only evidence.
+verification, or failed translation smoke blocks publication. This exact
+quality-profile gate runs for every version tag.
 
 Release artifacts use fixed names and become immutable only after the complete
 draft is published. Never publish the preliminary core draft: GitHub does not
@@ -499,8 +489,8 @@ its evidence.
 DirectML/hybrid acceptance is intentionally separate. Manually dispatch
 `.github/workflows/ocr-hardware-acceptance.yml` with the source build run ID.
 It targets only `[self-hosted, Windows, X64, bstrings-directml]`, downloads the
-core and split-pack artifacts from that run, preloads the release-owned compact
-packs, acquires the immutable compact model through the trust manifest,
+core and split-pack artifacts from that run, preloads the release-owned quality
+packs, acquires the immutable 7B Q8 model through the trust manifest,
 assembles/verifies the exact bundle, and then requires full CPU, DirectML, and
 hybrid image/PDF inference. It uploads a small synthetic hardware-acceptance
 record containing the source run ID, manifest/lock hashes, resolved providers,
@@ -516,7 +506,7 @@ Evidence types are not interchangeable:
 
 | Evidence | What it establishes |
 | --- | --- |
-| Internal `offline-profile-acceptance.json` artifact | Per-tag acquisition, assembly, strict verification, and translation smoke for every advertised profile; never a public Release asset |
+| Internal `offline-profile-acceptance.json` artifact | Per-tag acquisition, assembly, strict verification, and translation smoke for the quality profile; never a public Release asset |
 | OCR hardware acceptance artifact | CPU/DirectML/hybrid packaged-path behavior for one source build and named host/driver |
 | Local v3 SROIE CPU calibration | Frozen-candidate printed-receipt quality on the selected training corpus |
 | Internal SROIE terminal and post-hoc records | The consumed one-shot disposition and later diagnostic findings; neither establishes independent acceptance |
@@ -565,7 +555,7 @@ The complete builder and verifier enforce component-owned overlays:
 - llama.cpp build provenance and notice closure;
 - OCR's two Python/ONNX Runtime closures, models/dictionary, inventories,
   notices, and licenses;
-- all three Hy-MT2 profile licenses plus the selected canonical license; and
+- the Hy-MT2 7B profile and canonical license; and
 - exact .NET/Rust/VC runtime attribution.
 
 Read [Magika redistribution](magika-cli-redistribution.md) and

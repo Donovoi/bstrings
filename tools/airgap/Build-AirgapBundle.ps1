@@ -24,7 +24,7 @@ param(
     [string]$OcrComponentsDirectory,
     [Parameter(Mandatory = $true)]
     [string]$TranslationModelRevision,
-    [ValidateSet('quality', 'balanced', 'compact')]
+    [ValidateSet('quality')]
     [string]$TranslationProfile = 'quality',
     [ValidateSet('cpu', 'directml', 'hybrid')]
     [string[]]$OcrSelfTestProviders = @('cpu'),
@@ -272,9 +272,9 @@ $flossVerifyScript = Resolve-ChildFile `
 $translationProfileNames = @($componentLock.translationProfiles.PSObject.Properties.Name)
 if (
     [string]$componentLock.defaultTranslationProfile -ne 'quality' -or
-    (@($translationProfileNames | Sort-Object) -join '|') -cne 'balanced|compact|quality'
+    (@($translationProfileNames | Sort-Object) -join '|') -cne 'quality'
 ) {
-    throw 'The offline component lock must define quality, balanced, and compact translation profiles with quality as default.'
+    throw 'The offline component lock must define only the highest-quality translation profile.'
 }
 $modelLock = $componentLock.translationProfiles.$TranslationProfile
 if ($null -eq $modelLock) {
@@ -859,6 +859,7 @@ $bundleDocumentNames = @(
     'air-gapped-deployment.md',
     'command-reference.md',
     'crypto-address-coverage-2026-08.md',
+    'document-reading-research-2026-08.md',
     'download-and-install.md',
     'enrichment-pipeline.md',
     'floss-standalone-redistribution.md',
@@ -878,7 +879,7 @@ $bundleBenchmarkResultNames = @(
     'forensic-report-projection-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.9.md'
+    'v1.9.10.md'
 )
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `
@@ -1088,8 +1089,6 @@ try {
     }
     $translationLicenseDestinations = [ordered]@{
         quality = 'Hy-MT2-7B-Apache-2.0.txt'
-        balanced = 'Hy-MT2-1.8B-Apache-2.0.txt'
-        compact = 'Hy-MT2-1.8B-Apache-2.0.txt'
     }
     $copiedTranslationLicenses = [Collections.Generic.HashSet[string]]::new(
         [StringComparer]::OrdinalIgnoreCase

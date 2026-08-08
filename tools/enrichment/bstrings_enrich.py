@@ -36,7 +36,7 @@ MAX_JSON_DEPTH = 256
 JSON_READ_CHUNK_BYTES = 64 * 1024
 JSON_STRING_SPECIAL = re.compile(rb'[\x00-\x1f"\\]')
 DEFAULT_MODEL_ID = "google/madlad400-3b-mt"
-DEFAULT_LLAMA_MODEL_ID = "tencent/Hy-MT2-1.8B-GGUF"
+DEFAULT_LLAMA_MODEL_ID = "tencent/Hy-MT2-7B-GGUF"
 LANGUAGE_NAMES = {
     "ar": "Arabic",
     "bn": "Bengali",
@@ -2178,6 +2178,12 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=0,
         help="Expected translation-candidate records for measured percentage reporting",
     )
+    parser.add_argument(
+        "--progress-total-files",
+        type=int,
+        default=0,
+        help="Expected recovery input files for measured percentage reporting",
+    )
     return parser.parse_args(argv)
 
 
@@ -2253,6 +2259,10 @@ def validate_arguments(args: argparse.Namespace) -> None:
         raise EnrichmentError("--progress-total-records cannot be negative")
     if args.progress_total_records > 0 and args.input_jsonl is None:
         raise EnrichmentError("--progress-total-records requires --input-jsonl")
+    if args.progress_total_files < 0:
+        raise EnrichmentError("--progress-total-files cannot be negative")
+    if args.progress_total_files > 0 and args.input_jsonl is not None:
+        raise EnrichmentError("--progress-total-files cannot be used with --input-jsonl")
     if args.translation_strict_determinism and args.translation_parallelism > 1:
         raise EnrichmentError(
             "--translation-strict-determinism cannot be combined with parallelism above 1"
@@ -2409,6 +2419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         processed = 0
         skipped = 0
         translated = 0
+        recovery_completed = 0
         last_progress_percent = -1.0
         last_progress_time = 0.0
 
@@ -2438,8 +2449,34 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         report_translation_progress(0, force=True)
 
+        def report_recovery_progress(completed: int, *, force: bool = False) -> None:
+            nonlocal last_progress_percent, last_progress_time
+            total = args.progress_total_files
+            if total <= 0:
+                return
+            bounded = min(max(completed, 0), total)
+            percent = bounded * 100.0 / total
+            now = time.monotonic()
+            if (
+                not force
+                and percent < 100.0
+                and percent - last_progress_percent < 1.0
+                and now - last_progress_time < 5.0
+            ):
+                return
+            print(
+                f"Progress: Magika and FLOSS recovery: {percent:.1f}% "
+                f"({bounded:,}/{total:,} files)",
+                file=sys.stderr,
+                flush=True,
+            )
+            last_progress_percent = percent
+            last_progress_time = now
+
+        report_recovery_progress(0, force=True)
+
         def generate_records() -> Iterable[dict[str, Any]]:
-            nonlocal processed, skipped
+            nonlocal processed, skipped, recovery_completed
             if args.input_jsonl is not None:
                 assert translator is not None
                 yield from translate_normalized_records(
@@ -2471,6 +2508,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         file=sys.stderr,
                     )
                     skipped += 1
+                    recovery_completed += 1
+                    report_recovery_progress(recovery_completed)
                     continue
                 payload = run_floss(
                     floss,
@@ -2491,6 +2530,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if translator is None:
                     yield from records
                     processed += 1
+                    recovery_completed += 1
+                    report_recovery_progress(recovery_completed)
                     continue
 
                 # Combined recovery/translation retains the historical parent-first
@@ -2512,6 +2553,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                     yield from translated_records
                 processed += 1
+                recovery_completed += 1
+                report_recovery_progress(recovery_completed)
+            if args.progress_total_files > 0 and recovery_completed != args.progress_total_files:
+                raise EnrichmentError(
+                    "Recovery inventory count changed: expected "
+                    f"{args.progress_total_files:,} files but processed {recovery_completed:,}"
+                )
 
         def count_unique_records() -> Iterable[dict[str, Any]]:
             nonlocal translated

@@ -28,7 +28,10 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.9](https://github.com/Donovoi/bstrings/releases/tag/v1.9.9).
+[v1.9.10](https://github.com/Donovoi/bstrings/releases/tag/v1.9.10).
+There is one install and one Full profile: the largest, highest-scoring accepted
+Hy-MT2 7B Q8_0 translation model is included instead of asking examiners to
+choose among quality/size tiers.
 Requirements: Windows 11 x64, a connected staging machine, and at least
 **30 GiB free**. Administrator rights are not required.
 
@@ -40,7 +43,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.9'
+  $tag = 'v1.9.10'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -147,7 +150,9 @@ Detailed guidance: [terminal help and command reference](docs/command-reference.
 [download and installation](docs/download-and-install.md),
 [air-gapped deployment](docs/air-gapped-deployment.md),
 [analysis and translation](docs/enrichment-pipeline.md), and
-[outputs and provenance](docs/output-and-provenance.md). The forensic report
+[OCR and document analysis](docs/ocr-and-document-analysis.md),
+[document-reading research and roadmap](docs/document-reading-research-2026-08.md),
+and [outputs and provenance](docs/output-and-provenance.md). The forensic report
 contract and its bulk_extractor/Timeline Explorer design evidence are recorded
 in [forensic reporting](docs/forensic-reporting-2026-08.md).
 

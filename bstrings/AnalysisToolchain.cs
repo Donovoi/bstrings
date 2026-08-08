@@ -46,13 +46,13 @@ internal static class AnalysisToolchainLocator
     private const string OfflineBundleAcquisition =
         "Use the checked Install-BstringsQuality.ps1 asset from the latest GitHub Release "
         + "to install and verify the complete quality kit: "
-        + "https://github.com/Donovoi/bstrings/blob/v1.9.9/README.md#get-started";
+        + "https://github.com/Donovoi/bstrings/blob/v1.9.10/README.md#get-started";
 
     private const string ConfigurationFileName = "airgap-config.json";
     private const string MagikaUrl = "https://github.com/google/magika#command-line-tool";
     private const string FlossUrl = "https://github.com/mandiant/flare-floss/releases";
     private const string LlamaUrl = "https://github.com/ggml-org/llama.cpp/releases";
-    private const string ModelUrl = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF";
+    private const string ModelUrl = "https://huggingface.co/tencent/Hy-MT2-7B-GGUF";
     private const string OcrUrl =
         "https://github.com/Donovoi/bstrings/actions/workflows/dotnet-desktop.yml";
 

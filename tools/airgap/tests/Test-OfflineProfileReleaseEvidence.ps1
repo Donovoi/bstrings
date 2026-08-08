@@ -124,7 +124,7 @@ try {
     $tag = 'v9.9.9-test'
     $commit = '0123456789abcdef0123456789abcdef01234567'
     $runId = '123456789'
-    $profiles = @('quality', 'balanced', 'compact')
+    $profiles = @('quality')
     $componentLockPath = [IO.Path]::GetFullPath(
         (Join-Path $PSScriptRoot '..\offline-components.lock.json')
     )

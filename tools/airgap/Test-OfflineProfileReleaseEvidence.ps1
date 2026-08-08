@@ -281,7 +281,7 @@ if (
     throw 'Offline component lock does not use the exact reviewed release profile.'
 }
 $lockedProfileNames = @($componentLock.translationProfiles.PSObject.Properties.Name)
-if ((@($lockedProfileNames | Sort-Object) -join '|') -cne 'balanced|compact|quality') {
+if ((@($lockedProfileNames | Sort-Object) -join '|') -cne 'quality') {
     throw 'Offline component lock does not contain the exact translation profile set.'
 }
 
@@ -291,7 +291,7 @@ if ([IO.Path]::GetFileName($resolvedEvidence) -cne 'offline-profile-acceptance.j
     throw 'Offline profile acceptance evidence must use its exact internal gate-evidence file name.'
 }
 
-$profiles = @('quality', 'balanced', 'compact')
+$profiles = @('quality')
 $packAssetNames = [Collections.Generic.List[string]]::new()
 $packAssetNames.Add('bstrings-win-x64-offline-base.zip')
 $packAssetNames.Add('Install-BstringsQuality.ps1')
@@ -451,7 +451,7 @@ foreach ($fileName in $packAssetNames) {
 
 $profileRows = @($record.profiles)
 if ($profileRows.Count -ne $profiles.Count) {
-    throw 'Profile-acceptance evidence must contain exactly three profile results.'
+    throw 'Profile-acceptance evidence must contain exactly one quality result.'
 }
 $profileByName = [Collections.Generic.Dictionary[string, object]]::new(
     [StringComparer]::OrdinalIgnoreCase

@@ -49,7 +49,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ inputs.source_run_id }}
 
-      - name: Assemble the exact compact bundle
+      - name: Assemble the exact highest-quality bundle
         id: assemble
         shell: pwsh
         timeout-minutes: 90
@@ -79,17 +79,17 @@ jobs:
 
           $packsRoot = Join-Path $inputRoot 'packs'
           $trustManifest = Get-ChildItem -LiteralPath $packsRoot -Recurse -File `
-            -Filter 'bundle-packs-compact.json'
+            -Filter 'bundle-packs-quality.json'
           if (@($trustManifest).Count -ne 1) {
-            throw 'Expected one compact split-pack trust manifest.'
+            throw 'Expected one quality split-pack trust manifest.'
           }
           $packCache = Join-Path $workRoot 'pack-cache'
           [IO.Directory]::CreateDirectory($packCache) | Out-Null
           $cacheInputs = [ordered]@{
             'bstrings-win-x64-offline-base.zip' = 'base.zip'
-            'airgap-config-compact.json' = 'configuration.file'
-            'Hy-MT2-Apache-2.0-compact.txt' = 'translation-license.file'
-            'airgap-manifest-compact.json' = 'airgap-manifest.file'
+            'airgap-config-quality.json' = 'configuration.file'
+            'Hy-MT2-Apache-2.0-quality.txt' = 'translation-license.file'
+            'airgap-manifest-quality.json' = 'airgap-manifest.file'
           }
           foreach ($sourceName in $cacheInputs.Keys) {
             $source = @(Get-ChildItem -LiteralPath $packsRoot -Recurse -File -Filter $sourceName)
@@ -106,11 +106,11 @@ jobs:
             --cache $packCache `
             --output $bundleRoot
           if ($LASTEXITCODE -ne 0) {
-            throw "Compact bundle acquisition failed with exit code $LASTEXITCODE."
+            throw "Quality bundle acquisition failed with exit code $LASTEXITCODE."
           }
           & (Join-Path $bundleRoot 'bstrings.exe') bundle verify --bundle-root $bundleRoot
           if ($LASTEXITCODE -ne 0) {
-            throw "Assembled compact bundle verification failed with exit code $LASTEXITCODE."
+            throw "Assembled quality bundle verification failed with exit code $LASTEXITCODE."
           }
           "bundle_root=$bundleRoot" >> $env:GITHUB_OUTPUT
           "trust_manifest=$($trustManifest.FullName)" >> $env:GITHUB_OUTPUT

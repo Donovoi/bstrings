@@ -471,6 +471,7 @@ internal static class AnalysisOrchestrator
                             toolchain!,
                             inventoryPath,
                             recoveredPath,
+                            inputFileCount,
                             outputDirectory,
                             logsDirectory,
                             cancellationToken
@@ -536,6 +537,7 @@ internal static class AnalysisOrchestrator
                                 inputManifestPath,
                                 ocrPath,
                                 ocrAssessmentsPath,
+                                inputFileCount,
                                 outputDirectory,
                                 logsDirectory,
                                 cancellationToken
@@ -1028,6 +1030,7 @@ internal static class AnalysisOrchestrator
         AnalysisToolchain toolchain,
         string inventoryPath,
         string outputPath,
+        long totalFiles,
         string workingDirectory,
         string logsDirectory,
         CancellationToken cancellationToken
@@ -1046,6 +1049,8 @@ internal static class AnalysisOrchestrator
         arguments.Add(toolchain.FlossExecutable!);
         arguments.Add("--minimum-length");
         arguments.Add(options.MinimumStringLength.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("--progress-total-files");
+        arguments.Add(totalFiles.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (options.RecoveryMode == ExecutableRecoveryMode.Force)
         {
             arguments.Add("--force-floss");
@@ -1057,7 +1062,8 @@ internal static class AnalysisOrchestrator
             Path.Combine(logsDirectory, "recovery.stdout.log"),
             Path.Combine(logsDirectory, "recovery.stderr.log"),
             OfflineEnvironment(),
-            cancellationToken
+            cancellationToken,
+            static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
         );
     }
 
@@ -1068,6 +1074,7 @@ internal static class AnalysisOrchestrator
         string inputManifestPath,
         string stringsPath,
         string assessmentsPath,
+        long totalFiles,
         string workingDirectory,
         string logsDirectory,
         CancellationToken cancellationToken
@@ -1081,7 +1088,8 @@ internal static class AnalysisOrchestrator
             inventoryPath,
             inputManifestPath,
             stringsPath,
-            assessmentsPath
+            assessmentsPath,
+            totalFiles
         );
 
         await ChildProcessRunner.RunAsync(
@@ -1091,7 +1099,8 @@ internal static class AnalysisOrchestrator
             Path.Combine(logsDirectory, "ocr.stdout.log"),
             Path.Combine(logsDirectory, "ocr.stderr.log"),
             OfflineEnvironment(),
-            cancellationToken
+            cancellationToken,
+            static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
         );
         if (!File.Exists(stringsPath) || !File.Exists(assessmentsPath))
         {
@@ -1195,12 +1204,17 @@ internal static class AnalysisOrchestrator
         string inventoryPath,
         string inputManifestPath,
         string stringsPath,
-        string assessmentsPath
+        string assessmentsPath,
+        long totalFiles
     )
     {
         if (mode is not (OcrWorkflowMode.Auto or OcrWorkflowMode.Force))
         {
             throw new ArgumentOutOfRangeException(nameof(mode));
+        }
+        if (totalFiles < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(totalFiles));
         }
 
         var arguments = OcrPythonPrefix(toolchain);
@@ -1218,6 +1232,8 @@ internal static class AnalysisOrchestrator
         AddOcrThreadsArgument(arguments, threads);
         arguments.Add("--ocr-mode");
         arguments.Add(mode.ToString().ToLowerInvariant());
+        arguments.Add("--progress-total-files");
+        arguments.Add(totalFiles.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return arguments;
     }
 

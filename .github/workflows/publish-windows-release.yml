@@ -183,7 +183,7 @@ jobs:
           Draft Windows x64 release staged from the exact artifact produced by
           the successful master build. The complete tagged release workflow must
           replace these preliminary core/checksum assets with its accepted build,
-          add every offline profile asset, and publish this draft exactly once.
+          add the single highest-quality offline bundle assets, and publish this draft exactly once.
           '@
           & gh release create $env:RELEASE_TAG `
             'release-assets/bstrings-win-x64.zip#Windows x64 self-contained core' `

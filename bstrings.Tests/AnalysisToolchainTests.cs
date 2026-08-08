@@ -186,7 +186,16 @@ public sealed class AnalysisToolchainTests
             }
                 .Concat(identity)
                 .Concat(
-                    ["--provider", "hybrid", "--threads", "7", "--ocr-mode", "force"]
+                    [
+                        "--provider",
+                        "hybrid",
+                        "--threads",
+                        "7",
+                        "--ocr-mode",
+                        "force",
+                        "--progress-total-files",
+                        "123",
+                    ]
                 ),
             AnalysisOrchestrator.BuildOcrAnalysisArguments(
                 toolchain,
@@ -196,7 +205,8 @@ public sealed class AnalysisToolchainTests
                 "inventory.txt",
                 "manifest.jsonl",
                 "strings.jsonl",
-                "assessments.jsonl"
+                "assessments.jsonl",
+                123
             )
         );
     }
@@ -223,7 +233,7 @@ public sealed class AnalysisToolchainTests
                 StringComparison.OrdinalIgnoreCase
             );
             Assert.Contains(
-                "github.com/Donovoi/bstrings/blob/v1.9.9/README.md#get-started",
+                "github.com/Donovoi/bstrings/blob/v1.9.10/README.md#get-started",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );

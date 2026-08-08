@@ -7,7 +7,7 @@ param(
     [string]$WorkingDirectory,
     [string]$ComponentLockPath,
     [string]$OcrComponentLockPath,
-    [ValidateSet('quality', 'balanced', 'compact')]
+    [ValidateSet('quality')]
     [string]$TranslationProfile = 'quality',
     [string]$VisualCppRuntimeDirectory,
     [switch]$DryRun,
@@ -366,8 +366,8 @@ if ([string]$lock.defaultTranslationProfile -ne 'quality') {
     throw 'The offline component lock must select quality as its default translation profile.'
 }
 $translationProfileNames = @($lock.translationProfiles.PSObject.Properties.Name)
-if ((@($translationProfileNames | Sort-Object) -join '|') -cne 'balanced|compact|quality') {
-    throw 'The offline component lock must define exactly quality, balanced, and compact translation profiles.'
+if ((@($translationProfileNames | Sort-Object) -join '|') -cne 'quality') {
+    throw 'The offline component lock must define exactly the quality translation profile.'
 }
 $translationProfileSpecs = @{}
 foreach ($profileName in $translationProfileNames) {

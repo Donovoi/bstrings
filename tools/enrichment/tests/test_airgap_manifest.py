@@ -235,7 +235,7 @@ class AirgapManifestTests(unittest.TestCase):
         script = (repo_root / "tools" / "airgap" / "Invoke-OfflineProfileAcceptance.ps1").read_text(
             encoding="utf-8"
         )
-        profiles_index = script.index("$profiles = @('quality', 'balanced', 'compact')")
+        profiles_index = script.index("$profiles = @('quality')")
         loop_index = script.index("foreach ($profile in $profiles)", profiles_index)
         acquire_index = script.index("& $coreExecutable bundle acquire", loop_index)
         verify_index = script.index("& $bundleExecutable bundle verify", acquire_index)
@@ -340,7 +340,7 @@ class AirgapManifestTests(unittest.TestCase):
             repo_root / "README.md",
             repo_root / "CORE_RELEASE_README.md",
             repo_root / "docs" / "air-gapped-deployment.md",
-            repo_root / "docs" / "releases" / "v1.9.9.md",
+            repo_root / "docs" / "releases" / "v1.9.10.md",
         )
         public_sources = {
             path: path.read_text(encoding="utf-8") for path in public_paths

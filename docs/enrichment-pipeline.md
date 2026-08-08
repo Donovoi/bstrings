@@ -1,7 +1,7 @@
 # Enrichment pipeline
 
 This document describes the integrated workflow in current source and the
-complete v1.9.9 quality release. See
+complete v1.9.10 quality release. See
 [download and installation](download-and-install.md) before choosing a command,
 and never combine assets from different versions.
 
@@ -27,7 +27,7 @@ interface is one command:
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete v1.9.9 bundle contains every worker, runtime, model, and dependency
+The complete v1.9.10 bundle contains every worker, runtime, model, and dependency
 published for that version. It does not ask the user to install or invoke
 Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
@@ -130,7 +130,7 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.9 profile
+page. Images are always OCR inputs when the stage is enabled. The v1.9.10 profile
 defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
 per-path inference smoke test. Those smokes do not establish cross-provider
 parity or corpus-level quality. CUDA OCR is not part of the profile. See
@@ -171,31 +171,29 @@ hard cases. Use `--translation detect-only` to review the distribution, or
 Every assessment records detector version/profile, policy, thresholds,
 confidence values, decision, and source record ID.
 
-## Offline translation profiles
+## Offline translation profile
 
 The complete bundle uses the official
-[Hy-MT2 7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF) and
-[Hy-MT2 1.8B](https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF) GGUF repositories
-through a private local llama.cpp server. Three profile manifests are defined
-in current source:
+[Hy-MT2 7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF) GGUF repository
+through a private local llama.cpp server. Current source publishes one profile:
 
 | Profile | Model | Bytes | WMT24++ chrF++ | Forensic chrF++ | Identifiers | Strings/s |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | `quality` | Hy-MT2-7B Q8_0 | 7,981,928,896 | **62.6786** | **92.8310** | 22/22 | 0.2793 |
-| `balanced` | Hy-MT2-1.8B Q8_0 | 1,908,528,192 | 58.6211 | 87.5297 | 22/22 | 1.8870 |
-| `compact` | Hy-MT2-1.8B Q4_K_M | 1,133,080,448 | 58.1829 | 85.6382 | 22/22 | 2.7055 |
 
-Those results use the strict synthetic/attribution-safe gate described in the
-[translation report](translation-benchmark-2026-08-04.md). Quality is the
-default because it produced the strongest scores, not because it is fastest or
-best for every language/domain. Balanced and compact keep the same protected
-identifier gate with much smaller files and higher throughput.
+The strict synthetic/attribution-safe gate is described in the historical
+[translation report](translation-benchmark-2026-08-04.md), which also records
+the retired smaller candidates. The 7B Q8_0 model remains because it produced
+the strongest measured scores; it is not claimed to be fastest or best for
+every language/domain. `balanced` still names a language-triage policy above—it
+is not an install or model profile.
 
 TranslateGemma remains a research challenger, not the production one-executable
 engine. After gated access was accepted, the official BF16 4B model completed
 the same 72-row air-gap gate with 22/22 identifiers and 10/10 pattern matches,
 but scored 56.1631/84.2550 chrF++ at 0.05237 strings/s. That was lower quality
-and about 51.7 times slower than compact Hy-MT2 on this bounded corpus. It also
+and about 51.7 times slower than the retired 1.8B Q4_K_M candidate on this
+bounded corpus. It also
 has not cleared the complete integrated-runtime and offline-packaging gates.
 It is distributed under the gated
 [Gemma Terms](https://ai.google.dev/gemma/terms), so a redistributable pack must

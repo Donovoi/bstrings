@@ -8,7 +8,7 @@ import tempfile
 import threading
 import unittest
 from argparse import Namespace
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -761,21 +761,35 @@ class EnrichmentTests(unittest.TestCase):
             )
             run_floss_mock.return_value = self.payload
 
-            with patch(
-                "bstrings_enrich.normalize_floss",
-                side_effect=AssertionError("integrated recovery must stay streaming"),
+            stderr = io.StringIO()
+            with (
+                patch(
+                    "bstrings_enrich.normalize_floss",
+                    side_effect=AssertionError("integrated recovery must stay streaming"),
+                ),
+                redirect_stderr(stderr),
             ):
                 exit_code = main(
                     [
                         "--bounded-integrated-mode",
                         "--paths-from",
                         str(inventory),
+                        "--progress-total-files",
+                        "2",
                         "-o",
                         str(output),
                     ]
                 )
 
             self.assertEqual(0, exit_code)
+            self.assertIn(
+                "Progress: Magika and FLOSS recovery: 0.0% (0/2 files)",
+                stderr.getvalue(),
+            )
+            self.assertIn(
+                "Progress: Magika and FLOSS recovery: 100.0% (2/2 files)",
+                stderr.getvalue(),
+            )
             self.assertEqual(
                 [path.resolve() for path in inputs],
                 [call.args[1] for call in run_floss_mock.call_args_list],
