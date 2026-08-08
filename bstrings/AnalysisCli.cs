@@ -34,7 +34,7 @@ internal static class AnalysisCli
         var fullOption = new Option<bool>("--full")
         {
             Description =
-                "Enable automatic FLOSS recovery, OCR, language triage, offline translation, all patterns, and reports; an explicit stage 'off' overrides its full default",
+                "Run the single installed Full quality profile: automatic FLOSS recovery, OCR, language triage, 7B-Q8 offline translation, all patterns, and reports; an explicit stage 'off' overrides its default",
         };
         var ocrOption = new Option<string?>("--ocr")
         {

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import redirect_stderr
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -293,7 +295,9 @@ class OcrWorkerTests(unittest.TestCase):
             "scores": [0.91, 0.99],
         }
 
-        stats = run_pipeline(self._config(), runtime)
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            stats = run_pipeline(replace(self._config(), progress_total_files=1), runtime)
 
         records = read_jsonl(self.output)
         self.assertEqual([upper_text, lower_text], [record["text"] for record in records])
@@ -305,6 +309,8 @@ class OcrWorkerTests(unittest.TestCase):
         self.assertTrue(all(record["attributes"]["renderSha256"] for record in records))
         self.assertTrue(all(record["origin"]["provider"] == "cpu" for record in records))
         self.assertEqual(2, stats["stringRecords"])
+        self.assertIn("Progress: offline OCR: 0.0% (0/1 files)", stderr.getvalue())
+        self.assertIn("Progress: offline OCR: 100.0% (1/1 files)", stderr.getvalue())
         assessment = read_jsonl(self.assessments)[0]
         self.assertEqual(
             sha256_file(self.root / "ppocrv6_dict.txt"), assessment["dictionarySha256"]
@@ -777,11 +783,14 @@ class OcrWorkerTests(unittest.TestCase):
                 "a" * 64,
                 "--ocr-mode",
                 "force",
+                "--progress-total-files",
+                "27",
             ]
         )
         self.assertEqual("force", args.ocr_mode)
         self.assertEqual("auto", args.provider)
         self.assertEqual(0, args.threads)
+        self.assertEqual(27, args.progress_total_files)
         self.assertEqual(Path("input-manifest.jsonl"), args.input_manifest)
         pack = load_model_pack(
             self.model_manifest,

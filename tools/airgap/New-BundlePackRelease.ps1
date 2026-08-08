@@ -138,8 +138,8 @@ if (
     throw 'Offline component lock does not use the reviewed split-pack profile.'
 }
 $profileNames = @($lock.translationProfiles.PSObject.Properties.Name)
-if ((@($profileNames | Sort-Object) -join '|') -cne 'balanced|compact|quality') {
-    throw 'Offline component lock must contain exactly quality, balanced, and compact profiles.'
+if ((@($profileNames | Sort-Object) -join '|') -cne 'quality') {
+    throw 'Offline component lock must contain exactly the quality profile.'
 }
 foreach ($profileName in $profileNames) {
     $profile = $lock.translationProfiles.$profileName
@@ -275,11 +275,9 @@ if ($baseIdentity.bytes -lt 1 -or $baseIdentity.bytes -ge 2000000000) {
 
 $licenseSources = @{
     quality = 'licenses/Hy-MT2-7B-Apache-2.0.txt'
-    balanced = 'licenses/Hy-MT2-1.8B-Apache-2.0.txt'
-    compact = 'licenses/Hy-MT2-1.8B-Apache-2.0.txt'
 }
 $results = [Collections.Generic.List[object]]::new()
-foreach ($profileName in @('quality', 'balanced', 'compact')) {
+foreach ($profileName in @('quality')) {
     $profile = $lock.translationProfiles.$profileName
     $configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
     $configuration.translationProfile = $profileName

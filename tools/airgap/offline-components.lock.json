@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "profile": "windows-x64-offline-v2",
-  "description": "Pinned, redistributable inputs for the complete bstrings Windows x64 offline bundle and its selectable translation profiles.",
+  "description": "Pinned, redistributable inputs for the single highest-quality bstrings Windows x64 offline bundle.",
   "defaultTranslationProfile": "quality",
   "translationProfiles": {
     "quality": {
@@ -19,40 +19,6 @@
         "url": "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/LICENSE.txt?download=true",
         "bytes": 11635,
         "sha256": "746750afa6af28fe4f8b326751ad2a40c700d2e5c459c0a1f6a2e76d99ace224"
-      }
-    },
-    "balanced": {
-      "version": "Q8_0",
-      "archiveType": "file",
-      "fileName": "Hy-MT2-1.8B-Q8_0.gguf",
-      "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/Hy-MT2-1.8B-Q8_0.gguf?download=true",
-      "bytes": 1908528192,
-      "sha256": "5c3fe0b1408a5ceb0143184ef247b11b579c525f4b02b060e6c851bb76fef1a4",
-      "modelId": "tencent/Hy-MT2-1.8B-GGUF",
-      "revision": "1cd5208700acedef4ef93019b6cfc148b8522d45",
-      "license": {
-        "source": "download",
-        "fileName": "LICENSE-Hy-MT2.txt",
-        "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/LICENSE.txt?download=true",
-        "bytes": 11639,
-        "sha256": "a1d52d448f81c584a47c583e19dfab2d3851c7c84431b07baee093c1113ed114"
-      }
-    },
-    "compact": {
-      "version": "Q4_K_M",
-      "archiveType": "file",
-      "fileName": "Hy-MT2-1.8B-Q4_K_M.gguf",
-      "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/Hy-MT2-1.8B-Q4_K_M.gguf?download=true",
-      "bytes": 1133080448,
-      "sha256": "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699",
-      "modelId": "tencent/Hy-MT2-1.8B-GGUF",
-      "revision": "1cd5208700acedef4ef93019b6cfc148b8522d45",
-      "license": {
-        "source": "download",
-        "fileName": "LICENSE-Hy-MT2.txt",
-        "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/LICENSE.txt?download=true",
-        "bytes": 11639,
-        "sha256": "a1d52d448f81c584a47c583e19dfab2d3851c7c84431b07baee093c1113ed114"
       }
     }
   },

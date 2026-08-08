@@ -1,6 +1,6 @@
 # OCR and document analysis
 
-OCR is distributed in the complete v1.9.9 quality kit. The commands in this
+OCR is distributed in the complete v1.9.10 quality kit. The commands in this
 guide require a verified, version-matched quality bundle. See
 [download and installation](download-and-install.md); do not copy OCR assets
 manually into a core-only directory.
@@ -16,7 +16,7 @@ manifest-covered component and is not a separate user command.
 
 ## Use it
 
-In the v1.9.9 quality kit, `--full` enables OCR in automatic mode and asks the
+In the v1.9.10 quality kit, `--full` enables OCR in automatic mode and asks the
 verified bundle to select a provider:
 
 ```powershell
@@ -43,10 +43,16 @@ OCR can also be requested without the other optional stages:
 ```
 
 `--ocr` accepts `off`, `auto`, or `force`. `--ocr-provider` accepts `auto`,
-`cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.9 source profile
+`cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.10 source profile
 `windows-x64-ocr-cpu-directml-v1` contains and claims only CPU, DirectML, and
 DirectML+CPU hybrid. CUDA requires a separately built and validated custom
 runtime profile.
+
+The analysis console prints measured OCR file completion inside the overall
+stage percentage, for example `Progress: offline OCR: 37.5% (3/8 files)`.
+Magika/FLOSS recovery uses the same file-count contract. These are completed
+work units, not elapsed-time estimates; one scanned PDF can take much longer
+than one small image.
 
 ## File and PDF behavior
 
@@ -68,9 +74,14 @@ paying the raster cost for ordinary searchable PDFs while still finding text
 in image-only or damaged pages. Force mode is appropriate when the visual page
 may disagree with, conceal, or supplement the embedded text layer.
 
+File size is not the OCR/GPU routing rule. A large born-digital PDF may need no
+raster inference, while a small photographed page may be expensive. Routing is
+therefore based on format, page text-layer quality, and the explicitly selected
+provider—not a 1 GiB threshold.
+
 ## Bundled engine and immutable model pack
 
-The v1.9.9 source profile uses
+The v1.9.10 source profile uses
 [RapidOCR 3.9.2](https://github.com/RapidAI/RapidOCR/releases/tag/v3.9.2)
 as the local orchestration engine, immutable
 [PP-OCRv6 medium](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv6/PP-OCRv6.html)
@@ -176,6 +187,13 @@ independent corpus quality evidence. A later DirectML run returned device-loss
 error `887A0006` while another model occupied roughly 6.2 of 8.2 GB graphics
 memory; the same OCR path passed after that process exited. Avoid competing GPU
 work or choose CPU. The integrated pipeline completes OCR before translation.
+
+The primary-source comparison with Microsoft, Google, OpenAI, PaddlePaddle,
+Hugging Face models, and independent document benchmarks is recorded in
+[document-reading research and roadmap](document-reading-research-2026-08.md).
+It supports the current native-text-first design, but also identifies missing
+document formats, layout grouping, text-layer reconciliation, and bounded
+render/inference pipelining as the next benchmark-gated improvements.
 
 ## Output and forensic interpretation
 

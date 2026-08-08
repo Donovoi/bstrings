@@ -257,7 +257,7 @@ if ($freeBytesAtStart -lt $MinimumFreeBytes) {
     throw "Profile acceptance requires at least $MinimumFreeBytes free bytes; found $freeBytesAtStart on $driveRoot."
 }
 
-$profiles = @('quality', 'balanced', 'compact')
+$profiles = @('quality')
 $releaseAssetNames = [Collections.Generic.List[string]]::new()
 $releaseAssetNames.Add('bstrings-win-x64-offline-base.zip')
 $releaseAssetNames.Add('Install-BstringsQuality.ps1')
@@ -407,7 +407,7 @@ foreach ($profile in $profiles) {
 }
 
 if ($results.Count -ne $profiles.Count) {
-    throw "Profile acceptance completed $($results.Count) of $($profiles.Count) profiles."
+    throw "Quality acceptance completed $($results.Count) of $($profiles.Count) bundles."
 }
 [IO.Directory]::CreateDirectory($evidenceRoot) | Out-Null
 $evidencePath = Join-Path $evidenceRoot 'offline-profile-acceptance.json'
@@ -436,4 +436,4 @@ $record = [ordered]@{
     ($record | ConvertTo-Json -Depth 8) + "`n",
     [Text.UTF8Encoding]::new($false)
 )
-Write-Host "All advertised offline profiles passed acceptance: $evidencePath"
+Write-Host "The advertised highest-quality offline bundle passed acceptance: $evidencePath"

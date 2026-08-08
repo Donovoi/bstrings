@@ -360,7 +360,7 @@ jobs:
             ${{ runner.temp }}\bstrings-offline\ocr-downloads
           key: bstrings-offline-${{ runner.os }}-${{ hashFiles('tools/airgap/offline-components.lock.json', 'tools/airgap/ocr-components.lock.json') }}
 
-      - name: Build complete compact offline bundle
+      - name: Build the complete highest-quality offline bundle
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: pwsh
         timeout-minutes: 150
@@ -370,7 +370,7 @@ jobs:
             -PublishedBstringsDirectory publish/win-x64 `
             -OutputDirectory publish/offline `
             -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline') `
-            -TranslationProfile compact
+            -TranslationProfile quality
 
       - name: Revalidate the warmed offline cache without network fallback
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -383,7 +383,7 @@ jobs:
             -PublishedBstringsDirectory publish/win-x64 `
             -OutputDirectory $validationOutput `
             -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline') `
-            -TranslationProfile compact `
+            -TranslationProfile quality `
             -ValidateOnly
           if (Test-Path -LiteralPath $validationOutput) {
             throw 'Cache-only offline validation unexpectedly created bundle output.'
@@ -494,7 +494,7 @@ jobs:
           compression-level: 0
 
   profile-acceptance:
-    name: Accept every advertised offline profile
+    name: Accept the highest-quality offline bundle
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: [self-hosted, Windows, X64, bstrings-offline-release]
@@ -522,7 +522,7 @@ jobs:
           name: bstrings-win-x64-offline-packs
           path: ${{ runner.temp }}\bstrings-profile-input-${{ github.run_id }}-${{ github.run_attempt }}\packs
 
-      - name: Acquire, assemble, verify, and smoke every profile
+      - name: Acquire, assemble, verify, and smoke the quality bundle
         shell: pwsh
         timeout-minutes: 330
         run: |
@@ -630,19 +630,11 @@ jobs:
           }
           $actual = @($release.assets | ForEach-Object { [string]$_.name } | Sort-Object)
           $expected = @(
-            'airgap-config-balanced.json'
-            'airgap-config-compact.json'
             'airgap-config-quality.json'
-            'airgap-manifest-balanced.json'
-            'airgap-manifest-compact.json'
             'airgap-manifest-quality.json'
             'bstrings-win-x64-offline-base.zip'
             'bstrings-win-x64.zip'
-            'bundle-packs-balanced.json'
-            'bundle-packs-compact.json'
             'bundle-packs-quality.json'
-            'Hy-MT2-Apache-2.0-balanced.txt'
-            'Hy-MT2-Apache-2.0-compact.txt'
             'Hy-MT2-Apache-2.0-quality.txt'
             'Install-BstringsQuality.ps1'
             'SHA256SUMS.txt'

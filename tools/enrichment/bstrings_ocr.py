@@ -33,6 +33,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import warnings
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -154,6 +155,7 @@ class OcrConfig:
     self_test: bool
     airgap: bool
     input_manifest: Path | None = None
+    progress_total_files: int = 0
 
 
 @dataclass(frozen=True)
@@ -2597,6 +2599,8 @@ def _validate_config(config: OcrConfig) -> None:
         raise OcrError("OCR mode must be auto or force")
     if config.provider not in {"auto", "cpu", "cuda", "directml", "hybrid"}:
         raise OcrError("OCR provider must be auto, cpu, cuda, directml, or hybrid")
+    if config.progress_total_files < 0:
+        raise OcrError("OCR progress total cannot be negative")
     numeric_values = (
         config.dpi,
         config.max_pages,
@@ -2808,6 +2812,34 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
         scheduler = RasterScheduler(runtime)
         record_ids: set[str] = set()
         pending_sources: deque[PendingRasterSource] = deque()
+        last_progress_percent = -1.0
+        last_progress_time = 0.0
+
+        def report_progress(completed: int, *, force: bool = False) -> None:
+            nonlocal last_progress_percent, last_progress_time
+            total = config.progress_total_files
+            if total <= 0:
+                return
+            bounded = min(max(completed, 0), total)
+            percent = bounded * 100.0 / total
+            now = time.monotonic()
+            if (
+                not force
+                and percent < 100.0
+                and percent - last_progress_percent < 1.0
+                and now - last_progress_time < 5.0
+            ):
+                return
+            print(
+                f"Progress: offline OCR: {percent:.1f}% "
+                f"({bounded:,}/{total:,} files)",
+                file=sys.stderr,
+                flush=True,
+            )
+            last_progress_percent = percent
+            last_progress_time = now
+
+        report_progress(0, force=True)
 
         def publish_source(result: SourceResult, outputs: AtomicJsonlPair) -> None:
             try:
@@ -2827,6 +2859,7 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
                         stats["stringRecords"] += 1
                         outputs.write(config.output, record)
                 outputs.write(config.assessments_output, result.assessment)
+                report_progress(stats["inputFiles"])
             finally:
                 if result.records is not None:
                     result.records.close()
@@ -2932,6 +2965,15 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
                     )
                     publish_source(result, outputs)
                 finish_pending_sources(outputs)
+                if (
+                    config.progress_total_files > 0
+                    and stats["inputFiles"] != config.progress_total_files
+                ):
+                    raise OcrError(
+                        "OCR inventory count changed: expected "
+                        f"{config.progress_total_files:,} files but processed "
+                        f"{stats['inputFiles']:,}"
+                    )
                 outputs.commit()
             finally:
                 if pending_sources:
@@ -3013,6 +3055,12 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-output-records", type=int, default=1_000_000)
     parser.add_argument("--max-text-characters", type=int, default=4 * 1024 * 1024)
     parser.add_argument("--pdf-text-min-characters", type=int, default=32)
+    parser.add_argument(
+        "--progress-total-files",
+        type=int,
+        default=0,
+        help="Expected inventory files for measured percentage reporting",
+    )
     parser.add_argument("--self-test", action="store_true")
     return parser.parse_args(argv)
 
@@ -3044,6 +3092,7 @@ def config_from_arguments(args: argparse.Namespace) -> OcrConfig:
         self_test=args.self_test,
         airgap=args.airgap,
         input_manifest=args.input_manifest,
+        progress_total_files=args.progress_total_files,
     )
 
 

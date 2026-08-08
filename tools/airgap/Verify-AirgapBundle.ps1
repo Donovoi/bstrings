@@ -89,7 +89,6 @@ $requiredNoticeFiles = @(
     'licenses/llama.cpp/NOTICE-SCOPE.md',
     'licenses/Hy-MT2-Apache-2.0.txt',
     'licenses/Hy-MT2-7B-Apache-2.0.txt',
-    'licenses/Hy-MT2-1.8B-Apache-2.0.txt',
     'ocr-components.lock.json',
     'licenses/ocr-runtime-win-x64.json',
     'licenses/ocr-runtime-files.json',
@@ -108,7 +107,7 @@ foreach ($relativePath in $requiredNoticeFiles) {
 $offlineLockPath = Resolve-BundlePath $config.componentLock
 $offlineLock = Get-Content -LiteralPath $offlineLockPath -Raw | ConvertFrom-Json
 $translationProfileName = [string]$config.translationProfile
-if ($translationProfileName -notin @('quality', 'balanced', 'compact')) {
+if ($translationProfileName -cne 'quality') {
     throw "Bundle configuration has an unsupported translation profile: $translationProfileName"
 }
 $translationProfile = $offlineLock.translationProfiles.$translationProfileName

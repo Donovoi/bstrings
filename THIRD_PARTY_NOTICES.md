@@ -77,7 +77,7 @@ components under their own terms:
   applicable cpp-httplib, nlohmann JSON, base64, miniaudio, stb_image,
   llamafile, YaRN, and ggllm-derived notices preserved under
   `licenses/llama.cpp/`;
-- the Hy-MT2-1.8B Q4_K_M model, with its Apache 2.0 license in `licenses/`; and
+- the Hy-MT2-7B Q8_0 model, with its Apache 2.0 license in `licenses/`; and
 - the Microsoft Visual C++ x64 runtime files described below.
 
 Those license and notice files must remain with the bundle. Building the
