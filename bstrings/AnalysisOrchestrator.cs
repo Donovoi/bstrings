@@ -52,6 +52,166 @@ internal static class AnalysisOrchestrator
     private const uint FileShareDelete = 0x4;
     private const uint OpenExisting = 3;
     private const uint FileFlagBackupSemantics = 0x02000000;
+    private static readonly AsyncLocal<AnalysisStageProgress?> ActiveAnalysisProgress = new();
+
+    private sealed class AnalysisStageProgress
+    {
+        private readonly object _gate = new();
+        private readonly int _totalStages;
+        private int _completedStages;
+        private string? _currentStage;
+        private double _lastOverallPercent = -1;
+        private long _lastTimestamp;
+
+        internal AnalysisStageProgress(int totalStages)
+        {
+            _totalStages = totalStages;
+        }
+
+        internal void Start(string name)
+        {
+            lock (_gate)
+            {
+                _currentStage = name;
+                ReportLocked(0, "starting", force: true);
+            }
+        }
+
+        internal void Report(long completed, long total)
+        {
+            if (total <= 0)
+            {
+                return;
+            }
+            lock (_gate)
+            {
+                ReportLocked(Math.Clamp(completed * 100.0 / total, 0, 100), null, force: false);
+            }
+        }
+
+        internal void ReportChildLine(string line)
+        {
+            if (!TryExtractPercent(line, out var percent))
+            {
+                return;
+            }
+            lock (_gate)
+            {
+                ReportLocked(percent, line.Trim(), force: false);
+            }
+        }
+
+        internal void Complete(string name, double elapsedSeconds)
+        {
+            lock (_gate)
+            {
+                _currentStage = name;
+                ReportLocked(100, $"complete in {elapsedSeconds:N2} s", force: true);
+                _completedStages++;
+                _currentStage = null;
+            }
+        }
+
+        internal void Fail(string name)
+        {
+            lock (_gate)
+            {
+                _currentStage = name;
+                ReportLocked(0, "failed", force: true, retainLastFraction: true);
+            }
+        }
+
+        private void ReportLocked(
+            double stagePercent,
+            string? detail,
+            bool force,
+            bool retainLastFraction = false
+        )
+        {
+            var fraction = retainLastFraction
+                ? Math.Max(0, _lastOverallPercent * _totalStages / 100.0 - _completedStages)
+                : stagePercent / 100.0;
+            var overall = Math.Clamp(
+                (_completedStages + fraction) * 100.0 / _totalStages,
+                0,
+                100
+            );
+            var now = Stopwatch.GetTimestamp();
+            var elapsed = _lastTimestamp == 0
+                ? TimeSpan.MaxValue
+                : Stopwatch.GetElapsedTime(_lastTimestamp, now);
+            if (
+                !force
+                && overall < 100
+                && overall - _lastOverallPercent < 0.25
+                && elapsed < TimeSpan.FromSeconds(5)
+            )
+            {
+                return;
+            }
+
+            var stageNumber = Math.Min(_completedStages + 1, _totalStages);
+            var suffix = string.IsNullOrWhiteSpace(detail) ? string.Empty : $"; {detail}";
+            Console.Error.WriteLine(
+                string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"Progress: analysis: {overall:F1}% (stage {stageNumber:N0}/{_totalStages:N0}, {_currentStage}: {stagePercent:F1}%{suffix})"
+                )
+            );
+            _lastOverallPercent = overall;
+            _lastTimestamp = now;
+        }
+
+        private static bool TryExtractPercent(string line, out double percent)
+        {
+            percent = 0;
+            var marker = line.IndexOf('%', StringComparison.Ordinal);
+            if (marker <= 0)
+            {
+                return false;
+            }
+            var start = marker - 1;
+            while (
+                start >= 0
+                && (char.IsDigit(line[start]) || line[start] is '.' or ',')
+            )
+            {
+                start--;
+            }
+            var value = line.AsSpan(start + 1, marker - start - 1);
+            return (
+                    double.TryParse(
+                        value,
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out percent
+                    )
+                    || double.TryParse(
+                        value,
+                        System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.CurrentCulture,
+                        out percent
+                    )
+                )
+                && percent is >= 0 and <= 100;
+        }
+    }
+
+    private sealed class AnalysisProgressScope : IDisposable
+    {
+        private readonly AnalysisStageProgress? _previous;
+
+        internal AnalysisProgressScope(AnalysisStageProgress current)
+        {
+            _previous = ActiveAnalysisProgress.Value;
+            ActiveAnalysisProgress.Value = current;
+        }
+
+        public void Dispose()
+        {
+            ActiveAnalysisProgress.Value = _previous;
+        }
+    }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -80,6 +240,10 @@ internal static class AnalysisOrchestrator
             options.RecoveryMode != ExecutableRecoveryMode.Off
             || options.OcrMode != OcrWorkflowMode.Off
             || options.TranslationMode is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All;
+        var stageProgress = new AnalysisStageProgress(
+            CountPlannedStages(options, needsExternalToolchain)
+        );
+        using var progressScope = new AnalysisProgressScope(stageProgress);
         var hasImplicitBundle = AnalysisToolchainLocator.HasImplicitBundleConfiguration();
         if (
             needsExternalToolchain
@@ -119,7 +283,7 @@ internal static class AnalysisOrchestrator
         if (options.TranslationMode is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All)
         {
             Console.Error.WriteLine("Preflight: verifying the bundled translation model...");
-            VerifyTranslationModel(toolchain!);
+            VerifyTranslationModel(toolchain!, new ConsolePercentageProgress());
             translationRequirements = new TranslationValidationRequirements(
                 "llama.cpp",
                 options.TranslationTarget,
@@ -131,13 +295,14 @@ internal static class AnalysisOrchestrator
         OcrValidationRequirements? ocrRequirements = null;
         if (options.OcrMode != OcrWorkflowMode.Off)
         {
-            Console.Error.WriteLine("Preflight: verifying the bundled OCR model...");
+            Console.Error.WriteLine("Progress: OCR model verification: 0.0%");
             ocrRequirements = OcrCompletionCore.CreateValidationRequirements(
                 toolchain!,
                 options.OcrMode,
                 options.OcrProvider,
                 options.OcrThreads
             );
+            Console.Error.WriteLine("Progress: OCR model verification: 100.0%");
         }
 
         PrepareOutputDirectory(outputDirectory);
@@ -458,7 +623,10 @@ internal static class AnalysisOrchestrator
                                 BatchSize: 2048,
                                 MaxDegreeOfParallelism: Math.Max(1, Environment.ProcessorCount)
                             ),
-                            cancellationToken
+                            cancellationToken,
+                            detector: null,
+                            progress: static (completed, total) =>
+                                ActiveAnalysisProgress.Value?.Report(completed, total)
                         )
                 );
                 translationCandidateCount = triage!.Value.TranslationCandidates;
@@ -478,7 +646,9 @@ internal static class AnalysisOrchestrator
                                 candidatesPath,
                                 options.TranslationMinimumCharacters,
                                 options.TranslationMaximumCharacters,
-                                cancellationToken
+                                cancellationToken,
+                                static (completed, total) =>
+                                    ActiveAnalysisProgress.Value?.Report(completed, total)
                             )
                     );
                     translationCandidateCount = allCandidates.CandidateRecords;
@@ -492,21 +662,24 @@ internal static class AnalysisOrchestrator
             if (
                 options.TranslationMode
                 is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
-                && translationCandidateCount > 0
             )
             {
                 await RunStageAsync(
                     "offline translation",
                     stageSeconds,
-                    () => RunTranslationAsync(
-                        options,
-                        toolchain!,
-                        candidatesPath,
-                        translationsPath,
-                        outputDirectory,
-                        logsDirectory,
-                        cancellationToken
-                    )
+                    () =>
+                        translationCandidateCount > 0
+                            ? RunTranslationAsync(
+                                options,
+                                toolchain!,
+                                candidatesPath,
+                                translationsPath,
+                                translationCandidateCount,
+                                outputDirectory,
+                                logsDirectory,
+                                cancellationToken
+                            )
+                            : CreateEmptyFileAtomicAsync(translationsPath, cancellationToken)
                 );
             }
             else
@@ -740,7 +913,6 @@ internal static class AnalysisOrchestrator
         arguments.Add("--cpu-engine");
         arguments.Add(options.CpuEngine);
         arguments.Add("--emit-enrichment-jsonl");
-        arguments.Add("-q");
         arguments.Add("-s");
 
         await ChildProcessRunner.RunAsync(
@@ -749,7 +921,8 @@ internal static class AnalysisOrchestrator
             workingDirectory,
             Path.Combine(logsDirectory, "native.stdout.log"),
             Path.Combine(logsDirectory, "native.stderr.log"),
-            cancellationToken: cancellationToken
+            cancellationToken: cancellationToken,
+            lineObserver: static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
         );
         if (!File.Exists(outputPath))
         {
@@ -933,6 +1106,7 @@ internal static class AnalysisOrchestrator
         AnalysisToolchain toolchain,
         string inputPath,
         string outputPath,
+        long totalRecords,
         string workingDirectory,
         string logsDirectory,
         CancellationToken cancellationToken
@@ -973,6 +1147,8 @@ internal static class AnalysisOrchestrator
         arguments.Add(options.TranslationMinimumCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture));
         arguments.Add("--translation-max-characters");
         arguments.Add(options.TranslationMaximumCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("--progress-total-records");
+        arguments.Add(totalRecords.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         await ChildProcessRunner.RunAsync(
             toolchain.PythonExecutable,
@@ -981,7 +1157,8 @@ internal static class AnalysisOrchestrator
             Path.Combine(logsDirectory, "translation.stdout.log"),
             Path.Combine(logsDirectory, "translation.stderr.log"),
             OfflineEnvironment(),
-            cancellationToken
+            cancellationToken,
+            static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
         );
     }
 
@@ -1441,16 +1618,25 @@ internal static class AnalysisOrchestrator
         }
     }
 
-    private static void VerifyTranslationModel(AnalysisToolchain toolchain)
+    private static void VerifyTranslationModel(
+        AnalysisToolchain toolchain,
+        ConsolePercentageProgress progress
+    )
     {
         VerifyModel(
             toolchain.TranslationModelPath!,
             toolchain.TranslationModelSha256!,
-            "Translation"
+            "Translation",
+            progress
         );
     }
 
-    private static void VerifyModel(string modelPath, string expectedSha256, string description)
+    private static void VerifyModel(
+        string modelPath,
+        string expectedSha256,
+        string description,
+        ConsolePercentageProgress progress
+    )
     {
         using var stream = new FileStream(
             modelPath,
@@ -1460,7 +1646,16 @@ internal static class AnalysisOrchestrator
             4 * 1024 * 1024,
             FileOptions.SequentialScan
         );
-        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        var actual = ProgressHashing.ComputeSha256(
+            stream,
+            (completed, total) =>
+                progress.Report(
+                    $"{description.ToLowerInvariant()} model verification",
+                    completed,
+                    total,
+                    "bytes"
+                )
+        );
         if (!string.Equals(actual, expectedSha256, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
@@ -1526,12 +1721,47 @@ internal static class AnalysisOrchestrator
         Func<Task> action
     )
     {
+        var progress = ActiveAnalysisProgress.Value;
+        progress?.Start(name);
         Console.Error.WriteLine($"Stage: {name}...");
         var started = Stopwatch.GetTimestamp();
-        await action();
-        var elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
-        timings[name] = elapsed;
-        Console.Error.WriteLine($"Stage complete: {name} ({elapsed:N2} s)");
+        try
+        {
+            await action();
+            var elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
+            timings[name] = elapsed;
+            Console.Error.WriteLine($"Stage complete: {name} ({elapsed:N2} s)");
+            progress?.Complete(name, elapsed);
+        }
+        catch
+        {
+            progress?.Fail(name);
+            throw;
+        }
+    }
+
+    internal static int CountPlannedStages(AnalysisOptions options, bool needsExternalToolchain)
+    {
+        var count = 9;
+        if (needsExternalToolchain)
+        {
+            count++;
+        }
+        if (options.RecoveryMode != ExecutableRecoveryMode.Off)
+        {
+            count += 3;
+        }
+        if (options.OcrMode != OcrWorkflowMode.Off)
+        {
+            count += 4;
+        }
+        count += options.TranslationMode switch
+        {
+            TranslationWorkflowMode.Auto or TranslationWorkflowMode.All => 3,
+            TranslationWorkflowMode.DetectOnly => 1,
+            _ => 0,
+        };
+        return count;
     }
 
     private static async Task WriteRunAsync(

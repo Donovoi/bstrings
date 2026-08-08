@@ -60,19 +60,22 @@ internal static class BundleManifestVerifier
 
     internal static BundleVerificationResult Verify(
         string bundleRoot,
-        bool allowIncompleteMarker = false
-    ) => VerifyCore(bundleRoot, File.GetAttributes, allowIncompleteMarker);
+        bool allowIncompleteMarker = false,
+        Action<long, long>? progress = null
+    ) => VerifyCore(bundleRoot, File.GetAttributes, allowIncompleteMarker, progress);
 
     internal static BundleVerificationResult VerifyForTesting(
         string bundleRoot,
         Func<string, FileAttributes> getAttributes,
-        bool allowIncompleteMarker = false
-    ) => VerifyCore(bundleRoot, getAttributes, allowIncompleteMarker);
+        bool allowIncompleteMarker = false,
+        Action<long, long>? progress = null
+    ) => VerifyCore(bundleRoot, getAttributes, allowIncompleteMarker, progress);
 
     private static BundleVerificationResult VerifyCore(
         string bundleRoot,
         Func<string, FileAttributes> getAttributes,
-        bool allowIncompleteMarker
+        bool allowIncompleteMarker,
+        Action<long, long>? progress
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(bundleRoot);
@@ -126,7 +129,20 @@ internal static class BundleManifestVerifier
             );
         }
 
+        long expectedTotalBytes = 0;
+        try
+        {
+            foreach (var entry in expected.Values)
+            {
+                expectedTotalBytes = checked(expectedTotalBytes + entry.Length);
+            }
+        }
+        catch (OverflowException ex)
+        {
+            throw new InvalidDataException("Bundle byte total exceeds the supported range.", ex);
+        }
         long totalBytes = 0;
+        progress?.Invoke(0, Math.Max(1, expectedTotalBytes));
         foreach (var entry in expected.Values.OrderBy(item => item.RelativePath, StringComparer.Ordinal))
         {
             var path = actual[entry.RelativePath];
@@ -147,7 +163,16 @@ internal static class BundleManifestVerifier
                 );
             }
 
-            var digest = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+            var completedBeforeFile = totalBytes;
+            var digest = ProgressHashing.ComputeSha256(
+                stream,
+                progress is null
+                    ? null
+                    : (completed, _) => progress(
+                        checked(completedBeforeFile + completed),
+                        Math.Max(1, expectedTotalBytes)
+                    )
+            );
             if (!CryptographicOperations.FixedTimeEquals(
                     Convert.FromHexString(entry.Sha256),
                     Convert.FromHexString(digest)
@@ -174,6 +199,7 @@ internal static class BundleManifestVerifier
                 throw new InvalidDataException("Bundle byte total exceeds the supported range.", ex);
             }
         }
+        progress?.Invoke(Math.Max(1, expectedTotalBytes), Math.Max(1, expectedTotalBytes));
 
         return new BundleVerificationResult(
             expected.Count,

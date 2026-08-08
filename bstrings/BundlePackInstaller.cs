@@ -70,7 +70,8 @@ internal static class BundlePackInstaller
         string? cacheDirectory,
         string outputDirectory,
         CancellationToken cancellationToken = default,
-        HttpMessageHandler? messageHandler = null
+        HttpMessageHandler? messageHandler = null,
+        Action<string, long, long>? progress = null
     )
     {
         var manifest = ReadTrustManifest(manifestPath);
@@ -93,24 +94,25 @@ internal static class BundlePackInstaller
         foreach (var pack in manifest.Packs)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await AcquirePackAsync(client, cache, pack, cancellationToken);
+            await AcquirePackAsync(client, cache, pack, cancellationToken, progress);
         }
 
-        return AssembleCore(manifest, cache, output, cancellationToken);
+        return AssembleCore(manifest, cache, output, cancellationToken, progress);
     }
 
     internal static BundlePackInstallationResult Assemble(
         string? manifestPath,
         string? cacheDirectory,
         string outputDirectory,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<string, long, long>? progress = null
     )
     {
         var manifest = ReadTrustManifest(manifestPath);
         var cache = ResolveCacheDirectory(manifest, cacheDirectory);
         var output = NormalizeAbsentOutput(outputDirectory);
         ValidateCacheDoesNotCreateOutput(cache, output);
-        return AssembleCore(manifest, cache, output, cancellationToken);
+        return AssembleCore(manifest, cache, output, cancellationToken, progress);
     }
 
     internal static BundlePackTrustManifest ReadTrustManifest(string? manifestPath)
@@ -355,14 +357,15 @@ internal static class BundlePackInstaller
         HttpClient client,
         string cacheDirectory,
         BundlePackDefinition pack,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action<string, long, long>? progress
     )
     {
         var finalPath = PackPath(cacheDirectory, pack);
         var partialPath = finalPath + ".partial";
         ValidateCacheEntry(finalPath, "cached bundle pack");
         ValidateCacheEntry(partialPath, "partial bundle pack");
-        if (File.Exists(finalPath) && TryVerifyPack(finalPath, pack))
+        if (File.Exists(finalPath) && TryVerifyPack(finalPath, pack, progress))
         {
             if (File.Exists(partialPath))
             {
@@ -375,7 +378,7 @@ internal static class BundlePackInstaller
         if (File.Exists(partialPath))
         {
             var partialLength = new FileInfo(partialPath).Length;
-            if (partialLength == pack.Bytes && TryVerifyPack(partialPath, pack))
+            if (partialLength == pack.Bytes && TryVerifyPack(partialPath, pack, progress))
             {
                 MoveVerifiedPartial(partialPath, finalPath);
                 return;
@@ -397,9 +400,10 @@ internal static class BundlePackInstaller
                 pack,
                 partialPath,
                 offset,
-                cancellationToken
+                cancellationToken,
+                progress
             );
-            if (!TryVerifyPack(partialPath, pack))
+            if (!TryVerifyPack(partialPath, pack, progress))
             {
                 if (offset == 0)
                 {
@@ -415,11 +419,12 @@ internal static class BundlePackInstaller
                     pack,
                     partialPath,
                     offset: 0,
-                    cancellationToken
+                    cancellationToken,
+                    progress
                 );
                 try
                 {
-                    VerifyPack(partialPath, pack);
+                    VerifyPack(partialPath, pack, progress);
                 }
                 catch
                 {
@@ -454,7 +459,8 @@ internal static class BundlePackInstaller
         BundlePackDefinition pack,
         string partialPath,
         long offset,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action<string, long, long>? progress
     )
     {
         using var response = await SendWithSafeRedirectsAsync(
@@ -523,6 +529,7 @@ internal static class BundlePackInstaller
             );
         }
         output.Position = writeOffset;
+        progress?.Invoke($"bundle download ({pack.Id})", writeOffset, pack.Bytes);
 
         var buffer = new byte[CopyBufferBytes];
         var remaining = expectedResponseBytes;
@@ -539,6 +546,11 @@ internal static class BundlePackInstaller
             }
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
             remaining -= read;
+            progress?.Invoke(
+                $"bundle download ({pack.Id})",
+                checked(pack.Bytes - remaining),
+                pack.Bytes
+            );
         }
         if (await input.ReadAsync(buffer.AsMemory(0, 1), cancellationToken) != 0)
         {
@@ -618,7 +630,8 @@ internal static class BundlePackInstaller
         BundlePackTrustManifest manifest,
         string cacheDirectory,
         string outputDirectory,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action<string, long, long>? progress
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -649,7 +662,8 @@ internal static class BundlePackInstaller
             using (var verifiedPacks = OpenVerifiedPacks(
                 manifest,
                 cacheDirectory,
-                cancellationToken
+                cancellationToken,
+                progress
             ))
             {
                 var plans = ReadAndValidateAssemblyPlans(
@@ -663,11 +677,41 @@ internal static class BundlePackInstaller
                     temporaryDirectory,
                     "bundle assembly workspace"
                 );
-                ExtractPlans(plans.ZipEntries, temporaryDirectory, cancellationToken);
-                StageFilePlans(plans.Files, temporaryDirectory, cancellationToken);
+                var assemblyBytes = checked(
+                    plans.ZipEntries.Where(plan => !plan.IsDirectory).Sum(plan => plan.Entry.Length)
+                        + plans.Files.Sum(plan => plan.Handle.Definition.Bytes)
+                );
+                var assemblyTotal = Math.Max(1, assemblyBytes);
+                long assembledBytes = 0;
+                progress?.Invoke("bundle assembly", 0, assemblyTotal);
+                ExtractPlans(
+                    plans.ZipEntries,
+                    temporaryDirectory,
+                    cancellationToken,
+                    bytes =>
+                    {
+                        assembledBytes = checked(assembledBytes + bytes);
+                        progress?.Invoke("bundle assembly", assembledBytes, assemblyTotal);
+                    }
+                );
+                StageFilePlans(
+                    plans.Files,
+                    temporaryDirectory,
+                    cancellationToken,
+                    bytes =>
+                    {
+                        assembledBytes = checked(assembledBytes + bytes);
+                        progress?.Invoke("bundle assembly", assembledBytes, assemblyTotal);
+                    }
+                );
+                progress?.Invoke("bundle assembly", assemblyTotal, assemblyTotal);
             }
 
-            var verification = BundleManifestVerifier.Verify(temporaryDirectory);
+            var verification = BundleManifestVerifier.Verify(
+                temporaryDirectory,
+                progress: (completed, total) =>
+                    progress?.Invoke("bundle verification", completed, total)
+            );
             if (!HashesEqual(verification.ManifestSha256, manifest.AirgapManifestSha256))
             {
                 throw new InvalidDataException(
@@ -700,7 +744,8 @@ internal static class BundlePackInstaller
     private static VerifiedPackCollection OpenVerifiedPacks(
         BundlePackTrustManifest manifest,
         string cacheDirectory,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action<string, long, long>? progress
     )
     {
         var handles = new List<VerifiedPackHandle>(manifest.Packs.Count);
@@ -728,7 +773,7 @@ internal static class BundlePackInstaller
                 );
                 try
                 {
-                    VerifyPack(stream, pack);
+                    VerifyPack(stream, pack, progress);
                     handles.Add(new VerifiedPackHandle(pack, stream));
                 }
                 catch
@@ -1087,7 +1132,8 @@ internal static class BundlePackInstaller
     private static void ExtractPlans(
         IReadOnlyList<ZipEntryPlan> plans,
         string temporaryDirectory,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action<long>? progress
     )
     {
         var rootPrefix = Path.TrimEndingDirectorySeparator(
@@ -1138,6 +1184,7 @@ internal static class BundlePackInstaller
                 }
                 output.Write(buffer, 0, read);
                 remaining -= read;
+                progress?.Invoke(read);
             }
             if (input.ReadByte() != -1)
             {
@@ -1158,7 +1205,8 @@ internal static class BundlePackInstaller
     private static void StageFilePlans(
         IReadOnlyList<FileEntryPlan> plans,
         string temporaryDirectory,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action<long>? progress
     )
     {
         var rootPrefix = Path.TrimEndingDirectorySeparator(
@@ -1205,6 +1253,7 @@ internal static class BundlePackInstaller
                 }
                 output.Write(buffer, 0, read);
                 remaining -= read;
+                progress?.Invoke(read);
             }
             if (input.ReadByte() != -1)
             {
@@ -1359,11 +1408,15 @@ internal static class BundlePackInstaller
         File.Move(partialPath, finalPath, overwrite: true);
     }
 
-    private static bool TryVerifyPack(string path, BundlePackDefinition pack)
+    private static bool TryVerifyPack(
+        string path,
+        BundlePackDefinition pack,
+        Action<string, long, long>? progress
+    )
     {
         try
         {
-            VerifyPack(path, pack);
+            VerifyPack(path, pack, progress);
             return true;
         }
         catch (InvalidDataException)
@@ -1372,7 +1425,11 @@ internal static class BundlePackInstaller
         }
     }
 
-    private static void VerifyPack(string path, BundlePackDefinition pack)
+    private static void VerifyPack(
+        string path,
+        BundlePackDefinition pack,
+        Action<string, long, long>? progress
+    )
     {
         using var stream = new FileStream(
             path,
@@ -1382,10 +1439,14 @@ internal static class BundlePackInstaller
             CopyBufferBytes,
             FileOptions.SequentialScan
         );
-        VerifyPack(stream, pack);
+        VerifyPack(stream, pack, progress);
     }
 
-    private static void VerifyPack(FileStream stream, BundlePackDefinition pack)
+    private static void VerifyPack(
+        FileStream stream,
+        BundlePackDefinition pack,
+        Action<string, long, long>? progress
+    )
     {
         if (stream.Length != pack.Bytes)
         {
@@ -1394,7 +1455,13 @@ internal static class BundlePackInstaller
             );
         }
         stream.Position = 0;
-        var actual = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        var activity = $"bundle pack verification ({pack.Id})";
+        var actual = ProgressHashing.ComputeSha256(
+            stream,
+            progress is null
+                ? null
+                : (completed, total) => progress(activity, completed, total)
+        );
         if (!HashesEqual(actual, pack.Sha256))
         {
             throw new InvalidDataException(

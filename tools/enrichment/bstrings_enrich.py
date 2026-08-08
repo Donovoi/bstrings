@@ -20,7 +20,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -267,8 +267,8 @@ def map_ordered_parallel(
         return list(executor.map(function, values))
 
 
-def protected_identifiers(text: str) -> tuple[str, ...]:
-    """Return conservative, strongly structured tokens that translation must preserve."""
+def protected_identifier_spans(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Return non-overlapping structured-token spans that translation must preserve."""
     matches: list[tuple[int, int, str]] = []
     for pattern in PROTECTED_IDENTIFIER_PATTERNS:
         for match in pattern.finditer(text):
@@ -276,8 +276,7 @@ def protected_identifiers(text: str) -> tuple[str, ...]:
             if value:
                 matches.append((match.start(), match.start() + len(value), value))
     matches.sort(key=lambda item: (item[0], -len(item[2])))
-    unique: list[str] = []
-    seen: set[str] = set()
+    accepted: list[tuple[int, int, str]] = []
     accepted_ranges: list[tuple[int, int]] = []
     for start, end, value in matches:
         if any(
@@ -285,15 +284,38 @@ def protected_identifiers(text: str) -> tuple[str, ...]:
             for parent_start, parent_end in accepted_ranges
         ):
             continue
-        if value not in seen:
-            seen.add(value)
-            unique.append(value)
-            accepted_ranges.append((start, end))
-    return tuple(unique)
+        accepted.append((start, end, value))
+        accepted_ranges.append((start, end))
+    return tuple(accepted)
+
+
+def protected_identifiers(text: str) -> tuple[str, ...]:
+    """Return conservative, strongly structured tokens that translation must preserve."""
+    return tuple(dict.fromkeys(value for _, _, value in protected_identifier_spans(text)))
+
+
+def contains_only_protected_identifiers(text: str) -> bool:
+    """Identify machine tokens that have no natural-language letters outside protected spans."""
+    spans = protected_identifier_spans(text)
+    if not spans:
+        return False
+    protected_positions = [False] * len(text)
+    for start, end, _ in spans:
+        protected_positions[start:end] = [True] * (end - start)
+    return not any(
+        character.isalpha() and not protected_positions[index]
+        for index, character in enumerate(text)
+    )
 
 
 def validate_identifier_retention(source: str, translated: str) -> None:
-    missing = [value for value in protected_identifiers(source) if value not in translated]
+    source_counts = Counter(value for _, _, value in protected_identifier_spans(source))
+    translated_counts = Counter(value for _, _, value in protected_identifier_spans(translated))
+    missing = [
+        value
+        for value, required in source_counts.items()
+        if translated_counts[value] < required
+    ]
     if missing:
         preview = ", ".join(repr(value) for value in missing[:3])
         raise EnrichmentError(
@@ -1223,6 +1245,11 @@ def add_translations(
         text = str(record["text"])
         if text in translations_by_text or text in missing_text_set:
             continue
+        if contains_only_protected_identifiers(text):
+            translations_by_text[text] = text
+            if cache:
+                cache.put(target_language, text, text)
+            continue
         found, translated_text = cache.get(target_language, text) if cache else (False, "")
         if found:
             translations_by_text[text] = translated_text
@@ -1380,11 +1407,15 @@ def translate_normalized_records(
     window_size: int | None = None,
     cache: TranslationCache | None = None,
     include_parents: bool = True,
+    progress: Callable[[int], None] | None = None,
 ) -> Iterable[dict[str, Any]]:
     pending: list[dict[str, Any]] = []
     effective_window_size = window_size or batch_size
+    completed = 0
 
     def flush_pending() -> Iterable[dict[str, Any]]:
+        nonlocal completed
+        pending_count = len(pending)
         translated = add_translations(
             pending,
             translator,
@@ -1395,6 +1426,9 @@ def translate_normalized_records(
             cache,
         )
         pending.clear()
+        completed += pending_count
+        if progress is not None:
+            progress(completed)
         return translated
 
     for record in records:
@@ -2138,6 +2172,12 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--translation-max-characters", type=int, default=2048)
     parser.add_argument("--translation-max-input-tokens", type=int, default=512)
     parser.add_argument("--translation-max-new-tokens", type=int, default=512)
+    parser.add_argument(
+        "--progress-total-records",
+        type=int,
+        default=0,
+        help="Expected translation-candidate records for measured percentage reporting",
+    )
     return parser.parse_args(argv)
 
 
@@ -2209,6 +2249,10 @@ def validate_arguments(args: argparse.Namespace) -> None:
         )
     if args.translation_cache_size < 0:
         raise EnrichmentError("--translation-cache-size cannot be negative")
+    if args.progress_total_records < 0:
+        raise EnrichmentError("--progress-total-records cannot be negative")
+    if args.progress_total_records > 0 and args.input_jsonl is None:
+        raise EnrichmentError("--progress-total-records requires --input-jsonl")
     if args.translation_strict_determinism and args.translation_parallelism > 1:
         raise EnrichmentError(
             "--translation-strict-determinism cannot be combined with parallelism above 1"
@@ -2365,6 +2409,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         processed = 0
         skipped = 0
         translated = 0
+        last_progress_percent = -1.0
+        last_progress_time = 0.0
+
+        def report_translation_progress(completed: int, *, force: bool = False) -> None:
+            nonlocal last_progress_percent, last_progress_time
+            total = args.progress_total_records
+            if total <= 0:
+                return
+            bounded = min(max(completed, 0), total)
+            percent = bounded * 100.0 / total
+            now = time.monotonic()
+            if (
+                not force
+                and percent < 100.0
+                and percent - last_progress_percent < 1.0
+                and now - last_progress_time < 5.0
+            ):
+                return
+            print(
+                f"Progress: offline translation: {percent:.1f}% "
+                f"({bounded:,}/{total:,} records)",
+                file=sys.stderr,
+                flush=True,
+            )
+            last_progress_percent = percent
+            last_progress_time = now
+
+        report_translation_progress(0, force=True)
 
         def generate_records() -> Iterable[dict[str, Any]]:
             nonlocal processed, skipped
@@ -2380,6 +2452,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     translation_window_size,
                     translation_cache,
                     include_parents=not args.translations_only,
+                    progress=report_translation_progress,
                 )
                 return
             for raw_path in iter_extraction_paths(args.paths, args.paths_from):

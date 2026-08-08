@@ -547,6 +547,7 @@ class EnrichmentTests(unittest.TestCase):
         second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
         translator = FakeTranslator()
         cache = TranslationCache(16)
+        progress: list[int] = []
 
         output = list(
             translate_normalized_records(
@@ -558,11 +559,13 @@ class EnrichmentTests(unittest.TestCase):
                 maximum_characters=200,
                 window_size=1,
                 cache=cache,
+                progress=progress.append,
             )
         )
 
         self.assertEqual([["language text"]], translator.calls)
         self.assertEqual(4, len(output))
+        self.assertEqual([1, 2], progress)
 
     def test_changed_structured_identifier_is_fatal(self) -> None:
         parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
@@ -574,6 +577,19 @@ class EnrichmentTests(unittest.TestCase):
 
         with self.assertRaisesRegex(EnrichmentError, "analyst@example.com"):
             add_translations([parent], IdentifierBreakingTranslator(), "en", 4, 4, 200)
+
+    def test_identifier_only_candidate_bypasses_translation_and_is_auditable(self) -> None:
+        parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
+        parent = {**parent, "text": "$SYNTH_TOKEN001 $SYNTH_TOKEN001"}
+        translator = FakeTranslator()
+
+        children = add_translations([parent], translator, "en", 4, 4, 200)
+
+        self.assertEqual([], translator.calls)
+        self.assertEqual(1, len(children))
+        self.assertEqual("$SYNTH_TOKEN001 $SYNTH_TOKEN001", children[0]["text"])
+        self.assertEqual("unchanged", children[0]["transform"]["outcome"])
+        self.assertEqual(parent["recordId"], children[0]["parentRecordId"])
 
     def test_deduplication_keeps_distinct_provenance(self) -> None:
         records = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")

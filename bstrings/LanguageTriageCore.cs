@@ -111,7 +111,8 @@ internal static class LanguageTriageCore
         string assessmentsPath,
         LanguageTriageOptions options,
         CancellationToken cancellationToken = default,
-        LanguageDetectionHandler? detector = null
+        LanguageDetectionHandler? detector = null,
+        Action<long, long>? progress = null
     )
     {
         ValidateOptions(options);
@@ -153,6 +154,8 @@ internal static class LanguageTriageCore
             options.DetectionMode == LanguageDetectionMode.Adaptive
                 ? await ResolveAdaptiveModeAsync(inputFullPath, options, cancellationToken)
                 : options.DetectionMode;
+        var inputBytes = new FileInfo(inputFullPath).Length;
+        progress?.Invoke(0, inputBytes);
         long inputRecords = 0;
         long targetRecords = 0;
         long candidates = 0;
@@ -282,9 +285,11 @@ internal static class LanguageTriageCore
                 )
                 {
                     await FlushAsync();
+                    progress?.Invoke(Math.Min(inputBytes, reader.BaseStream.Position), inputBytes);
                 }
             }
             await FlushAsync();
+            progress?.Invoke(inputBytes, inputBytes);
             await candidateWriter.FlushAsync(cancellationToken);
             await assessmentWriter.FlushAsync(cancellationToken);
             await candidateWriter.DisposeAsync();
@@ -586,30 +591,23 @@ internal static class LanguageTriageCore
         out int characterCount
     )
     {
-        characterCount = 0;
-        if (text.Length < minimum)
-        {
-            return false;
-        }
-        var letters = 0;
-        foreach (var rune in text.EnumerateRunes())
-        {
-            characterCount++;
-            if (characterCount > maximum)
-            {
-                return false;
-            }
-            if (Rune.IsLetter(rune))
-            {
-                letters++;
-            }
-        }
-        return characterCount >= minimum && letters >= 4;
+        characterCount = text.EnumerateRunes().Count();
+        return TranslationTextEligibility.ShouldTranslate(
+            text,
+            minimum,
+            maximum,
+            minimumLetters: 4
+        );
     }
 
     private static bool IsLinguisticCandidate(string text, int minimum, int maximum)
     {
-        return TryMeasureLinguisticCandidate(text, minimum, maximum, out _);
+        return TranslationTextEligibility.ShouldTranslate(
+            text,
+            minimum,
+            maximum,
+            minimumLetters: 4
+        );
     }
 
     internal static bool ShouldFlushBeforeAdding(

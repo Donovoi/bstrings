@@ -17,7 +17,8 @@ internal static class TranslationCandidateCore
         string outputPath,
         int minimumCharacters,
         int maximumCharacters,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<long, long>? progress = null
     )
     {
         if (minimumCharacters < 1)
@@ -38,6 +39,8 @@ internal static class TranslationCandidateCore
 
         Directory.CreateDirectory(Path.GetDirectoryName(outputFullPath)!);
         var temporaryPath = outputFullPath + ".partial." + Guid.NewGuid().ToString("N");
+        var inputBytes = new FileInfo(inputFullPath).Length;
+        progress?.Invoke(0, inputBytes);
         long inputRecords = 0;
         long candidateRecords = 0;
         try
@@ -74,21 +77,24 @@ internal static class TranslationCandidateCore
                     }
 
                     var text = item.Record.Text!;
-                    var textShape = MeasureText(text);
                     if (
-                        textShape.CharacterCount >= minimumCharacters
-                        && textShape.CharacterCount <= maximumCharacters
-                        && textShape.ContainsLetter
+                        TranslationTextEligibility.ShouldTranslate(
+                            text,
+                            minimumCharacters,
+                            maximumCharacters
+                        )
                     )
                     {
                         await writer.WriteLineAsync(item.Json.AsMemory(), cancellationToken);
                         candidateRecords++;
                     }
+                    progress?.Invoke(Math.Min(inputBytes, item.StreamPosition), inputBytes);
                 }
                 await writer.FlushAsync(cancellationToken);
             }
 
             File.Move(temporaryPath, outputFullPath, overwrite: true);
+            progress?.Invoke(inputBytes, inputBytes);
             temporaryPath = string.Empty;
             return new TranslationCandidateStats(inputRecords, candidateRecords);
         }
@@ -104,21 +110,6 @@ internal static class TranslationCandidateCore
                 catch (UnauthorizedAccessException) { }
             }
         }
-    }
-
-    private static (int CharacterCount, bool ContainsLetter) MeasureText(string text)
-    {
-        var characterCount = 0;
-        var containsLetter = false;
-        foreach (var rune in text.EnumerateRunes())
-        {
-            characterCount++;
-            if (Rune.IsLetter(rune))
-            {
-                containsLetter = true;
-            }
-        }
-        return (characterCount, containsLetter);
     }
 
     private static StringComparison PathComparison =>

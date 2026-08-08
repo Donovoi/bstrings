@@ -228,6 +228,33 @@ public sealed class BundlePackInstallerTests
     }
 
     [Fact]
+    public void Assemble_ReportsPackAssemblyAndFinalVerificationProgress()
+    {
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSinglePack();
+        var updates = new List<(string Activity, long Completed, long Total)>();
+
+        BundlePackInstaller.Assemble(
+            fixture.TrustManifestPath,
+            scope.CacheDirectory,
+            scope.OutputDirectory,
+            TestContext.Current.CancellationToken,
+            (activity, completed, total) => updates.Add((activity, completed, total))
+        );
+
+        Assert.Contains(updates, update =>
+            update.Activity.StartsWith("bundle pack verification (", StringComparison.Ordinal)
+                && update.Completed == update.Total
+        );
+        Assert.Contains(updates, update =>
+            update.Activity == "bundle assembly" && update.Completed == update.Total
+        );
+        Assert.Contains(updates, update =>
+            update.Activity == "bundle verification" && update.Completed == update.Total
+        );
+    }
+
+    [Fact]
     public void Assemble_StagesVerifiedFilePackBeforeStrictFinalManifestVerification()
     {
         using var scope = new BundlePackScope();

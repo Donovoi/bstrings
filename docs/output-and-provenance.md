@@ -1,6 +1,6 @@
 # Output, completion, and provenance
 
-The complete v1.9.6 quality kit produces native, FLOSS, OCR, language, and
+The complete v1.9.7 quality kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
 
@@ -15,6 +15,13 @@ Treat the result directory as one examination artifact. It records the command,
 program version, per-input content hashes, optional-tool versions, model
 revision and hash, and completion status; preserve the directory together with
 the final process exit status.
+
+Console lines beginning `Progress: analysis:` report the overall completed
+stage fraction. Native extraction, model and bundle hashing, language triage,
+translation filtering, and offline translation also expose chunk, byte, or
+record percentages. These are deterministic work-unit ratios rather than an
+estimated time remaining, so throughput changes can make equal percentage
+steps take different amounts of time.
 
 ## Know when a run is complete
 
@@ -84,7 +91,7 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-In current source and v1.9.6, every completed integrated `analyze` run
+In current source and v1.9.7, every completed integrated `analyze` run
 also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,
