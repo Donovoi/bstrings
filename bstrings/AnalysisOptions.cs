@@ -60,6 +60,7 @@ internal sealed record AnalysisOptions(
     int TranslationParallelism,
     int TranslationThreads,
     int TranslationGpuLayers,
+    bool TranslationStrictDeterminism,
     string PatternSelection,
     string? RegexFilePath,
     string Processor,

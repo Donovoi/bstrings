@@ -1171,6 +1171,7 @@ public sealed class OcrCompletionCoreTests
             TranslationParallelism: 0,
             TranslationThreads: 0,
             TranslationGpuLayers: -1,
+            TranslationStrictDeterminism: false,
             PatternSelection: "all",
             RegexFilePath: null,
             Processor: "cpu",

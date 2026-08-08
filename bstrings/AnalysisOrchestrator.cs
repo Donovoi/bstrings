@@ -1143,6 +1143,10 @@ internal static class AnalysisOrchestrator
         arguments.Add(options.TranslationThreads.ToString(System.Globalization.CultureInfo.InvariantCulture));
         arguments.Add("--translation-gpu-layers");
         arguments.Add(options.TranslationGpuLayers.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (options.TranslationStrictDeterminism)
+        {
+            arguments.Add("--translation-strict-determinism");
+        }
         arguments.Add("--translation-min-characters");
         arguments.Add(options.TranslationMinimumCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture));
         arguments.Add("--translation-max-characters");
@@ -1367,10 +1371,11 @@ internal static class AnalysisOrchestrator
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Invalid translation character bounds.");
         }
-        if (options.TranslationParallelism < 0 || options.TranslationThreads < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), "Translation parallelism and thread counts cannot be negative.");
-        }
+        AnalysisCli.ValidateTranslationScheduling(
+            options.TranslationParallelism,
+            options.TranslationThreads,
+            options.TranslationStrictDeterminism
+        );
         if (options.TranslationGpuLayers < -1)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Translation GPU layers must be -1 or non-negative.");

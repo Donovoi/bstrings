@@ -7,6 +7,23 @@ namespace bstrings.Tests;
 public sealed class AnalysisCliTests
 {
     [Theory]
+    [InlineData(new[] { "help" }, new[] { "--help" })]
+    [InlineData(new[] { "help", "analyze" }, new[] { "analyze", "--help" })]
+    [InlineData(
+        new[] { "help", "bundle", "verify" },
+        new[] { "bundle", "verify", "--help" }
+    )]
+    [InlineData(new[] { "analyze", "help" }, new[] { "analyze", "--help" })]
+    [InlineData(new[] { "--help" }, new[] { "--help" })]
+    public void NormalizeHelpArguments_AcceptsCommandStyleHelp(
+        string[] arguments,
+        string[] expected
+    )
+    {
+        Assert.Equal(expected, Program.NormalizeHelpArguments(arguments));
+    }
+
+    [Theory]
     [InlineData(null, false, 0)]
     [InlineData(null, true, 1)]
     [InlineData("off", true, 0)]
@@ -111,6 +128,9 @@ public sealed class AnalysisCliTests
             footer,
             StringComparison.Ordinal
         );
+        Assert.Contains("bstrings.exe help analyze", footer, StringComparison.Ordinal);
+        Assert.Contains("percentage completion", footer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(".incomplete", footer, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -141,5 +161,47 @@ public sealed class AnalysisCliTests
                 maximumLength: EnrichmentRegexPipelineCore.MaxNativeTextCharacters + 1
             )
         );
+    }
+
+    [Theory]
+    [InlineData(0, 0, false)]
+    [InlineData(0, 0, true)]
+    [InlineData(1, 8, true)]
+    [InlineData(4, 0, false)]
+    public void ValidateTranslationScheduling_AcceptsSupportedCombinations(
+        int parallelism,
+        int threads,
+        bool strictDeterminism
+    )
+    {
+        AnalysisCli.ValidateTranslationScheduling(parallelism, threads, strictDeterminism);
+    }
+
+    [Theory]
+    [InlineData(-1, 0, false)]
+    [InlineData(0, -1, false)]
+    public void ValidateTranslationScheduling_RejectsNegativeCounts(
+        int parallelism,
+        int threads,
+        bool strictDeterminism
+    )
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AnalysisCli.ValidateTranslationScheduling(parallelism, threads, strictDeterminism)
+        );
+    }
+
+    [Fact]
+    public void ValidateTranslationScheduling_RejectsParallelStrictDeterminism()
+    {
+        var error = Assert.Throws<ArgumentException>(() =>
+            AnalysisCli.ValidateTranslationScheduling(
+                parallelism: 2,
+                threads: 0,
+                strictDeterminism: true
+            )
+        );
+
+        Assert.Contains("parallelism above 1", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 }

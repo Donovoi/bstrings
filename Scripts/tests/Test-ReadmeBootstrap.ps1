@@ -125,13 +125,13 @@ function Invoke-RestMethod {
     )
     $script:releaseLookups++
     return [pscustomobject]@{
-        tag_name = 'v1.9.7'
+        tag_name = 'v1.9.8'
         draft = $false
         prerelease = $false
         assets = @(
             [pscustomobject]@{
                 name = 'Install-BstringsQuality.ps1'
-                browser_download_url = 'https://github.com/Donovoi/bstrings/releases/download/v1.9.7/Install-BstringsQuality.ps1'
+                browser_download_url = 'https://github.com/Donovoi/bstrings/releases/download/v1.9.8/Install-BstringsQuality.ps1'
                 digest = "sha256:$script:installerDigest"
             }
         )

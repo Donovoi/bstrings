@@ -28,7 +28,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.7](https://github.com/Donovoi/bstrings/releases/tag/v1.9.7).
+[v1.9.8](https://github.com/Donovoi/bstrings/releases/tag/v1.9.8).
 Requirements: Windows 11 x64, a connected staging machine, and at least
 **30 GiB free**. Administrator rights are not required.
 
@@ -40,7 +40,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.7'
+  $tag = 'v1.9.8'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -86,6 +86,26 @@ analysis with:
 .\bstrings-quality\bstrings.exe analyze -d D:\evidence -o D:\results --full
 ```
 
+For an upgrade, run the bootstrap from a new empty parent directory. It
+deliberately refuses to overwrite an old installer, cache, or
+`bstrings-quality` directory. Keep the previous kit until the new one verifies,
+then use a new results directory for the new run.
+
+## Choose a command
+
+```powershell
+.\bstrings-quality\bstrings.exe help
+.\bstrings-quality\bstrings.exe help analyze
+.\bstrings-quality\bstrings.exe help bundle verify
+```
+
+- Use `analyze --full` for the complete provenance-preserving workflow and
+  filterable reports.
+- Use `analyze` with explicit stages set to `off` for a native-only report
+  directory.
+- Use the root `-f`/`-d` options only for the legacy single-file output.
+- Use `bundle verify` before examination and after copying the kit offline.
+
 Installer, bundle, direct extraction, and integrated-analysis commands print
 percentage completion. Integrated analysis combines stage progress with
 measured byte or record progress for long-running work. Percentages are
@@ -100,7 +120,8 @@ coverage is required.
 For an air-gapped workstation, copy the whole `bstrings-quality` directory and
 run `bundle verify` again before examining evidence.
 
-Detailed guidance: [download and installation](docs/download-and-install.md),
+Detailed guidance: [terminal help and command reference](docs/command-reference.md),
+[download and installation](docs/download-and-install.md),
 [air-gapped deployment](docs/air-gapped-deployment.md),
 [analysis and translation](docs/enrichment-pipeline.md), and
 [outputs and provenance](docs/output-and-provenance.md). The forensic report

@@ -1,6 +1,6 @@
 # Air-gapped deployment
 
-The complete Windows x64 v1.9.7 quality kit is prepared on a connected staging
+The complete Windows x64 v1.9.8 quality kit is prepared on a connected staging
 machine, verified, then copied as a directory to the
 disconnected workstation. During an examination, the user runs only the root
 `bstrings.exe`: no package manager, Python command, model hub, service
@@ -8,7 +8,7 @@ installation, or network access is needed.
 PowerShell is only the shell displaying the examples below; normal users do not
 run a Python script or package-manager command.
 
-The same v1.9.7 installation contains the current backend, reporting, pattern,
+The same v1.9.8 installation contains the current backend, reporting, pattern,
 FLOSS, OCR, language, and translation features. See
 [download and installation](download-and-install.md), and do not mix files or
 manifests between versions.
@@ -25,8 +25,8 @@ On a connected staging machine, start in the directory where you want
 at least 30 GiB free on the volume holding its install and cache. It installs
 the complete quality profile.
 
-Use the [pinned, checksum-verified v1.9.7
-bootstrap](https://github.com/Donovoi/bstrings/blob/v1.9.7/README.md#get-started)
+Use the [pinned, checksum-verified v1.9.8
+bootstrap](https://github.com/Donovoi/bstrings/blob/v1.9.8/README.md#get-started)
 for `Install-BstringsQuality.ps1`. The installer handles the downloads,
 resumable cache, assembly, and final strict verification. A failed run keeps
 verified cache data for the next attempt; a successful default run removes its
@@ -57,7 +57,7 @@ On the disconnected workstation:
 ```
 
 `bundle verify` rejects a missing, extra, linked, resized, or SHA-256-mismatched
-file. In the v1.9.7 quality kit, `analyze --full` runs native extraction,
+file. In the v1.9.8 quality kit, `analyze --full` runs native extraction,
 executable recovery, OCR, language assessment, local translation, all 66
 built-in patterns, and the report projection. A requested stage fails instead
 of being silently skipped.
@@ -102,7 +102,7 @@ system prerequisites.
 
 ## OCR hardware choices
 
-The v1.9.7 OCR profile defines two runtime environments:
+The v1.9.8 OCR profile defines two runtime environments:
 
 - a CPU-only ONNX Runtime environment, verified separately as a fallback; and
 - the active DirectML ONNX Runtime environment, which exposes both DirectML and

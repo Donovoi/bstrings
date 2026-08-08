@@ -1,7 +1,7 @@
 # Offline translation selection gate — 2026-08-04, updated 2026-08-06
 
 Distribution status: the accepted translation profiles are published through
-the complete v1.9.6 quality channel. They are not included in the standalone
+the complete v1.9.8 quality channel. They are not included in the standalone
 core ZIP. This document preserves the dated selection evidence; current
 acquisition instructions are in the
 [download guide](download-and-install.md).

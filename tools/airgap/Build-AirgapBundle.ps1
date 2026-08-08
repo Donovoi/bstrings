@@ -857,6 +857,7 @@ $null = Resolve-ChildFile `
     'Bundled Markdown-link verifier'
 $bundleDocumentNames = @(
     'air-gapped-deployment.md',
+    'command-reference.md',
     'crypto-address-coverage-2026-08.md',
     'download-and-install.md',
     'enrichment-pipeline.md',
@@ -877,7 +878,7 @@ $bundleBenchmarkResultNames = @(
     'forensic-report-projection-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.7.md'
+    'v1.9.8.md'
 )
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `

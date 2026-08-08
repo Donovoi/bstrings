@@ -1,7 +1,7 @@
 # Enrichment pipeline
 
 This document describes the integrated workflow in current source and the
-complete v1.9.7 quality release. See
+complete v1.9.8 quality release. See
 [download and installation](download-and-install.md) before choosing a command,
 and never combine assets from different versions.
 
@@ -27,7 +27,7 @@ interface is one command:
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete v1.9.7 bundle contains every worker, runtime, model, and dependency
+The complete v1.9.8 bundle contains every worker, runtime, model, and dependency
 published for that version. It does not ask the user to install or invoke
 Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
@@ -130,7 +130,7 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.7 profile
+page. Images are always OCR inputs when the stage is enabled. The v1.9.8 profile
 defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
 per-path inference smoke test. Those smokes do not establish cross-provider
 parity or corpus-level quality. CUDA OCR is not part of the profile. See
@@ -252,6 +252,12 @@ Windows/registry paths, CVEs, GUIDs, host/port values, common filenames,
 hyphenated/underscored identifiers, and placeholders. A missing or changed
 protected token aborts the output transaction.
 
+A record containing only protected identifiers is classified as
+`non-linguistic` and does not enter model inference. The adapter independently
+applies the same bypass if such a record reaches its input. Mixed natural
+language containing protected identifiers is still translated and remains
+fail-closed if any protected occurrence changes, disappears, or is duplicated.
+
 The local server must return exactly one terminal `stop` choice and the expected
 prompt-token count. Empty, truncated, missing, extra, or duplicated translations
 fail. An unchanged successful translation stays in the audit trail with
@@ -295,6 +301,10 @@ The important result files are:
 A result is complete only when both status documents say `complete` and the
 `.incomplete` marker has been removed. See [output and provenance](output-and-provenance.md)
 for schema and interpretation detail.
+
+Use `bstrings.exe help analyze` for the installed option set, or see the
+[terminal help and command reference](command-reference.md) for a task-oriented
+workflow guide.
 
 ## Maintainer and regression entry points
 
