@@ -2,7 +2,7 @@
 param(
     [string]$DestinationDirectory = (Join-Path (Get-Location).Path 'bstrings-quality'),
     [string]$InstallerCacheDirectory,
-    [string]$ReleaseTag = 'v1.9.11',
+    [string]$ReleaseTag = 'v1.9.12',
     [switch]$KeepCache,
     [ValidateRange(1, 10)]
     [int]$AcquireAttempts = 3,
@@ -18,7 +18,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$expectedReleaseTag = 'v1.9.11'
+$expectedReleaseTag = 'v1.9.12'
 $repository = 'Donovoi/bstrings'
 $qualityManifestName = 'bundle-packs-quality.json'
 $coreArchiveName = 'bstrings-win-x64.zip'
@@ -27,12 +27,16 @@ $installerName = 'Install-BstringsQuality.ps1'
 $maximumMetadataBytes = 4MB
 $maximumCoreBytes = 2000000000
 $productionMinimumFreeBytes = 30GB
-$createdDestination = $false
 $installationSucceeded = $false
 $ownedCache = $false
 $cacheRoot = $null
 $destination = $null
 $destinationParent = $null
+$stagingDestination = $null
+$stagingDestinationCreated = $false
+$backupDestination = $null
+$backupDestinationCreated = $false
+$publishedDestination = $false
 
 function Write-InstallerProgress([double]$Percent, [string]$Activity) {
     if ($Percent -lt 0 -or $Percent -gt 100 -or [string]::IsNullOrWhiteSpace($Activity)) {
@@ -539,6 +543,17 @@ function Invoke-BundleVerify([string]$Executable, [string]$BundleRoot, [string]$
     }
 }
 
+function Assert-PhysicalDirectoryTree([string]$Path, [string]$Name) {
+    Assert-PhysicalItem $Path $Name $true | Out-Null
+    $linked = @(
+        Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction Stop |
+            Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }
+    )
+    if ($linked.Count -ne 0) {
+        throw "$Name contains a link or reparse point: $Path"
+    }
+}
+
 function Remove-ValidatedDirectory(
     [string]$Path,
     [string]$ExpectedParent,
@@ -561,14 +576,7 @@ function Remove-ValidatedDirectory(
     ) {
         throw "Refusing to remove an uncontrolled $Name path: $fullPath"
     }
-    Assert-PhysicalItem $fullPath $Name $true | Out-Null
-    $linked = @(
-        Get-ChildItem -LiteralPath $fullPath -Recurse -Force -ErrorAction Stop |
-            Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 }
-    )
-    if ($linked.Count -ne 0) {
-        throw "Refusing to remove $Name because it contains a link or reparse point: $fullPath"
-    }
+    Assert-PhysicalDirectoryTree $fullPath $Name
     [IO.Directory]::Delete($fullPath, $true)
 }
 
@@ -628,7 +636,7 @@ if ([string]::IsNullOrWhiteSpace($destinationParent)) {
 }
 $existingDestination = Get-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
 if ($null -ne $existingDestination) {
-    Assert-PhysicalItem $destination 'DestinationDirectory' $true | Out-Null
+    Assert-PhysicalDirectoryTree $destination 'DestinationDirectory'
 }
 Assert-ExistingPathChain $destination 'DestinationDirectory'
 
@@ -747,57 +755,104 @@ try {
     $coreRuntime = Expand-VerifiedCore $coreArchivePath $cacheRoot
     Write-InstallerProgress 30 'authenticated core runtime ready'
 
+    $destinationLeaf = [IO.Path]::GetFileName($destination)
+    $stagingLeaf = ".${destinationLeaf}.install-$([Guid]::NewGuid().ToString('N')).staging"
+    $backupLeaf = ".${destinationLeaf}.backup-$([Guid]::NewGuid().ToString('N')).tmp"
+    $stagingDestination = Join-Path $destinationParent $stagingLeaf
+    $backupDestination = Join-Path $destinationParent $backupLeaf
+    if (
+        (Test-Path -LiteralPath $stagingDestination) -or
+        (Test-Path -LiteralPath $backupDestination)
+    ) {
+        throw 'A unique installer staging or backup path unexpectedly exists.'
+    }
+    Write-InstallerProgress 35 'replacement staging prepared'
+
+    $lastAcquireExit = 0
+    for ($attempt = 1; $attempt -le $AcquireAttempts; $attempt++) {
+        Write-Host "Acquiring the quality bundle (attempt $attempt of $AcquireAttempts)..."
+        $lastAcquireExit = Invoke-NativeProcess $coreRuntime.Executable @(
+            'bundle',
+            'acquire',
+            '--manifest',
+            $qualityManifestPath,
+            '--cache',
+            $packCache,
+            '--output',
+            $stagingDestination
+        )
+        if ($lastAcquireExit -eq 0) {
+            $stagingDestinationCreated = $true
+            break
+        }
+        if (Test-Path -LiteralPath $stagingDestination) {
+            Remove-ValidatedDirectory `
+                $stagingDestination `
+                $destinationParent `
+                $stagingLeaf `
+                'invocation-owned failed staging destination'
+        }
+        if ($attempt -lt $AcquireAttempts) {
+            Write-Warning "Bundle acquisition exited with $lastAcquireExit; retrying with the same resumable cache."
+        }
+    }
+    if ($lastAcquireExit -ne 0) {
+        throw "Bundle acquisition failed after $AcquireAttempts attempt(s); last exit code: $lastAcquireExit."
+    }
+    Write-InstallerProgress 85 'quality bundle acquired and assembled'
+    Assert-PhysicalDirectoryTree $stagingDestination 'Staged replacement quality bundle'
+    Assert-InstalledManifest $stagingDestination $trustIdentity.AirgapManifestSha256
+    Invoke-BundleVerify `
+        $coreRuntime.Executable `
+        $stagingDestination `
+        'Authenticated-core verification of the staged replacement quality bundle'
+    Write-InstallerProgress 90 'replacement quality bundle verified'
+
     if ($null -ne $existingDestination) {
-        Assert-InstalledManifest $destination $trustIdentity.AirgapManifestSha256
-        Invoke-BundleVerify `
-            $coreRuntime.Executable `
-            $destination `
-            'Trusted-core verification of the existing quality bundle'
-        $installationSucceeded = $true
-        Write-InstallerProgress 95 'existing quality bundle verified'
-        Write-Host "The existing bstrings quality kit is complete and verified: $destination"
+        Assert-PhysicalDirectoryTree $destination 'DestinationDirectory before replacement'
+        [IO.Directory]::Move($destination, $backupDestination)
+        $backupDestinationCreated = $true
     }
-    else {
-        $lastAcquireExit = 0
-        for ($attempt = 1; $attempt -le $AcquireAttempts; $attempt++) {
-            Write-Host "Acquiring the quality bundle (attempt $attempt of $AcquireAttempts)..."
-            $lastAcquireExit = Invoke-NativeProcess $coreRuntime.Executable @(
-                'bundle',
-                'acquire',
-                '--manifest',
-                $qualityManifestPath,
-                '--cache',
-                $packCache,
-                '--output',
-                $destination
+    try {
+        [IO.Directory]::Move($stagingDestination, $destination)
+        $stagingDestinationCreated = $false
+        $publishedDestination = $true
+    }
+    catch {
+        if ($backupDestinationCreated -and -not (Test-Path -LiteralPath $destination)) {
+            [IO.Directory]::Move($backupDestination, $destination)
+            $backupDestinationCreated = $false
+        }
+        throw
+    }
+
+    Assert-InstalledManifest $destination $trustIdentity.AirgapManifestSha256
+    $installedExecutable = Join-Path $destination 'bstrings.exe'
+    Assert-PhysicalItem $installedExecutable 'Installed bstrings.exe' $false | Out-Null
+    Invoke-BundleVerify `
+        $installedExecutable `
+        $destination `
+        'Final installed quality-bundle verification'
+    $installationSucceeded = $true
+    Write-InstallerProgress 95 'installed replacement verified'
+
+    if ($backupDestinationCreated) {
+        try {
+            Remove-ValidatedDirectory `
+                $backupDestination `
+                $destinationParent `
+                $backupLeaf `
+                'replaced quality-bundle backup'
+            $backupDestinationCreated = $false
+        }
+        catch {
+            Write-Warning (
+                "The replacement is verified, but the previous bundle backup could not be removed: " +
+                "$backupDestination ($($_.Exception.Message))"
             )
-            if ($lastAcquireExit -eq 0) {
-                $createdDestination = $true
-                break
-            }
-            if (Test-Path -LiteralPath $destination) {
-                throw "Bundle acquisition failed with exit code $lastAcquireExit and a destination now exists. It was preserved because this installer cannot prove ownership after a failed native operation."
-            }
-            if ($attempt -lt $AcquireAttempts) {
-                Write-Warning "Bundle acquisition exited with $lastAcquireExit; retrying with the same resumable cache."
-            }
         }
-        if ($lastAcquireExit -ne 0) {
-            throw "Bundle acquisition failed after $AcquireAttempts attempt(s); last exit code: $lastAcquireExit."
-        }
-        Write-InstallerProgress 85 'quality bundle acquired and assembled'
-        Assert-PhysicalItem $destination 'New quality bundle' $true | Out-Null
-        Assert-InstalledManifest $destination $trustIdentity.AirgapManifestSha256
-        $installedExecutable = Join-Path $destination 'bstrings.exe'
-        Assert-PhysicalItem $installedExecutable 'Installed bstrings.exe' $false | Out-Null
-        Invoke-BundleVerify `
-            $installedExecutable `
-            $destination `
-            'Final installed quality-bundle verification'
-        $installationSucceeded = $true
-        Write-InstallerProgress 95 'installed quality bundle verified'
-        Write-Host "bstrings quality kit installed and verified: $destination"
     }
+    Write-Host "bstrings quality kit installed or refreshed and verified: $destination"
 
     Remove-ValidatedDirectory `
         $coreRuntime.Root `
@@ -831,17 +886,46 @@ try {
 }
 catch {
     $originalError = $_
-    if ($createdDestination -and -not $installationSucceeded -and (Test-Path -LiteralPath $destination)) {
+    if (-not $installationSucceeded) {
+        $cleanupError = $null
         try {
-            Remove-ValidatedDirectory `
-                $destination `
-                $destinationParent `
-                ([IO.Path]::GetFileName($destination)) `
-                'invocation-created invalid destination'
-            Write-Warning 'Removed the invalid destination created by this failed installation; the resumable cache was retained.'
+            if ($publishedDestination -and (Test-Path -LiteralPath $destination)) {
+                Remove-ValidatedDirectory `
+                    $destination `
+                    $destinationParent `
+                    ([IO.Path]::GetFileName($destination)) `
+                    'failed replacement destination'
+                $publishedDestination = $false
+            }
+            if ($backupDestinationCreated -and -not (Test-Path -LiteralPath $destination)) {
+                [IO.Directory]::Move($backupDestination, $destination)
+                $backupDestinationCreated = $false
+                Write-Warning 'Restored the previous quality kit after the replacement failed.'
+            }
+            elseif ($backupDestinationCreated) {
+                throw "The previous quality kit could not be restored because the destination path reappeared. The previous bytes remain at: $backupDestination"
+            }
+            if (
+                $stagingDestinationCreated -and
+                $null -ne $stagingDestination -and
+                (Test-Path -LiteralPath $stagingDestination)
+            ) {
+                Remove-ValidatedDirectory `
+                    $stagingDestination `
+                    $destinationParent `
+                    ([IO.Path]::GetFileName($stagingDestination)) `
+                    'failed replacement staging destination'
+                $stagingDestinationCreated = $false
+            }
         }
         catch {
-            throw "Installation failed: $($originalError.Exception.Message) Cleanup also failed: $($_.Exception.Message)"
+            $cleanupError = $_
+        }
+        if ($null -ne $cleanupError) {
+            throw "Installation failed: $($originalError.Exception.Message) Rollback also failed: $($cleanupError.Exception.Message)"
+        }
+        if ($null -eq $existingDestination -and -not (Test-Path -LiteralPath $destination)) {
+            Write-Warning 'Removed the invalid replacement created by this failed installation; the resumable cache was retained.'
         }
     }
     throw $originalError

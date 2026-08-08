@@ -2,7 +2,7 @@
 
 ## Current release
 
-[bstrings v1.9.11](https://github.com/Donovoi/bstrings/releases/tag/v1.9.11)
+[bstrings v1.9.12](https://github.com/Donovoi/bstrings/releases/tag/v1.9.12)
 is the complete Windows x64 release. Its quality installer assembles one
 verified offline directory containing the current native scanner and reporting
 code together with FLOSS, Magika, OCR, language detection, and local
@@ -11,7 +11,7 @@ the accepted Hy-MT2 7B Q8_0 translation model.
 
 | Installation | Included | Intended use |
 | --- | --- | --- |
-| Complete `bstrings-quality` kit | Every v1.9.11 stage, runtime, model, licence, manifest, all 66 patterns, TSV reports, and histograms | Normal and air-gapped forensic analysis |
+| Complete `bstrings-quality` kit | Every v1.9.12 stage, runtime, model, licence, manifest, all 66 patterns, TSV reports, and histograms | Normal and air-gapped forensic analysis |
 | Core ZIP only | Native CPU/Rust/CUDA/hybrid extraction, current patterns, native-only JSONL/TSV reports, and histograms | Small native-only installation or diagnostics |
 
 Do not combine executables, manifests, packs, tools, or models from different
@@ -25,14 +25,19 @@ Requirements: Windows 11 x64, a connected staging machine, and at least
 required. DirectML OCR requires a compatible Windows GPU/driver stack; CPU OCR
 and native CPU extraction remain available without a GPU.
 
-Run the [safe pinned installer bootstrap from the v1.9.11
-README](https://github.com/Donovoi/bstrings/blob/v1.9.11/README.md#get-started)
+Run the [safe pinned installer bootstrap from the v1.9.12
+README](https://github.com/Donovoi/bstrings/blob/v1.9.12/README.md#get-started)
 verbatim. Do not pipe a downloaded script into `Invoke-Expression`. The
 bootstrap downloads to a unique temporary file, authenticates the exact GitHub
 release and installer digest, and then replaces any existing physical
 `Install-BstringsQuality.ps1` before launching it. A failed download or digest
 check preserves the previous installer. The installer then downloads, resumes,
 assembles, and strictly verifies the complete `bstrings-quality` directory.
+Every run refreshes an existing physical destination rather than accepting or
+patching its old contents. It verifies a unique sibling replacement first,
+keeps the previous directory as a rollback backup during the swap, and removes
+that backup only after the installed executable verifies the new directory.
+Stale files that are absent from the current release therefore do not survive.
 
 The installer prints an overall percentage, while its bundle client prints
 measured percentages for each pack download and hash plus assembly and final
@@ -45,7 +50,7 @@ Verify the completed bundle before use:
 .\bstrings-quality\bstrings.exe bundle verify
 ```
 
-Run every v1.9.11 stage over one file:
+Run every v1.9.12 stage over one file:
 
 ```powershell
 .\bstrings-quality\bstrings.exe analyze `
@@ -92,18 +97,22 @@ legacy flat-output interface.
 
 Rerun the pinned bootstrap in the same parent directory whenever the local
 installer script is stale: a successfully authenticated download always
-replaces that file. The bundle transaction remains stricter:
+replaces that file. The bundle transaction then:
 
-1. a valid same-version `bstrings-quality` directory is reverified without
-   reacquisition;
-2. an interrupted acquisition can reuse its verified versioned cache;
-3. an invalid, linked, or mixed-version destination is preserved and rejected
-   instead of being patched in place; and
-4. a new analysis still requires a new or empty result directory.
+1. assembles and verifies a complete sibling replacement on every run;
+2. can reuse only size- and SHA-256-verified same-release cache files after an
+   interrupted acquisition;
+3. swaps the verified replacement over a valid physical destination, removes
+   all stale old files, and restores the prior directory if final verification
+   fails;
+4. rejects a linked destination tree rather than risking writes outside it; and
+5. leaves analysis output rules unchanged: a new analysis still requires a new
+   or empty result directory.
 
-For a version upgrade, keep the previous verified kit until the new one passes
-`bstrings.exe --version` and `bundle verify`. Move the old directory aside or
-select a different `-DestinationDirectory`; do not merge release files by hand.
+For a version upgrade, rerun the current pinned bootstrap from the same parent
+directory. The installer keeps the previous directory as an internal rollback
+backup until the new installed executable passes `bundle verify`; do not merge
+release files by hand.
 If analysis failed, retain its `.incomplete` result for diagnosis and rerun into
 a different empty directory after correcting the cause.
 
@@ -131,7 +140,7 @@ network connection is required during examination.
 
 Use this smaller path only when native extraction and the current report set
 are sufficient. Open PowerShell in the directory where the new
-`bstrings-v1.9.11` directory should be created, then run this exact-tag,
+`bstrings-v1.9.12` directory should be created, then run this exact-tag,
 API-digest-verified download:
 
 ```powershell
@@ -139,10 +148,10 @@ API-digest-verified download:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.11'
+  $tag = 'v1.9.12'
   $repo = 'Donovoi/bstrings'
   $archiveName = 'bstrings-win-x64.zip'
-  $destination = Join-Path (Get-Location) 'bstrings-v1.9.11'
+  $destination = Join-Path (Get-Location) 'bstrings-v1.9.12'
   if ((Test-Path -LiteralPath $archiveName) -or
       (Test-Path -LiteralPath $destination)) {
     throw 'Refusing to overwrite the archive or destination.'
@@ -180,7 +189,7 @@ asset. Use the integrated native-only path when the filterable report set is
 wanted:
 
 ```powershell
-.\bstrings-v1.9.11\bstrings.exe analyze `
+.\bstrings-v1.9.12\bstrings.exe analyze `
   -f "C:\evidence\memory.raw" `
   -o "C:\results\memory-native" `
   --recover-executable-strings off `
@@ -194,7 +203,7 @@ The legacy command below writes one flat output file instead of the integrated
 TSV/histogram report set:
 
 ```powershell
-.\bstrings-v1.9.11\bstrings.exe `
+.\bstrings-v1.9.12\bstrings.exe `
   -f "C:\evidence\memory.raw" `
   --lr all --ro --off --trace `
   -o "C:\results\memory-hits.csv"

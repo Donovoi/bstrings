@@ -14,7 +14,7 @@ if ($installerSource -cmatch '(?m)\bGet-FileHash\b') {
 if ($installerSource -cnotmatch '\[Security\.Cryptography\.SHA256\]::Create\(\)') {
     throw 'The quality installer must hash through the .NET SHA-256 API.'
 }
-$releaseTag = 'v1.9.11'
+$releaseTag = 'v1.9.12'
 $testBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot = Join-Path $testBase (
     'bstrings-quality-installer-test-' + [Guid]::NewGuid().ToString('N')
@@ -195,7 +195,11 @@ internal static class Program
     private static int Verify(string[] args)
     {
         var requestedExit = IntEnvironment("BSTRINGS_INSTALLER_STUB_VERIFY_EXIT");
-        if (requestedExit != 0)
+        var failureAt = IntEnvironment("BSTRINGS_INSTALLER_STUB_VERIFY_FAILURE_AT");
+        if (
+            requestedExit != 0 &&
+            (failureAt == 0 || IncrementCounter("BSTRINGS_INSTALLER_STUB_VERIFY_STATE") == failureAt)
+        )
         {
             return requestedExit;
         }
@@ -209,10 +213,15 @@ internal static class Program
 
     private static int IncrementAttempt()
     {
-        var statePath = Environment.GetEnvironmentVariable("BSTRINGS_INSTALLER_STUB_STATE");
+        return IncrementCounter("BSTRINGS_INSTALLER_STUB_STATE");
+    }
+
+    private static int IncrementCounter(string environmentName)
+    {
+        var statePath = Environment.GetEnvironmentVariable(environmentName);
         if (string.IsNullOrWhiteSpace(statePath))
         {
-            throw new InvalidOperationException("The stub state path is missing.");
+            throw new InvalidOperationException($"The stub counter path is missing: {environmentName}");
         }
         var fullPath = Path.GetFullPath(statePath);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
@@ -321,9 +330,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         request_path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         with request_log.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(request_path + "\n")
-        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v1.9.11"):
+        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v1.9.12"):
             candidate = root / "release.json"
-        elif "/Donovoi/bstrings/releases/download/v1.9.11/" in request_path:
+        elif "/Donovoi/bstrings/releases/download/v1.9.12/" in request_path:
             name = pathlib.PurePosixPath(request_path).name
             candidate = root / name
         else:
@@ -608,16 +617,19 @@ function New-StubEnvironment(
     [string]$AirgapManifest,
     [int]$AcquireFailures = 0,
     [int]$VerifyExit = 0,
-    [bool]$PublishFailure = $false
+    [bool]$PublishFailure = $false,
+    [int]$VerifyFailureAt = 0
 ) {
     $stateRoot = Join-Path $testRoot "stub-state-$Name"
     return @{
         BSTRINGS_INSTALLER_STUB_LOG = Join-Path $stateRoot 'invocations.jsonl'
         BSTRINGS_INSTALLER_STUB_STATE = Join-Path $stateRoot 'acquire-count.txt'
+        BSTRINGS_INSTALLER_STUB_VERIFY_STATE = Join-Path $stateRoot 'verify-count.txt'
         BSTRINGS_INSTALLER_STUB_ERROR = Join-Path $stateRoot 'errors.txt'
         BSTRINGS_INSTALLER_STUB_AIRGAP_MANIFEST = $AirgapManifest
         BSTRINGS_INSTALLER_STUB_ACQUIRE_FAILURES = [string]$AcquireFailures
         BSTRINGS_INSTALLER_STUB_VERIFY_EXIT = [string]$VerifyExit
+        BSTRINGS_INSTALLER_STUB_VERIFY_FAILURE_AT = [string]$VerifyFailureAt
         BSTRINGS_INSTALLER_STUB_PUBLISH_FAILURE = if ($PublishFailure) { '1' } else { '0' }
         HTTP_PROXY = 'http://127.0.0.1:9'
         HTTPS_PROXY = 'http://127.0.0.1:9'
@@ -661,6 +673,21 @@ function Assert-CommandPrefix([object]$Invocation, [string]$Command) {
     Assert-True ($Invocation.Arguments.Count -ge 2) "The stub invocation did not contain a command."
     Assert-Equal $Invocation.Arguments[0] 'bundle' 'The stub command group differed.'
     Assert-Equal $Invocation.Arguments[1] $Command 'The stub bundle command differed.'
+}
+
+function Assert-ReplacementStagingPath(
+    [string]$Path,
+    [string]$Destination,
+    [string]$Message
+) {
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $fullDestination = [IO.Path]::GetFullPath($Destination)
+    $expectedParent = [IO.Path]::GetDirectoryName($fullDestination)
+    $destinationLeaf = [IO.Path]::GetFileName($fullDestination)
+    Assert-Equal ([IO.Path]::GetDirectoryName($fullPath)) $expectedParent $Message
+    $expectedPattern = '^\.' + [regex]::Escape($destinationLeaf) +
+        '\.install-[0-9a-f]{32}\.staging$'
+    Assert-True ([IO.Path]::GetFileName($fullPath) -cmatch $expectedPattern) $Message
 }
 
 function Assert-InstallerFailed([object]$Result, [string]$ExpectedPattern, [string]$Name) {
@@ -749,9 +776,10 @@ try {
         'The successful installation did not publish the quality marker.'
     Assert-PathAbsent $successCache 'A successful default installation did not clean its installer cache.'
     $successInvocations = @(Read-StubInvocations $successEnvironment.BSTRINGS_INSTALLER_STUB_LOG)
-    Assert-Equal $successInvocations.Count 2 'A successful installation used an unexpected command count.'
+    Assert-Equal $successInvocations.Count 3 'A successful installation used an unexpected command count.'
     Assert-CommandPrefix $successInvocations[0] 'acquire'
     Assert-CommandPrefix $successInvocations[1] 'verify'
+    Assert-CommandPrefix $successInvocations[2] 'verify'
     $successManifestArgument = Get-InvocationOption $successInvocations[0] '--manifest'
     Assert-Equal ([IO.Path]::GetFileName($successManifestArgument)) 'bundle-packs-quality.json' `
         'The installer did not pass the quality trust manifest to bundle acquire.'
@@ -762,16 +790,21 @@ try {
         ([IO.Path]::GetFullPath($successPackCacheArgument)) `
         ([IO.Path]::GetFullPath((Join-Path $successCache 'bundle-packs'))) `
         'The installer passed the wrong owned pack cache to bundle acquire.'
-    Assert-Equal `
-        ([IO.Path]::GetFullPath((Get-InvocationOption $successInvocations[0] '--output'))) `
-        ([IO.Path]::GetFullPath($successDestination)) `
-        'The bundle acquire output differed from DestinationDirectory.'
+    $successStaging = Get-InvocationOption $successInvocations[0] '--output'
+    Assert-ReplacementStagingPath `
+        $successStaging `
+        $successDestination `
+        'The bundle acquire output was not a bounded sibling replacement path.'
     Assert-Equal `
         ([IO.Path]::GetFullPath((Get-InvocationOption $successInvocations[1] '--bundle-root'))) `
+        ([IO.Path]::GetFullPath($successStaging)) `
+        'The authenticated core did not verify the staged replacement.'
+    Assert-Equal `
+        ([IO.Path]::GetFullPath((Get-InvocationOption $successInvocations[2] '--bundle-root'))) `
         ([IO.Path]::GetFullPath($successDestination)) `
         'The final bundle verification root differed from DestinationDirectory.'
     Assert-Equal `
-        ([IO.Path]::GetFullPath($successInvocations[1].ProcessPath)) `
+        ([IO.Path]::GetFullPath($successInvocations[2].ProcessPath)) `
         ([IO.Path]::GetFullPath((Join-Path $successDestination 'bstrings.exe'))) `
         'Final verification did not run through the installed bstrings.exe.'
 
@@ -836,24 +869,30 @@ try {
     $defaultCallerInvocations = @(
         Read-StubInvocations $defaultCallerEnvironment.BSTRINGS_INSTALLER_STUB_LOG
     )
-    Assert-Equal $defaultCallerInvocations.Count 2 `
+    Assert-Equal $defaultCallerInvocations.Count 3 `
         'The caller-relative default used an unexpected command count.'
     Assert-CommandPrefix $defaultCallerInvocations[0] 'acquire'
     Assert-CommandPrefix $defaultCallerInvocations[1] 'verify'
+    Assert-CommandPrefix $defaultCallerInvocations[2] 'verify'
     Assert-Equal `
         ([IO.Path]::GetFileName((Get-InvocationOption $defaultCallerInvocations[0] '--manifest'))) `
         'bundle-packs-quality.json' `
         'The caller-relative default did not acquire the quality-only manifest.'
-    Assert-Equal `
-        ([IO.Path]::GetFullPath((Get-InvocationOption $defaultCallerInvocations[0] '--output'))) `
-        ([IO.Path]::GetFullPath($defaultCallerDestination)) `
-        'The omitted destination did not resolve to caller-relative bstrings-quality.'
+    $defaultCallerStaging = Get-InvocationOption $defaultCallerInvocations[0] '--output'
+    Assert-ReplacementStagingPath `
+        $defaultCallerStaging `
+        $defaultCallerDestination `
+        'The omitted destination did not stage beside caller-relative bstrings-quality.'
     Assert-Equal `
         ([IO.Path]::GetFullPath((Get-InvocationOption $defaultCallerInvocations[1] '--bundle-root'))) `
+        ([IO.Path]::GetFullPath($defaultCallerStaging)) `
+        'The caller-relative staged replacement was not verified.'
+    Assert-Equal `
+        ([IO.Path]::GetFullPath((Get-InvocationOption $defaultCallerInvocations[2] '--bundle-root'))) `
         ([IO.Path]::GetFullPath($defaultCallerDestination)) `
         'The caller-relative default verification used the wrong bundle root.'
     Assert-Equal `
-        ([IO.Path]::GetFullPath($defaultCallerInvocations[1].ProcessPath)) `
+        ([IO.Path]::GetFullPath($defaultCallerInvocations[2].ProcessPath)) `
         ([IO.Path]::GetFullPath((Join-Path $defaultCallerDestination 'bstrings.exe'))) `
         'The caller-relative default was not verified by its installed executable.'
 
@@ -873,7 +912,7 @@ try {
     Assert-True (Test-Path -LiteralPath $keptCache -PathType Container) `
         'KeepCache did not retain the installer cache.'
     $keptInvocations = @(Read-StubInvocations $keptEnvironment.BSTRINGS_INSTALLER_STUB_LOG)
-    Assert-Equal $keptInvocations.Count 2 'The KeepCache installation used an unexpected command count.'
+    Assert-Equal $keptInvocations.Count 3 'The KeepCache installation used an unexpected command count.'
     $keptPackCache = Get-InvocationOption $keptInvocations[0] '--cache'
     Assert-Equal `
         ([IO.Path]::GetFullPath($keptPackCache)) `
@@ -882,17 +921,19 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $keptPackCache 'stub-verified.cache') -PathType Leaf) `
         'KeepCache did not retain the verified synthetic pack marker.'
 
-    # An already-valid destination is idempotent: verify it without reacquiring
-    # or modifying unrelated content in the destination.
+    # Every run refreshes an already-valid destination from authenticated
+    # release inputs. Stale and unrelated destination files must disappear.
     $idempotentSentinel = Join-Path $keptDestination 'user-sentinel.txt'
     Write-Utf8File $idempotentSentinel 'preserve me'
     $idempotent = Invoke-Installer $keptArguments $keptEnvironment
-    Assert-True $idempotent.Succeeded "The idempotent installation failed: $($idempotent.Text)"
-    Assert-Equal ([IO.File]::ReadAllText($idempotentSentinel)) 'preserve me' `
-        'The idempotent installation changed an existing destination file.'
+    Assert-True $idempotent.Succeeded "The replacement installation failed: $($idempotent.Text)"
+    Assert-PathAbsent $idempotentSentinel `
+        'The replacement retained a stale destination file.'
     $idempotentInvocations = @(Read-StubInvocations $keptEnvironment.BSTRINGS_INSTALLER_STUB_LOG)
-    Assert-Equal $idempotentInvocations.Count 3 'The idempotent run unexpectedly reacquired the bundle.'
-    Assert-CommandPrefix $idempotentInvocations[2] 'verify'
+    Assert-Equal $idempotentInvocations.Count 6 'The replacement run did not reacquire and reverify the bundle.'
+    Assert-CommandPrefix $idempotentInvocations[3] 'acquire'
+    Assert-CommandPrefix $idempotentInvocations[4] 'verify'
+    Assert-CommandPrefix $idempotentInvocations[5] 'verify'
 
     # A transient acquire failure must retry against the same manifest, cache,
     # and output paths before performing one installed verification.
@@ -924,10 +965,11 @@ try {
         "The bounded acquire retry did not recover: $($retry.Text)" +
         "`nStub invocations:`n$retryInvocationText`nStub errors:`n$retryStubErrors"
     )
-    Assert-Equal $retryInvocations.Count 3 'The retry scenario used an unexpected command count.'
+    Assert-Equal $retryInvocations.Count 4 'The retry scenario used an unexpected command count.'
     Assert-CommandPrefix $retryInvocations[0] 'acquire'
     Assert-CommandPrefix $retryInvocations[1] 'acquire'
     Assert-CommandPrefix $retryInvocations[2] 'verify'
+    Assert-CommandPrefix $retryInvocations[3] 'verify'
     Assert-Equal `
         ($retryInvocations[0].Arguments -join [char]31) `
         ($retryInvocations[1].Arguments -join [char]31) `
@@ -936,20 +978,24 @@ try {
         ([string](Get-InvocationOption $retryInvocations[0] '--cache')) `
         ([IO.Path]::GetFullPath((Join-Path $retryCache 'bundle-packs'))) `
         'The installer did not use the exact explicit cache root for bundle packs.'
-    Assert-Equal `
-        ([string](Get-InvocationOption $retryInvocations[0] '--output')) `
-        ([IO.Path]::GetFullPath($retryDestination)) `
-        'The installer did not normalize the trailing destination separator.'
+    $retryStaging = Get-InvocationOption $retryInvocations[0] '--output'
+    Assert-ReplacementStagingPath `
+        $retryStaging `
+        $retryDestination `
+        'The retry did not use a normalized bounded staging destination.'
     Assert-Equal `
         ([string](Get-InvocationOption $retryInvocations[2] '--bundle-root')) `
+        ([IO.Path]::GetFullPath($retryStaging)) `
+        'The authenticated-core verifier did not receive the staged bundle path.'
+    Assert-Equal `
+        ([string](Get-InvocationOption $retryInvocations[3] '--bundle-root')) `
         ([IO.Path]::GetFullPath($retryDestination)) `
-        'The verifier did not receive the normalized destination path.'
+        'The installed verifier did not receive the normalized destination path.'
     Assert-True (Test-Path -LiteralPath $retryCache -PathType Container) `
         'A successful run unexpectedly removed the user-owned explicit cache.'
 
-    # A native acquire can lose a race after the initial absence check. If it
-    # publishes a destination and then fails, the installer cannot prove that
-    # it owns the path and must preserve every byte instead of rolling it back.
+    # A native acquire failure can leave content only in the unique staging
+    # directory owned by this invocation. It is removed before a bounded retry.
     $publishFailureFixture = New-ReleaseFixture `
         'publish-failure' `
         $coreArchive `
@@ -970,27 +1016,17 @@ try {
         $publishFailureEnvironment
     Assert-InstallerFailed `
         $publishFailure `
-        'exit code 29|preserved|ownership' `
-        'Failed acquire with a newly published destination'
-    $unownedSentinel = Join-Path `
-        $publishFailureDestination `
-        'unowned-sentinel.txt'
-    Assert-True (Test-Path -LiteralPath $unownedSentinel -PathType Leaf) `
-        'The installer deleted the unowned destination sentinel after acquire failed.'
-    Assert-Equal `
-        ([IO.File]::ReadAllText($unownedSentinel)) `
-        'preserve unowned destination exactly' `
-        'The installer changed the unowned destination sentinel after acquire failed.'
-    Assert-Equal `
-        (@(Get-ChildItem -LiteralPath $publishFailureDestination -Force).Count) `
-        1 `
-        'The failed acquire destination was not preserved exactly.'
+        'exit code 29|failed after' `
+        'Failed acquire in an invocation-owned staging destination'
+    Assert-PathAbsent $publishFailureDestination `
+        'A failed staging acquire changed the final destination.'
     $publishFailureInvocations = @(
         Read-StubInvocations $publishFailureEnvironment.BSTRINGS_INSTALLER_STUB_LOG
     )
-    Assert-Equal $publishFailureInvocations.Count 1 `
-        'The publish-then-fail acquire was unexpectedly retried.'
+    Assert-Equal $publishFailureInvocations.Count 2 `
+        'The failed staging acquire did not use the bounded retry count.'
     Assert-CommandPrefix $publishFailureInvocations[0] 'acquire'
+    Assert-CommandPrefix $publishFailureInvocations[1] 'acquire'
     Assert-True (Test-Path -LiteralPath $publishFailureCache -PathType Container) `
         'The failed acquire unexpectedly removed the user-owned resumable cache.'
 
@@ -1093,12 +1129,24 @@ try {
     Assert-PathAbsent $urlEnvironment.BSTRINGS_INSTALLER_STUB_LOG `
         'A noncanonical release asset URL executed bstrings.exe.'
 
-    # An invalid pre-existing destination must remain byte-for-byte untouched.
+    # A stale or invalid pre-existing destination is replaced by the newly
+    # authenticated release rather than rejected by its old manifest.
     $existingFixture = New-ReleaseFixture 'existing-invalid' $coreArchive $airgapManifest
     $existingDestination = Join-Path $testRoot 'destination-existing-invalid'
     [IO.Directory]::CreateDirectory($existingDestination) | Out-Null
     $existingSentinel = Join-Path $existingDestination 'original.txt'
     Write-Utf8File $existingSentinel 'original destination bytes'
+    $existingOldManifest = Join-Path $existingDestination 'airgap-manifest.json'
+    Write-JsonFile $existingOldManifest ([ordered]@{
+        schemaVersion = 1
+        files = @(
+            [ordered]@{
+                path = 'obsolete-release-file.txt'
+                bytes = 17
+                sha256 = ('a' * 64)
+            }
+        )
+    })
     $existingCache = Join-Path $testRoot 'cache-existing-invalid'
     $existingEnvironment = New-StubEnvironment 'existing-invalid' $airgapManifest
     $existingArguments = New-InstallerArguments `
@@ -1107,15 +1155,64 @@ try {
         $existingCache `
         1
     $existing = Invoke-Installer $existingArguments $existingEnvironment
-    Assert-InstallerFailed $existing 'existing|destination|verify|manifest' 'Invalid existing destination'
-    Assert-Equal ([IO.File]::ReadAllText($existingSentinel)) 'original destination bytes' `
-        'The installer changed the invalid existing destination sentinel.'
-    Assert-Equal (@(Get-ChildItem -LiteralPath $existingDestination -Force).Count) 1 `
-        'The installer added content to an invalid existing destination.'
+    Assert-True $existing.Succeeded "The stale-destination replacement failed: $($existing.Text)"
+    Assert-PathAbsent $existingSentinel `
+        'The installer retained stale bytes from the replaced destination.'
+    Assert-True `
+        ((Get-LowerSha256 (Join-Path $existingDestination 'airgap-manifest.json')) -ceq
+            (Get-LowerSha256 $airgapManifest)) `
+        'The installer did not replace the stale air-gap manifest.'
+    Assert-True `
+        (Test-Path -LiteralPath (Join-Path $existingDestination 'quality-profile.txt') -PathType Leaf) `
+        'The replacement did not publish the current quality bundle.'
+    $existingInvocations = @(
+        Read-StubInvocations $existingEnvironment.BSTRINGS_INSTALLER_STUB_LOG
+    )
+    Assert-Equal $existingInvocations.Count 3 `
+        'The stale-destination replacement used an unexpected command count.'
+    Assert-CommandPrefix $existingInvocations[0] 'acquire'
+    Assert-CommandPrefix $existingInvocations[1] 'verify'
+    Assert-CommandPrefix $existingInvocations[2] 'verify'
 
-    # A failed final verification must never be reported as success. Only the
-    # destination created by this invocation is rolled back; its resumable
-    # user-owned cache remains available for diagnosis.
+    # If the installed-path verification fails after the swap, the complete
+    # previous destination must be restored and the staged replacement removed.
+    $rollbackFixture = New-ReleaseFixture 'rollback-existing' $coreArchive $airgapManifest
+    $rollbackDestination = Join-Path $testRoot 'destination-rollback-existing'
+    [IO.Directory]::CreateDirectory($rollbackDestination) | Out-Null
+    $rollbackSentinel = Join-Path $rollbackDestination 'previous-kit.txt'
+    Write-Utf8File $rollbackSentinel 'restore this exact previous kit'
+    $rollbackCache = Join-Path $testRoot 'cache-rollback-existing'
+    $rollbackEnvironment = New-StubEnvironment `
+        'rollback-existing' `
+        $airgapManifest `
+        -VerifyExit 41 `
+        -VerifyFailureAt 2
+    $rollbackArguments = New-InstallerArguments `
+        $rollbackFixture `
+        $rollbackDestination `
+        $rollbackCache `
+        1
+    $rollback = Invoke-Installer $rollbackArguments $rollbackEnvironment
+    Assert-InstallerFailed $rollback 'verification|exit code 41' 'Post-swap verification rollback'
+    Assert-Equal `
+        ([IO.File]::ReadAllText($rollbackSentinel)) `
+        'restore this exact previous kit' `
+        'The failed post-swap verification did not restore the previous destination.'
+    Assert-Equal (@(Get-ChildItem -LiteralPath $rollbackDestination -Force).Count) 1 `
+        'The failed replacement mixed new files into the restored previous destination.'
+    $rollbackInvocations = @(
+        Read-StubInvocations $rollbackEnvironment.BSTRINGS_INSTALLER_STUB_LOG
+    )
+    Assert-Equal $rollbackInvocations.Count 3 `
+        'The rollback scenario did not reach both verification boundaries.'
+    Assert-CommandPrefix $rollbackInvocations[0] 'acquire'
+    Assert-CommandPrefix $rollbackInvocations[1] 'verify'
+    Assert-CommandPrefix $rollbackInvocations[2] 'verify'
+    Assert-True (Test-Path -LiteralPath $rollbackCache -PathType Container) `
+        'The failed replacement unexpectedly removed its resumable cache.'
+
+    # A staged verification failure must never be reported as success or
+    # publish a destination. Its resumable user-owned cache remains available.
     $verifyFixture = New-ReleaseFixture 'verify-failure' $coreArchive $airgapManifest
     $verifyDestination = Join-Path $testRoot 'destination-verify-failure'
     $verifyCache = Join-Path $testRoot 'cache-verify-failure'
@@ -1126,7 +1223,7 @@ try {
         $verifyCache `
         1
     $verify = Invoke-Installer $verifyArguments $verifyEnvironment
-    Assert-InstallerFailed $verify 'verif|exit|37' 'Nonzero final bundle verification'
+    Assert-InstallerFailed $verify 'verif|exit|37' 'Nonzero staged bundle verification'
     Assert-PathAbsent $verifyDestination `
         'A failed final verification left an invocation-created destination behind.'
     Assert-True (Test-Path -LiteralPath $verifyCache -PathType Container) `
