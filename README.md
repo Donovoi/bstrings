@@ -28,7 +28,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.11](https://github.com/Donovoi/bstrings/releases/tag/v1.9.11).
+[v1.9.12](https://github.com/Donovoi/bstrings/releases/tag/v1.9.12).
 There is one install and one Full profile: the largest, highest-scoring accepted
 Hy-MT2 7B Q8_0 translation model is included instead of asking examiners to
 choose among quality/size tiers.
@@ -43,7 +43,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.11'
+  $tag = 'v1.9.12'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -113,9 +113,12 @@ analysis with:
 
 The bootstrap always replaces an existing physical
 `Install-BstringsQuality.ps1`, but only after the new download matches the
-published release SHA-256. A valid same-version `bstrings-quality` directory is
-reverified without redownloading it. An invalid or mixed-version kit is never
-patched in place; move it aside or select another destination, then rerun.
+published release SHA-256. The installer also always refreshes an existing
+physical `bstrings-quality` directory with the complete authenticated release;
+it never patches old files in place. The replacement is assembled and verified
+beside the destination first, and the previous directory is restored if the
+swap or installed-path verification fails. A same-release retry may reuse only
+its size- and SHA-256-verified resumable cache.
 
 ## Choose a command
 

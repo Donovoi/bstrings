@@ -5,13 +5,13 @@ This guide is for maintainers of the Windows x64 release. Examiners should use
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-Current publication status: v1.9.11 is the fully gated Windows x64
+Current publication status: v1.9.12 is the fully gated Windows x64
 quality/offline release. Its automatic core artifact and complete asset set are
 bound to the same tag and commit. Do not combine them with another version.
 
-## v1.9.11 release process and asset set
+## v1.9.12 release process and asset set
 
-The exact v1.9.11 project-version tag publishes the asset set below after every
+The exact v1.9.12 project-version tag publishes the asset set below after every
 required gate passes. Do not combine a core ZIP with manifests from another
 version.
 
@@ -29,7 +29,7 @@ The tag- and commit-bound `offline-profile-acceptance.json` remains an internal
 Actions gate artifact. The release job validates it, but does not publish it as
 a user download.
 
-The workflow uses [`releases/v1.9.11.md`](releases/v1.9.11.md) as the human
+The workflow uses [`releases/v1.9.12.md`](releases/v1.9.12.md) as the human
 release body. Review it against the final filenames, profile identities, and
 known boundaries before tagging.
 
@@ -48,7 +48,7 @@ known boundaries before tagging.
 `Scripts/Install-BstringsQuality.ps1` is published unchanged as
 `Install-BstringsQuality.ps1`. `SHA256SUMS.txt` must contain exactly one
 lowercase SHA-256 row for it alongside every other public release asset. The
-README bootstrap uses GitHub's exact-tag API for `v1.9.11`, rejects a draft or
+README bootstrap uses GitHub's exact-tag API for `v1.9.12`, rejects a draft or
 prerelease, downloads the installer to a unique physical temporary file, and
 verifies its API digest before replacing an existing physical installer and
 launching `powershell.exe -File`. Failed authentication preserves the previous
@@ -58,7 +58,7 @@ response piped into `Invoke-Expression`.
 
 The installer is deliberately narrow:
 
-- default release tag: `v1.9.11`;
+- default release tag: `v1.9.12`;
 - default destination: `.\bstrings-quality` under the caller's current
   directory;
 - quality profile only;
@@ -67,6 +67,11 @@ The installer is deliberately narrow:
 - exact GitHub release metadata and canonical asset URLs;
 - checksum verification for the installer, core ZIP, and quality trust
   manifest, followed by the existing strict pack and final-bundle verification;
+- unconditional destination refresh through an authenticated sibling staging
+  directory, with the complete previous physical directory retained until the
+  replacement passes installed-path verification;
+- rollback to the previous directory if publication or final verification
+  fails, without ever merging old and new release files;
 - visible overall installer progress plus measured pack download, hashing,
   assembly, and final-verification percentages;
 - three acquisition attempts by default; and
@@ -168,7 +173,7 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 
 ## Build and test the self-contained core
 
-The v1.9.11 release process uses
+The v1.9.12 release process uses
 [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
 repository-pinned Rust toolchain:
 
