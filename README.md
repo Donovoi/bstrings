@@ -28,7 +28,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.10](https://github.com/Donovoi/bstrings/releases/tag/v1.9.10).
+[v1.9.11](https://github.com/Donovoi/bstrings/releases/tag/v1.9.11).
 There is one install and one Full profile: the largest, highest-scoring accepted
 Hy-MT2 7B Q8_0 translation model is included instead of asking examiners to
 choose among quality/size tiers.
@@ -43,7 +43,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.10'
+  $tag = 'v1.9.11'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -137,9 +137,12 @@ percentage completion. Integrated analysis combines stage progress with
 measured byte or record progress for long-running work. Percentages are
 completed work units, not elapsed-time estimates.
 
-`--full` runs native extraction, executable recovery, OCR, language assessment,
-local translation, all 66 built-in patterns, and the TSV/histogram reporting
-stage. It does not mount filesystems or carve embedded files from raw disk or
+`--full` freezes input hashes, batch-classifies each supplied file once, always
+runs native extraction, routes applicable files to FLOSS/OCR, then performs
+language assessment, local translation, all 66 built-in patterns, and the
+TSV/histogram reporting stage. The result retains `content-routing.jsonl`, the
+three-rows-per-input `engine-status.jsonl` terminal coverage ledger, and their
+hash/count summaries. It does not mount filesystems or carve embedded files from raw disk or
 memory images; mount or carve those images first when file-level FLOSS and OCR
 coverage is required.
 
@@ -155,6 +158,13 @@ Detailed guidance: [terminal help and command reference](docs/command-reference.
 and [outputs and provenance](docs/output-and-provenance.md). The forensic report
 contract and its bulk_extractor/Timeline Explorer design evidence are recorded
 in [forensic reporting](docs/forensic-reporting-2026-08.md).
+
+High-level changes that can affect evidence coverage, provenance, model/tool
+selection, routing, privacy, or performance defaults use the
+[Robin-round architecture decision policy](docs/architecture/decision-review-policy.md).
+The evidence, detractor review, falsifiers, implementation, and release gates
+for the early shared fail-open routing stage are recorded in
+[ADR-0001](docs/architecture/adr-0001-early-fail-open-content-routing.md).
 
 The project remains under its upstream terms in [LICENSE.md](LICENSE.md), with
 component attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -1,6 +1,6 @@
 # OCR and document analysis
 
-OCR is distributed in the complete v1.9.10 quality kit. The commands in this
+OCR is distributed in the complete v1.9.11 quality kit. The commands in this
 guide require a verified, version-matched quality bundle. See
 [download and installation](download-and-install.md); do not copy OCR assets
 manually into a core-only directory.
@@ -16,7 +16,7 @@ manifest-covered component and is not a separate user command.
 
 ## Use it
 
-In the v1.9.10 quality kit, `--full` enables OCR in automatic mode and asks the
+In the v1.9.11 quality kit, `--full` enables OCR in automatic mode and asks the
 verified bundle to select a provider:
 
 ```powershell
@@ -43,23 +43,25 @@ OCR can also be requested without the other optional stages:
 ```
 
 `--ocr` accepts `off`, `auto`, or `force`. `--ocr-provider` accepts `auto`,
-`cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.10 source profile
+`cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.11 source profile
 `windows-x64-ocr-cpu-directml-v1` contains and claims only CPU, DirectML, and
 DirectML+CPU hybrid. CUDA requires a separately built and validated custom
 runtime profile.
 
-The analysis console prints measured OCR file completion inside the overall
-stage percentage, for example `Progress: offline OCR: 37.5% (3/8 files)`.
-Magika/FLOSS recovery uses the same file-count contract. These are completed
-work units, not elapsed-time estimates; one scanned PDF can take much longer
-than one small image.
+The analysis console first prints measured content-triage completion for every
+fixed input. OCR and routed FLOSS then report their smaller candidate totals,
+for example `Progress: offline OCR: 37.5% (3/8 files)`. These are completed work
+units, not elapsed-time estimates; one scanned PDF can take much longer than
+one small image.
 
 ## File and PDF behavior
 
-The worker recognizes PDFs by header or `.pdf` suffix and images by common file
-signatures or these suffixes: BMP, GIF, ICO, JFIF/JPEG, PNG, TIFF, and WebP.
-Multi-frame images are processed frame by frame. Other inventory entries receive
-a `not-applicable` assessment rather than being silently treated as images.
+Early routing recognizes PDFs by Magika, header, or `.pdf` suffix and images by
+Magika, common file signatures, or these suffixes: BMP, GIF, ICO, JFIF/JPEG,
+PNG, TIFF, and WebP. The OCR worker independently re-sniffs every routed
+candidate before loading its pages. Multi-frame images are processed frame by
+frame. Non-candidates remain explicit in `content-routing.jsonl`; conservative
+false-positive candidates receive a `not-applicable` OCR assessment.
 
 For every PDF page, bstrings first extracts the born-digital text layer through
 [PDFium](https://pdfium.googlesource.com/pdfium/) and records non-empty text with
@@ -81,7 +83,7 @@ provider—not a 1 GiB threshold.
 
 ## Bundled engine and immutable model pack
 
-The v1.9.10 source profile uses
+The v1.9.11 source profile uses
 [RapidOCR 3.9.2](https://github.com/RapidAI/RapidOCR/releases/tag/v3.9.2)
 as the local orchestration engine, immutable
 [PP-OCRv6 medium](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv6/PP-OCRv6.html)
@@ -200,8 +202,12 @@ render/inference pipelining as the next benchmark-gated improvements.
 The stage writes:
 
 - `ocr-strings.jsonl`, one normalized text child per PDF text layer or OCR hit;
-- `ocr-assessments.jsonl`, one completion/provenance assessment per inventory
-  item; and
+- `ocr-assessments.jsonl`, one completion/provenance assessment per routed OCR
+  candidate;
+- `content-routing.jsonl` plus the `ocr-input-*` projection that explains the
+  candidate set;
+- `engine-status.jsonl`, whose OCR row records selection, terminal status, and
+  output count for every routed input; and
 - the usual downstream `language-assessments.jsonl`,
   `translated-strings.jsonl`, `regex-matches.jsonl`, `run.json`, and
   `summary.json` when those stages are enabled.

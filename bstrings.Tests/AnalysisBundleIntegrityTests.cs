@@ -84,28 +84,29 @@ public sealed class AnalysisBundleIntegrityTests
     }
 
     [Fact]
-    public async Task Analyze_RejectsAnUnverifiedOcrModelBeforeCreatingAResultsDirectory()
+    public void OcrPreflight_RejectsAnUnverifiedModelWhenOcrCandidatesExist()
     {
         using var scope = new TemporaryAnalysis();
         scope.CreateBundle(ocrModelSha256: new string('0', 64));
-        var evidence = scope.WriteFile("ocr-evidence.png", "fixture image bytes");
-        var output = Path.Combine(scope.Root, "unverified-ocr-results");
-        var options = CreateOptions(scope.BundleRoot, evidence, output) with
-        {
-            OcrMode = OcrWorkflowMode.Auto,
-            TranslationMode = TranslationWorkflowMode.Off,
-        };
+        var toolchain = AnalysisToolchainLocator.Locate(
+            scope.BundleRoot,
+            requireExplicitBundle: true,
+            requireRecovery: false,
+            requireTranslation: false,
+            requireOcr: true,
+            executingExecutablePath: scope.BstringsExecutable
+        );
 
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            AnalysisOrchestrator.RunAsync(
-                options,
-                TestContext.Current.CancellationToken,
-                executingExecutablePath: scope.BstringsExecutable
+        var error = Assert.Throws<InvalidDataException>(() =>
+            OcrCompletionCore.CreateValidationRequirements(
+                toolchain,
+                OcrWorkflowMode.Auto,
+                OcrProvider.Auto,
+                0
             )
         );
 
         Assert.Contains("OCR model SHA-256 mismatch", error.Message, StringComparison.Ordinal);
-        Assert.False(Directory.Exists(output));
     }
 
     [Theory]
@@ -412,6 +413,7 @@ public sealed class AnalysisBundleIntegrityTests
             };
             if (ocrModelSha256 is not null)
             {
+                WriteBundleFile("tools/magika.exe", "private-magika");
                 WriteBundleFile("ocr/python.exe", "private-ocr-python");
                 WriteBundleFile("ocr/ocr.exe", "private-ocr-engine");
                 WriteBundleFile("ocr/ocr-adapter.py", "private-ocr-adapter");
@@ -431,6 +433,7 @@ public sealed class AnalysisBundleIntegrityTests
                         sha256 = ocrModelSha256,
                     },
                 };
+                configuration["magikaExecutable"] = "tools/magika.exe";
             }
             File.WriteAllText(
                 Path.Combine(BundleRoot, "airgap-config.json"),

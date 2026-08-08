@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -20,12 +22,14 @@ from bstrings_ocr import (  # noqa: E402
     HYBRID_SOURCE_MAX_PENDING,
     AtomicJsonlPair,
     CpuParallelOcrRuntime,
+    EvidenceReadLease,
     HybridOcrRuntime,
     OcrConfig,
     OcrError,
     RapidOcrRuntime,
     RasterScheduler,
     _validate_resolved_provider,
+    config_from_arguments,
     load_model_pack,
     make_record,
     parse_arguments,
@@ -186,6 +190,7 @@ class OcrWorkerTests(unittest.TestCase):
         self.model_manifest = self._make_model_pack()
         self.inventory = self.root / "inventory.txt"
         self.input_manifest = self.root / "input-manifest.jsonl"
+        self.routing_manifest = self.root / "content-routing.jsonl"
         self.output = self.root / "ocr-strings.jsonl"
         self.assessments = self.root / "ocr-assessments.jsonl"
 
@@ -265,6 +270,65 @@ class OcrWorkerTests(unittest.TestCase):
         self.input_manifest.write_text(
             "".join(
                 json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n" for row in rows
+            ),
+            encoding="utf-8",
+        )
+
+    def _routing_manifest_row(
+        self,
+        path: Path,
+        *,
+        ordinal: int,
+        scheduled_routes: tuple[str, ...] = ("native", "ocr"),
+        length: int | None = None,
+        sha256: str | None = None,
+    ) -> dict[str, Any]:
+        source_sha256 = sha256_file(path) if sha256 is None else sha256
+        routes = sorted(scheduled_routes)
+        row: dict[str, Any] = {
+            "schemaVersion": 1,
+            "recordType": "content-route",
+            "policyVersion": "content-routing-v1",
+            "ordinal": ordinal,
+            "sourceFile": str(path.resolve()),
+            "sourceSize": path.stat().st_size if length is None else length,
+            "sourceSha256": source_sha256,
+            "classifier": {
+                "engine": "magika",
+                "version": "1.1.0",
+                "predictionMode": "default-thresholded-output-plus-raw-dl",
+                "status": "ok",
+                "score": 0.99,
+                "output": {
+                    "label": "png",
+                    "mimeType": "image/png",
+                    "group": "image",
+                    "isText": False,
+                },
+                "rawPrediction": {
+                    "label": "png",
+                    "mimeType": "image/png",
+                    "group": "image",
+                    "isText": False,
+                },
+            },
+            "signals": ["magic:png"],
+            "eligibleRoutes": sorted(set(routes).union({"native"})),
+            "scheduledRoutes": routes,
+            "conflicts": [],
+        }
+        material = json.dumps(
+            row, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        row["decisionId"] = f"sha256:{hashlib.sha256(material).hexdigest()}"
+        return row
+
+    def _write_routing_manifest_rows(self, *rows: dict[str, Any]) -> None:
+        self.routing_manifest.write_text(
+            "".join(
+                json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+                + "\n"
+                for row in rows
             ),
             encoding="utf-8",
         )
@@ -504,6 +568,142 @@ class OcrWorkerTests(unittest.TestCase):
         record = read_jsonl(self.output)[0]
         self.assertEqual(manifest_rows[1]["length"], record["attributes"]["sourceSize"])
         self.assertEqual(manifest_rows[1]["sha256"], record["attributes"]["sourceSha256"])
+
+    def test_routed_ocr_binds_decision_lineage_before_record_identity(self) -> None:
+        native_only = self.root / "memory.raw"
+        native_only.write_bytes(b"not an OCR candidate")
+        image = self._image()
+        self._write_inventory(image)
+        self._write_input_manifest_rows(self._input_manifest_row(image))
+        native_route = self._routing_manifest_row(
+            native_only, ordinal=1, scheduled_routes=("native",)
+        )
+        image_route = self._routing_manifest_row(image, ordinal=2)
+        self._write_routing_manifest_rows(native_route, image_route)
+        runtime = FakeRuntime()
+        runtime.image_frames[image.name] = [FakeImage("image:1")]
+        runtime.ocr_results["image:1"] = {
+            "txts": ["routed@example.test"],
+            "boxes": [[[1, 1], [160, 1], [160, 20], [1, 20]]],
+            "scores": [0.99],
+        }
+
+        run_pipeline(
+            replace(
+                self._config(),
+                input_manifest=self.input_manifest,
+                routing_manifest=self.routing_manifest,
+            ),
+            runtime,
+        )
+
+        decision_id = image_route["decisionId"]
+        record = read_jsonl(self.output)[0]
+        assessment = read_jsonl(self.assessments)[0]
+        self.assertEqual(decision_id, record["attributes"]["routeDecisionId"])
+        self.assertEqual(decision_id, assessment["routeDecisionId"])
+        identity_material = dict(record)
+        del identity_material["recordId"]
+        expected_record_id = "sha256:" + hashlib.sha256(
+            json.dumps(
+                identity_material,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(expected_record_id, record["recordId"])
+
+    def test_routed_ocr_rejects_unbound_or_altered_decisions_atomically(self) -> None:
+        image = self._image()
+        self._write_inventory(image)
+        input_row = self._input_manifest_row(image)
+        self._write_input_manifest_rows(input_row)
+        cases: list[tuple[str, dict[str, Any]]] = []
+        cases.append(
+            (
+                "not scheduled",
+                self._routing_manifest_row(image, ordinal=1, scheduled_routes=("native",)),
+            )
+        )
+        altered_decision = self._routing_manifest_row(image, ordinal=1)
+        altered_decision["decisionId"] = "sha256:" + "0" * 64
+        cases.append(("altered decision", altered_decision))
+        cases.append(
+            (
+                "source identity mismatch",
+                self._routing_manifest_row(image, ordinal=1, sha256="0" * 64),
+            )
+        )
+
+        config = replace(
+            self._config(),
+            input_manifest=self.input_manifest,
+            routing_manifest=self.routing_manifest,
+        )
+        for name, route in cases:
+            with self.subTest(name=name):
+                self._write_routing_manifest_rows(route)
+                with self.assertRaises(OcrError):
+                    run_pipeline(config, FakeRuntime())
+                self.assertFalse(self.output.exists())
+                self.assertFalse(self.assessments.exists())
+
+    def test_standalone_ocr_omits_unavailable_routing_lineage(self) -> None:
+        image = self._image()
+        self._write_inventory(image)
+        runtime = FakeRuntime()
+        runtime.image_frames[image.name] = [FakeImage("image:1")]
+        runtime.ocr_results["image:1"] = {
+            "txts": ["standalone@example.test"],
+            "boxes": [[[1, 1], [160, 1], [160, 20], [1, 20]]],
+            "scores": [0.99],
+        }
+
+        run_pipeline(self._config(), runtime)
+
+        self.assertNotIn("routeDecisionId", read_jsonl(self.output)[0]["attributes"])
+        self.assertNotIn("routeDecisionId", read_jsonl(self.assessments)[0])
+
+    @unittest.skipUnless(os.name == "nt", "Windows sharing leases are release-platform specific")
+    def test_evidence_read_lease_denies_write_and_delete_sharing(self) -> None:
+        source = self._image()
+        with EvidenceReadLease(source):
+            with self.assertRaises(OSError):
+                source.write_bytes(b"same-length-modification!!")
+            with self.assertRaises(OSError):
+                source.unlink()
+        source.write_bytes(b"lease released")
+        self.assertEqual(b"lease released", source.read_bytes())
+
+    @patch("bstrings_ocr.EvidenceReadLease")
+    def test_post_hash_fallback_rejects_same_length_mutation_with_restored_mtime(
+        self, lease_type: Any
+    ) -> None:
+        source = self._image()
+        original_size = source.stat().st_size
+        original_mtime = source.stat().st_mtime_ns
+        self._write_inventory(source)
+        runtime = FakeRuntime()
+        runtime.image_frames[source.name] = [FakeImage("image:1")]
+
+        def mutate_source() -> dict[str, Any]:
+            source.write_bytes(b"X" * original_size)
+            os.utime(source, ns=(source.stat().st_atime_ns, original_mtime))
+            return {
+                "txts": ["mutated@example.test"],
+                "boxes": [[[1, 1], [160, 1], [160, 20], [1, 20]]],
+                "scores": [0.99],
+            }
+
+        runtime.ocr_results["image:1"] = mutate_source
+        lease_type.return_value.__enter__.return_value = lease_type.return_value
+
+        with self.assertRaisesRegex(OcrError, "changed during OCR examination"):
+            run_pipeline(self._config(), runtime)
+
+        self.assertFalse(self.output.exists())
+        self.assertFalse(self.assessments.exists())
 
     def test_input_manifest_path_and_order_mismatch_fails_atomically(self) -> None:
         first = self.root / "first.raw"
@@ -763,6 +963,8 @@ class OcrWorkerTests(unittest.TestCase):
                 "inventory.txt",
                 "--input-manifest",
                 "input-manifest.jsonl",
+                "--routing-manifest",
+                "content-routing.jsonl",
                 "--output",
                 "strings.jsonl",
                 "--assessments-output",
@@ -792,6 +994,10 @@ class OcrWorkerTests(unittest.TestCase):
         self.assertEqual(0, args.threads)
         self.assertEqual(27, args.progress_total_files)
         self.assertEqual(Path("input-manifest.jsonl"), args.input_manifest)
+        self.assertEqual(Path("content-routing.jsonl"), args.routing_manifest)
+        self.assertEqual(
+            Path("content-routing.jsonl"), config_from_arguments(args).routing_manifest
+        )
         pack = load_model_pack(
             self.model_manifest,
             sha256_file(self.model_manifest),
@@ -1378,6 +1584,49 @@ class OcrWorkerTests(unittest.TestCase):
         self.assertEqual(2, stats["processedFiles"])
         self.assertEqual(2, stats["pages"])
         self.assertEqual("hybrid-directml-cpu", stats["provider"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows sharing leases are release-platform specific")
+    def test_hybrid_cross_source_keeps_evidence_lease_during_pending_ocr(self) -> None:
+        source = self._image("leased-pending.png")
+        self._write_inventory(source)
+        self._write_input_manifest_rows(self._input_manifest_row(source))
+        cpu = FakeRuntime("cpu")
+        gpu = FakeRuntime("directml")
+        image = FakeImage("leased:pending")
+        cpu.image_frames[source.name] = [image]
+        sharing_failures: list[str] = []
+
+        def verify_lease() -> dict[str, Any]:
+            for name, operation in (
+                ("write", lambda: source.write_bytes(b"same-length-modification!!")),
+                ("delete", source.unlink),
+            ):
+                try:
+                    operation()
+                except OSError:
+                    continue
+                sharing_failures.append(name)
+            return {
+                "txts": ["leased@example.test"],
+                "boxes": [[[1, 1], [200, 1], [200, 20], [1, 20]]],
+                "scores": [0.99],
+            }
+
+        gpu.ocr_results[image.key] = verify_lease
+        cpu.ocr_results[image.key] = verify_lease
+
+        run_pipeline(
+            replace(
+                self._config(),
+                provider="hybrid",
+                input_manifest=self.input_manifest,
+            ),
+            HybridOcrRuntime(gpu, cpu),
+        )
+
+        self.assertEqual([], sharing_failures)
+        source.write_bytes(b"lease released")
+        self.assertEqual(b"lease released", source.read_bytes())
 
     def test_hybrid_cross_source_lane_weighting_is_run_global_and_deterministic(self) -> None:
         sources = [self._image(f"weighted-{index:02d}.png") for index in range(27)]

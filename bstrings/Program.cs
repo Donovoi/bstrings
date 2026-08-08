@@ -72,6 +72,7 @@ public static partial class Program
         + "\r\n'analyze' writes a provenance-preserving result directory with TSV/JSONL reports and histograms."
         + "\r\nIts output directory must be new or empty; a failed run remains marked .incomplete."
         + "\r\nLong-running operations print measured percentage completion; percentages are work units, not an ETA."
+        + "\r\nFull analysis classifies each input in one early shared pass, records content-routing.jsonl and engine-status.jsonl, and always keeps native coverage."
         + "\r\n--processor controls native extraction only. OCR and translation have separate hardware options."
         + "\r\n--use-rapids is a separate, optional regex prefilter for the legacy scanner."
         + "\r\n--enrich-jsonl processes provenance-preserving external string records without rescanning file bytes.";
@@ -87,12 +88,21 @@ public static partial class Program
     {
         private readonly StreamWriter _writer;
         private readonly string _incompleteMarker;
+        private readonly string _temporaryOutputPath;
+        private readonly string _finalOutputPath;
         private bool _completed;
 
-        internal OutputCompletionScope(StreamWriter writer, string incompleteMarker)
+        internal OutputCompletionScope(
+            StreamWriter writer,
+            string incompleteMarker,
+            string temporaryOutputPath = null,
+            string finalOutputPath = null
+        )
         {
             _writer = writer;
             _incompleteMarker = incompleteMarker;
+            _temporaryOutputPath = temporaryOutputPath;
+            _finalOutputPath = finalOutputPath;
         }
 
         internal void MarkCompleted()
@@ -108,9 +118,23 @@ public static partial class Program
                 await _writer.DisposeAsync();
             }
 
-            if (!_completed || _incompleteMarker is null)
+            if (!_completed)
+            {
+                if (_temporaryOutputPath is not null)
+                {
+                    File.Delete(_temporaryOutputPath);
+                }
+                return;
+            }
+
+            if (_incompleteMarker is null)
             {
                 return;
+            }
+
+            if (_temporaryOutputPath is not null)
+            {
+                File.Move(_temporaryOutputPath, _finalOutputPath, overwrite: true);
             }
 
             try
@@ -622,6 +646,11 @@ public static partial class Program
             Description = "Read the exact input-file inventory from a UTF-8 line-delimited file",
             Hidden = true,
         };
+        var inputManifestOpt = new Option<string>("--input-manifest")
+        {
+            Description = "Bind integrated native extraction to a trusted evidence identity manifest",
+            Hidden = true,
+        };
 
         _rootCommand = new RootCommand
         {
@@ -658,6 +687,7 @@ public static partial class Program
             enrichJsonlOpt,
             emitEnrichmentJsonlOpt,
             pathsFromOpt,
+            inputManifestOpt,
         };
 
         _rootCommand.Description = Header + "\r\n\r\n" + Footer;
@@ -696,7 +726,8 @@ public static partial class Program
                     result.GetValue(forceRapidsOpt),
                     result.GetValue(enrichJsonlOpt),
                     result.GetValue(emitEnrichmentJsonlOpt),
-                    result.GetValue(pathsFromOpt)
+                    result.GetValue(pathsFromOpt),
+                    result.GetValue(inputManifestOpt)
                 )
         );
 
@@ -823,7 +854,8 @@ public static partial class Program
         bool forceRapids, // deprecated compatibility flag
         string enrichJsonl, // normalized external-extractor/translation records
         bool emitEnrichmentJsonl,
-        string pathsFrom // exact integrated-workflow input inventory
+        string pathsFrom, // exact integrated-workflow input inventory
+        string inputManifest // exact integrated-workflow evidence identity manifest
     )
     { // Set the global debug flag
         _debug = debug;
@@ -999,6 +1031,13 @@ public static partial class Program
         // ########################### EDITED ###########################
         IReadOnlyList<string> files;
         var inventoryBackedInputs = !string.IsNullOrWhiteSpace(pathsFrom);
+        var trustedNativeInputs = !string.IsNullOrWhiteSpace(inputManifest);
+        if (trustedNativeInputs && (!inventoryBackedInputs || !emitEnrichmentJsonl))
+        {
+            throw new InvalidOperationException(
+                "--input-manifest requires the integrated --paths-from and --emit-enrichment-jsonl workflow."
+            );
+        }
         if (inventoryBackedInputs)
         {
             if (!string.IsNullOrWhiteSpace(f) || !string.IsNullOrWhiteSpace(d))
@@ -1110,6 +1149,9 @@ public static partial class Program
 
             files = resolvedFiles;
         }
+        var trustedInputEntries = trustedNativeInputs
+            ? NativeInputTrustCore.ReadAndBindManifest(inputManifest, files)
+            : null;
 
         if (!q)
         {
@@ -1158,6 +1200,8 @@ public static partial class Program
         bool isCsvOutput = outputConfiguration.IsCsvOutput;
         bool csvHeaderWritten = false;
         string outputIncompleteMarker = null;
+        string temporaryOutputPath = null;
+        string finalOutputPath = null;
 
         var globalCounter = 0;
         var globalHits = 0;
@@ -1183,10 +1227,19 @@ public static partial class Program
                 outputIncompleteMarker,
                 $"bstrings output is incomplete; processing started {DateTimeOffset.UtcNow:O}.{Environment.NewLine}"
             );
-            sw = new StreamWriter(o, true);
+            finalOutputPath = o;
+            temporaryOutputPath = trustedNativeInputs
+                ? o + ".partial." + Guid.NewGuid().ToString("N")
+                : null;
+            sw = new StreamWriter(temporaryOutputPath ?? o, append: !trustedNativeInputs);
         }
 
-        await using var outputCompletion = new OutputCompletionScope(sw, outputIncompleteMarker);
+        await using var outputCompletion = new OutputCompletionScope(
+            sw,
+            outputIncompleteMarker,
+            temporaryOutputPath,
+            finalOutputPath
+        );
         long fileCount = 0;
         long largestInputBytes = 0;
         foreach (var candidate in files)
@@ -1203,7 +1256,10 @@ public static partial class Program
                 }
                 continue;
             }
-            largestInputBytes = Math.Max(largestInputBytes, new FileInfo(candidate).Length);
+            var candidateLength = trustedInputEntries is null
+                ? new FileInfo(candidate).Length
+                : trustedInputEntries[checked((int)fileCount - 1)].Length;
+            largestInputBytes = Math.Max(largestInputBytes, candidateLength);
         }
         if (fileCount == 0)
         {
@@ -1232,8 +1288,10 @@ public static partial class Program
             Console.WriteLine();
         }
 
-        foreach (var currentFile in files) // Renamed 'file' to 'currentFile'
+        for (var fileIndex = 0; fileIndex < files.Count; fileIndex++)
         {
+            var currentFile = files[fileIndex];
+            var trustedInputEntry = trustedInputEntries?[fileIndex];
             if (File.Exists(currentFile) == false) // Use currentFile
             {
                 if (inventoryBackedInputs)
@@ -1380,18 +1438,33 @@ public static partial class Program
                 maxLength = x;
             }
 
-            var fileSizeBytes = new FileInfo(currentFile).Length; // Use currentFile
-            var calibration = processingBackend.CalibrateForFile(
-                currentFile,
-                fileSizeBytes,
-                minLength,
-                maxLength,
-                a,
-                u,
-                cp,
-                ar,
-                ur
-            );
+            await using var trustedSourceStream = trustedInputEntry is null
+                ? null
+                : await NativeInputTrustCore.OpenVerifiedSourceAsync(trustedInputEntry);
+            var fileSizeBytes = trustedInputEntry?.Length ?? new FileInfo(currentFile).Length;
+            var calibration = trustedSourceStream is null
+                ? processingBackend.CalibrateForFile(
+                    currentFile,
+                    fileSizeBytes,
+                    minLength,
+                    maxLength,
+                    a,
+                    u,
+                    cp,
+                    ar,
+                    ur
+                )
+                : processingBackend.CalibrateForStream(
+                    trustedSourceStream,
+                    fileSizeBytes,
+                    minLength,
+                    maxLength,
+                    a,
+                    u,
+                    cp,
+                    ar,
+                    ur
+                );
             var processingMode = calibration.Mode;
 
             if (_debug || trace)
@@ -1511,15 +1584,18 @@ public static partial class Program
 
             try
             {
-                var mappedStreamSetup = FileSetupCore.SetupMappedStreamForFile(
-                    currentFile,
-                    _ => FileSetupCore.CreateReadableFileStream(currentFile),
-                    _ => OpenFile(currentFile),
-                    !q && _debug ? Console.Error.WriteLine : null,
-                    Console.Error.WriteLine,
-                    stream => MappedStream.FromStream(stream, Ownership.Dispose)
-                );
-                var mappedStream = mappedStreamSetup.Stream;
+                var mappedStream = trustedSourceStream is null
+                    ? FileSetupCore
+                        .SetupMappedStreamForFile(
+                            currentFile,
+                            _ => FileSetupCore.CreateReadableFileStream(currentFile),
+                            _ => OpenFile(currentFile),
+                            !q && _debug ? Console.Error.WriteLine : null,
+                            Console.Error.WriteLine,
+                            stream => MappedStream.FromStream(stream, Ownership.Dispose)
+                        )
+                        .Stream
+                    : MappedStream.FromStream(trustedSourceStream, Ownership.None);
 
                 using (mappedStream)
                 { // Process main chunks concurrently with streaming output for memory efficiency
@@ -1681,6 +1757,14 @@ public static partial class Program
                                 literalBatchTransform
                             ) > 0;
                     }
+                }
+
+                if (trustedSourceStream is not null)
+                {
+                    await NativeInputTrustCore.VerifyIdentityAsync(
+                        trustedSourceStream,
+                        trustedInputEntry!
+                    );
                 }
 
                 // Mark progress as completed to stop the progress task

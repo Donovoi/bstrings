@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -19,10 +21,17 @@ from bstrings_enrich import (  # noqa: E402
     JSON_READ_CHUNK_BYTES,
     Classification,
     EnrichmentError,
+    EvidenceReadLease,
     FlossJsonDocument,
+    InputIdentity,
     LlamaCppTranslator,
     MadladTranslator,
+    MagikaClassification,
+    RoutingInput,
     TranslationCache,
+    _iter_magika_batches,
+    _make_routing_record,
+    _run_magika_batch,
     add_translations,
     build_llama_server_command,
     iter_extraction_paths,
@@ -36,6 +45,7 @@ from bstrings_enrich import (  # noqa: E402
     protected_identifiers,
     read_normalized_jsonl,
     read_paths_from,
+    read_routing_manifest,
     resolve_translation_parallelism,
     run_floss,
     selected_translation_engine,
@@ -131,6 +141,31 @@ class EnrichmentTests(unittest.TestCase):
                 ],
             },
         }
+
+    @staticmethod
+    def write_input_manifest(path: Path, inputs: list[Path]) -> None:
+        rows = []
+        for source in inputs:
+            content = source.read_bytes()
+            rows.append(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "path": str(source.resolve()),
+                        "length": len(content),
+                        "sha256": hashlib.sha256(content).hexdigest(),
+                    },
+                    separators=(",", ":"),
+                )
+            )
+        path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def unknown_magika(status: str = "ok") -> MagikaClassification:
+        unknown = Classification(
+            "unknown", 0.25 if status == "ok" else 0.0, False, "application/octet-stream", "unknown"
+        )
+        return MagikaClassification(status, unknown, unknown, None if status == "ok" else "test")
 
     @staticmethod
     def disk_document(payload: bytes) -> FlossJsonDocument:
@@ -799,6 +834,460 @@ class EnrichmentTests(unittest.TestCase):
             self.assertEqual(
                 {str(path.resolve()) for path in inputs},
                 {record["sourceFile"] for record in records},
+            )
+
+    @patch("bstrings_enrich.run_floss", side_effect=AssertionError("triage invoked FLOSS"))
+    @patch("bstrings_enrich._run_magika_batch")
+    @patch(
+        "bstrings_enrich.sha256_file",
+        side_effect=lambda path: (
+            hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            if Path(path).is_file()
+            else "b" * 64
+        ),
+    )
+    @patch("bstrings_enrich.tool_version", return_value="magika 1.1.0 model")
+    @patch("bstrings_enrich.executable_path", side_effect=lambda command: command)
+    def test_triage_only_batches_and_routes_conservative_union(
+        self,
+        _executable_path_mock,
+        tool_version_mock,
+        _sha256_file_mock,
+        magika_batch_mock,
+        _run_floss_mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pe = root / "extensionless"
+            pe_bytes = bytearray(256)
+            pe_bytes[0:2] = b"MZ"
+            pe_bytes[60:64] = (128).to_bytes(4, "little")
+            pe_bytes[128:132] = b"PE\x00\x00"
+            pe.write_bytes(pe_bytes)
+            image = root / "picture.bin"
+            image.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+            text = root / "ordinary.txt"
+            text.write_text("ordinary text", encoding="utf-8")
+            inputs = [pe, image, text]
+            inventory = root / "inventory.txt"
+            inventory.write_text(
+                "".join(f"{path.resolve()}\n" for path in inputs), encoding="utf-8"
+            )
+            manifest = root / "input-manifest.jsonl"
+            self.write_input_manifest(manifest, inputs)
+            output = root / "content-routing.jsonl"
+            magika_batch_mock.side_effect = lambda _magika, batch, _timeout: [
+                self.unknown_magika() for _ in batch
+            ]
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "--triage-only",
+                        "--enable-floss",
+                        "--enable-ocr",
+                        "--paths-from",
+                        str(inventory),
+                        "--input-manifest",
+                        str(manifest),
+                        "--progress-total-files",
+                        "3",
+                        "-o",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(0, exit_code)
+            self.assertEqual(1, magika_batch_mock.call_count)
+            tool_version_mock.assert_called_once()
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([1, 2, 3], [record["ordinal"] for record in records])
+            self.assertEqual("content-routing-v1", records[0]["policyVersion"])
+            self.assertRegex(records[0]["decisionId"], r"^sha256:[0-9a-f]{64}$")
+            self.assertEqual("b" * 64, records[0]["classifier"]["executableSha256"])
+            self.assertEqual(["floss", "native"], records[0]["scheduledRoutes"])
+            self.assertIn("magic:pe", records[0]["signals"])
+            self.assertEqual(["native", "ocr"], records[1]["scheduledRoutes"])
+            self.assertIn("magic:png", records[1]["signals"])
+            self.assertEqual(["native"], records[2]["scheduledRoutes"])
+            self.assertIn("Progress: content triage: 0.0% (0/3 files)", stderr.getvalue())
+            self.assertIn("Progress: content triage: 100.0% (3/3 files)", stderr.getvalue())
+
+    def test_raw_magika_pe_prediction_routes_floss_but_pe_extension_alone_does_not(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "misleading.exe"
+            source.write_bytes(b"ordinary text")
+            identity = InputIdentity(
+                str(source.resolve()),
+                len(b"ordinary text"),
+                hashlib.sha256(b"ordinary text").hexdigest(),
+            )
+            item = RoutingInput(source.resolve(), identity)
+            unknown = self.unknown_magika().output
+            raw_pe = Classification("pebin", 0.41, False, "application/x-dosexec", "executable")
+            routed = _make_routing_record(
+                item,
+                MagikaClassification("ok", unknown, raw_pe),
+                "magika 1.1.0 model",
+                1,
+                enable_floss=True,
+                enable_ocr=False,
+                force_floss=False,
+                magika_runtime_path="C:/bundle/DirectML.dll",
+                magika_runtime_sha256="c" * 64,
+            )
+            extension_only = _make_routing_record(
+                item,
+                self.unknown_magika(),
+                "magika 1.1.0 model",
+                1,
+                enable_floss=True,
+                enable_ocr=False,
+                force_floss=False,
+            )
+
+            self.assertIn("floss", routed["scheduledRoutes"])
+            self.assertIn("magika-raw:pebin", routed["signals"])
+            self.assertEqual(
+                {"path": "C:/bundle/DirectML.dll", "sha256": "c" * 64},
+                routed["classifier"]["runtime"],
+            )
+            self.assertNotIn("floss", extension_only["scheduledRoutes"])
+            self.assertIn("extension-content-disagreement:pe", extension_only["conflicts"])
+            self.assertEqual(
+                extension_only["decisionId"],
+                _make_routing_record(
+                    item,
+                    self.unknown_magika(),
+                    "magika 1.1.0 model",
+                    1,
+                    enable_floss=True,
+                    enable_ocr=False,
+                    force_floss=False,
+                )["decisionId"],
+            )
+
+    def test_routing_manifest_rejects_tampered_decision_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "sample.bin"
+            source.write_bytes(b"sample")
+            identity = InputIdentity(
+                str(source.resolve()), 6, hashlib.sha256(b"sample").hexdigest()
+            )
+            route = _make_routing_record(
+                RoutingInput(source.resolve(), identity),
+                self.unknown_magika(),
+                "1.1.0",
+                1,
+                enable_floss=False,
+                enable_ocr=False,
+                force_floss=False,
+            )
+            route["decisionId"] = "sha256:" + "0" * 64
+            manifest = root / "content-routing.jsonl"
+            manifest.write_text(json.dumps(route) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(EnrichmentError, "decision identity"):
+                list(read_routing_manifest(manifest))
+
+    @patch("bstrings_enrich.subprocess.run")
+    def test_magika_batch_uses_one_ordered_jsonl_process(self, run_mock) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = []
+            rows = []
+            for index in range(100):
+                source = root / f"sample-{index}.bin"
+                source.write_bytes(b"sample")
+                identity = InputIdentity(str(source.resolve()), 6, "a" * 64)
+                inputs.append(RoutingInput(source.resolve(), identity))
+                type_info = {
+                    "label": "unknown",
+                    "is_text": False,
+                    "mime_type": "application/octet-stream",
+                    "group": "unknown",
+                }
+                rows.append(
+                    json.dumps(
+                        {
+                            "path": str(source.resolve()),
+                            "result": {
+                                "status": "ok",
+                                "value": {"dl": type_info, "output": type_info, "score": 0.2},
+                            },
+                        }
+                    )
+                )
+            run_mock.return_value = subprocess.CompletedProcess(
+                ["magika"], 0, stdout="\n".join(rows) + "\n", stderr=""
+            )
+
+            batches = list(_iter_magika_batches(inputs, "magika.exe"))
+            self.assertEqual(1, len(batches))
+            classifications = _run_magika_batch("magika.exe", batches[0], 60)
+
+            self.assertEqual(100, len(classifications))
+            self.assertEqual(1, run_mock.call_count)
+            command = run_mock.call_args.args[0]
+            self.assertEqual(["magika.exe", "--jsonl", "--"], command[:3])
+            self.assertEqual([str(item.path) for item in inputs], command[3:])
+
+    @patch("bstrings_enrich.subprocess.run", side_effect=subprocess.TimeoutExpired("magika", 60))
+    def test_magika_batch_timeout_fails_open_with_auditable_errors(self, _run_mock) -> None:
+        item = RoutingInput(Path("sample.bin").resolve(), InputIdentity("sample.bin", 1, "a" * 64))
+        classifications = _run_magika_batch("magika.exe", [item], 60)
+        self.assertEqual("error", classifications[0].status)
+        self.assertEqual("batch-timeout", classifications[0].error_code)
+
+    @patch("bstrings_enrich.subprocess.run")
+    def test_magika_nonzero_and_unbound_output_fail_open_with_auditable_errors(
+        self, run_mock
+    ) -> None:
+        item = RoutingInput(Path("sample.bin").resolve(), InputIdentity("sample.bin", 1, "a" * 64))
+        run_mock.return_value = subprocess.CompletedProcess(
+            ["magika"], 17, stdout="", stderr="crashed"
+        )
+        classifications = _run_magika_batch("magika.exe", [item], 60)
+        self.assertEqual("error", classifications[0].status)
+        self.assertEqual("batch-exit-17", classifications[0].error_code)
+
+        run_mock.return_value = subprocess.CompletedProcess(
+            ["magika"], 0, stdout=json.dumps({"path": "different", "result": {}}), stderr=""
+        )
+        classifications = _run_magika_batch("magika.exe", [item], 60)
+        self.assertEqual("error", classifications[0].status)
+        self.assertEqual("invalid-row-content", classifications[0].error_code)
+
+    def test_classifier_error_still_uses_magic_and_force_routes_are_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "extensionless"
+            pe_bytes = bytearray(256)
+            pe_bytes[0:2] = b"MZ"
+            pe_bytes[60:64] = (128).to_bytes(4, "little")
+            pe_bytes[128:132] = b"PE\x00\x00"
+            source.write_bytes(pe_bytes)
+            item = RoutingInput(
+                source.resolve(),
+                InputIdentity(
+                    str(source.resolve()), len(pe_bytes), hashlib.sha256(pe_bytes).hexdigest()
+                ),
+            )
+            failed = _make_routing_record(
+                item,
+                self.unknown_magika("error"),
+                "magika 1.1.0 model",
+                1,
+                enable_floss=True,
+                enable_ocr=False,
+                force_floss=False,
+            )
+            forced = _make_routing_record(
+                item,
+                self.unknown_magika(),
+                "magika 1.1.0 model",
+                1,
+                enable_floss=True,
+                enable_ocr=False,
+                force_floss=True,
+            )
+            self.assertEqual("error", failed["classifier"]["status"])
+            self.assertIn("floss", failed["scheduledRoutes"])
+            self.assertIn("magic:pe", failed["signals"])
+            self.assertIn("user-force:floss", forced["signals"])
+
+    def test_large_dos_stub_pe_signature_still_routes_floss(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "extensionless"
+            pe_offset = 16 * 1024 * 1024 + 4_096
+            with source.open("wb") as handle:
+                handle.write(b"MZ")
+                handle.seek(60)
+                handle.write(pe_offset.to_bytes(4, "little"))
+                handle.seek(pe_offset)
+                handle.write(b"PE\x00\x00")
+            identity = InputIdentity(
+                str(source.resolve()),
+                source.stat().st_size,
+                hashlib.sha256(source.read_bytes()).hexdigest(),
+            )
+            route = _make_routing_record(
+                RoutingInput(source.resolve(), identity),
+                self.unknown_magika("error"),
+                "unavailable",
+                1,
+                enable_floss=True,
+                enable_ocr=False,
+                force_floss=False,
+            )
+
+            self.assertIn("magic:pe", route["signals"])
+            self.assertIn("floss", route["scheduledRoutes"])
+
+    def test_pe_pdf_polyglot_routes_both_specialists_monotonically(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "polyglot.bin"
+            content = bytearray(1_024)
+            content[0:2] = b"MZ"
+            content[60:64] = (128).to_bytes(4, "little")
+            content[128:132] = b"PE\x00\x00"
+            content[512:517] = b"%PDF-"
+            source.write_bytes(content)
+            identity = InputIdentity(
+                str(source.resolve()), len(content), hashlib.sha256(content).hexdigest()
+            )
+            route = _make_routing_record(
+                RoutingInput(source.resolve(), identity),
+                self.unknown_magika(),
+                "1.1.0",
+                1,
+                enable_floss=True,
+                enable_ocr=True,
+                force_floss=False,
+            )
+
+            self.assertEqual(["floss", "native", "ocr"], route["scheduledRoutes"])
+            self.assertIn("magic:pe", route["signals"])
+            self.assertIn("probe:embedded-pdf-header", route["signals"])
+            self.assertIn("nonzero-pdf-header", route["conflicts"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows sharing leases are release-platform specific")
+    def test_evidence_read_lease_denies_write_and_delete_sharing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "evidence.bin"
+            alias = root / "hard-link.bin"
+            replacement = root / "replacement.bin"
+            source.write_bytes(b"original")
+            os.link(source, alias)
+            replacement.write_bytes(b"modified")
+            with EvidenceReadLease(source):
+                with self.assertRaises(OSError):
+                    source.write_bytes(b"modified")
+                with self.assertRaises(OSError):
+                    alias.write_bytes(b"modified")
+                with self.assertRaises(OSError):
+                    source.unlink()
+                with self.assertRaises(OSError):
+                    os.replace(replacement, source)
+            source.write_bytes(b"modified")
+            self.assertEqual(b"modified", source.read_bytes())
+
+    @patch("bstrings_enrich._run_magika_batch", side_effect=EnrichmentError("malformed"))
+    @patch(
+        "bstrings_enrich.sha256_file",
+        side_effect=lambda path: (
+            hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            if Path(path).is_file()
+            else "b" * 64
+        ),
+    )
+    @patch("bstrings_enrich.tool_version", return_value="magika 1.1.0 model")
+    @patch("bstrings_enrich.executable_path", side_effect=lambda command: command)
+    def test_unexpected_batch_failure_emits_fail_open_route_and_replaces_output_atomically(
+        self, _executable_path_mock, _tool_version_mock, _sha256_file_mock, _batch_mock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "sample.bin"
+            source.write_bytes(b"sample")
+            inventory = root / "inventory.txt"
+            inventory.write_text(f"{source.resolve()}\n", encoding="utf-8")
+            manifest = root / "input-manifest.jsonl"
+            self.write_input_manifest(manifest, [source])
+            output = root / "content-routing.jsonl"
+            output.write_text("preserved\n", encoding="utf-8")
+
+            exit_code = main(
+                [
+                    "--triage-only",
+                    "--paths-from",
+                    str(inventory),
+                    "--input-manifest",
+                    str(manifest),
+                    "--progress-total-files",
+                    "1",
+                    "-o",
+                    str(output),
+                ]
+            )
+
+            self.assertEqual(0, exit_code)
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(1, len(records))
+            self.assertEqual("error", records[0]["classifier"]["status"])
+            self.assertEqual(
+                "batch-classification-error", records[0]["classifier"]["errorCode"]
+            )
+            self.assertEqual(["native"], records[0]["scheduledRoutes"])
+
+    @patch("bstrings_enrich.classify_file", side_effect=AssertionError("Magika was relaunched"))
+    @patch("bstrings_enrich.run_floss")
+    @patch("bstrings_enrich.tool_version", return_value="floss 3.1.1")
+    @patch("bstrings_enrich.executable_path", side_effect=lambda command: command)
+    def test_recovery_reuses_routing_manifest_without_relaunching_magika(
+        self,
+        _executable_path_mock,
+        tool_version_mock,
+        run_floss_mock,
+        _classify_file_mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "sample.exe"
+            pe_bytes = bytearray(256)
+            pe_bytes[0:2] = b"MZ"
+            pe_bytes[60:64] = (128).to_bytes(4, "little")
+            pe_bytes[128:132] = b"PE\x00\x00"
+            source.write_bytes(pe_bytes)
+            identity = InputIdentity(
+                str(source.resolve()), len(pe_bytes), hashlib.sha256(pe_bytes).hexdigest()
+            )
+            route = _make_routing_record(
+                RoutingInput(source.resolve(), identity),
+                self.unknown_magika(),
+                "magika 1.1.0 model",
+                1,
+                enable_floss=True,
+                enable_ocr=False,
+                force_floss=False,
+            )
+            routing_manifest = root / "content-routing.jsonl"
+            routing_manifest.write_text(json.dumps(route) + "\n", encoding="utf-8")
+            inventory = root / "floss-inputs.txt"
+            inventory.write_text(f"{source.resolve()}\n", encoding="utf-8")
+            output = root / "recovered.jsonl"
+            run_floss_mock.return_value = self.payload
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = main(
+                    [
+                        "--bounded-integrated-mode",
+                        "--paths-from",
+                        str(inventory),
+                        "--routing-manifest",
+                        str(routing_manifest),
+                        "--progress-total-files",
+                        "1",
+                        "-o",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(0, exit_code)
+            tool_version_mock.assert_called_once_with("floss")
+            run_floss_mock.assert_called_once()
+            self.assertIn("Progress: FLOSS recovery: 100.0% (1/1 files)", stderr.getvalue())
+            records = [
+                json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertTrue(records)
+            self.assertEqual(
+                {route["decisionId"]},
+                {record["attributes"]["routeDecisionId"] for record in records},
             )
 
     def test_transformers_v5_is_rejected_after_invalid_output_regression(self) -> None:

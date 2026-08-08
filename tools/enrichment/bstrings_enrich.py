@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import atexit
 import codecs
+import ctypes
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
 import shutil
@@ -23,18 +25,26 @@ import urllib.request
 from collections import Counter, OrderedDict
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
 
 SCHEMA_VERSION = 1
 MAX_PATH_LIST_LINE_CHARACTERS = 32 * 1024
+MAX_INPUT_MANIFEST_LINE_CHARACTERS = 256 * 1024
 MAX_JSONL_LINE_CHARACTERS = 16 * 1024 * 1024
 MAX_FLOSS_JSON_ITEM_BYTES = MAX_JSONL_LINE_CHARACTERS
 MAX_JSON_DEPTH = 256
 JSON_READ_CHUNK_BYTES = 64 * 1024
 JSON_STRING_SPECIAL = re.compile(rb'[\x00-\x1f"\\]')
+MAGIKA_BATCH_MAX_PATHS = 2_048
+MAGIKA_BATCH_MAX_COMMAND_CHARACTERS = 24 * 1024
+OCR_IMAGE_EXTENSIONS = frozenset(
+    (".bmp", ".gif", ".ico", ".jfif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp")
+)
+OCR_MAGIKA_LABELS = frozenset(("bmp", "gif", "ico", "jpeg", "jpg", "pdf", "png", "tiff", "webp"))
+PE_EXTENSIONS = frozenset((".cpl", ".dll", ".efi", ".exe", ".ocx", ".scr", ".sys"))
 DEFAULT_MODEL_ID = "google/madlad400-3b-mt"
 DEFAULT_LLAMA_MODEL_ID = "tencent/Hy-MT2-7B-GGUF"
 LANGUAGE_NAMES = {
@@ -218,6 +228,88 @@ class Classification:
     group: str
 
 
+@dataclass(frozen=True)
+class InputIdentity:
+    path: str
+    length: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class RoutingInput:
+    path: Path
+    identity: InputIdentity
+
+
+class EvidenceReadLease:
+    """Prevent write/delete sharing while an external Windows reader uses a source path."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._handle: int | None = None
+        self._portable_handle: Any | None = None
+
+    def __enter__(self) -> EvidenceReadLease:
+        if os.name != "nt":
+            self._portable_handle = self.path.open("rb")
+            return self
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        create_file.restype = ctypes.c_void_p
+        handle = create_file(
+            str(self.path),
+            0x80000000,  # GENERIC_READ
+            0x00000001,  # FILE_SHARE_READ only: deny write and delete sharing
+            None,
+            3,  # OPEN_EXISTING
+            0x08000000,  # FILE_FLAG_SEQUENTIAL_SCAN
+            None,
+        )
+        invalid_handle = ctypes.c_void_p(-1).value
+        if handle in (None, invalid_handle):
+            error = ctypes.get_last_error()
+            raise EnrichmentError(
+                f"Could not acquire an immutable read lease for routed evidence (WinError {error})"
+            )
+        self._handle = int(handle)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self._portable_handle is not None:
+            self._portable_handle.close()
+            self._portable_handle = None
+        if self._handle is not None:
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+            kernel32.CloseHandle(ctypes.c_void_p(self._handle))
+            self._handle = None
+
+
+@dataclass(frozen=True)
+class MagikaClassification:
+    status: str
+    output: Classification
+    raw_prediction: Classification
+    error_code: str | None = None
+
+
+def _magika_batch_errors(
+    inputs: Sequence[RoutingInput], error_code: str
+) -> list[MagikaClassification]:
+    unknown = Classification("unknown", 0.0, False, "application/octet-stream", "unknown")
+    return [MagikaClassification("error", unknown, unknown, error_code) for _ in inputs]
+
+
 class Translator(Protocol):
     engine: str
     engine_version: str
@@ -312,9 +404,7 @@ def validate_identifier_retention(source: str, translated: str) -> None:
     source_counts = Counter(value for _, _, value in protected_identifier_spans(source))
     translated_counts = Counter(value for _, _, value in protected_identifier_spans(translated))
     missing = [
-        value
-        for value, required in source_counts.items()
-        if translated_counts[value] < required
+        value for value, required in source_counts.items() if translated_counts[value] < required
     ]
     if missing:
         preview = ", ".join(repr(value) for value in missing[:3])
@@ -425,6 +515,284 @@ def classify_file(magika: str, path: Path, timeout_seconds: int) -> Classificati
         )
     except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise EnrichmentError(f"Unexpected Magika JSON for '{path}': {exc}") from exc
+
+
+def _classification_from_magika(value: Any, score: Any, description: str) -> Classification:
+    if not isinstance(value, dict):
+        raise EnrichmentError(f"{description} is not an object")
+    label = value.get("label")
+    is_text = value.get("is_text")
+    mime_type = value.get("mime_type")
+    group = value.get("group")
+    if (
+        not isinstance(label, str)
+        or not label
+        or type(is_text) is not bool
+        or not isinstance(mime_type, str)
+        or not mime_type
+        or not isinstance(group, str)
+        or not group
+        or isinstance(score, bool)
+        or not isinstance(score, (int, float))
+        or not math.isfinite(float(score))
+        or not 0 <= float(score) <= 1
+    ):
+        raise EnrichmentError(f"{description} contains invalid classification fields")
+    return Classification(label, float(score), is_text, mime_type, group)
+
+
+def _parse_magika_jsonl_item(value: Any, expected_path: Path) -> MagikaClassification:
+    if not isinstance(value, dict) or set(value) != {"path", "result"}:
+        raise EnrichmentError("Magika JSONL row has unsupported fields")
+    reported_path = value.get("path")
+    result = value.get("result")
+    if not isinstance(reported_path, str) or not _path_literals_equal(
+        reported_path, str(expected_path)
+    ):
+        raise EnrichmentError("Magika JSONL path does not match the requested inventory order")
+    if not isinstance(result, dict) or not isinstance(result.get("status"), str):
+        raise EnrichmentError("Magika JSONL row has an invalid result")
+    if result["status"] != "ok":
+        unknown = Classification("unknown", 0.0, False, "application/octet-stream", "unknown")
+        return MagikaClassification("error", unknown, unknown, str(result["status"]))
+    if set(result) != {"status", "value"} or not isinstance(result["value"], dict):
+        raise EnrichmentError("Successful Magika JSONL result has unsupported fields")
+    result_value = result["value"]
+    if set(result_value) != {"dl", "output", "score"}:
+        raise EnrichmentError("Successful Magika JSONL value has unsupported fields")
+    score = result_value["score"]
+    output = _classification_from_magika(result_value["output"], score, "Magika output")
+    raw = _classification_from_magika(result_value["dl"], score, "Magika raw prediction")
+    return MagikaClassification("ok", output, raw)
+
+
+def _run_magika_batch(
+    magika: str,
+    inputs: Sequence[RoutingInput],
+    timeout_seconds: int,
+) -> list[MagikaClassification]:
+    command = [magika, "--jsonl", "--", *(str(item.path) for item in inputs)]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return _magika_batch_errors(inputs, "batch-timeout")
+    except OSError:
+        return _magika_batch_errors(inputs, "batch-start-failed")
+
+    lines = result.stdout.splitlines()
+    if result.returncode != 0 and not lines:
+        return _magika_batch_errors(inputs, f"batch-exit-{result.returncode}")
+    if len(lines) != len(inputs):
+        return _magika_batch_errors(inputs, "invalid-row-cardinality")
+    classifications: list[MagikaClassification] = []
+    for line, item in zip(lines, inputs, strict=True):
+        if not line or len(line) > MAX_JSONL_LINE_CHARACTERS:
+            return _magika_batch_errors(inputs, "invalid-row-size")
+        try:
+            value = json.loads(line)
+            classifications.append(_parse_magika_jsonl_item(value, item.path))
+        except (json.JSONDecodeError, EnrichmentError):
+            return _magika_batch_errors(inputs, "invalid-row-content")
+    if result.returncode != 0:
+        return _magika_batch_errors(inputs, f"batch-exit-{result.returncode}")
+    return classifications
+
+
+def _iter_magika_batches(
+    inputs: Iterable[RoutingInput], magika: str
+) -> Iterable[list[RoutingInput]]:
+    prefix = [magika, "--jsonl", "--"]
+    prefix_units = len(subprocess.list2cmdline(prefix).encode("utf-16-le")) // 2
+    batch: list[RoutingInput] = []
+    command_units = prefix_units
+    for item in inputs:
+        quoted_path = subprocess.list2cmdline([str(item.path)])
+        added_units = 1 + len(quoted_path.encode("utf-16-le")) // 2
+        if batch and (
+            len(batch) >= MAGIKA_BATCH_MAX_PATHS
+            or command_units + added_units > MAGIKA_BATCH_MAX_COMMAND_CHARACTERS
+        ):
+            yield batch
+            batch = [item]
+            command_units = prefix_units + added_units
+        else:
+            batch.append(item)
+            command_units += added_units
+    if batch:
+        yield batch
+
+
+def _path_literals_equal(left: str, right: str) -> bool:
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+
+def _read_bounded_signals(path: Path) -> tuple[set[str], set[str]]:
+    signals: set[str] = set()
+    conflicts: set[str] = set()
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(4_096)
+            if header.startswith(b"%PDF-"):
+                signals.add("magic:pdf")
+            elif b"%PDF-" in header[:1_024]:
+                signals.add("probe:embedded-pdf-header")
+                conflicts.add("nonzero-pdf-header")
+            if header.startswith(b"\x89PNG\r\n\x1a\n"):
+                signals.add("magic:png")
+            elif header.startswith(b"\xff\xd8\xff"):
+                signals.add("magic:jpeg")
+            elif header.startswith((b"GIF87a", b"GIF89a")):
+                signals.add("magic:gif")
+            elif header.startswith((b"II*\x00", b"MM\x00*")):
+                signals.add("magic:tiff")
+            elif header.startswith(b"BM"):
+                signals.add("magic:bmp")
+            elif header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+                signals.add("magic:webp")
+            elif header.startswith(b"\x00\x00\x01\x00"):
+                signals.add("magic:ico")
+            if header.startswith(b"MZ") and len(header) >= 64:
+                pe_offset = int.from_bytes(header[60:64], "little")
+                if pe_offset + 4 <= len(header):
+                    pe_signature = header[pe_offset : pe_offset + 4]
+                else:
+                    handle.seek(pe_offset)
+                    pe_signature = handle.read(4)
+                if pe_signature == b"PE\x00\x00":
+                    signals.add("magic:pe")
+                else:
+                    conflicts.add("invalid-pe-signature")
+    except OSError as exc:
+        raise EnrichmentError("An inventory item could not be inspected for routing") from exc
+
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        signals.add("extension:pdf")
+        if not signals.intersection({"magic:pdf", "probe:embedded-pdf-header"}):
+            conflicts.add("extension-content-disagreement:pdf")
+    elif suffix in OCR_IMAGE_EXTENSIONS:
+        signals.add(f"extension:{suffix[1:]}")
+        if not any(signal.startswith("magic:") and signal != "magic:pe" for signal in signals):
+            conflicts.add("extension-content-disagreement:image")
+    if suffix in PE_EXTENSIONS:
+        signals.add(f"extension:{suffix[1:]}")
+        if "magic:pe" not in signals:
+            conflicts.add("extension-content-disagreement:pe")
+    return signals, conflicts
+
+
+def _classification_object(value: Classification) -> dict[str, Any]:
+    return {
+        "label": value.label,
+        "mimeType": value.mime_type,
+        "group": value.group,
+        "isText": value.is_text,
+    }
+
+
+def _make_routing_record(
+    item: RoutingInput,
+    classification: MagikaClassification,
+    magika_version: str,
+    ordinal: int,
+    *,
+    enable_floss: bool,
+    enable_ocr: bool,
+    force_floss: bool,
+    magika_executable: str | None = None,
+    magika_sha256: str | None = None,
+    magika_runtime_path: str | None = None,
+    magika_runtime_sha256: str | None = None,
+) -> dict[str, Any]:
+    signals, conflicts = _read_bounded_signals(item.path)
+    labels = {classification.output.label, classification.raw_prediction.label}
+    if classification.output.label == "pebin":
+        signals.add("magika-output:pebin")
+    if classification.raw_prediction.label == "pebin":
+        signals.add("magika-raw:pebin")
+    for label in labels.intersection(OCR_MAGIKA_LABELS):
+        prefix = "magika-output" if label == classification.output.label else "magika-raw"
+        signals.add(f"{prefix}:{label}")
+    if (
+        classification.status == "ok"
+        and classification.output.label != classification.raw_prediction.label
+    ):
+        conflicts.add("magika-output-raw-disagreement")
+    if force_floss:
+        signals.add("user-force:floss")
+
+    floss_eligible = force_floss or any(
+        signal in {"magic:pe", "magika-output:pebin", "magika-raw:pebin"} for signal in signals
+    )
+    ocr_eligible = any(
+        signal == "magic:pdf"
+        or signal == "probe:embedded-pdf-header"
+        or signal == "extension:pdf"
+        or signal.startswith("magika-")
+        and signal.rsplit(":", maxsplit=1)[-1] in OCR_MAGIKA_LABELS
+        or signal.startswith("magic:")
+        and signal not in {"magic:pe"}
+        or signal.startswith("extension:")
+        and f".{signal.removeprefix('extension:')}" in OCR_IMAGE_EXTENSIONS
+        for signal in signals
+    )
+    eligible_routes = {"native"}
+    scheduled_routes = {"native"}
+    if floss_eligible:
+        eligible_routes.add("floss")
+        if enable_floss:
+            scheduled_routes.add("floss")
+    if ocr_eligible:
+        eligible_routes.add("ocr")
+        if enable_ocr:
+            scheduled_routes.add("ocr")
+
+    classifier = {
+        "engine": "magika",
+        "version": magika_version,
+        "predictionMode": "default-thresholded-output-plus-raw-dl",
+        "status": classification.status,
+        "score": classification.output.score,
+        "output": _classification_object(classification.output),
+        "rawPrediction": _classification_object(classification.raw_prediction),
+    }
+    if magika_executable is not None:
+        classifier["executable"] = magika_executable
+    if magika_sha256 is not None:
+        classifier["executableSha256"] = magika_sha256
+    if magika_runtime_path is not None and magika_runtime_sha256 is not None:
+        classifier["runtime"] = {
+            "path": magika_runtime_path,
+            "sha256": magika_runtime_sha256,
+        }
+    if classification.error_code is not None:
+        classifier["errorCode"] = classification.error_code
+    record = {
+        "schemaVersion": SCHEMA_VERSION,
+        "recordType": "content-route",
+        "policyVersion": "content-routing-v1",
+        "ordinal": ordinal,
+        "sourceFile": str(item.path),
+        "sourceSize": item.identity.length,
+        "sourceSha256": item.identity.sha256,
+        "classifier": classifier,
+        "signals": sorted(signals),
+        "eligibleRoutes": sorted(eligible_routes),
+        "scheduledRoutes": sorted(scheduled_routes),
+        "conflicts": sorted(conflicts),
+    }
+    record["decisionId"] = (
+        f"sha256:{hashlib.sha256(canonical_json(record).encode('utf-8')).hexdigest()}"
+    )
+    return record
 
 
 def run_floss(
@@ -1091,6 +1459,7 @@ def iter_normalized_floss(
     classification: Classification,
     floss_version: str,
     include_static: bool = False,
+    route_decision_id: str | None = None,
 ) -> Iterable[dict[str, Any]]:
     """Yield normalized FLOSS records without duplicating its monolithic JSON payload."""
     document = payload if isinstance(payload, FlossJsonDocument) else None
@@ -1136,6 +1505,8 @@ def iter_normalized_floss(
     try:
         source_file = str(source_path.resolve())
         shared = common_attributes(classification, payload)
+        if route_decision_id is not None:
+            shared["routeDecisionId"] = route_decision_id
 
         static_categories = ["language_strings"]
         if include_static:
@@ -1395,6 +1766,239 @@ def iter_extraction_paths(
             raise EnrichmentError(f"Path list '{paths_from}' contains no usable paths")
     else:
         yield from positional_paths
+
+
+def read_input_manifest(path: Path) -> Iterable[InputIdentity]:
+    try:
+        input_handle = path.open("r", encoding="utf-8-sig", errors="strict")
+    except OSError as exc:
+        raise EnrichmentError("Could not open the evidence input manifest") from exc
+    with input_handle:
+        try:
+            for line_number, line in enumerate(input_handle, 1):
+                value = line.rstrip("\r\n")
+                if not value or len(value) > MAX_INPUT_MANIFEST_LINE_CHARACTERS:
+                    raise EnrichmentError(
+                        f"Evidence input manifest line {line_number} is empty or too large"
+                    )
+                try:
+                    record = json.loads(value)
+                except json.JSONDecodeError as exc:
+                    raise EnrichmentError(
+                        f"Evidence input manifest line {line_number} is invalid"
+                    ) from exc
+                if not isinstance(record, dict) or set(record) != {
+                    "schemaVersion",
+                    "path",
+                    "length",
+                    "sha256",
+                }:
+                    raise EnrichmentError(
+                        f"Evidence input manifest line {line_number} has unsupported fields"
+                    )
+                source_path = record.get("path")
+                length = record.get("length")
+                sha256 = record.get("sha256")
+                if (
+                    record.get("schemaVersion") != SCHEMA_VERSION
+                    or not isinstance(source_path, str)
+                    or not source_path
+                    or not os.path.isabs(source_path)
+                    or type(length) is not int
+                    or length < 0
+                    or not isinstance(sha256, str)
+                    or len(sha256) != 64
+                    or sha256 != sha256.lower()
+                    or any(character not in "0123456789abcdef" for character in sha256)
+                ):
+                    raise EnrichmentError(
+                        f"Evidence input manifest line {line_number} has invalid identity fields"
+                    )
+                yield InputIdentity(source_path, length, sha256)
+        except UnicodeError as exc:
+            raise EnrichmentError("The evidence input manifest is not valid UTF-8") from exc
+
+
+def iter_routing_inputs(
+    positional_paths: Sequence[Path],
+    paths_from: Path | None,
+    input_manifest: Path,
+) -> Iterable[RoutingInput]:
+    paths = iter(iter_extraction_paths(positional_paths, paths_from))
+    identities = iter(read_input_manifest(input_manifest))
+    sentinel = object()
+    while True:
+        raw_path = next(paths, sentinel)
+        identity = next(identities, sentinel)
+        if raw_path is sentinel and identity is sentinel:
+            return
+        if raw_path is sentinel or identity is sentinel:
+            raise EnrichmentError("Input inventory and evidence manifest have different coverage")
+        assert isinstance(raw_path, Path)
+        assert isinstance(identity, InputIdentity)
+        path = raw_path.resolve()
+        if not _path_literals_equal(str(path), identity.path):
+            raise EnrichmentError("Input inventory order does not match the evidence manifest")
+        if not path.is_file():
+            raise EnrichmentError("An input inventory item is not a regular file")
+        try:
+            source_size = path.stat().st_size
+        except OSError as exc:
+            raise EnrichmentError("An input inventory item is unavailable") from exc
+        if source_size != identity.length:
+            raise EnrichmentError("An input inventory item changed length before content triage")
+        yield RoutingInput(path, identity)
+
+
+def read_routing_manifest(path: Path) -> Iterable[dict[str, Any]]:
+    try:
+        input_handle = path.open("r", encoding="utf-8", errors="strict")
+    except OSError as exc:
+        raise EnrichmentError("Could not open the content routing manifest") from exc
+    with input_handle:
+        try:
+            expected_ordinal = 1
+            for line in input_handle:
+                value = line.rstrip("\r\n")
+                if not value or len(value) > MAX_JSONL_LINE_CHARACTERS:
+                    raise EnrichmentError(
+                        f"Content routing row {expected_ordinal} is empty or too large"
+                    )
+                try:
+                    record = json.loads(value)
+                except json.JSONDecodeError as exc:
+                    raise EnrichmentError(
+                        f"Content routing row {expected_ordinal} is invalid"
+                    ) from exc
+                required_properties = {
+                    "schemaVersion",
+                    "recordType",
+                    "policyVersion",
+                    "ordinal",
+                    "decisionId",
+                    "sourceFile",
+                    "sourceSize",
+                    "sourceSha256",
+                    "classifier",
+                    "signals",
+                    "eligibleRoutes",
+                    "scheduledRoutes",
+                    "conflicts",
+                }
+                if (
+                    not isinstance(record, dict)
+                    or set(record) != required_properties
+                    or record.get("schemaVersion") != SCHEMA_VERSION
+                    or record.get("recordType") != "content-route"
+                    or record.get("policyVersion") != "content-routing-v1"
+                    or record.get("ordinal") != expected_ordinal
+                    or not isinstance(record.get("sourceFile"), str)
+                    or not isinstance(record.get("classifier"), dict)
+                    or not isinstance(record.get("eligibleRoutes"), list)
+                    or not isinstance(record.get("scheduledRoutes"), list)
+                    or "native" not in record["scheduledRoutes"]
+                    or any(
+                        route not in {"native", "floss", "ocr"}
+                        for route in record["eligibleRoutes"]
+                    )
+                    or any(
+                        route not in record["eligibleRoutes"]
+                        for route in record["scheduledRoutes"]
+                    )
+                ):
+                    raise EnrichmentError(
+                        f"Content routing row {expected_ordinal} has invalid required fields"
+                    )
+                decision_id = record.get("decisionId")
+                material = {key: item for key, item in record.items() if key != "decisionId"}
+                expected_decision_id = (
+                    "sha256:"
+                    + hashlib.sha256(canonical_json(material).encode("utf-8")).hexdigest()
+                )
+                if decision_id != expected_decision_id:
+                    raise EnrichmentError(
+                        f"Content routing row {expected_ordinal} has an invalid decision identity"
+                    )
+                yield record
+                expected_ordinal += 1
+        except UnicodeError as exc:
+            raise EnrichmentError("The content routing manifest is not valid UTF-8") from exc
+
+
+def _classification_from_routing_record(record: dict[str, Any]) -> Classification:
+    classifier = record["classifier"]
+    output = classifier.get("output")
+    score = classifier.get("score")
+    if not isinstance(output, dict):
+        raise EnrichmentError("A routed recovery input has no Magika output")
+    normalized_output = {
+        "label": output.get("label"),
+        "is_text": output.get("isText"),
+        "mime_type": output.get("mimeType"),
+        "group": output.get("group"),
+    }
+    return _classification_from_magika(normalized_output, score, "Routed recovery Magika output")
+
+
+def iter_routed_recovery_inputs(
+    positional_paths: Sequence[Path],
+    paths_from: Path | None,
+    routing_manifest: Path,
+) -> Iterable[tuple[Path, Classification, InputIdentity, str]]:
+    targets = iter(iter_extraction_paths(positional_paths, paths_from))
+    sentinel = object()
+    raw_target = next(targets, sentinel)
+    for route in read_routing_manifest(routing_manifest):
+        if raw_target is sentinel:
+            continue
+        assert isinstance(raw_target, Path)
+        target = raw_target.resolve()
+        if not _path_literals_equal(str(target), str(route["sourceFile"])):
+            continue
+        if "floss" not in route["scheduledRoutes"]:
+            raise EnrichmentError("A recovery input was not scheduled for FLOSS by content triage")
+        if not target.is_file():
+            raise EnrichmentError("A routed recovery input is not a regular file")
+        source_size = route.get("sourceSize")
+        source_sha256 = route.get("sourceSha256")
+        if (
+            type(source_size) is not int
+            or source_size < 0
+            or not isinstance(source_sha256, str)
+            or len(source_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in source_sha256)
+        ):
+            raise EnrichmentError("A routed recovery input has an invalid source identity")
+        identity = InputIdentity(str(target), source_size, source_sha256)
+        decision_id = route.get("decisionId")
+        if (
+            not isinstance(decision_id, str)
+            or not decision_id.startswith("sha256:")
+            or len(decision_id) != 71
+            or any(character not in "0123456789abcdef" for character in decision_id[7:])
+        ):
+            raise EnrichmentError("A routed recovery input has an invalid decision identity")
+        with EvidenceReadLease(target):
+            verify_routed_source_identity(target, identity)
+            yield target, _classification_from_routing_record(route), identity, decision_id
+            verify_routed_source_identity(target, identity)
+        raw_target = next(targets, sentinel)
+    if raw_target is not sentinel:
+        raise EnrichmentError("The content routing manifest does not cover every recovery input")
+    if next(targets, sentinel) is not sentinel:
+        raise EnrichmentError("Recovery input coverage changed while reading content routes")
+
+
+def verify_routed_source_identity(path: Path, identity: InputIdentity) -> None:
+    try:
+        length = path.stat().st_size
+    except OSError as exc:
+        raise EnrichmentError("A routed recovery input became unavailable") from exc
+    digest = sha256_file(path)
+    if length != identity.length or digest != identity.sha256:
+        raise EnrichmentError(
+            "A routed recovery input changed from the content-routing source identity"
+        )
 
 
 def translate_normalized_records(
@@ -2068,6 +2672,31 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--triage-only",
+        action="store_true",
+        help="Write an early content-routing manifest without invoking FLOSS or translation",
+    )
+    parser.add_argument(
+        "--input-manifest",
+        type=Path,
+        help="Trusted input identity manifest required by --triage-only",
+    )
+    parser.add_argument(
+        "--routing-manifest",
+        type=Path,
+        help="Reuse an already validated content-routing manifest for FLOSS recovery",
+    )
+    parser.add_argument(
+        "--enable-floss",
+        action="store_true",
+        help="Schedule FLOSS-eligible inputs in --triage-only output",
+    )
+    parser.add_argument(
+        "--enable-ocr",
+        action="store_true",
+        help="Schedule OCR-eligible inputs in --triage-only output",
+    )
+    parser.add_argument(
         "--translations-only",
         action="store_true",
         help=(
@@ -2219,6 +2848,26 @@ def validate_arguments(args: argparse.Namespace) -> None:
             raise EnrichmentError("--input-jsonl requires --translate")
     elif args.translations_only:
         raise EnrichmentError("--translations-only requires --input-jsonl")
+    if args.triage_only:
+        if args.input_jsonl is not None or args.translate or args.translations_only:
+            raise EnrichmentError("--triage-only cannot be combined with translation")
+        if args.routing_manifest is not None:
+            raise EnrichmentError("--triage-only cannot consume --routing-manifest")
+        if args.input_manifest is None or not args.input_manifest.is_file():
+            raise EnrichmentError("--triage-only requires an existing --input-manifest")
+        if args.input_manifest.resolve() == args.output.resolve():
+            raise EnrichmentError("--input-manifest and --output must be different paths")
+    elif args.input_manifest is not None:
+        raise EnrichmentError("--input-manifest requires --triage-only")
+    if args.routing_manifest is not None:
+        if args.input_jsonl is not None or args.translate:
+            raise EnrichmentError("--routing-manifest is supported by recovery, not translation")
+        if not args.routing_manifest.is_file():
+            raise EnrichmentError("The content routing manifest was not found")
+        if args.routing_manifest.resolve() == args.output.resolve():
+            raise EnrichmentError("--routing-manifest and --output must be different paths")
+    if (args.enable_floss or args.enable_ocr) and not args.triage_only:
+        raise EnrichmentError("--enable-floss and --enable-ocr require --triage-only")
     if args.minimum_length < 3:
         raise EnrichmentError("--minimum-length must be at least 3")
     if args.magika_timeout <= 0 or args.floss_timeout <= 0:
@@ -2263,6 +2912,8 @@ def validate_arguments(args: argparse.Namespace) -> None:
         raise EnrichmentError("--progress-total-files cannot be negative")
     if args.progress_total_files > 0 and args.input_jsonl is not None:
         raise EnrichmentError("--progress-total-files cannot be used with --input-jsonl")
+    if args.triage_only and args.progress_total_files <= 0:
+        raise EnrichmentError("--triage-only requires --progress-total-files for measured progress")
     if args.translation_strict_determinism and args.translation_parallelism > 1:
         raise EnrichmentError(
             "--translation-strict-determinism cannot be combined with parallelism above 1"
@@ -2348,6 +2999,105 @@ def write_jsonl_atomic(output_path: Path, records: Iterable[dict[str, Any]]) -> 
     return count
 
 
+def verify_routing_input_identity(item: RoutingInput) -> None:
+    try:
+        length = item.path.stat().st_size
+    except OSError as exc:
+        raise EnrichmentError("A routing input became unavailable") from exc
+    digest = sha256_file(item.path)
+    if length != item.identity.length or digest != item.identity.sha256:
+        raise EnrichmentError(
+            "A routing input changed from the immutable evidence manifest"
+        )
+
+
+def run_content_triage(
+    args: argparse.Namespace,
+    magika: str,
+    magika_version: str,
+) -> int:
+    completed = 0
+    magika_sha256 = sha256_file(Path(magika))
+    magika_runtime = Path(magika).resolve().with_name("DirectML.dll")
+    magika_runtime_path: str | None = None
+    magika_runtime_sha256: str | None = None
+    if magika_runtime.is_file():
+        magika_runtime_path = str(magika_runtime)
+        magika_runtime_sha256 = sha256_file(magika_runtime)
+    last_progress_percent = -1.0
+    last_progress_time = 0.0
+
+    def report_progress(*, force: bool = False) -> None:
+        nonlocal last_progress_percent, last_progress_time
+        total = args.progress_total_files
+        bounded = min(max(completed, 0), total)
+        percent = bounded * 100.0 / total
+        now = time.monotonic()
+        if (
+            not force
+            and percent < 100.0
+            and percent - last_progress_percent < 1.0
+            and now - last_progress_time < 5.0
+        ):
+            return
+        print(
+            f"Progress: content triage: {percent:.1f}% ({bounded:,}/{total:,} files)",
+            file=sys.stderr,
+            flush=True,
+        )
+        last_progress_percent = percent
+        last_progress_time = now
+
+    report_progress(force=True)
+
+    def generate_routes() -> Iterable[dict[str, Any]]:
+        nonlocal completed
+        inputs = iter_routing_inputs(args.paths, args.paths_from, args.input_manifest)
+        for batch in _iter_magika_batches(inputs, magika):
+            with ExitStack() as leases:
+                for item in batch:
+                    leases.enter_context(EvidenceReadLease(item.path))
+                    verify_routing_input_identity(item)
+                try:
+                    classifications = _run_magika_batch(magika, batch, args.magika_timeout)
+                except EnrichmentError:
+                    classifications = _magika_batch_errors(
+                        batch, "batch-classification-error"
+                    )
+                for item, classification in zip(batch, classifications, strict=True):
+                    completed += 1
+                    yield _make_routing_record(
+                        item,
+                        classification,
+                        magika_version,
+                        completed,
+                        enable_floss=args.enable_floss,
+                        enable_ocr=args.enable_ocr,
+                        force_floss=args.force_floss,
+                        magika_executable=magika,
+                        magika_sha256=magika_sha256,
+                        magika_runtime_path=magika_runtime_path,
+                        magika_runtime_sha256=magika_runtime_sha256,
+                    )
+                    report_progress()
+                if os.name != "nt":
+                    for item in batch:
+                        verify_routing_input_identity(item)
+        if completed != args.progress_total_files:
+            raise EnrichmentError(
+                "Content triage inventory count changed: expected "
+                f"{args.progress_total_files:,} files but processed {completed:,}"
+            )
+
+    written = write_jsonl_atomic(args.output, generate_routes())
+    report_progress(force=True)
+    print(
+        f"Wrote {written:,} content-routing records from one classified input inventory.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_arguments(argv)
     translator: Translator | None = None
@@ -2361,11 +3111,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         floss = ""
         magika_version = ""
         floss_version = ""
-        if args.input_jsonl is None:
+        if args.triage_only:
             magika = executable_path(args.magika)
+            try:
+                magika_version = tool_version(magika)
+            except EnrichmentError:
+                magika_version = "unavailable"
+            return run_content_triage(args, magika, magika_version)
+        if args.input_jsonl is None:
             floss = executable_path(args.floss)
-            magika_version = tool_version(magika)
             floss_version = tool_version(floss)
+            if args.routing_manifest is None:
+                magika = executable_path(args.magika)
+                magika_version = tool_version(magika)
         if args.translate:
             engine = selected_translation_engine(args)
             if engine == "llama-cpp":
@@ -2439,8 +3197,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ):
                 return
             print(
-                f"Progress: offline translation: {percent:.1f}% "
-                f"({bounded:,}/{total:,} records)",
+                f"Progress: offline translation: {percent:.1f}% ({bounded:,}/{total:,} records)",
                 file=sys.stderr,
                 flush=True,
             )
@@ -2464,9 +3221,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 and now - last_progress_time < 5.0
             ):
                 return
+            progress_name = (
+                "FLOSS recovery"
+                if args.routing_manifest is not None
+                else "Magika and FLOSS recovery"
+            )
             print(
-                f"Progress: Magika and FLOSS recovery: {percent:.1f}% "
-                f"({bounded:,}/{total:,} files)",
+                "Progress: " + progress_name + f": {percent:.1f}% ({bounded:,}/{total:,} files)",
                 file=sys.stderr,
                 flush=True,
             )
@@ -2492,25 +3253,39 @@ def main(argv: Sequence[str] | None = None) -> int:
                     progress=report_translation_progress,
                 )
                 return
-            for raw_path in iter_extraction_paths(args.paths, args.paths_from):
-                path = raw_path.resolve()
-                if not path.is_file():
-                    raise EnrichmentError(f"Input file was not found: {raw_path}")
-                classification = classify_file(magika, path, args.magika_timeout)
-                print(
-                    f"Magika {magika_version}: {path} -> {classification.label} "
-                    f"({classification.score:.3f})",
-                    file=sys.stderr,
-                )
-                if classification.label != "pebin" and not args.force_floss:
+
+            def recovery_inputs() -> Iterable[
+                tuple[Path, Classification, InputIdentity | None, str | None]
+            ]:
+                nonlocal skipped, recovery_completed
+                if args.routing_manifest is not None:
+                    yield from iter_routed_recovery_inputs(
+                        args.paths, args.paths_from, args.routing_manifest
+                    )
+                    return
+                for raw_path in iter_extraction_paths(args.paths, args.paths_from):
+                    path = raw_path.resolve()
+                    if not path.is_file():
+                        raise EnrichmentError(f"Input file was not found: {raw_path}")
+                    classification = classify_file(magika, path, args.magika_timeout)
                     print(
-                        f"Skipping FLOSS for non-PE Magika label '{classification.label}': {path}",
+                        f"Magika {magika_version}: {path} -> {classification.label} "
+                        f"({classification.score:.3f})",
                         file=sys.stderr,
                     )
-                    skipped += 1
-                    recovery_completed += 1
-                    report_recovery_progress(recovery_completed)
-                    continue
+                    if classification.label != "pebin" and not args.force_floss:
+                        print(
+                            "Skipping FLOSS for non-PE Magika label "
+                            f"'{classification.label}': {path}",
+                            file=sys.stderr,
+                        )
+                        skipped += 1
+                        recovery_completed += 1
+                        report_recovery_progress(recovery_completed)
+                        continue
+                    yield path, classification, None, None
+
+            for path, classification, routed_identity, route_decision_id in recovery_inputs():
                 payload = run_floss(
                     floss,
                     path,
@@ -2524,11 +3299,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     classification,
                     floss_version,
                     include_static=args.include_floss_static,
+                    route_decision_id=route_decision_id,
                 )
                 if args.bounded_integrated_mode:
                     records = iter_unique_records(records)
                 if translator is None:
                     yield from records
+                    if routed_identity is not None:
+                        verify_routed_source_identity(path, routed_identity)
                     processed += 1
                     recovery_completed += 1
                     report_recovery_progress(recovery_completed)
@@ -2540,6 +3318,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # record-streaming above.
                 replayable_records = list(records)
                 del payload
+                if routed_identity is not None:
+                    verify_routed_source_identity(path, routed_identity)
                 yield from replayable_records
                 if translator is not None:
                     translated_records = add_translations(

@@ -1,6 +1,6 @@
 # Output, completion, and provenance
 
-The complete v1.9.10 quality kit produces native, FLOSS, OCR, language, and
+The complete v1.9.11 quality kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
 
@@ -44,9 +44,18 @@ The workflow writes `input-files.txt` and `input-manifest.jsonl` once, before
 extraction. The manifest records each canonical path, byte length, and SHA-256;
 `run.json` and `summary.json` record the manifest filename, its own SHA-256, and
 the content-hash algorithm instead of embedding a potentially huge path array.
-Native extraction, executable recovery, and OCR consume the same fixed
-inventory, so a recursive directory is not independently re-enumerated by each
-stage.
+Native extraction consumes that complete fixed inventory and manifest. It
+hashes, calibrates, rewinds, and scans the same write-denying source handle,
+rechecks it after scanning, and publishes native JSONL atomically. Early content triage
+writes `content-routing.jsonl`, exactly one identity-bound row per input, then
+projects ordered `floss-input-*` and `ocr-input-*` inventory/manifest pairs.
+Specialists consume only those proven subsets, so a recursive directory is not
+independently re-enumerated and a zero-candidate stage does not load its runtime.
+`run.json` and `summary.json` record the routing policy, manifest SHA-256,
+candidate counts, classifier errors, and conflicts. They also bind
+`engine-status.jsonl` by SHA-256. That terminal ledger has three rows per routed
+input, one each for native extraction, FLOSS, and OCR, keyed by the routing
+decision and source identity.
 
 When analysis uses the complete offline bundle, `run.json` and `summary.json`
 also contain the same `bundleIntegrity` object. It records the bundle manifest
@@ -91,7 +100,7 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-In current source and v1.9.10, every completed integrated `analyze` run
+In current source and v1.9.11, every completed integrated `analyze` run
 also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,
@@ -174,6 +183,17 @@ Derived evidence can create strong leads, but it is not interchangeable with a
 byte-native finding. Confirm consequential OCR and translated matches against
 their page/parent and surrounding source evidence.
 
+## Engine terminal statuses
+
+`engine-status.jsonl` records whether each engine was eligible and selected,
+its terminal `succeeded`, `not-applicable`, or `disabled-by-user` state, and its
+output-record count. Selected engines remain present when they succeed with
+zero records, so an empty FLOSS or OCR result cannot be confused with an engine
+that was never attempted. The file is written atomically only after source
+identity, route lineage, OCR assessments, and specialist output coverage agree.
+The `engineStatuses` objects in `run.json` and `summary.json` record its filename,
+SHA-256, row count, per-engine terminal counts, and output-record totals.
+
 ## OCR records and assessments
 
 When OCR is enabled, `ocr-strings.jsonl` contains `pdf-text` and `ocr` string
@@ -182,10 +202,13 @@ page/frame number, pixel bounding box, confidence, rendered-raster SHA-256 and
 DPI, model-pack/component hashes, runtime hash, requested/resolved provider,
 and source file length/SHA-256.
 
-`ocr-assessments.jsonl` contains one row per fixed-inventory input, including
-`not-applicable` rows. Each assessment records status, pages, rendered pages,
+`ocr-assessments.jsonl` contains one row per routed OCR candidate. Inputs not
+routed to OCR remain visible in `content-routing.jsonl`; the OCR worker still
+re-sniffs every candidate and may record `not-applicable` when a conservative
+extension or classifier signal is disproved. Each assessment records status,
+pages, rendered pages,
 PDF-text/OCR record counts, engine/model/revision/hash, component hashes,
-runtime/provider, source identity, mode, and enforced air-gap state. The .NET
+runtime/provider, source identity, routing decision, mode, and enforced air-gap state. The .NET
 orchestrator independently checks record cardinality, source identity, page and
 coordinate bounds, model/runtime/provider identity, parent ordering, and the
 assessment totals before merging OCR strings into downstream processing.

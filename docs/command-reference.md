@@ -45,8 +45,8 @@ failed or cancelled run; retain it for diagnosis and choose a new output path.
 `--full` supplies these defaults:
 
 - native ASCII/Unicode extraction and all 66 built-in patterns;
-- automatic Magika-routed FLOSS recovery;
-- automatic PDF text extraction and OCR;
+- one batched, fail-open Magika/signature routing pass;
+- automatic routed FLOSS recovery and PDF/image OCR;
 - adaptive language detection and high-recall translation selection; and
 - offline translation with the single installed 7B Q8_0 quality profile.
 
@@ -86,6 +86,8 @@ names, descriptions, and expressions.
 Every completed `analyze` run writes the authoritative JSONL evidence graph
 and these review surfaces:
 
+- `content-routing.jsonl` and `engine-status.jsonl`, which explain each route
+  and the terminal native/FLOSS/OCR coverage of every routed input;
 - `findings.tsv`, suitable for Timeline Explorer and spreadsheet filtering;
 - `pattern-histogram.tsv`, including zero-count requested patterns;
 - `feature-histogram.tsv`, with exact matched-feature counts; and
@@ -119,7 +121,8 @@ Long-running user operations report percentage completion:
 
 - `Progress: analysis:` is the overall planned-stage fraction;
 - native extraction reports chunks and strings;
-- Magika/FLOSS recovery and OCR report completed inventory files;
+- content triage reports all fixed inputs;
+- FLOSS recovery and OCR report their routed candidate files;
 - language triage and translation filtering report bytes;
 - offline translation reports completed candidate records; and
 - downloads, pack hashing, assembly, and bundle verification report bytes or
@@ -174,3 +177,15 @@ See [download and installation](download-and-install.md),
 [analysis and translation](enrichment-pipeline.md), and
 [output and provenance](output-and-provenance.md) for the complete operational
 and interpretation boundaries.
+
+## Architecture decisions versus installed help
+
+Installed `bstrings.exe help` is authoritative for the behavior available in
+that executable. Proposed or accepted target architectures do not become user
+features until their implementation, tests, help, and release gates pass.
+
+High-level changes that can alter forensic coverage, provenance, engine/model
+selection, privacy, or performance defaults use the
+[Robin-round decision policy](architecture/decision-review-policy.md). The early
+Magika/content-triage design and its fail-open acceptance gates are recorded in
+[ADR-0001](architecture/adr-0001-early-fail-open-content-routing.md).

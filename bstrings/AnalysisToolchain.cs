@@ -46,7 +46,7 @@ internal static class AnalysisToolchainLocator
     private const string OfflineBundleAcquisition =
         "Use the checked Install-BstringsQuality.ps1 asset from the latest GitHub Release "
         + "to install and verify the complete quality kit: "
-        + "https://github.com/Donovoi/bstrings/blob/v1.9.10/README.md#get-started";
+        + "https://github.com/Donovoi/bstrings/blob/v1.9.11/README.md#get-started";
 
     private const string ConfigurationFileName = "airgap-config.json";
     private const string MagikaUrl = "https://github.com/google/magika#command-line-tool";
@@ -86,7 +86,8 @@ internal static class AnalysisToolchainLocator
         bool requireRecovery = true,
         bool requireTranslation = true,
         bool requireOcr = false,
-        string? executingExecutablePath = null
+        string? executingExecutablePath = null,
+        Action<long, long>? verificationProgress = null
     )
     {
         var candidates = CandidateRoots(explicitRoot, requireExplicitBundle).ToList();
@@ -103,7 +104,10 @@ internal static class AnalysisToolchainLocator
             );
         }
 
-        var verification = BundleManifestVerifier.Verify(bundleRoot);
+        var verification = BundleManifestVerifier.Verify(
+            bundleRoot,
+            progress: verificationProgress
+        );
         var manifest = Path.GetRelativePath(bundleRoot, verification.ManifestPath)
             .Replace(Path.DirectorySeparatorChar, '/');
         var configurationPath = Path.Combine(bundleRoot, ConfigurationFileName);
@@ -197,7 +201,7 @@ internal static class AnalysisToolchainLocator
             requireOcr
                 ? ValidateSha256(RequiredText(ocrModel, "sha256", configurationPath), configurationPath)
                 : null,
-            requireRecovery
+            requireRecovery || requireOcr
                 ? RequiredFile(bundleRoot, RequiredText(root, "magikaExecutable", configurationPath), "Magika", MagikaUrl)
                 : null,
             requireRecovery

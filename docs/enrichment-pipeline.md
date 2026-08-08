@@ -1,7 +1,7 @@
 # Enrichment pipeline
 
 This document describes the integrated workflow in current source and the
-complete v1.9.10 quality release. See
+complete v1.9.11 quality release. See
 [download and installation](download-and-install.md) before choosing a command,
 and never combine assets from different versions.
 
@@ -27,7 +27,7 @@ interface is one command:
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete v1.9.10 bundle contains every worker, runtime, model, and dependency
+The complete v1.9.11 bundle contains every worker, runtime, model, and dependency
 published for that version. It does not ask the user to install or invoke
 Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
@@ -90,12 +90,22 @@ Directory analysis is recursive. Put the output outside the input tree.
 
 ## Executable recovery
 
-[Magika](https://github.com/google/magika) probabilistically classifies each
-supplied file from sampled content. Automatic recovery invokes
-[FLOSS](https://github.com/mandiant/flare-floss) only for Magika's PE
-classification, reducing unnecessary expensive attempts. This routing decision
-does not prove that every byte was inspected and is not a polyglot, carving, or
-malware-detection result.
+[Magika](https://github.com/google/magika) now runs once in bounded multi-file
+batches immediately after the SHA-256 input manifest is frozen. Its raw and
+thresholded predictions are combined with deterministic PE/PDF/image signatures
+and conservative extension hints in `content-routing.jsonl`. The union of
+positive signals routes candidates to [FLOSS](https://github.com/mandiant/flare-floss)
+and OCR; it never removes an input from native byte extraction. A valid PE
+signature, either Magika PE prediction, or the explicit force override can
+schedule FLOSS. An executable extension by itself cannot.
+
+Unknown or failed classification remains auditable and fails open to the
+deterministic probes. Magika samples content, so routing does not prove that
+every byte was inspected and is not a polyglot, carving, or malware-detection
+result. The non-negotiable coverage, mutation, provenance, and performance
+gates are recorded in
+[ADR-0001: early fail-open content routing](architecture/adr-0001-early-fail-open-content-routing.md).
+
 The bstrings adapter consumes FLOSS JSON from a temporary disk file, validates
 its pinned result schema incrementally, normalizes supported categories, and
 keeps distinct evidence locations even when the text is identical.
@@ -130,7 +140,7 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.10 profile
+page. Images are always OCR inputs when the stage is enabled. The v1.9.11 profile
 defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
 per-path inference smoke test. Those smokes do not establish cross-provider
 parity or corpus-level quality. CUDA OCR is not part of the profile. See
@@ -291,6 +301,8 @@ The important result files are:
 - `ocr-assessments.jsonl` and `language-assessments.jsonl`;
 - `translated-strings.jsonl`, `enriched-strings.jsonl`, and
   `regex-matches.jsonl`;
+- `content-routing.jsonl`, routed input projections, and
+  `engine-status.jsonl` terminal coverage;
 - `findings.tsv`, `pattern-histogram.tsv`, `feature-histogram.tsv`, and
   `pattern-histogram.html`;
 - `input-manifest.jsonl`, `run.json`, and `summary.json`; and
@@ -318,6 +330,11 @@ links are:
 - [RapidOCR](https://github.com/RapidAI/RapidOCR) and
   [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR); and
 - [Hugging Face `hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli).
+
+Changes to stage order, routing, evidence semantics, models, or performance
+defaults must follow the
+[high-level architecture decision policy](architecture/decision-review-policy.md)
+before implementation is promoted.
 
 Run source-tree regression gates with:
 
