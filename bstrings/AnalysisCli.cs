@@ -16,15 +16,15 @@ internal static class AnalysisCli
     {
         var fileOption = new Option<string?>("-f")
         {
-            Description = "Evidence file to analyze. Either this or -d is required",
+            Description = "Evidence file or raw byte image. Specify exactly one of -f or -d",
         };
         var directoryOption = new Option<string?>("-d")
         {
-            Description = "Directory to analyze recursively. Either this or -f is required",
+            Description = "Evidence directory to analyze recursively. Specify exactly one of -f or -d",
         };
         var outputOption = new Option<string>("-o")
         {
-            Description = "New or empty results directory",
+            Description = "New or empty results directory outside the evidence tree and installed bundle",
             Required = true,
         };
         var maskOption = new Option<string?>("--mask")
@@ -34,15 +34,15 @@ internal static class AnalysisCli
         var fullOption = new Option<bool>("--full")
         {
             Description =
-                "Run native extraction, executable recovery, OCR, language triage, offline translation, and all pattern matching",
+                "Enable automatic FLOSS recovery, OCR, language triage, offline translation, all patterns, and reports; an explicit stage 'off' overrides its full default",
         };
         var ocrOption = new Option<string?>("--ocr")
         {
-            Description = "Optical character recognition for supported files: off, auto, or force",
+            Description = "OCR/PDF workflow: off, auto (text layers plus needed OCR), or force (OCR every page)",
         };
         var ocrProviderOption = new Option<string?>("--ocr-provider")
         {
-            Description = "OCR execution hardware: auto, cpu, cuda, directml, or hybrid",
+            Description = "OCR hardware: auto, cpu, directml, hybrid, or custom-profile cuda; independent of --processor",
         };
         var ocrThreadsOption = new Option<int>("--ocr-threads")
         {
@@ -52,20 +52,20 @@ internal static class AnalysisCli
         };
         var recoveryOption = new Option<string?>("--recover-executable-strings")
         {
-            Description = "Executable string recovery: off, auto, or force",
+            Description = "FLOSS recovery: off, auto (Magika-routed PE files), or force (every supplied file)",
         };
         var translationOption = new Option<string?>("--translation")
         {
-            Description = "Translation workflow: off, auto, all, or detect-only",
+            Description = "Language/translation workflow: off, auto (policy-selected), all eligible text, or detect-only",
         };
         var detectionOption = new Option<string>("--language-detection")
         {
-            Description = "Offline detector profile: adaptive, accurate, or fast",
+            Description = "Offline language detector: adaptive samples the workload; accurate and fast force a profile",
             DefaultValueFactory = _ => "adaptive",
         };
         var policyOption = new Option<string>("--translation-policy")
         {
-            Description = "Automatic translation gate: high-recall, balanced, or high-precision",
+            Description = "Automatic translation gate: high-recall, balanced, or high-precision; used by --translation auto",
             DefaultValueFactory = _ => "high-recall",
         };
         var confidenceOption = new Option<double>("--language-confidence")
@@ -85,7 +85,7 @@ internal static class AnalysisCli
         };
         var translationDeviceOption = new Option<string>("--translation-device")
         {
-            Description = "Translation hardware: auto, cpu, cuda, or hybrid",
+            Description = "Translation hardware: auto, cpu, cuda, or hybrid; separate from native --processor (the standard kit resolves auto to its accepted CPU runtime)",
             DefaultValueFactory = _ => "auto",
         };
         var translationParallelismOption = new Option<int>("--translation-parallelism")
@@ -104,9 +104,16 @@ internal static class AnalysisCli
                 "Exact llama.cpp GPU layer count for hybrid mode; -1 selects automatically elsewhere",
             DefaultValueFactory = _ => -1,
         };
+        var translationStrictDeterminismOption = new Option<bool>(
+            "--translation-strict-determinism"
+        )
+        {
+            Description =
+                "Use one translation slot and disable prompt-cache reuse for maximum same-runtime repeatability",
+        };
         var patternOption = new Option<string>("--lr")
         {
-            Description = "Built-in pattern names, a group, a custom regex, or all",
+            Description = "Pattern names, groups (pii, credentials, browser, registry, wallets), a custom regex, or all",
             DefaultValueFactory = _ => "all",
         };
         var regexFileOption = new Option<string?>("--fr")
@@ -115,12 +122,13 @@ internal static class AnalysisCli
         };
         var processorOption = new Option<string>("--processor")
         {
-            Description = "Extraction processor: auto, cpu, gpu, or hybrid",
+            Description =
+                $"Native extraction hardware: auto, cpu, gpu, or hybrid. Auto uses CPU below this host's {ProcessingBackendCore.AutoCalibrationThresholdBytes / (1024 * 1024 * 1024)} GiB calibration threshold",
             DefaultValueFactory = _ => "auto",
         };
         var cpuEngineOption = new Option<string>("--cpu-engine")
         {
-            Description = "ASCII CPU engine: dotnet, rust, or auto",
+            Description = "ASCII CPU engine: dotnet, rust, or auto; Rust is parity-checked before use",
             DefaultValueFactory = _ => "auto",
         };
         var minimumLengthOption = new Option<int>("--minimum-length")
@@ -146,11 +154,11 @@ internal static class AnalysisCli
         };
         var bundleRootOption = new Option<string?>("--bundle-root")
         {
-            Description = "Directory containing airgap-config.json and bundled tools",
+            Description = "Complete bundle directory; defaults beside bstrings.exe or BSTRINGS_AIRGAP_BUNDLE",
         };
         var airgapOption = new Option<bool>("--airgap")
         {
-            Description = "Require the explicit or BSTRINGS_AIRGAP_BUNDLE directory",
+            Description = "Require a complete offline bundle and block non-loopback worker network access",
         };
 
         var command = new Command("analyze")
@@ -174,6 +182,7 @@ internal static class AnalysisCli
             translationParallelismOption,
             translationThreadsOption,
             translationGpuLayersOption,
+            translationStrictDeterminismOption,
             patternOption,
             regexFileOption,
             processorOption,
@@ -186,7 +195,12 @@ internal static class AnalysisCli
             airgapOption,
         };
         command.Description =
-            "Run the provenance-preserving bstrings analysis workflow through one executable.";
+            "Run the provenance-preserving workflow and write JSONL evidence, findings.tsv, exact histograms, and an HTML chart.\n\n"
+            + "Examples:\n"
+            + "  bstrings.exe analyze -d C:\\evidence\\carved --full -o C:\\results\\case-01\n"
+            + "  bstrings.exe analyze -f C:\\evidence\\memory.raw --ocr off --translation off --lr all -o C:\\results\\memory\n\n"
+            + "The results directory must be new or empty. Failures retain .incomplete and diagnostic logs. "
+            + "Long-running stages print measured percentage completion; percentages are work units, not an ETA.";
 
         var actionExitCode = 0;
         command.SetAction(
@@ -258,6 +272,7 @@ internal static class AnalysisCli
                         result.GetValue(translationParallelismOption),
                         result.GetValue(translationThreadsOption),
                         result.GetValue(translationGpuLayersOption),
+                        result.GetValue(translationStrictDeterminismOption),
                         result.GetValue(patternOption)!,
                         result.GetValue(regexFileOption),
                         result.GetValue(processorOption)!,
@@ -335,6 +350,27 @@ internal static class AnalysisCli
             throw new ArgumentOutOfRangeException(
                 nameof(maximumLength),
                 $"Maximum string length cannot exceed {EnrichmentRegexPipelineCore.MaxNativeTextCharacters:N0} in the JSONL analysis workflow."
+            );
+        }
+    }
+
+    internal static void ValidateTranslationScheduling(
+        int parallelism,
+        int threads,
+        bool strictDeterminism
+    )
+    {
+        if (parallelism < 0 || threads < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(parallelism),
+                "Translation parallelism and thread counts cannot be negative."
+            );
+        }
+        if (strictDeterminism && parallelism > 1)
+        {
+            throw new ArgumentException(
+                "--translation-strict-determinism cannot be combined with --translation-parallelism above 1."
             );
         }
     }

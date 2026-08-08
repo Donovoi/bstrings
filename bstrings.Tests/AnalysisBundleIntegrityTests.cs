@@ -342,6 +342,7 @@ public sealed class AnalysisBundleIntegrityTests
             TranslationParallelism: 0,
             TranslationThreads: 0,
             TranslationGpuLayers: -1,
+            TranslationStrictDeterminism: false,
             PatternSelection: "email",
             RegexFilePath: null,
             Processor: "cpu",

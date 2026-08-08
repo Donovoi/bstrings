@@ -43,9 +43,19 @@ public static partial class Program
         + "\r\nUpstream: https://github.com/EricZimmerman/bstrings"
         + "\r\nFork: https://github.com/Donovoi/bstrings";
     private static readonly string Footer =
-        @"Examples:"
+        @"Quick start (complete quality kit):"
         + "\r\n\t "
         + @"bstrings.exe analyze -d ""C:\evidence\carved-files"" --full -o ""C:\results\carved"""
+        + "\r\n\t "
+        + @"bstrings.exe analyze -f ""C:\evidence\memory.raw"" --full -o ""C:\results\memory"""
+        + "\r\n\r\nVerify and learn:"
+        + "\r\n\t "
+        + @"bstrings.exe bundle verify"
+        + "\r\n\t "
+        + @"bstrings.exe help analyze"
+        + "\r\n\t "
+        + @"bstrings.exe help bundle"
+        + "\r\n\r\nLegacy flat-output scanner:"
         + "\r\n\t "
         + @"bstrings.exe -f ""C:\evidence\image.bin"""
         + "\r\n\t "
@@ -59,9 +69,11 @@ public static partial class Program
         + "\r\n\t "
         + @"bstrings.exe --enrich-jsonl ""C:\results\enriched.jsonl"" --lr all -o ""C:\results\matches.jsonl"""
         + "\r\n"
-        + "\r\nUse 'bstrings.exe analyze --help' for the one-command recovery, language, translation, and matching workflow."
-        + "\r\nUse 'bstrings.exe bundle verify' to verify every file in a complete offline bundle."
-        + "\r\n--processor controls string extraction. --use-rapids is a separate, optional regex prefilter."
+        + "\r\n'analyze' writes a provenance-preserving result directory with TSV/JSONL reports and histograms."
+        + "\r\nIts output directory must be new or empty; a failed run remains marked .incomplete."
+        + "\r\nLong-running operations print measured percentage completion; percentages are work units, not an ETA."
+        + "\r\n--processor controls native extraction only. OCR and translation have separate hardware options."
+        + "\r\n--use-rapids is a separate, optional regex prefilter for the legacy scanner."
         + "\r\n--enrich-jsonl processes provenance-preserving external string records without rescanning file bytes.";
 
     private static RootCommand _rootCommand;
@@ -419,6 +431,7 @@ public static partial class Program
         }
 
         SetupPatterns();
+        args = NormalizeHelpArguments(args);
 
         if (args.Length > 0 && string.Equals(args[0], "analyze", StringComparison.OrdinalIgnoreCase))
         {
@@ -448,13 +461,16 @@ public static partial class Program
 
         var fOpt = new Option<string>("-f")
         {
-            Description = "File to search. Either this or -d is required",
+            Description = "File or raw byte image to scan. Specify exactly one of -f or -d",
         };
         var dOpt = new Option<string>("-d")
         {
-            Description = "Directory to recursively process. Either this or -f is required",
+            Description = "Directory to scan recursively. Specify exactly one of -f or -d",
         };
-        var oOpt = new Option<string>("-o") { Description = "File to save results to" };
+        var oOpt = new Option<string>("-o")
+        {
+            Description = "Output file; a .csv extension selects CSV, otherwise text",
+        };
         var aOpt = new Option<bool>("-a")
         {
             Description = "If set, look for code-page strings. Use -a false to disable",
@@ -493,7 +509,7 @@ public static partial class Program
         };
         var pOpt = new Option<bool>("-p")
         {
-            Description = "Display the built-in regular expressions",
+            Description = "List built-in pattern names, descriptions, and regular expressions",
             DefaultValueFactory = _ => false,
         };
         var lsOpt = new Option<string>("--ls")
@@ -564,24 +580,24 @@ public static partial class Program
         };
         var traceOpt = new Option<bool>("--trace")
         {
-            Description = "Show trace-level logging",
+            Description = "Show trace logging, including backend selection and CPU/GPU chunk totals",
             DefaultValueFactory = _ => false,
         };
         var processorOpt = new Option<string>("--processor")
         {
             Description =
-                "Extraction processor: auto, cpu, gpu, or hybrid. Default is auto",
+                $"Native extraction hardware: auto, cpu, gpu, or hybrid. Auto uses CPU below the host's {ProcessingBackendCore.AutoCalibrationThresholdBytes / (1024 * 1024 * 1024)} GiB calibration threshold",
             DefaultValueFactory = _ => "auto",
         };
         var cpuEngineOpt = new Option<string>("--cpu-engine")
         {
             Description =
-                "ASCII CPU engine: dotnet, rust, or auto. Rust is parity-checked before use; default is dotnet",
+                "ASCII CPU engine: dotnet, rust, or auto. Rust is parity-checked before use",
             DefaultValueFactory = _ => "dotnet",
         };
         var useRapidsOpt = new Option<bool>("--use-rapids")
         {
-            Description = "Use an existing NVIDIA RAPIDS installation for regex processing",
+            Description = "Use an existing NVIDIA RAPIDS installation for regex prefiltering; unrelated to --processor",
             DefaultValueFactory = _ => false,
         };
         var forceRapidsOpt = new Option<bool>("--force-rapids")
@@ -694,6 +710,31 @@ public static partial class Program
             bstrings.Rapids.RapidsProcessor.Shutdown();
             Log.CloseAndFlush();
         }
+    }
+
+    internal static string[] NormalizeHelpArguments(string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        if (args.Length == 0)
+        {
+            return args;
+        }
+
+        if (string.Equals(args[0], "help", StringComparison.OrdinalIgnoreCase))
+        {
+            return args.Length == 1
+                ? ["--help"]
+                : [.. args.Skip(1), "--help"];
+        }
+
+        if (string.Equals(args[^1], "help", StringComparison.OrdinalIgnoreCase))
+        {
+            var normalized = (string[])args.Clone();
+            normalized[^1] = "--help";
+            return normalized;
+        }
+
+        return args;
     }
 
     internal static IReadOnlyList<string> ReadInputInventory(string inventoryPath)

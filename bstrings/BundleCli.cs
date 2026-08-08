@@ -16,7 +16,7 @@ internal static class BundleCli
     {
         var bundleRootOption = new Option<string?>("--bundle-root")
         {
-            Description = "Bundle directory; defaults to the directory containing bstrings.exe",
+            Description = "Complete bundle directory; defaults to the directory containing bstrings.exe",
         };
         var allowIncompleteMarkerOption = new Option<bool>("--allow-incomplete-marker")
         {
@@ -29,7 +29,7 @@ internal static class BundleCli
             allowIncompleteMarkerOption,
         };
         verifyCommand.Description =
-            "Verify the exact bundle file set, lengths, SHA-256 values, paths, and link safety.";
+            "Verify every manifested file, byte length, SHA-256, path, and link-safety rule. Reports measured byte progress from 0% to 100%.";
 
         var acquireManifestOption = CreateManifestOption();
         var acquireCacheOption = CreateCacheOption();
@@ -41,7 +41,7 @@ internal static class BundleCli
             acquireOutputOption,
         };
         acquireCommand.Description =
-            "Download verified split packs with resume support, then assemble a complete offline bundle.";
+            "Download and hash exact split packs with resumable cache, then assemble and verify a new complete offline bundle. Preserves verified cache on cancellation.";
 
         var assembleManifestOption = CreateManifestOption();
         var assembleCacheOption = CreateCacheOption();
@@ -53,7 +53,7 @@ internal static class BundleCli
             assembleOutputOption,
         };
         assembleCommand.Description =
-            "Assemble already-cached verified packs into a new complete offline bundle.";
+            "Hash already-cached packs, then assemble and verify a new complete offline bundle without downloading.";
 
         var actionExitCode = 0;
         verifyCommand.SetAction(result =>
@@ -175,7 +175,11 @@ internal static class BundleCli
             assembleCommand,
         };
         bundleCommand.Description =
-            "Acquire, assemble, inspect, and verify complete offline bundles through bstrings.exe.";
+            "Acquire, assemble, and verify complete offline bundles through bstrings.exe.\n\n"
+            + "Examples:\n"
+            + "  bstrings.exe bundle verify\n"
+            + "  bstrings.exe help bundle acquire\n\n"
+            + "Acquire and assemble require a new output directory. Progress percentages report completed bytes, not an ETA.";
         var rootCommand = new RootCommand { bundleCommand };
         var invocationArguments = new[] { "bundle" }.Concat(args).ToArray();
         var parserExitCode = await rootCommand.Parse(invocationArguments).InvokeAsync();
@@ -186,7 +190,7 @@ internal static class BundleCli
         new("--manifest")
         {
             Description =
-                $"Local split-pack trust manifest; defaults to adjacent {BundlePackInstaller.PackManifestFileName}",
+                $"Authenticated local split-pack trust manifest; defaults to adjacent {BundlePackInstaller.PackManifestFileName}",
         };
 
     private static Option<string?> CreateCacheOption() =>
@@ -199,7 +203,7 @@ internal static class BundleCli
     private static Option<string> CreateOutputOption() =>
         new("--output")
         {
-            Description = "New output directory for the complete verified offline bundle",
+            Description = "New, nonexistent output directory for the complete verified offline bundle",
             Required = true,
         };
 }

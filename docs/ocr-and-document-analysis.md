@@ -1,6 +1,6 @@
 # OCR and document analysis
 
-OCR is distributed in the complete v1.9.7 quality kit. The commands in this
+OCR is distributed in the complete v1.9.8 quality kit. The commands in this
 guide require a verified, version-matched quality bundle. See
 [download and installation](download-and-install.md); do not copy OCR assets
 manually into a core-only directory.
@@ -16,7 +16,7 @@ manifest-covered component and is not a separate user command.
 
 ## Use it
 
-In the v1.9.7 quality kit, `--full` enables OCR in automatic mode and asks the
+In the v1.9.8 quality kit, `--full` enables OCR in automatic mode and asks the
 verified bundle to select a provider:
 
 ```powershell
@@ -43,7 +43,7 @@ OCR can also be requested without the other optional stages:
 ```
 
 `--ocr` accepts `off`, `auto`, or `force`. `--ocr-provider` accepts `auto`,
-`cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.7 source profile
+`cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.8 source profile
 `windows-x64-ocr-cpu-directml-v1` contains and claims only CPU, DirectML, and
 DirectML+CPU hybrid. CUDA requires a separately built and validated custom
 runtime profile.
@@ -70,7 +70,7 @@ may disagree with, conceal, or supplement the embedded text layer.
 
 ## Bundled engine and immutable model pack
 
-The v1.9.7 source profile uses
+The v1.9.8 source profile uses
 [RapidOCR 3.9.2](https://github.com/RapidAI/RapidOCR/releases/tag/v3.9.2)
 as the local orchestration engine, immutable
 [PP-OCRv6 medium](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv6/PP-OCRv6.html)

@@ -1,6 +1,6 @@
 # Output, completion, and provenance
 
-The complete v1.9.7 quality kit produces native, FLOSS, OCR, language, and
+The complete v1.9.8 quality kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
 
@@ -91,7 +91,7 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-In current source and v1.9.7, every completed integrated `analyze` run
+In current source and v1.9.8, every completed integrated `analyze` run
 also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,
@@ -239,8 +239,17 @@ file name, or placeholder. This protects important identifiers but does not
 make machine translation authoritative. Review the parent whenever a finding
 matters to attribution or reporting.
 
+Identifier-only records are retained as source evidence and classified as
+non-linguistic rather than being sent to the model. Mixed natural-language
+records remain eligible, and the protected-token check compares occurrence
+counts as well as values. `--translation-strict-determinism` selects the
+single-slot, no-prompt-cache path for maximum repeatability on the same accepted
+runtime; it does not promise identical output across different hardware or
+drivers.
+
 ## Related guides
 
+- [Terminal help and command reference](command-reference.md)
 - [Extractor, language-triage, and translation enrichment](enrichment-pipeline.md)
 - [OCR and document analysis](ocr-and-document-analysis.md)
 - [Air-gapped deployment and verification](air-gapped-deployment.md)
