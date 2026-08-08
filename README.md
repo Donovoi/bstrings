@@ -28,7 +28,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.8](https://github.com/Donovoi/bstrings/releases/tag/v1.9.8).
+[v1.9.9](https://github.com/Donovoi/bstrings/releases/tag/v1.9.9).
 Requirements: Windows 11 x64, a connected staging machine, and at least
 **30 GiB free**. Administrator rights are not required.
 
@@ -40,7 +40,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.8'
+  $tag = 'v1.9.9'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -56,24 +56,46 @@ this pinned, checksum-verified installer bootstrap:
       ([string]$asset[0].digest) -CNotMatch '^sha256:[0-9a-f]{64}$') {
     throw 'The exact published installer asset could not be authenticated.'
   }
-  if (Test-Path .\Install-BstringsQuality.ps1) {
-    throw 'Refusing to overwrite the existing installer file.'
-  }
-  Invoke-WebRequest $url -OutFile .\Install-BstringsQuality.ps1 -UseBasicParsing
+  $installerPath = [IO.Path]::GetFullPath(
+    (Join-Path (Get-Location).Path 'Install-BstringsQuality.ps1')
+  )
+  $downloadPath = Join-Path ([IO.Path]::GetDirectoryName($installerPath)) `
+    ('.Install-BstringsQuality.download-' + [Guid]::NewGuid().ToString('N') + '.partial')
+  $backupPath = Join-Path ([IO.Path]::GetDirectoryName($installerPath)) `
+    ('.Install-BstringsQuality.backup-' + [Guid]::NewGuid().ToString('N') + '.tmp')
   $expected = ([string]$asset[0].digest).Substring(7)
-  $installer = Get-Item -LiteralPath .\Install-BstringsQuality.ps1 -Force
-  $stream = [IO.File]::OpenRead($installer.FullName)
   try {
-    $hasher = [Security.Cryptography.SHA256]::Create()
+    Invoke-WebRequest $url -OutFile $downloadPath -UseBasicParsing
+    $download = Get-Item -LiteralPath $downloadPath -Force
+    $stream = [IO.File]::OpenRead($download.FullName)
     try {
-      $actual = ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+      $hasher = [Security.Cryptography.SHA256]::Create()
+      try {
+        $actual = ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+      }
+      finally { $hasher.Dispose() }
     }
-    finally { $hasher.Dispose() }
+    finally { $stream.Dispose() }
+    if ($actual -CNE $expected) { throw 'Installer SHA-256 mismatch.' }
+
+    $existing = Get-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+    if ($null -ne $existing) {
+      if ($existing.PSIsContainer -or
+          ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The existing installer path is not a physical file.'
+      }
+      [IO.File]::Replace($downloadPath, $installerPath, $backupPath)
+      [IO.File]::Delete($backupPath)
+    }
+    else {
+      [IO.File]::Move($downloadPath, $installerPath)
+    }
   }
-  finally { $stream.Dispose() }
-  if ($actual -CNE $expected) { throw 'Installer SHA-256 mismatch.' }
+  finally {
+    if ([IO.File]::Exists($downloadPath)) { [IO.File]::Delete($downloadPath) }
+  }
   powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File .\Install-BstringsQuality.ps1 -ReleaseTag $tag
+    -File $installerPath -ReleaseTag $tag
   if ($LASTEXITCODE -ne 0) { throw "Installer failed with exit code $LASTEXITCODE" }
 }
 ```
@@ -86,10 +108,11 @@ analysis with:
 .\bstrings-quality\bstrings.exe analyze -d D:\evidence -o D:\results --full
 ```
 
-For an upgrade, run the bootstrap from a new empty parent directory. It
-deliberately refuses to overwrite an old installer, cache, or
-`bstrings-quality` directory. Keep the previous kit until the new one verifies,
-then use a new results directory for the new run.
+The bootstrap always replaces an existing physical
+`Install-BstringsQuality.ps1`, but only after the new download matches the
+published release SHA-256. A valid same-version `bstrings-quality` directory is
+reverified without redownloading it. An invalid or mixed-version kit is never
+patched in place; move it aside or select another destination, then rerun.
 
 ## Choose a command
 

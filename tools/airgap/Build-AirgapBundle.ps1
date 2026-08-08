@@ -878,7 +878,7 @@ $bundleBenchmarkResultNames = @(
     'forensic-report-projection-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.8.md'
+    'v1.9.9.md'
 )
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `

@@ -1,7 +1,7 @@
 # Enrichment pipeline
 
 This document describes the integrated workflow in current source and the
-complete v1.9.8 quality release. See
+complete v1.9.9 quality release. See
 [download and installation](download-and-install.md) before choosing a command,
 and never combine assets from different versions.
 
@@ -27,7 +27,7 @@ interface is one command:
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete v1.9.8 bundle contains every worker, runtime, model, and dependency
+The complete v1.9.9 bundle contains every worker, runtime, model, and dependency
 published for that version. It does not ask the user to install or invoke
 Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
@@ -130,7 +130,7 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.8 profile
+page. Images are always OCR inputs when the stage is enabled. The v1.9.9 profile
 defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
 per-path inference smoke test. Those smokes do not establish cross-provider
 parity or corpus-level quality. CUDA OCR is not part of the profile. See

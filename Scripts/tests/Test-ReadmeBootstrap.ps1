@@ -104,6 +104,7 @@ $script:releaseLookups = 0
 $script:downloads = 0
 $script:installerLaunches = 0
 $script:getFileHashCalls = 0
+$script:downloadTargets = [Collections.Generic.List[string]]::new()
 $script:installerPayload = [Text.Encoding]::UTF8.GetBytes("synthetic installer`n")
 $payloadHasher = [Security.Cryptography.SHA256]::Create()
 try {
@@ -125,13 +126,13 @@ function Invoke-RestMethod {
     )
     $script:releaseLookups++
     return [pscustomobject]@{
-        tag_name = 'v1.9.8'
+        tag_name = 'v1.9.9'
         draft = $false
         prerelease = $false
         assets = @(
             [pscustomobject]@{
                 name = 'Install-BstringsQuality.ps1'
-                browser_download_url = 'https://github.com/Donovoi/bstrings/releases/download/v1.9.8/Install-BstringsQuality.ps1'
+                browser_download_url = 'https://github.com/Donovoi/bstrings/releases/download/v1.9.9/Install-BstringsQuality.ps1'
                 digest = "sha256:$script:installerDigest"
             }
         )
@@ -150,6 +151,7 @@ function Invoke-WebRequest {
     $resolvedOutFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
         $OutFile
     )
+    $script:downloadTargets.Add($resolvedOutFile)
     [IO.File]::WriteAllBytes($resolvedOutFile, $script:installerPayload)
 }
 
@@ -163,11 +165,64 @@ function Get-FileHash {
     throw 'Get-FileHash must not be called by the README bootstrap.'
 }
 
+$mismatchRoot = Join-Path ([IO.Path]::GetTempPath()) (
+    'bstrings-readme-bootstrap-mismatch-' + [Guid]::NewGuid().ToString('N')
+)
+[IO.Directory]::CreateDirectory($mismatchRoot) | Out-Null
+$mismatchInstaller = Join-Path $mismatchRoot 'Install-BstringsQuality.ps1'
+$stalePayload = [Text.Encoding]::UTF8.GetBytes('authenticated old installer')
+[IO.File]::WriteAllBytes($mismatchInstaller, $stalePayload)
+$publishedDigest = $script:installerDigest
+$script:installerDigest = '0' * 64
+$mismatchCaught = $null
+try {
+    Push-Location $mismatchRoot
+    try {
+        & $scriptBlock
+    }
+    catch {
+        $mismatchCaught = $_
+    }
+    finally {
+        Pop-Location
+    }
+    if (
+        $null -eq $mismatchCaught -or
+        $mismatchCaught.Exception.Message -cne 'Installer SHA-256 mismatch.'
+    ) {
+        throw "The digest-mismatch bootstrap returned an unexpected error: $mismatchCaught"
+    }
+    if ($script:downloads -ne 1 -or $script:installerLaunches -ne 0) {
+        throw 'The digest-mismatch bootstrap did not stop after its one temporary download.'
+    }
+    if (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($mismatchInstaller)) -cne
+        [Convert]::ToBase64String($stalePayload)
+    ) {
+        throw 'A failed installer authentication changed the existing installer bytes.'
+    }
+    if (@(Get-ChildItem -LiteralPath $mismatchRoot -Force -Filter '*.partial').Count -ne 0) {
+        throw 'The digest-mismatch bootstrap left a partial installer download behind.'
+    }
+}
+finally {
+    $script:installerDigest = $publishedDigest
+    [IO.Directory]::Delete($mismatchRoot, $true)
+}
+
+$script:releaseLookups = 0
+$script:downloads = 0
+$script:installerLaunches = 0
+$script:getFileHashCalls = 0
+$script:downloadTargets.Clear()
+
 $successRoot = Join-Path ([IO.Path]::GetTempPath()) (
     'bstrings-readme-bootstrap-test-' + [Guid]::NewGuid().ToString('N')
 )
 [IO.Directory]::CreateDirectory($successRoot) | Out-Null
 try {
+    $downloadedInstaller = Join-Path $successRoot 'Install-BstringsQuality.ps1'
+    [IO.File]::WriteAllText($downloadedInstaller, 'stale installer')
     Push-Location $successRoot
     try {
         & $scriptBlock
@@ -184,9 +239,33 @@ try {
     if ($script:getFileHashCalls -ne 0) {
         throw 'The successful bootstrap called Get-FileHash.'
     }
-    $downloadedInstaller = Join-Path $successRoot 'Install-BstringsQuality.ps1'
     if (-not (Test-Path -LiteralPath $downloadedInstaller -PathType Leaf)) {
         throw 'The successful bootstrap did not download into the current PowerShell directory.'
+    }
+    if (
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($downloadedInstaller)) -cne
+        [Convert]::ToBase64String($script:installerPayload)
+    ) {
+        throw 'The successful bootstrap did not replace the stale installer bytes.'
+    }
+    if ($script:downloadTargets.Count -ne 1) {
+        throw "Expected one recorded download target, found $($script:downloadTargets.Count)."
+    }
+    if (
+        [IO.Path]::GetFullPath($script:downloadTargets[0]).Equals(
+            [IO.Path]::GetFullPath($downloadedInstaller),
+            [StringComparison]::OrdinalIgnoreCase
+        )
+    ) {
+        throw 'The bootstrap downloaded directly over the existing installer before verification.'
+    }
+    if (@(Get-ChildItem -LiteralPath $successRoot -Force -Filter '*.partial').Count -ne 0) {
+        throw 'The successful bootstrap left a partial installer download behind.'
+    }
+    if (
+        @(Get-ChildItem -LiteralPath $successRoot -Force -Filter '.Install-BstringsQuality.backup-*').Count -ne 0
+    ) {
+        throw 'The successful bootstrap left an installer backup behind.'
     }
 }
 finally {
