@@ -874,18 +874,28 @@ $bundleDocumentNames = @(
     'scale-benchmark-2026-08.md',
     'translation-benchmark-2026-08-04.md'
 )
+$bundleArchitectureDocumentNames = @(
+    'adr-0001-early-fail-open-content-routing.md',
+    'decision-review-policy.md'
+)
 $bundleBenchmarkResultNames = @(
     'forensic-pattern-catalog-2026-08.csv',
     'forensic-report-projection-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.10.md'
+    'v1.9.11.md'
 )
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `
         (Join-Path $repoRoot 'docs') `
         $documentName `
         "Bundled document $documentName"
+}
+foreach ($documentName in $bundleArchitectureDocumentNames) {
+    $null = Resolve-ChildFile `
+        (Join-Path $repoRoot 'docs\architecture') `
+        $documentName `
+        "Bundled architecture document $documentName"
 }
 foreach ($resultName in $bundleBenchmarkResultNames) {
     $null = Resolve-ChildFile `
@@ -1034,6 +1044,15 @@ try {
             $documentName `
             "Bundled document $documentName"
         Copy-Item -LiteralPath $document -Destination $bundleDocs
+    }
+    $bundleArchitectureDocs = Join-Path $bundleDocs 'architecture'
+    [IO.Directory]::CreateDirectory($bundleArchitectureDocs) | Out-Null
+    foreach ($documentName in $bundleArchitectureDocumentNames) {
+        $document = Resolve-ChildFile `
+            (Join-Path $repoRoot 'docs\architecture') `
+            $documentName `
+            "Bundled architecture document $documentName"
+        Copy-Item -LiteralPath $document -Destination $bundleArchitectureDocs
     }
     $bundleBenchmarkResults = Join-Path $output 'benchmarks\results'
     [IO.Directory]::CreateDirectory($bundleBenchmarkResults) | Out-Null

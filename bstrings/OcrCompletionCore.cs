@@ -35,6 +35,7 @@ internal sealed record OcrAssessmentRecord
     public string DictionarySha256 { get; init; } = string.Empty;
     public string SourceSha256 { get; init; } = string.Empty;
     public long? SourceSize { get; init; }
+    public string? RouteDecisionId { get; init; }
     public string RuntimeSha256 { get; init; } = string.Empty;
     public string Mode { get; init; } = string.Empty;
     public string RequestedProvider { get; init; } = string.Empty;
@@ -593,6 +594,21 @@ internal static class OcrCompletionCore
                 $"{description} source hash or size does not match the trusted input manifest."
             );
         }
+        if (
+            assessment.RouteDecisionId is not null
+            && (
+                assessment.RouteDecisionId.Length != 71
+                || !assessment.RouteDecisionId.StartsWith("sha256:", StringComparison.Ordinal)
+                || !assessment.RouteDecisionId[7..].All(
+                    character => character is >= '0' and <= '9' or >= 'a' and <= 'f'
+                )
+            )
+        )
+        {
+            throw new InvalidDataException(
+                $"{description} routeDecisionId is not a lowercase SHA-256 identity."
+            );
+        }
         var requestedProvider = ProviderArgument(requirements.RequestedProvider);
         if (!string.Equals(assessment.RequestedProvider, requestedProvider, StringComparison.Ordinal))
         {
@@ -739,6 +755,15 @@ internal static class OcrCompletionCore
             ?? throw new InvalidDataException($"{description} has no forensic attributes.");
         RequireAttributeEquals(attributes, "sourceSha256", inputIdentity.Sha256, description);
         RequireAttributeEquals(attributes, "sourceSize", inputIdentity.Length, description);
+        if (assessment.RouteDecisionId is not null)
+        {
+            RequireAttributeEquals(
+                attributes,
+                "routeDecisionId",
+                assessment.RouteDecisionId,
+                description
+            );
+        }
         RequireAttributeEquals(
             attributes,
             "modelPackSha256",

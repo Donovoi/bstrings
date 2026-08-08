@@ -240,6 +240,9 @@ internal static class AnalysisOrchestrator
             options.RecoveryMode != ExecutableRecoveryMode.Off
             || options.OcrMode != OcrWorkflowMode.Off
             || options.TranslationMode is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All;
+        var needsContentRouting =
+            options.RecoveryMode != ExecutableRecoveryMode.Off
+            || options.OcrMode != OcrWorkflowMode.Off;
         var stageProgress = new AnalysisStageProgress(
             CountPlannedStages(options, needsExternalToolchain)
         );
@@ -252,6 +255,7 @@ internal static class AnalysisOrchestrator
             || hasImplicitBundle
         )
         {
+            var bundleProgress = new ConsolePercentageProgress();
             toolchain = AnalysisToolchainLocator.Locate(
                 options.BundleRoot,
                 options.Airgap,
@@ -259,7 +263,14 @@ internal static class AnalysisOrchestrator
                 requireTranslation: options.TranslationMode
                     is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All,
                 requireOcr: options.OcrMode != OcrWorkflowMode.Off,
-                executingExecutablePath: executingExecutablePath
+                executingExecutablePath: executingExecutablePath,
+                verificationProgress: (completed, total) =>
+                    bundleProgress.Report(
+                        "bundle verification",
+                        completed,
+                        total,
+                        "bytes"
+                    )
             );
         }
         if (toolchain is not null)
@@ -282,8 +293,6 @@ internal static class AnalysisOrchestrator
         TranslationValidationRequirements? translationRequirements = null;
         if (options.TranslationMode is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All)
         {
-            Console.Error.WriteLine("Preflight: verifying the bundled translation model...");
-            VerifyTranslationModel(toolchain!, new ConsolePercentageProgress());
             translationRequirements = new TranslationValidationRequirements(
                 "llama.cpp",
                 options.TranslationTarget,
@@ -293,17 +302,6 @@ internal static class AnalysisOrchestrator
             );
         }
         OcrValidationRequirements? ocrRequirements = null;
-        if (options.OcrMode != OcrWorkflowMode.Off)
-        {
-            Console.Error.WriteLine("Progress: OCR model verification: 0.0%");
-            ocrRequirements = OcrCompletionCore.CreateValidationRequirements(
-                toolchain!,
-                options.OcrMode,
-                options.OcrProvider,
-                options.OcrThreads
-            );
-            Console.Error.WriteLine("Progress: OCR model verification: 100.0%");
-        }
 
         PrepareOutputDirectory(outputDirectory);
         var logsDirectory = Path.Combine(outputDirectory, "logs");
@@ -322,8 +320,16 @@ internal static class AnalysisOrchestrator
         var summaryPath = Path.Combine(outputDirectory, "summary.json");
         var inventoryPath = Path.Combine(outputDirectory, "input-files.txt");
         var inputManifestPath = Path.Combine(outputDirectory, "input-manifest.jsonl");
+        var routingManifestPath = Path.Combine(outputDirectory, "content-routing.jsonl");
+        var flossInventoryPath = Path.Combine(outputDirectory, "floss-input-files.txt");
+        var flossManifestPath = Path.Combine(outputDirectory, "floss-input-manifest.jsonl");
+        var ocrInventoryPath = Path.Combine(outputDirectory, "ocr-input-files.txt");
+        var ocrInputManifestPath = Path.Combine(outputDirectory, "ocr-input-manifest.jsonl");
+        var engineStatusPath = Path.Combine(outputDirectory, "engine-status.jsonl");
         long inputFileCount = 0;
         InputManifestInfo? inputManifest = null;
+        ContentRoutingStats? routing = null;
+        EngineStatusStats? engineStatuses = null;
         long completedMatchCount = 0;
         long completedStringCount = 0;
 
@@ -370,6 +376,8 @@ internal static class AnalysisOrchestrator
                 options,
                 inputManifest,
                 bundleIntegrity,
+                routing,
+                engineStatuses,
                 null,
                 cancellationToken
             );
@@ -389,20 +397,83 @@ internal static class AnalysisOrchestrator
                 );
             }
 
-            FileStream? nativeInventoryLease = null;
-            await RunStageAsync(
-                "pre-native input inventory verification",
-                stageSeconds,
-                async () =>
-                    nativeInventoryLease = await InputEvidenceManifest
-                        .AcquireVerifiedInventoryLeaseAsync(
+            if (needsContentRouting)
+            {
+                await RunStageAsync(
+                    "content routing",
+                    stageSeconds,
+                    async () =>
+                    {
+                        await InputEvidenceManifest.VerifyInventoryAsync(
                             inventoryPath,
                             inputManifest!,
                             cancellationToken
-                        )
-            );
+                        );
+                        await InputEvidenceManifest.VerifyAsync(
+                            inputManifestPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
+                        await RunContentRoutingAsync(
+                            options,
+                            toolchain!,
+                            inventoryPath,
+                            inputManifestPath,
+                            routingManifestPath,
+                            inputFileCount,
+                            outputDirectory,
+                            logsDirectory,
+                            cancellationToken
+                        );
+                        await InputEvidenceManifest.VerifyInventoryAsync(
+                            inventoryPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
+                        await InputEvidenceManifest.VerifyAsync(
+                            inputManifestPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
+                        routing = await ContentRoutingCore.ValidateAndProjectAsync(
+                            inputManifestPath,
+                            inputManifest!,
+                            routingManifestPath,
+                            flossInventoryPath,
+                            flossManifestPath,
+                            ocrInventoryPath,
+                            ocrInputManifestPath,
+                            cancellationToken,
+                            expectedClassifierExecutable: toolchain!.MagikaExecutable
+                        );
+                    }
+                );
+            }
+
+            FileStream? nativeInventoryLease = null;
+            FileStream? nativeManifestLease = null;
             try
             {
+                await RunStageAsync(
+                    "pre-native input inventory verification",
+                    stageSeconds,
+                    async () =>
+                    {
+                        nativeInventoryLease = await InputEvidenceManifest
+                            .AcquireVerifiedInventoryLeaseAsync(
+                                inventoryPath,
+                                inputManifest!,
+                                cancellationToken
+                            );
+                        nativeManifestLease = await ContentRoutingCore
+                            .AcquireVerifiedFileLeaseAsync(
+                                inputManifestPath,
+                                inputManifest!.ManifestSha256,
+                                "evidence content manifest",
+                                cancellationToken
+                            );
+                    }
+                );
                 await RunStageAsync(
                     "native extraction",
                     stageSeconds,
@@ -410,6 +481,7 @@ internal static class AnalysisOrchestrator
                         RunNativeExtractionAsync(
                             options,
                             inventoryPath,
+                            inputManifestPath,
                             nativePath,
                             outputDirectory,
                             logsDirectory,
@@ -423,6 +495,10 @@ internal static class AnalysisOrchestrator
                 if (nativeInventoryLease is not null)
                 {
                     await nativeInventoryLease.DisposeAsync();
+                }
+                if (nativeManifestLease is not null)
+                {
+                    await nativeManifestLease.DisposeAsync();
                 }
             }
             await RunStageAsync(
@@ -450,36 +526,107 @@ internal static class AnalysisOrchestrator
             else
             {
                 FileStream? recoveryInventoryLease = null;
+                FileStream? recoveryProjectionManifestLease = null;
+                FileStream? recoveryRoutingManifestLease = null;
                 await RunStageAsync(
                     "pre-recovery input inventory verification",
                     stageSeconds,
                     async () =>
-                        recoveryInventoryLease = await InputEvidenceManifest
-                            .AcquireVerifiedInventoryLeaseAsync(
-                                inventoryPath,
-                                inputManifest!,
-                                cancellationToken
-                            )
+                    {
+                        try
+                        {
+                            recoveryInventoryLease = await InputEvidenceManifest
+                                .AcquireVerifiedInventoryLeaseAsync(
+                                    flossInventoryPath,
+                                    routing!.Value.FlossInput,
+                                    cancellationToken
+                                );
+                            recoveryProjectionManifestLease = await ContentRoutingCore
+                                .AcquireVerifiedFileLeaseAsync(
+                                    flossManifestPath,
+                                    routing.Value.FlossInput.ManifestSha256,
+                                    "FLOSS projection manifest",
+                                    cancellationToken
+                                );
+                            recoveryRoutingManifestLease = await ContentRoutingCore
+                                .AcquireVerifiedFileLeaseAsync(
+                                    routingManifestPath,
+                                    routing.Value.ManifestSha256,
+                                    "content-routing manifest",
+                                    cancellationToken
+                                );
+                        }
+                        catch
+                        {
+                            if (recoveryRoutingManifestLease is not null)
+                            {
+                                await recoveryRoutingManifestLease.DisposeAsync();
+                                recoveryRoutingManifestLease = null;
+                            }
+                            if (recoveryProjectionManifestLease is not null)
+                            {
+                                await recoveryProjectionManifestLease.DisposeAsync();
+                                recoveryProjectionManifestLease = null;
+                            }
+                            if (recoveryInventoryLease is not null)
+                            {
+                                await recoveryInventoryLease.DisposeAsync();
+                                recoveryInventoryLease = null;
+                            }
+                            throw;
+                        }
+                    }
                 );
                 try
                 {
                     await RunStageAsync(
-                        "Magika and FLOSS recovery",
+                        "routed FLOSS recovery",
                         stageSeconds,
-                        () => RunRecoveryAsync(
-                            options,
-                            toolchain!,
-                            inventoryPath,
-                            recoveredPath,
-                            inputFileCount,
-                            outputDirectory,
-                            logsDirectory,
-                            cancellationToken
-                        )
+                        async () =>
+                        {
+                            if (routing!.Value.FlossCandidates == 0)
+                            {
+                                Console.Error.WriteLine(
+                                    "Stage skipped: routed FLOSS recovery (0 routed files)."
+                                );
+                                await CreateEmptyFileAtomicAsync(recoveredPath, cancellationToken);
+                                return;
+                            }
+                            await ContentRoutingCore.VerifyManifestAsync(
+                                routingManifestPath,
+                                routing.Value.ManifestSha256,
+                                cancellationToken
+                            );
+                            await RunFlossPreflightAsync(
+                                toolchain!,
+                                outputDirectory,
+                                logsDirectory,
+                                cancellationToken
+                            );
+                            await RunRecoveryAsync(
+                                options,
+                                toolchain!,
+                                flossInventoryPath,
+                                routingManifestPath,
+                                recoveredPath,
+                                routing.Value.FlossCandidates,
+                                outputDirectory,
+                                logsDirectory,
+                                cancellationToken
+                            );
+                        }
                     );
                 }
                 finally
                 {
+                    if (recoveryRoutingManifestLease is not null)
+                    {
+                        await recoveryRoutingManifestLease.DisposeAsync();
+                    }
+                    if (recoveryProjectionManifestLease is not null)
+                    {
+                        await recoveryProjectionManifestLease.DisposeAsync();
+                    }
                     if (recoveryInventoryLease is not null)
                     {
                         await recoveryInventoryLease.DisposeAsync();
@@ -500,6 +647,21 @@ internal static class AnalysisOrchestrator
                             inputManifest!,
                             cancellationToken
                         );
+                        await InputEvidenceManifest.VerifyInventoryAsync(
+                            flossInventoryPath,
+                            routing!.Value.FlossInput,
+                            cancellationToken
+                        );
+                        await InputEvidenceManifest.VerifyAsync(
+                            flossManifestPath,
+                            routing.Value.FlossInput,
+                            cancellationToken
+                        );
+                        await ContentRoutingCore.VerifyManifestAsync(
+                            routingManifestPath,
+                            routing.Value.ManifestSha256,
+                            cancellationToken
+                        );
                     }
                 );
             }
@@ -513,39 +675,110 @@ internal static class AnalysisOrchestrator
             else
             {
                 FileStream? ocrInventoryLease = null;
+                FileStream? ocrProjectionManifestLease = null;
+                FileStream? ocrRoutingManifestLease = null;
                 await RunStageAsync(
                     "pre-OCR input inventory verification",
                     stageSeconds,
                     async () =>
-                        ocrInventoryLease = await InputEvidenceManifest
-                            .AcquireVerifiedInventoryLeaseAsync(
-                                inventoryPath,
-                                inputManifest!,
-                                cancellationToken
-                            )
+                    {
+                        try
+                        {
+                            ocrInventoryLease = await InputEvidenceManifest
+                                .AcquireVerifiedInventoryLeaseAsync(
+                                    ocrInventoryPath,
+                                    routing!.Value.OcrInput,
+                                    cancellationToken
+                                );
+                            ocrProjectionManifestLease = await ContentRoutingCore
+                                .AcquireVerifiedFileLeaseAsync(
+                                    ocrInputManifestPath,
+                                    routing.Value.OcrInput.ManifestSha256,
+                                    "OCR projection manifest",
+                                    cancellationToken
+                                );
+                            ocrRoutingManifestLease = await ContentRoutingCore
+                                .AcquireVerifiedFileLeaseAsync(
+                                    routingManifestPath,
+                                    routing.Value.ManifestSha256,
+                                    "content-routing manifest",
+                                    cancellationToken
+                                );
+                        }
+                        catch
+                        {
+                            if (ocrRoutingManifestLease is not null)
+                            {
+                                await ocrRoutingManifestLease.DisposeAsync();
+                                ocrRoutingManifestLease = null;
+                            }
+                            if (ocrProjectionManifestLease is not null)
+                            {
+                                await ocrProjectionManifestLease.DisposeAsync();
+                                ocrProjectionManifestLease = null;
+                            }
+                            if (ocrInventoryLease is not null)
+                            {
+                                await ocrInventoryLease.DisposeAsync();
+                                ocrInventoryLease = null;
+                            }
+                            throw;
+                        }
+                    }
                 );
                 try
                 {
                     await RunStageAsync(
                         "offline OCR",
                         stageSeconds,
-                        () =>
-                            RunOcrAsync(
+                        async () =>
+                        {
+                            if (routing!.Value.OcrCandidates == 0)
+                            {
+                                Console.Error.WriteLine(
+                                    "Stage skipped: offline OCR (0 routed files)."
+                                );
+                                await CreateEmptyFileAtomicAsync(ocrPath, cancellationToken);
+                                await CreateEmptyFileAtomicAsync(
+                                    ocrAssessmentsPath,
+                                    cancellationToken
+                                );
+                                return;
+                            }
+                            Console.Error.WriteLine("Progress: OCR model verification: 0.0%");
+                            ocrRequirements = OcrCompletionCore.CreateValidationRequirements(
+                                toolchain!,
+                                options.OcrMode,
+                                options.OcrProvider,
+                                options.OcrThreads
+                            );
+                            Console.Error.WriteLine("Progress: OCR model verification: 100.0%");
+                            await RunOcrAsync(
                                 options,
                                 toolchain!,
-                                inventoryPath,
-                                inputManifestPath,
+                                ocrInventoryPath,
+                                ocrInputManifestPath,
+                                routingManifestPath,
                                 ocrPath,
                                 ocrAssessmentsPath,
-                                inputFileCount,
+                                routing.Value.OcrCandidates,
                                 outputDirectory,
                                 logsDirectory,
                                 cancellationToken
-                            )
+                            );
+                        }
                     );
                 }
                 finally
                 {
+                    if (ocrRoutingManifestLease is not null)
+                    {
+                        await ocrRoutingManifestLease.DisposeAsync();
+                    }
+                    if (ocrProjectionManifestLease is not null)
+                    {
+                        await ocrProjectionManifestLease.DisposeAsync();
+                    }
                     if (ocrInventoryLease is not null)
                     {
                         await ocrInventoryLease.DisposeAsync();
@@ -566,23 +799,39 @@ internal static class AnalysisOrchestrator
                             inputManifest!,
                             cancellationToken
                         );
+                        await InputEvidenceManifest.VerifyInventoryAsync(
+                            ocrInventoryPath,
+                            routing!.Value.OcrInput,
+                            cancellationToken
+                        );
+                        await InputEvidenceManifest.VerifyAsync(
+                            ocrInputManifestPath,
+                            routing.Value.OcrInput,
+                            cancellationToken
+                        );
                     }
                 );
                 await RunStageAsync(
                     "OCR provenance validation",
                     stageSeconds,
                     async () =>
+                    {
+                        if (routing!.Value.OcrCandidates == 0)
+                        {
+                            return;
+                        }
                         ocr = await OcrCompletionCore.ValidateAsync(
-                            inventoryPath,
-                            inputManifestPath,
-                            inputManifest!,
+                            ocrInventoryPath,
+                            ocrInputManifestPath,
+                            routing.Value.OcrInput,
                             ocrPath,
                             ocrAssessmentsPath,
                             outputDirectory,
-                            inputFileCount,
+                            routing.Value.OcrCandidates,
                             ocrRequirements!,
                             cancellationToken
-                        )
+                        );
+                    }
                 );
             }
 
@@ -669,9 +918,11 @@ internal static class AnalysisOrchestrator
                 await RunStageAsync(
                     "offline translation",
                     stageSeconds,
-                    () =>
-                        translationCandidateCount > 0
-                            ? RunTranslationAsync(
+                    async () =>
+                    {
+                        if (translationCandidateCount > 0)
+                        {
+                            await RunTranslationAsync(
                                 options,
                                 toolchain!,
                                 candidatesPath,
@@ -680,8 +931,19 @@ internal static class AnalysisOrchestrator
                                 outputDirectory,
                                 logsDirectory,
                                 cancellationToken
-                            )
-                            : CreateEmptyFileAtomicAsync(translationsPath, cancellationToken)
+                            );
+                        }
+                        else
+                        {
+                            Console.Error.WriteLine(
+                                "Stage skipped: offline translation (0 candidate records)."
+                            );
+                            await CreateEmptyFileAtomicAsync(
+                                translationsPath,
+                                cancellationToken
+                            );
+                        }
+                    }
                 );
             }
             else
@@ -756,6 +1018,25 @@ internal static class AnalysisOrchestrator
                     )
             );
 
+            if (routing is not null)
+            {
+                await RunStageAsync(
+                    "engine status ledger",
+                    stageSeconds,
+                    async () =>
+                        engineStatuses = await EngineStatusCore.WriteAsync(
+                            routingManifestPath,
+                            routing.Value.ManifestSha256,
+                            routing.Value.InputFiles,
+                            nativePath,
+                            recoveredPath,
+                            ocrAssessmentsPath,
+                            engineStatusPath,
+                            cancellationToken
+                        )
+                );
+            }
+
             if (beforeFinalInputVerification is not null)
             {
                 await beforeFinalInputVerification(cancellationToken);
@@ -775,6 +1056,14 @@ internal static class AnalysisOrchestrator
                         inputManifest!,
                         cancellationToken
                     );
+                    if (routing is not null)
+                    {
+                        await ContentRoutingCore.VerifyManifestAsync(
+                            routingManifestPath,
+                            routing.Value.ManifestSha256,
+                            cancellationToken
+                        );
+                    }
                 }
             );
 
@@ -796,6 +1085,20 @@ internal static class AnalysisOrchestrator
                     contentHashAlgorithm = inputManifest.ContentHashAlgorithm,
                 },
                 bundleIntegrity,
+                contentRouting = routing is null
+                    ? null
+                    : new
+                    {
+                        manifest = routing.Value.Manifest,
+                        manifestSha256 = routing.Value.ManifestSha256,
+                        policyVersion = routing.Value.PolicyVersion,
+                        inputFiles = routing.Value.InputFiles,
+                        flossCandidates = routing.Value.FlossCandidates,
+                        ocrCandidates = routing.Value.OcrCandidates,
+                        classifierErrors = routing.Value.ClassifierErrors,
+                        conflicts = routing.Value.Conflicts,
+                    },
+                engineStatuses = CreateEngineStatusSummary(engineStatuses),
                 nativeStrings = rawMerge.InputRecords.Count > 0 ? rawMerge.InputRecords[0] : 0,
                 recoveredStrings = rawMerge.InputRecords.Count > 1 ? rawMerge.InputRecords[1] : 0,
                 ocrStrings = rawMerge.InputRecords.Count > 2 ? rawMerge.InputRecords[2] : 0,
@@ -849,6 +1152,8 @@ internal static class AnalysisOrchestrator
                 options,
                 inputManifest,
                 bundleIntegrity,
+                routing,
+                engineStatuses,
                 null,
                 cancellationToken
             );
@@ -870,6 +1175,8 @@ internal static class AnalysisOrchestrator
                     options,
                     inputManifest,
                     bundleIntegrity,
+                    routing,
+                    engineStatuses,
                     ex.Message,
                     CancellationToken.None
                 );
@@ -893,6 +1200,7 @@ internal static class AnalysisOrchestrator
     private static async Task RunNativeExtractionAsync(
         AnalysisOptions options,
         string inventoryPath,
+        string inputManifestPath,
         string outputPath,
         string workingDirectory,
         string logsDirectory,
@@ -904,6 +1212,8 @@ internal static class AnalysisOrchestrator
         var arguments = new List<string>(invocation.PrefixArguments);
         arguments.Add("--paths-from");
         arguments.Add(inventoryPath);
+        arguments.Add("--input-manifest");
+        arguments.Add(inputManifestPath);
         arguments.Add("-o");
         arguments.Add(outputPath);
         arguments.Add("-m");
@@ -961,74 +1271,84 @@ internal static class AnalysisOrchestrator
             OfflineEnvironment(),
             cancellationToken
         );
+    }
+
+    private static async Task RunContentRoutingAsync(
+        AnalysisOptions options,
+        AnalysisToolchain toolchain,
+        string inventoryPath,
+        string inputManifestPath,
+        string outputPath,
+        long totalFiles,
+        string workingDirectory,
+        string logsDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var arguments = PythonPrefix(toolchain);
+        arguments.Add("--airgap");
+        arguments.Add("--triage-only");
+        arguments.Add("--paths-from");
+        arguments.Add(inventoryPath);
+        arguments.Add("--input-manifest");
+        arguments.Add(inputManifestPath);
+        arguments.Add("-o");
+        arguments.Add(outputPath);
+        arguments.Add("--magika");
+        arguments.Add(toolchain.MagikaExecutable!);
+        arguments.Add("--progress-total-files");
+        arguments.Add(totalFiles.ToString(System.Globalization.CultureInfo.InvariantCulture));
         if (options.RecoveryMode != ExecutableRecoveryMode.Off)
         {
-            await ChildProcessRunner.RunAsync(
-                toolchain.MagikaExecutable!,
-                ["--version"],
-                workingDirectory,
-                Path.Combine(logsDirectory, "magika-preflight.stdout.log"),
-                Path.Combine(logsDirectory, "magika-preflight.stderr.log"),
-                OfflineEnvironment(),
-                cancellationToken
-            );
-            await ChildProcessRunner.RunAsync(
-                toolchain.FlossExecutable!,
-                ["--version"],
-                workingDirectory,
-                Path.Combine(logsDirectory, "floss-preflight.stdout.log"),
-                Path.Combine(logsDirectory, "floss-preflight.stderr.log"),
-                OfflineEnvironment(),
-                cancellationToken
-            );
+            arguments.Add("--enable-floss");
         }
         if (options.OcrMode != OcrWorkflowMode.Off)
         {
-            await ChildProcessRunner.RunAsync(
-                toolchain.OcrExecutable!,
-                ["--version"],
-                workingDirectory,
-                Path.Combine(logsDirectory, "ocr-engine-preflight.stdout.log"),
-                Path.Combine(logsDirectory, "ocr-engine-preflight.stderr.log"),
-                OfflineEnvironment(),
-                cancellationToken
-            );
-            var ocrArguments = BuildOcrPreflightArguments(
-                toolchain,
-                options.OcrProvider,
-                options.OcrThreads
-            );
-            await ChildProcessRunner.RunAsync(
-                toolchain.OcrPythonExecutable!,
-                ocrArguments,
-                workingDirectory,
-                Path.Combine(logsDirectory, "ocr-adapter-preflight.stdout.log"),
-                Path.Combine(logsDirectory, "ocr-adapter-preflight.stderr.log"),
-                OfflineEnvironment(),
-                cancellationToken
-            );
+            arguments.Add("--enable-ocr");
         }
-        if (
-            options.TranslationMode
-            is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
-        )
+        if (options.RecoveryMode == ExecutableRecoveryMode.Force)
         {
-            await ChildProcessRunner.RunAsync(
-                toolchain.LlamaServer!,
-                ["--version"],
-                workingDirectory,
-                Path.Combine(logsDirectory, "llama-preflight.stdout.log"),
-                Path.Combine(logsDirectory, "llama-preflight.stderr.log"),
-                OfflineEnvironment(),
-                cancellationToken
+            arguments.Add("--force-floss");
+        }
+        await ChildProcessRunner.RunAsync(
+            toolchain.PythonExecutable,
+            arguments,
+            workingDirectory,
+            Path.Combine(logsDirectory, "content-routing.stdout.log"),
+            Path.Combine(logsDirectory, "content-routing.stderr.log"),
+            OfflineEnvironment(),
+            cancellationToken,
+            static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
+        );
+        if (!File.Exists(outputPath))
+        {
+            throw new InvalidDataException(
+                "Content triage completed without its required routing manifest."
             );
         }
     }
+
+    private static Task RunFlossPreflightAsync(
+        AnalysisToolchain toolchain,
+        string workingDirectory,
+        string logsDirectory,
+        CancellationToken cancellationToken
+    ) =>
+        ChildProcessRunner.RunAsync(
+            toolchain.FlossExecutable!,
+            ["--version"],
+            workingDirectory,
+            Path.Combine(logsDirectory, "floss-preflight.stdout.log"),
+            Path.Combine(logsDirectory, "floss-preflight.stderr.log"),
+            OfflineEnvironment(),
+            cancellationToken
+        );
 
     private static async Task RunRecoveryAsync(
         AnalysisOptions options,
         AnalysisToolchain toolchain,
         string inventoryPath,
+        string routingManifestPath,
         string outputPath,
         long totalFiles,
         string workingDirectory,
@@ -1041,10 +1361,10 @@ internal static class AnalysisOrchestrator
         arguments.Add("--bounded-integrated-mode");
         arguments.Add("--paths-from");
         arguments.Add(inventoryPath);
+        arguments.Add("--routing-manifest");
+        arguments.Add(routingManifestPath);
         arguments.Add("-o");
         arguments.Add(outputPath);
-        arguments.Add("--magika");
-        arguments.Add(toolchain.MagikaExecutable!);
         arguments.Add("--floss");
         arguments.Add(toolchain.FlossExecutable!);
         arguments.Add("--minimum-length");
@@ -1072,6 +1392,7 @@ internal static class AnalysisOrchestrator
         AnalysisToolchain toolchain,
         string inventoryPath,
         string inputManifestPath,
+        string routingManifestPath,
         string stringsPath,
         string assessmentsPath,
         long totalFiles,
@@ -1087,6 +1408,7 @@ internal static class AnalysisOrchestrator
             options.OcrThreads,
             inventoryPath,
             inputManifestPath,
+            routingManifestPath,
             stringsPath,
             assessmentsPath,
             totalFiles
@@ -1203,6 +1525,7 @@ internal static class AnalysisOrchestrator
         int threads,
         string inventoryPath,
         string inputManifestPath,
+        string routingManifestPath,
         string stringsPath,
         string assessmentsPath,
         long totalFiles
@@ -1223,6 +1546,8 @@ internal static class AnalysisOrchestrator
         arguments.Add(inventoryPath);
         arguments.Add("--input-manifest");
         arguments.Add(inputManifestPath);
+        arguments.Add("--routing-manifest");
+        arguments.Add(routingManifestPath);
         arguments.Add("--output");
         arguments.Add(stringsPath);
         arguments.Add("--assessments-output");
@@ -1639,53 +1964,6 @@ internal static class AnalysisOrchestrator
         }
     }
 
-    private static void VerifyTranslationModel(
-        AnalysisToolchain toolchain,
-        ConsolePercentageProgress progress
-    )
-    {
-        VerifyModel(
-            toolchain.TranslationModelPath!,
-            toolchain.TranslationModelSha256!,
-            "Translation",
-            progress
-        );
-    }
-
-    private static void VerifyModel(
-        string modelPath,
-        string expectedSha256,
-        string description,
-        ConsolePercentageProgress progress
-    )
-    {
-        using var stream = new FileStream(
-            modelPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            4 * 1024 * 1024,
-            FileOptions.SequentialScan
-        );
-        var actual = ProgressHashing.ComputeSha256(
-            stream,
-            (completed, total) =>
-                progress.Report(
-                    $"{description.ToLowerInvariant()} model verification",
-                    completed,
-                    total,
-                    "bytes"
-                )
-        );
-        if (!string.Equals(actual, expectedSha256, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException(
-                $"{description} model SHA-256 mismatch for '{modelPath}'. "
-                    + $"Expected {expectedSha256}, found {actual}."
-            );
-        }
-    }
-
     private static IEnumerable<string> EnumerateInputFiles(AnalysisOptions options)
     {
         if (!string.IsNullOrWhiteSpace(options.FilePath))
@@ -1768,6 +2046,13 @@ internal static class AnalysisOrchestrator
         {
             count++;
         }
+        if (
+            options.RecoveryMode != ExecutableRecoveryMode.Off
+            || options.OcrMode != OcrWorkflowMode.Off
+        )
+        {
+            count += 2;
+        }
         if (options.RecoveryMode != ExecutableRecoveryMode.Off)
         {
             count += 3;
@@ -1793,6 +2078,8 @@ internal static class AnalysisOrchestrator
         AnalysisOptions options,
         InputManifestInfo? inputManifest,
         BundleIntegrity? bundleIntegrity,
+        ContentRoutingStats? routing,
+        EngineStatusStats? engineStatuses,
         string? error,
         CancellationToken cancellationToken
     )
@@ -1814,10 +2101,59 @@ internal static class AnalysisOrchestrator
                 contentHashAlgorithm = inputManifest?.ContentHashAlgorithm,
             },
             bundleIntegrity,
+            contentRouting = routing is null
+                ? null
+                : new
+                {
+                    manifest = routing.Value.Manifest,
+                    manifestSha256 = routing.Value.ManifestSha256,
+                    policyVersion = routing.Value.PolicyVersion,
+                    inputFiles = routing.Value.InputFiles,
+                    flossCandidates = routing.Value.FlossCandidates,
+                    ocrCandidates = routing.Value.OcrCandidates,
+                    classifierErrors = routing.Value.ClassifierErrors,
+                    conflicts = routing.Value.Conflicts,
+                },
+            engineStatuses = CreateEngineStatusSummary(engineStatuses),
             options,
             error,
         };
         await WriteJsonAtomicAsync(path, record, cancellationToken);
+    }
+
+    private static object? CreateEngineStatusSummary(EngineStatusStats? stats)
+    {
+        if (stats is null)
+        {
+            return null;
+        }
+        return new
+        {
+            manifest = stats.Value.Manifest,
+            manifestSha256 = stats.Value.ManifestSha256,
+            records = stats.Value.Records,
+            native = new
+            {
+                succeeded = stats.Value.Native.Succeeded,
+                notApplicable = stats.Value.Native.NotApplicable,
+                disabledByUser = stats.Value.Native.DisabledByUser,
+                outputRecords = stats.Value.Native.OutputRecords,
+            },
+            floss = new
+            {
+                succeeded = stats.Value.Floss.Succeeded,
+                notApplicable = stats.Value.Floss.NotApplicable,
+                disabledByUser = stats.Value.Floss.DisabledByUser,
+                outputRecords = stats.Value.Floss.OutputRecords,
+            },
+            ocr = new
+            {
+                succeeded = stats.Value.Ocr.Succeeded,
+                notApplicable = stats.Value.Ocr.NotApplicable,
+                disabledByUser = stats.Value.Ocr.DisabledByUser,
+                outputRecords = stats.Value.Ocr.OutputRecords,
+            },
+        };
     }
 
     private static async Task WriteJsonAtomicAsync<T>(

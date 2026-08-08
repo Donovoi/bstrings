@@ -26,6 +26,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test and enforce high-level decision records
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./tools/decisions/tests/Test-DecisionRecords.ps1
+          if (
+            $env:GITHUB_EVENT_NAME -eq 'pull_request' -or
+            ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/master')
+          ) {
+            ./tools/decisions/Test-DecisionRecords.ps1 `
+              -BaseRevision $env:BASE_SHA `
+              -HeadRevision $env:HEAD_SHA `
+              -PullRequestBody $env:PR_BODY
+          }
+
       - name: Require an exact project-version release tag
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh

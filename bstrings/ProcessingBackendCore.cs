@@ -248,6 +248,55 @@ internal sealed class ProcessingBackendSession : IDisposable
         int codePage,
         string asciiRange,
         string unicodeRange
+    ) =>
+        CalibrateForSource(
+            filePath,
+            null,
+            fileSizeBytes,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            codePage,
+            asciiRange,
+            unicodeRange
+        );
+
+    internal BackendCalibrationResult CalibrateForStream(
+        Stream trustedStream,
+        long fileSizeBytes,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        int codePage,
+        string asciiRange,
+        string unicodeRange
+    ) =>
+        CalibrateForSource(
+            null,
+            trustedStream,
+            fileSizeBytes,
+            minLength,
+            maxLength,
+            asciiSearch,
+            unicodeSearch,
+            codePage,
+            asciiRange,
+            unicodeRange
+        );
+
+    private BackendCalibrationResult CalibrateForSource(
+        string? filePath,
+        Stream? trustedStream,
+        long fileSizeBytes,
+        int minLength,
+        int maxLength,
+        bool asciiSearch,
+        bool unicodeSearch,
+        int codePage,
+        string asciiRange,
+        string unicodeRange
     )
     {
         if (RequestedMode != ProcessingMode.Auto)
@@ -286,7 +335,9 @@ internal sealed class ProcessingBackendSession : IDisposable
             );
         }
 
-        var samples = ReadCalibrationSamples(filePath, fileSizeBytes);
+        var samples = trustedStream is null
+            ? ReadCalibrationSamples(filePath!, fileSizeBytes)
+            : ReadCalibrationSamples(trustedStream, fileSizeBytes);
         var sampledBytes = samples.Sum(sample => (long)sample.Data.Length);
         var maximumHits = samples.Max(sample =>
         {
@@ -491,6 +542,34 @@ internal sealed class ProcessingBackendSession : IDisposable
         long fileSizeBytes
     )
     {
+        using var stream = new FileStream(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite,
+            1024 * 1024,
+            FileOptions.RandomAccess
+        );
+        return ReadCalibrationSamples(stream, fileSizeBytes);
+    }
+
+    internal static List<CalibrationSample> ReadCalibrationSamples(
+        Stream stream,
+        long fileSizeBytes
+    )
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!stream.CanRead || !stream.CanSeek)
+        {
+            throw new InvalidDataException("Calibration requires a readable, seekable stream.");
+        }
+        if (stream.Length != fileSizeBytes)
+        {
+            throw new InvalidDataException(
+                $"Calibration stream length changed: expected {fileSizeBytes:N0}, found {stream.Length:N0}."
+            );
+        }
+
         var sampleSize = (int)Math.Min(
             ProcessingBackendCore.CalibrationSampleBytes,
             fileSizeBytes
@@ -500,27 +579,27 @@ internal sealed class ProcessingBackendSession : IDisposable
             Math.Max(1, fileSizeBytes / Math.Max(1, sampleSize))
         );
         var samples = new List<CalibrationSample>(sampleCount);
-        using var stream = new FileStream(
-            filePath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite,
-            1024 * 1024,
-            FileOptions.RandomAccess
-        );
-        for (var index = 0; index < sampleCount; index++)
+        var originalPosition = stream.Position;
+        try
         {
-            var maximumOffset = Math.Max(0, fileSizeBytes - sampleSize);
-            var offset = sampleCount == 1
-                ? 0
-                : maximumOffset * index / (sampleCount - 1);
-            offset &= ~1L;
-            stream.Position = offset;
-            var data = new byte[sampleSize];
-            stream.ReadExactly(data);
-            samples.Add(new CalibrationSample(offset, data));
+            for (var index = 0; index < sampleCount; index++)
+            {
+                var maximumOffset = Math.Max(0, fileSizeBytes - sampleSize);
+                var offset = sampleCount == 1
+                    ? 0
+                    : maximumOffset * index / (sampleCount - 1);
+                offset &= ~1L;
+                stream.Position = offset;
+                var data = new byte[sampleSize];
+                stream.ReadExactly(data);
+                samples.Add(new CalibrationSample(offset, data));
+            }
+            return samples;
         }
-        return samples;
+        finally
+        {
+            stream.Position = originalPosition;
+        }
     }
 
     private static List<string>[] RunCpuSamples(
@@ -657,7 +736,7 @@ internal sealed class ProcessingBackendSession : IDisposable
         return ordered[ordered.Length / 2];
     }
 
-    private sealed record CalibrationSample(long Offset, byte[] Data);
+    internal sealed record CalibrationSample(long Offset, byte[] Data);
 
     internal List<string> ProcessGpuChunk(
         Program.DataChunk chunk,

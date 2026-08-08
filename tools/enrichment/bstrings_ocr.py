@@ -22,6 +22,7 @@ and supplied explicitly to RapidOCR, so a valid run never downloads models.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import heapq
 import hmac
@@ -47,6 +48,7 @@ from typing import Any, Protocol
 SCHEMA_VERSION = 1
 MAX_PATH_LIST_LINE_CHARACTERS = 32 * 1024
 MAX_INPUT_MANIFEST_LINE_CHARACTERS = 256 * 1024
+MAX_ROUTING_MANIFEST_LINE_CHARACTERS = 512 * 1024
 MAX_JSONL_LINE_CHARACTERS = 16 * 1024 * 1024
 MAX_MODEL_MANIFEST_BYTES = 1024 * 1024
 HASH_CHUNK_BYTES = 4 * 1024 * 1024
@@ -108,6 +110,63 @@ class AirgapNetworkError(OcrError):
     """Raised when an offline run attempts a non-loopback network operation."""
 
 
+class EvidenceReadLease:
+    """Hold a source open and deny Windows write/delete sharing during OCR use."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._handle: int | None = None
+        self._portable_handle: Any | None = None
+
+    def __enter__(self) -> EvidenceReadLease:
+        if os.name != "nt":
+            try:
+                self._portable_handle = self.path.open("rb")
+            except OSError as exc:
+                raise OcrError("Could not acquire an evidence read lease for OCR") from exc
+            return self
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        create_file.restype = ctypes.c_void_p
+        handle = create_file(
+            str(self.path),
+            0x80000000,  # GENERIC_READ
+            0x00000001,  # FILE_SHARE_READ only: deny write and delete sharing
+            None,
+            3,  # OPEN_EXISTING
+            0x08000000,  # FILE_FLAG_SEQUENTIAL_SCAN
+            None,
+        )
+        invalid_handle = ctypes.c_void_p(-1).value
+        if handle in (None, invalid_handle):
+            error = ctypes.get_last_error()
+            raise OcrError(
+                f"Could not acquire an immutable OCR evidence read lease (WinError {error})"
+            )
+        self._handle = int(handle)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self._portable_handle is not None:
+            self._portable_handle.close()
+            self._portable_handle = None
+        if self._handle is not None:
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+            kernel32.CloseHandle(ctypes.c_void_p(self._handle))
+            self._handle = None
+
+
 @dataclass(frozen=True)
 class ModelComponent:
     name: str
@@ -155,6 +214,7 @@ class OcrConfig:
     self_test: bool
     airgap: bool
     input_manifest: Path | None = None
+    routing_manifest: Path | None = None
     progress_total_files: int = 0
 
 
@@ -176,6 +236,15 @@ class InputManifestEntry:
     path: str
     length: int
     sha256: str
+
+
+@dataclass(frozen=True)
+class RoutingManifestEntry:
+    path: str
+    length: int
+    sha256: str
+    decision_id: str
+    scheduled_routes: tuple[str, ...]
 
 
 class OcrRuntime(Protocol):
@@ -223,6 +292,8 @@ class PreparedRasterSource:
     source_size: int
     mtime_before: int
     image: Any
+    route_decision_id: str | None
+    evidence_lease: EvidenceReadLease
 
 
 @dataclass(frozen=True)
@@ -1174,6 +1245,7 @@ def make_record(
     source_file: str,
     source_sha256: str,
     source_size: int,
+    route_decision_id: str | None,
     origin_kind: str,
     location_kind: str,
     page_number: int,
@@ -1200,6 +1272,7 @@ def make_record(
     attributes: dict[str, Any] = {
         "sourceSha256": source_sha256,
         "sourceSize": source_size,
+        "routeDecisionId": route_decision_id,
         "pageNumber": page_number,
         "box": [list(point) for point in box],
         "confidence": confidence,
@@ -1273,6 +1346,7 @@ def make_assessment(
     ocr_records: int,
     source_sha256: str | None,
     source_size: int | None,
+    route_decision_id: str | None,
     runtime_sha256: str,
     rendered_pages: int,
     resolved_provider: str,
@@ -1292,6 +1366,7 @@ def make_assessment(
         **_component_attributes(pack),
         "sourceSha256": source_sha256,
         "sourceSize": source_size,
+        **({"routeDecisionId": route_decision_id} if route_decision_id is not None else {}),
         "runtimeSha256": runtime_sha256,
         "mode": config.mode,
         "requestedProvider": config.provider,
@@ -1339,6 +1414,13 @@ def _source_snapshot(path: Path) -> tuple[int, int]:
     return stat.st_size, stat.st_mtime_ns
 
 
+def _verify_source_hash_after_use(path: Path, expected_sha256: str | None) -> None:
+    if expected_sha256 is None:
+        return
+    if not hmac.compare_digest(sha256_file(path), expected_sha256):
+        raise OcrError("An evidence input changed during OCR examination")
+
+
 def _pdf_text_is_suspicious(text: str, minimum_characters: int) -> bool:
     stripped = text.strip()
     if len(stripped) < minimum_characters:
@@ -1361,6 +1443,7 @@ def _records_for_raster(
     source_file: str,
     source_sha256: str,
     source_size: int,
+    route_decision_id: str | None,
     page_number: int,
     image: Any,
     location_kind: str,
@@ -1387,6 +1470,7 @@ def _records_for_raster(
                     source_file=source_file,
                     source_sha256=source_sha256,
                     source_size=source_size,
+                    route_decision_id=route_decision_id,
                     origin_kind="ocr",
                     location_kind=location_kind,
                     page_number=page_number,
@@ -1952,6 +2036,7 @@ def _process_image(
     path: Path,
     source_sha256: str,
     source_size: int,
+    route_decision_id: str | None,
     runtime_sha256: str,
     scheduler: RasterScheduler,
     spool: SourceRecordSpool,
@@ -1971,6 +2056,7 @@ def _process_image(
                 source_file=source_file,
                 source_sha256=source_sha256,
                 source_size=source_size,
+                route_decision_id=route_decision_id,
                 page_number=page_number,
                 image=image,
                 location_kind="image_region",
@@ -2006,6 +2092,7 @@ def _process_pdf(
     path: Path,
     source_sha256: str,
     source_size: int,
+    route_decision_id: str | None,
     runtime_sha256: str,
     scheduler: RasterScheduler,
     spool: SourceRecordSpool,
@@ -2037,6 +2124,7 @@ def _process_pdf(
                             source_file=source_file,
                             source_sha256=source_sha256,
                             source_size=source_size,
+                            route_decision_id=route_decision_id,
                             origin_kind="pdf-text",
                             location_kind="page_region",
                             page_number=page_number,
@@ -2070,6 +2158,7 @@ def _process_pdf(
                         source_file=source_file,
                         source_sha256=source_sha256,
                         source_size=source_size,
+                        route_decision_id=route_decision_id,
                         page_number=page_number,
                         image=image,
                         location_kind="page_region",
@@ -2107,6 +2196,8 @@ def _prepare_single_frame_raster_source(
     config: OcrConfig,
     source_file: str,
     expected_identity: InputManifestEntry | None,
+    route_decision_id: str | None,
+    evidence_lease: EvidenceReadLease,
 ) -> PreparedRasterSource | None:
     path = Path(source_file)
     size_before, mtime_before = _source_snapshot(path)
@@ -2146,6 +2237,8 @@ def _prepare_single_frame_raster_source(
             source_size=size_before,
             mtime_before=mtime_before,
             image=image,
+            route_decision_id=route_decision_id,
+            evidence_lease=evidence_lease,
         )
         image = None
         return prepared
@@ -2165,6 +2258,7 @@ def _finalize_processed_source(
     path: Path,
     source_sha256: str,
     source_size: int,
+    route_decision_id: str | None,
     mtime_before: int,
     runtime_sha256: str,
     records: SourceRecordSpool,
@@ -2188,6 +2282,7 @@ def _finalize_processed_source(
         ocr_records=records.ocr_records,
         source_sha256=source_sha256,
         source_size=source_size,
+        route_decision_id=route_decision_id,
         runtime_sha256=runtime_sha256,
         rendered_pages=rendered_pages,
         resolved_provider=resolved_provider,
@@ -2208,6 +2303,7 @@ def process_source(
     scheduler: RasterScheduler,
     budget: OutputBudget,
     expected_identity: InputManifestEntry | None = None,
+    route_decision_id: str | None = None,
 ) -> SourceResult:
     path = Path(source_file)
     size_before, mtime_before = _source_snapshot(path)
@@ -2236,6 +2332,7 @@ def process_source(
             ocr_records=0,
             source_sha256=source_sha256,
             source_size=size_before,
+            route_decision_id=route_decision_id,
             runtime_sha256=runtime_sha256,
             rendered_pages=0,
             resolved_provider=scheduler.resolved_provider,
@@ -2263,6 +2360,7 @@ def process_source(
                 path=path,
                 source_sha256=source_sha256,
                 source_size=size_before,
+                route_decision_id=route_decision_id,
                 runtime_sha256=runtime_sha256,
                 scheduler=scheduler,
                 spool=records,
@@ -2277,6 +2375,7 @@ def process_source(
                 path=path,
                 source_sha256=source_sha256,
                 source_size=size_before,
+                route_decision_id=route_decision_id,
                 runtime_sha256=runtime_sha256,
                 scheduler=scheduler,
                 spool=records,
@@ -2289,6 +2388,7 @@ def process_source(
             path=path,
             source_sha256=source_sha256,
             source_size=size_before,
+            route_decision_id=route_decision_id,
             mtime_before=mtime_before,
             runtime_sha256=runtime_sha256,
             records=records,
@@ -2419,6 +2519,159 @@ def read_input_manifest(path: Path) -> Iterable[InputManifestEntry]:
             raise OcrError("The OCR input manifest is not strict UTF-8") from exc
 
 
+def _reject_duplicate_routing_json_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    document: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in document:
+            raise OcrError("The OCR routing manifest contains a duplicate JSON field")
+        document[name] = value
+    return document
+
+
+def _routing_string_array(
+    document: dict[str, Any], name: str, ordinal: int
+) -> tuple[str, ...]:
+    value = document[name]
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) or not item for item in value)
+        or value != sorted(set(value))
+    ):
+        raise OcrError(
+            f"OCR routing row {ordinal} contains an invalid sorted {name} array"
+        )
+    return tuple(value)
+
+
+def _parse_routing_manifest_entry(value: str, expected_ordinal: int) -> RoutingManifestEntry:
+    try:
+        document = json.loads(value, object_pairs_hook=_reject_duplicate_routing_json_members)
+    except OcrError:
+        raise
+    except json.JSONDecodeError as exc:
+        raise OcrError(f"OCR routing row {expected_ordinal} contains invalid JSON") from exc
+
+    required = frozenset(
+        (
+            "schemaVersion",
+            "recordType",
+            "policyVersion",
+            "ordinal",
+            "decisionId",
+            "sourceFile",
+            "sourceSize",
+            "sourceSha256",
+            "classifier",
+            "signals",
+            "eligibleRoutes",
+            "scheduledRoutes",
+            "conflicts",
+        )
+    )
+    if not isinstance(document, dict) or frozenset(document) != required:
+        raise OcrError(f"OCR routing row {expected_ordinal} has unsupported fields")
+    if (
+        type(document["schemaVersion"]) is not int
+        or document["schemaVersion"] != SCHEMA_VERSION
+        or document["recordType"] != "content-route"
+        or document["policyVersion"] != "content-routing-v1"
+        or type(document["ordinal"]) is not int
+        or document["ordinal"] != expected_ordinal
+    ):
+        raise OcrError(f"OCR routing row {expected_ordinal} has an invalid identity")
+
+    source_path = document["sourceFile"]
+    source_size = document["sourceSize"]
+    source_sha256 = document["sourceSha256"]
+    decision_id = document["decisionId"]
+    if (
+        not isinstance(source_path, str)
+        or not source_path
+        or "\x00" in source_path
+        or not os.path.isabs(source_path)
+        or not _path_literals_equal(source_path, os.path.abspath(source_path))
+    ):
+        raise OcrError(f"OCR routing row {expected_ordinal} has an invalid source path")
+    if type(source_size) is not int or not 0 <= source_size <= 2**63 - 1:
+        raise OcrError(f"OCR routing row {expected_ordinal} has an invalid source length")
+    if (
+        not isinstance(source_sha256, str)
+        or not _is_sha256(source_sha256)
+        or source_sha256 != source_sha256.lower()
+    ):
+        raise OcrError(f"OCR routing row {expected_ordinal} has an invalid source SHA-256")
+    if (
+        not isinstance(decision_id, str)
+        or not decision_id.startswith("sha256:")
+        or len(decision_id) != 71
+        or not _is_sha256(decision_id[7:])
+        or decision_id != decision_id.lower()
+    ):
+        raise OcrError(f"OCR routing row {expected_ordinal} has an invalid decision identity")
+
+    classifier = document["classifier"]
+    if (
+        not isinstance(classifier, dict)
+        or classifier.get("engine") != "magika"
+        or classifier.get("status") not in {"ok", "error"}
+    ):
+        raise OcrError(f"OCR routing row {expected_ordinal} has an invalid classifier")
+    signals = _routing_string_array(document, "signals", expected_ordinal)
+    eligible_routes = _routing_string_array(document, "eligibleRoutes", expected_ordinal)
+    scheduled_routes = _routing_string_array(document, "scheduledRoutes", expected_ordinal)
+    conflicts = _routing_string_array(document, "conflicts", expected_ordinal)
+    del signals, conflicts
+    allowed_routes = {"native", "floss", "ocr"}
+    if (
+        "native" not in eligible_routes
+        or "native" not in scheduled_routes
+        or not set(eligible_routes).issubset(allowed_routes)
+        or not set(scheduled_routes).issubset(eligible_routes)
+    ):
+        raise OcrError(f"OCR routing row {expected_ordinal} has invalid route policy")
+
+    decision_material = dict(document)
+    del decision_material["decisionId"]
+    expected_decision_id = (
+        "sha256:"
+        + hashlib.sha256(canonical_json(decision_material).encode("utf-8")).hexdigest()
+    )
+    if not hmac.compare_digest(decision_id, expected_decision_id):
+        raise OcrError(f"OCR routing row {expected_ordinal} has an altered decision identity")
+    return RoutingManifestEntry(
+        source_path, source_size, source_sha256, decision_id, scheduled_routes
+    )
+
+
+def read_routing_manifest(path: Path) -> Iterable[RoutingManifestEntry]:
+    try:
+        handle = path.open("r", encoding="utf-8", errors="strict", newline=None)
+    except OSError as exc:
+        raise OcrError("The OCR routing manifest could not be opened") from exc
+    seen_paths: set[str] = set()
+    with handle:
+        try:
+            expected_ordinal = 1
+            while True:
+                line = handle.readline(MAX_ROUTING_MANIFEST_LINE_CHARACTERS + 2)
+                if line == "":
+                    return
+                value = line.rstrip("\r\n")
+                if len(value) > MAX_ROUTING_MANIFEST_LINE_CHARACTERS:
+                    raise OcrError("An OCR routing manifest line exceeds the safety limit")
+                if not value.strip() or "\x00" in value:
+                    raise OcrError("The OCR routing manifest contains an empty or invalid row")
+                entry = _parse_routing_manifest_entry(value, expected_ordinal)
+                path_identity = os.path.normcase(os.path.abspath(entry.path))
+                if path_identity in seen_paths:
+                    raise OcrError("The OCR routing manifest contains a duplicate source path")
+                seen_paths.add(path_identity)
+                yield entry
+                expected_ordinal += 1
+        except UnicodeError as exc:
+            raise OcrError("The OCR routing manifest is not strict UTF-8") from exc
+
+
 def read_input_pairs(
     inventory_path: Path, manifest_path: Path | None
 ) -> Iterable[tuple[str, InputManifestEntry | None]]:
@@ -2446,6 +2699,49 @@ def read_input_pairs(
             yield source_file, manifest_entry
     finally:
         for iterator in (inventory, manifest):
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
+
+
+def read_routed_input_pairs(
+    inventory_path: Path,
+    input_manifest_path: Path | None,
+    routing_manifest_path: Path | None,
+) -> Iterable[tuple[str, InputManifestEntry | None, str | None]]:
+    candidates = iter(read_input_pairs(inventory_path, input_manifest_path))
+    if routing_manifest_path is None:
+        yield from ((source_file, identity, None) for source_file, identity in candidates)
+        return
+    if input_manifest_path is None:
+        raise OcrError("The OCR routing manifest requires a verified input manifest")
+
+    routes = iter(read_routing_manifest(routing_manifest_path))
+    sentinel = object()
+    candidate = next(candidates, sentinel)
+    try:
+        for route in routes:
+            if candidate is sentinel:
+                continue
+            assert isinstance(candidate, tuple)
+            source_file, identity = candidate
+            assert isinstance(identity, InputManifestEntry)
+            if not _path_literals_equal(source_file, route.path):
+                continue
+            if identity.length != route.length or not hmac.compare_digest(
+                identity.sha256, route.sha256
+            ):
+                raise OcrError(
+                    "An OCR candidate does not match its routed source identity"
+                )
+            if "ocr" not in route.scheduled_routes:
+                raise OcrError("An OCR candidate was not scheduled by content routing")
+            yield source_file, identity, route.decision_id
+            candidate = next(candidates, sentinel)
+        if candidate is not sentinel:
+            raise OcrError("The OCR routing manifest does not cover every OCR candidate")
+    finally:
+        for iterator in (candidates, routes):
             close = getattr(iterator, "close", None)
             if close is not None:
                 close()
@@ -2623,6 +2919,12 @@ def _validate_config(config: OcrConfig) -> None:
         raise OcrError("OCR examination requires inventory, string output, and assessment output")
     if config.input_manifest is not None and config.paths_from is None:
         raise OcrError("The OCR input manifest requires a path inventory")
+    if config.routing_manifest is not None and (
+        config.self_test or config.paths_from is None or config.input_manifest is None
+    ):
+        raise OcrError(
+            "The OCR routing manifest requires an examination inventory and verified input manifest"
+        )
     protected = {config.ocr_executable.resolve(), config.model_path.resolve()}
     if config.paths_from is not None:
         if not config.paths_from.is_file():
@@ -2632,6 +2934,10 @@ def _validate_config(config: OcrConfig) -> None:
         if not config.input_manifest.is_file():
             raise OcrError("The OCR input manifest is missing")
         protected.add(config.input_manifest.resolve())
+    if config.routing_manifest is not None:
+        if not config.routing_manifest.is_file():
+            raise OcrError("The OCR routing manifest is missing")
+        protected.add(config.routing_manifest.resolve())
     destinations = {
         value.resolve() for value in (config.output, config.assessments_output) if value is not None
     }
@@ -2866,9 +3172,10 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
 
         def finish_pending_source(outputs: AtomicJsonlPair) -> None:
             pending = pending_sources.popleft()
-            selected = scheduler.finish_cross_source(pending.work)
+            selected: PageRecordSpool | None = None
             records: SourceRecordSpool | None = None
             try:
+                selected = scheduler.finish_cross_source(pending.work)
                 records = SourceRecordSpool(config.output.resolve().parent)
                 records.append_page((selected,))
                 result = _finalize_processed_source(
@@ -2878,6 +3185,7 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
                     path=pending.source.path,
                     source_sha256=pending.source.source_sha256,
                     source_size=pending.source.source_size,
+                    route_decision_id=pending.source.route_decision_id,
                     mtime_before=pending.source.mtime_before,
                     runtime_sha256=runtime_sha256,
                     records=records,
@@ -2887,12 +3195,18 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
                     resolved_thread_counts=runtime.resolved_thread_counts,
                     resolved_worker_counts=runtime.resolved_worker_counts,
                 )
+                _verify_source_hash_after_use(
+                    pending.source.path, pending.source.source_sha256
+                )
                 publish_source(result, outputs)
             except BaseException:
-                selected.close()
+                if selected is not None:
+                    selected.close()
                 if records is not None:
                     records.close()
                 raise
+            finally:
+                pending.source.evidence_lease.__exit__(None, None, None)
 
         def finish_pending_sources(outputs: AtomicJsonlPair) -> None:
             while pending_sources:
@@ -2902,8 +3216,8 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
             config.output, config.assessments_output, config.max_output_bytes
         ) as outputs:
             try:
-                for source_file, expected_identity in read_input_pairs(
-                    config.paths_from, config.input_manifest
+                for source_file, expected_identity, route_decision_id in read_routed_input_pairs(
+                    config.paths_from, config.input_manifest, config.routing_manifest
                 ):
                     if (
                         scheduler.cross_source_enabled
@@ -2916,54 +3230,74 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
                     }:
                         raise OcrError("The OCR inventory includes one of its output files")
 
-                    prepared = None
-                    if scheduler.cross_source_enabled:
-                        prepared = _prepare_single_frame_raster_source(
+                    evidence_lease = EvidenceReadLease(Path(source_file))
+                    evidence_lease.__enter__()
+                    lease_transferred = False
+                    try:
+                        prepared = None
+                        if scheduler.cross_source_enabled:
+                            prepared = _prepare_single_frame_raster_source(
+                                runtime=runtime,
+                                config=config,
+                                source_file=source_file,
+                                expected_identity=expected_identity,
+                                route_decision_id=route_decision_id,
+                                evidence_lease=evidence_lease,
+                            )
+                        if prepared is not None:
+                            work = partial(
+                                _records_for_raster,
+                                config=config,
+                                pack=pack,
+                                source_file=source_file,
+                                source_sha256=prepared.source_sha256,
+                                source_size=prepared.source_size,
+                                route_decision_id=prepared.route_decision_id,
+                                page_number=1,
+                                image=prepared.image,
+                                location_kind="image_region",
+                                runtime_sha256=runtime_sha256,
+                                render_dpi=None,
+                                resolved_provider=scheduler.resolved_provider,
+                                requested_threads=config.threads,
+                                resolved_thread_counts=runtime.resolved_thread_counts,
+                                resolved_worker_counts=runtime.resolved_worker_counts,
+                                budget=budget,
+                                spool_directory=config.output.resolve().parent,
+                            )
+                            scheduled = scheduler.submit_cross_source(prepared.image, work)
+                            try:
+                                pending_sources.append(PendingRasterSource(prepared, scheduled))
+                                lease_transferred = True
+                            except BaseException:
+                                scheduler.cancel_and_drain_cross_sources((scheduled,))
+                                raise
+                            continue
+
+                        finish_pending_sources(outputs)
+                        result = process_source(
                             runtime=runtime,
-                            config=config,
-                            source_file=source_file,
-                            expected_identity=expected_identity,
-                        )
-                    if prepared is not None:
-                        work = partial(
-                            _records_for_raster,
                             config=config,
                             pack=pack,
                             source_file=source_file,
-                            source_sha256=prepared.source_sha256,
-                            source_size=prepared.source_size,
-                            page_number=1,
-                            image=prepared.image,
-                            location_kind="image_region",
                             runtime_sha256=runtime_sha256,
-                            render_dpi=None,
-                            resolved_provider=scheduler.resolved_provider,
-                            requested_threads=config.threads,
-                            resolved_thread_counts=runtime.resolved_thread_counts,
-                            resolved_worker_counts=runtime.resolved_worker_counts,
+                            scheduler=scheduler,
                             budget=budget,
-                            spool_directory=config.output.resolve().parent,
+                            expected_identity=expected_identity,
+                            route_decision_id=route_decision_id,
                         )
-                        scheduled = scheduler.submit_cross_source(prepared.image, work)
                         try:
-                            pending_sources.append(PendingRasterSource(prepared, scheduled))
+                            _verify_source_hash_after_use(
+                                Path(source_file), result.assessment.get("sourceSha256")
+                            )
                         except BaseException:
-                            scheduler.cancel_and_drain_cross_sources((scheduled,))
+                            if result.records is not None:
+                                result.records.close()
                             raise
-                        continue
-
-                    finish_pending_sources(outputs)
-                    result = process_source(
-                        runtime=runtime,
-                        config=config,
-                        pack=pack,
-                        source_file=source_file,
-                        runtime_sha256=runtime_sha256,
-                        scheduler=scheduler,
-                        budget=budget,
-                        expected_identity=expected_identity,
-                    )
-                    publish_source(result, outputs)
+                        publish_source(result, outputs)
+                    finally:
+                        if not lease_transferred:
+                            evidence_lease.__exit__(None, None, None)
                 finish_pending_sources(outputs)
                 if (
                     config.progress_total_files > 0
@@ -2977,10 +3311,15 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
                 outputs.commit()
             finally:
                 if pending_sources:
-                    scheduler.cancel_and_drain_cross_sources(
-                        pending.work for pending in pending_sources
-                    )
-                    pending_sources.clear()
+                    remaining = tuple(pending_sources)
+                    try:
+                        scheduler.cancel_and_drain_cross_sources(
+                            pending.work for pending in remaining
+                        )
+                    finally:
+                        for pending in remaining:
+                            pending.source.evidence_lease.__exit__(None, None, None)
+                        pending_sources.clear()
         return stats
     finally:
         if scheduler is not None:
@@ -3026,6 +3365,7 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--airgap", action="store_true")
     parser.add_argument("--paths-from", type=Path)
     parser.add_argument("--input-manifest", type=Path)
+    parser.add_argument("--routing-manifest", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--assessments-output", type=Path)
     parser.add_argument("--ocr-executable", type=Path, required=True)
@@ -3092,6 +3432,7 @@ def config_from_arguments(args: argparse.Namespace) -> OcrConfig:
         self_test=args.self_test,
         airgap=args.airgap,
         input_manifest=args.input_manifest,
+        routing_manifest=args.routing_manifest,
         progress_total_files=args.progress_total_files,
     )
 

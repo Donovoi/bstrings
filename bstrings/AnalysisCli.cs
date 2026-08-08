@@ -34,11 +34,11 @@ internal static class AnalysisCli
         var fullOption = new Option<bool>("--full")
         {
             Description =
-                "Run the single installed Full quality profile: automatic FLOSS recovery, OCR, language triage, 7B-Q8 offline translation, all patterns, and reports; an explicit stage 'off' overrides its default",
+                "Run the single Full profile: hash inputs, classify each input in one early shared pass, always extract native strings, route applicable files to FLOSS/OCR, then language triage, 7B-Q8 offline translation, all patterns, and reports; an explicit stage 'off' overrides its default",
         };
         var ocrOption = new Option<string?>("--ocr")
         {
-            Description = "OCR/PDF workflow: off, auto (text layers plus needed OCR), or force (OCR every page)",
+            Description = "OCR/PDF workflow: off, auto (early fail-open routing, text layers, then needed OCR), or force (OCR every page)",
         };
         var ocrProviderOption = new Option<string?>("--ocr-provider")
         {
@@ -52,7 +52,7 @@ internal static class AnalysisCli
         };
         var recoveryOption = new Option<string?>("--recover-executable-strings")
         {
-            Description = "FLOSS recovery: off, auto (Magika-routed PE files), or force (every supplied file)",
+            Description = "FLOSS recovery: off, auto (batched Magika plus validated PE-signature routing), or force (every supplied file)",
         };
         var translationOption = new Option<string?>("--translation")
         {
@@ -200,7 +200,8 @@ internal static class AnalysisCli
             + "  bstrings.exe analyze -d C:\\evidence\\carved --full -o C:\\results\\case-01\n"
             + "  bstrings.exe analyze -f C:\\evidence\\memory.raw --ocr off --translation off --lr all -o C:\\results\\memory\n\n"
             + "The results directory must be new or empty. Failures retain .incomplete and diagnostic logs. "
-            + "Long-running stages print measured percentage completion; percentages are work units, not an ETA.";
+            + "Long-running stages print measured percentage completion; percentages are work units, not an ETA. "
+            + "content-routing.jsonl records every routing signal and decision; engine-status.jsonl records terminal per-input engine coverage; native extraction always covers every input.";
 
         var actionExitCode = 0;
         command.SetAction(

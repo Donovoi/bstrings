@@ -112,7 +112,11 @@ public sealed class AnalysisToolchainTests
         Assert.Equal("fixture/ocr-model", toolchain.OcrModelId);
         Assert.Equal("fixture-ocr-revision", toolchain.OcrModelRevision);
         Assert.Equal(new string('b', 64), toolchain.OcrModelSha256);
-        Assert.Null(toolchain.MagikaExecutable);
+        Assert.Equal(
+            Path.Combine(scope.DirectoryPath, "tools", "magika.exe"),
+            toolchain.MagikaExecutable
+        );
+        Assert.Null(toolchain.FlossExecutable);
         Assert.Null(toolchain.TranslationModelPath);
     }
 
@@ -179,6 +183,8 @@ public sealed class AnalysisToolchainTests
                 "inventory.txt",
                 "--input-manifest",
                 "manifest.jsonl",
+                "--routing-manifest",
+                "routing.jsonl",
                 "--output",
                 "strings.jsonl",
                 "--assessments-output",
@@ -204,6 +210,7 @@ public sealed class AnalysisToolchainTests
                 7,
                 "inventory.txt",
                 "manifest.jsonl",
+                "routing.jsonl",
                 "strings.jsonl",
                 "assessments.jsonl",
                 123
@@ -233,7 +240,7 @@ public sealed class AnalysisToolchainTests
                 StringComparison.OrdinalIgnoreCase
             );
             Assert.Contains(
-                "github.com/Donovoi/bstrings/blob/v1.9.10/README.md#get-started",
+                "github.com/Donovoi/bstrings/blob/v1.9.11/README.md#get-started",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );
@@ -314,9 +321,12 @@ public sealed class AnalysisToolchainTests
             "runtime/llama-server.exe",
             "models/model.gguf",
         };
-        if (includeRecoveryTools)
+        if (includeRecoveryTools || includeOcr)
         {
             files.Add("tools/magika.exe");
+        }
+        if (includeRecoveryTools)
+        {
             files.Add("tools/floss.exe");
         }
         if (includeOcr)
