@@ -104,6 +104,12 @@ The scale test is sparse and warm-cache on the reviewed host. Process startup,
 file reading, string decoding, regex work, scheduling, and output dominate more
 of the result than they do in the focused scanner benchmark.
 
+These measurements exercised the scanner-only ABI 2 prototype. The current
+library is ABI 3 because it also exposes bundled Lingua language detection.
+Current ABI 3 and the wider C#/Rust architecture were reviewed separately in
+[ADR-0002](architecture/adr-0002-retain-managed-host-and-measure-rust-kernels.md);
+the historical rows above have not been relabelled as current measurements.
+
 ## Correctness gates
 
 - Rust's dispatched implementation matches a scalar Rust reference for every
