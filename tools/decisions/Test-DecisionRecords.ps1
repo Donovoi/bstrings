@@ -157,6 +157,10 @@ function Assert-DecisionRecord {
     if ($content.Contains([char]0)) {
         Stop-DecisionGate "Decision record '$DecisionPath' contains a NUL byte."
     }
+    # Git may materialize this Markdown with CRLF on Windows runners. Normalize
+    # before applying line-anchored policy expressions so validation is
+    # identical for LF, CRLF, and legacy CR inputs.
+    $content = $content.Replace("`r`n", "`n").Replace("`r", "`n")
 
     $fileName = [IO.Path]::GetFileName($DecisionPath)
     $number = $fileName.Substring(4, 4)

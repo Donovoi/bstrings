@@ -131,6 +131,12 @@ try {
     Assert-Passed (
         Invoke-Gate -Body $highLevelBody -Paths @($decisionRelativePath)
     ) 'Valid high-level decision'
+    $crlfDecision = (New-ValidDecisionContent).Replace("`r`n", "`n").Replace("`r", "`n")
+    Write-Utf8File $decisionPath ($crlfDecision.Replace("`n", "`r`n"))
+    Assert-Passed (
+        Invoke-Gate -Body $highLevelBody -Paths @($decisionRelativePath)
+    ) 'Valid CRLF high-level decision'
+    Write-Utf8File $decisionPath (New-ValidDecisionContent)
     Assert-Passed (
         Invoke-Gate -Paths @($decisionRelativePath)
     ) 'Push validation without pull-request body'
