@@ -28,7 +28,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.13](https://github.com/Donovoi/bstrings/releases/tag/v1.9.13).
+[v1.9.14](https://github.com/Donovoi/bstrings/releases/tag/v1.9.14).
 There is one install and one Full profile: the largest, highest-scoring accepted
 Hy-MT2 7B Q8_0 translation model is included instead of asking examiners to
 choose among quality/size tiers.
@@ -43,7 +43,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.13'
+  $tag = 'v1.9.14'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
