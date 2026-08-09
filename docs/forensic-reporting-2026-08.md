@@ -3,7 +3,7 @@
 Date: 7 August 2026
 
 Availability note: these projections are in current source and the complete
-v1.9.12 quality release, including runs that also use FLOSS, OCR, and
+v1.9.13 quality release, including runs that also use FLOSS, OCR, and
 translation. See [download and installation](download-and-install.md).
 
 ## Outcome

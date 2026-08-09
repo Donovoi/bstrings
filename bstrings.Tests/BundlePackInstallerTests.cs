@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -697,11 +698,9 @@ public sealed class BundlePackInstallerTests
         var fixture = scope.CreateValidSinglePack(cachePack: false);
         var pack = fixture.Packs[0];
         var split = pack.Bytes.Length / 3;
-        Directory.CreateDirectory(scope.CacheDirectory);
-        File.WriteAllBytes(
-            scope.CachePath(pack.Id) + ".partial",
-            pack.Bytes[..split]
-        );
+        var objectPath = scope.ObjectPath(pack);
+        Directory.CreateDirectory(Path.GetDirectoryName(objectPath)!);
+        File.WriteAllBytes(objectPath + ".partial", pack.Bytes[..split]);
         using var handler = new ResumeHandler(pack.Bytes);
 
         var result = await BundlePackInstaller.AcquireAndAssembleAsync(
@@ -713,8 +712,8 @@ public sealed class BundlePackInstallerTests
         );
 
         Assert.Equal(split, handler.RequestedOffset);
-        Assert.Equal(pack.Bytes, File.ReadAllBytes(scope.CachePath(pack.Id)));
-        Assert.False(File.Exists(scope.CachePath(pack.Id) + ".partial"));
+        Assert.Equal(pack.Bytes, File.ReadAllBytes(objectPath));
+        Assert.False(File.Exists(objectPath + ".partial"));
         Assert.True(Directory.Exists(result.OutputDirectory));
         BundleManifestVerifier.Verify(scope.OutputDirectory);
     }
@@ -726,9 +725,9 @@ public sealed class BundlePackInstallerTests
         var fixture = scope.CreateValidSplitPack(cacheFile: false);
         var pack = fixture.Packs.Single(item => item.Kind == BundlePackKind.File);
         var split = pack.Bytes.Length / 3;
-        Directory.CreateDirectory(scope.CacheDirectory);
-        var cachePath = scope.CachePath(pack.Id, BundlePackKind.File);
-        File.WriteAllBytes(cachePath + ".partial", pack.Bytes[..split]);
+        var objectPath = scope.ObjectPath(pack);
+        Directory.CreateDirectory(Path.GetDirectoryName(objectPath)!);
+        File.WriteAllBytes(objectPath + ".partial", pack.Bytes[..split]);
         using var handler = new ResumeHandler(pack.Bytes);
 
         var result = await BundlePackInstaller.AcquireAndAssembleAsync(
@@ -740,10 +739,366 @@ public sealed class BundlePackInstallerTests
         );
 
         Assert.Equal(split, handler.RequestedOffset);
-        Assert.Equal(pack.Bytes, File.ReadAllBytes(cachePath));
-        Assert.False(File.Exists(cachePath + ".partial"));
+        Assert.Equal(pack.Bytes, File.ReadAllBytes(objectPath));
+        Assert.False(File.Exists(objectPath + ".partial"));
         Assert.True(Directory.Exists(result.OutputDirectory));
         BundleManifestVerifier.Verify(scope.OutputDirectory);
+    }
+
+    [Fact]
+    public async Task Acquire_ImportsExactLegacyPackIntoContentStoreWithoutNetwork()
+    {
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSinglePack();
+        var pack = fixture.Packs[0];
+        using var handler = new ThrowingHandler(
+            new HttpRequestException("network must not be used")
+        );
+
+        await BundlePackInstaller.AcquireAndAssembleAsync(
+            fixture.TrustManifestPath,
+            scope.CacheDirectory,
+            scope.OutputDirectory,
+            TestContext.Current.CancellationToken,
+            handler
+        );
+
+        var objectPath = scope.ObjectPath(pack);
+        Assert.Equal(pack.Bytes, File.ReadAllBytes(objectPath));
+        Assert.True(File.Exists(scope.CachePath(pack.Id)));
+        BundleManifestVerifier.Verify(scope.OutputDirectory);
+    }
+
+    [Fact]
+    public void ContentObjectPath_BindsSchemaKindLengthAndShaUnderCacheRoot()
+    {
+        using var scope = new BundlePackScope();
+        var bytes = "object-identity"u8.ToArray();
+        var sha256 = Sha256(bytes);
+        var zip = new BundlePackDefinition(
+            "zip-id",
+            new Uri("https://example.test/pack.zip"),
+            bytes.LongLength,
+            sha256
+        );
+        var file = zip with
+        {
+            Id = "file-id",
+            Kind = BundlePackKind.File,
+            Target = "models/model.gguf",
+        };
+
+        var zipPath = BundlePackInstaller.ContentObjectPath(scope.CacheDirectory, zip);
+        var filePath = BundlePackInstaller.ContentObjectPath(scope.CacheDirectory, file);
+
+        Assert.Equal(
+            Path.Combine(
+                scope.CacheDirectory,
+                "objects",
+                "v1",
+                "zip",
+                bytes.LongLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                sha256[..2],
+                sha256 + ".object"
+            ),
+            zipPath
+        );
+        Assert.Equal(
+            Path.Combine(
+                scope.CacheDirectory,
+                "objects",
+                "v1",
+                "file",
+                bytes.LongLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                sha256[..2],
+                sha256 + ".object"
+            ),
+            filePath
+        );
+        Assert.NotEqual(zipPath, filePath);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Acquire_RecoversCorruptOrTruncatedObjectThroughColdFallback(
+        bool truncate
+    )
+    {
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSinglePack(cachePack: false);
+        var pack = fixture.Packs[0];
+        var objectPath = scope.ObjectPath(pack);
+        Directory.CreateDirectory(Path.GetDirectoryName(objectPath)!);
+        File.WriteAllBytes(
+            objectPath,
+            truncate
+                ? pack.Bytes[..^1]
+                : Enumerable.Repeat((byte)0xA5, pack.Bytes.Length).ToArray()
+        );
+        using var handler = new ResumeHandler(pack.Bytes);
+
+        await BundlePackInstaller.AcquireAndAssembleAsync(
+            fixture.TrustManifestPath,
+            scope.CacheDirectory,
+            scope.OutputDirectory,
+            TestContext.Current.CancellationToken,
+            handler
+        );
+
+        Assert.Null(handler.RequestedOffset);
+        Assert.Equal(pack.Bytes, File.ReadAllBytes(objectPath));
+        BundleManifestVerifier.Verify(scope.OutputDirectory);
+    }
+
+    [Fact]
+    public void Assemble_RejectsHardLinkedContentObjectOutsideTheCache()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Skip("The release cache hard-link contract is Windows-specific.");
+        }
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSinglePack(cachePack: false);
+        var pack = fixture.Packs[0];
+        var outsidePath = Path.Combine(scope.Root, "outside-pack.zip");
+        File.WriteAllBytes(outsidePath, pack.Bytes);
+        var objectPath = scope.ObjectPath(pack);
+        Directory.CreateDirectory(Path.GetDirectoryName(objectPath)!);
+        if (!CreateHardLink(objectPath, outsidePath, IntPtr.Zero))
+        {
+            Assert.Skip(
+                $"Hard links are unavailable on this host: {Marshal.GetLastWin32Error()}."
+            );
+        }
+
+        var error = Assert.Throws<InvalidDataException>(() =>
+            BundlePackInstaller.Assemble(
+                fixture.TrustManifestPath,
+                scope.CacheDirectory,
+                scope.OutputDirectory,
+                TestContext.Current.CancellationToken
+            )
+        );
+
+        Assert.Contains("physical filesystem link", error.Message);
+        Assert.False(Directory.Exists(scope.OutputDirectory));
+        Assert.Equal(pack.Bytes, File.ReadAllBytes(outsidePath));
+    }
+
+    [Fact]
+    public async Task Acquire_SeedsMissingFilePackFromExactPhysicalBundleWithoutNetwork()
+    {
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSplitPack(cacheFile: false);
+        var filePack = fixture.Packs.Single(pack => pack.Kind == BundlePackKind.File);
+        var seedRoot = Path.Combine(scope.Root, "seed-bundle");
+        var seedPath = Path.Combine(
+            seedRoot,
+            filePack.Target!.Replace('/', Path.DirectorySeparatorChar)
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(seedPath)!);
+        File.WriteAllBytes(seedPath, filePack.Bytes);
+        using var handler = new ThrowingHandler(
+            new HttpRequestException("network must not be used")
+        );
+
+        await BundlePackInstaller.AcquireAndAssembleAsync(
+            fixture.TrustManifestPath,
+            scope.CacheDirectory,
+            scope.OutputDirectory,
+            TestContext.Current.CancellationToken,
+            handler,
+            seedBundleDirectory: seedRoot
+        );
+
+        Assert.Equal(filePack.Bytes, File.ReadAllBytes(scope.ObjectPath(filePack)));
+        Assert.Equal(
+            filePack.Bytes,
+            File.ReadAllBytes(
+                Path.Combine(
+                    scope.OutputDirectory,
+                    filePack.Target.Replace('/', Path.DirectorySeparatorChar)
+                )
+            )
+        );
+    }
+
+    [Fact]
+    public async Task Acquire_RejectsMutatedSeedAndDownloadsExactFilePack()
+    {
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSplitPack(cacheFile: false);
+        var filePack = fixture.Packs.Single(pack => pack.Kind == BundlePackKind.File);
+        var seedRoot = Path.Combine(scope.Root, "seed-bundle");
+        var seedPath = Path.Combine(
+            seedRoot,
+            filePack.Target!.Replace('/', Path.DirectorySeparatorChar)
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(seedPath)!);
+        var mutated = filePack.Bytes.ToArray();
+        mutated[0] ^= 0xFF;
+        File.WriteAllBytes(seedPath, mutated);
+        using var handler = new ResumeHandler(filePack.Bytes);
+
+        await BundlePackInstaller.AcquireAndAssembleAsync(
+            fixture.TrustManifestPath,
+            scope.CacheDirectory,
+            scope.OutputDirectory,
+            TestContext.Current.CancellationToken,
+            handler,
+            seedBundleDirectory: seedRoot
+        );
+
+        Assert.Null(handler.RequestedOffset);
+        Assert.Equal(filePack.Bytes, File.ReadAllBytes(scope.ObjectPath(filePack)));
+        BundleManifestVerifier.Verify(scope.OutputDirectory);
+    }
+
+    [Fact]
+    public async Task Acquire_RejectsSeedFileLinkBeforeNetworkOrPublication()
+    {
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSplitPack(cacheFile: false);
+        var filePack = fixture.Packs.Single(pack => pack.Kind == BundlePackKind.File);
+        var seedRoot = Path.Combine(scope.Root, "seed-bundle");
+        var seedPath = Path.Combine(
+            seedRoot,
+            filePack.Target!.Replace('/', Path.DirectorySeparatorChar)
+        );
+        Directory.CreateDirectory(Path.GetDirectoryName(seedPath)!);
+        var outsidePath = Path.Combine(scope.Root, "outside-model.gguf");
+        File.WriteAllBytes(outsidePath, filePack.Bytes);
+        try
+        {
+            File.CreateSymbolicLink(seedPath, outsidePath);
+        }
+        catch (Exception ex) when (
+            ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException
+        )
+        {
+            Assert.Skip($"File links are unavailable on this test host: {ex.Message}");
+        }
+        using var handler = new ThrowingHandler(
+            new HttpRequestException("network must not be used")
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            BundlePackInstaller.AcquireAndAssembleAsync(
+                fixture.TrustManifestPath,
+                scope.CacheDirectory,
+                scope.OutputDirectory,
+                TestContext.Current.CancellationToken,
+                handler,
+                seedBundleDirectory: seedRoot
+            )
+        );
+
+        Assert.Contains("link or reparse", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(scope.ObjectPath(filePack)));
+        Assert.False(Directory.Exists(scope.OutputDirectory));
+    }
+
+    [Fact]
+    public async Task Acquire_InterruptedInvocationLeavesDigestPartialForNextLeaseOwner()
+    {
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSinglePack(cachePack: false);
+        var pack = fixture.Packs[0];
+        var split = pack.Bytes.Length / 3;
+        using var interrupted = new ShortBodyHandler(pack.Bytes, split);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            BundlePackInstaller.AcquireAndAssembleAsync(
+                fixture.TrustManifestPath,
+                scope.CacheDirectory,
+                scope.OutputDirectory,
+                TestContext.Current.CancellationToken,
+                interrupted
+            )
+        );
+
+        var objectPath = scope.ObjectPath(pack);
+        Assert.Equal(split, new FileInfo(objectPath + ".partial").Length);
+        using var resumed = new ResumeHandler(pack.Bytes);
+        await BundlePackInstaller.AcquireAndAssembleAsync(
+            fixture.TrustManifestPath,
+            scope.CacheDirectory,
+            scope.OutputDirectory,
+            TestContext.Current.CancellationToken,
+            resumed
+        );
+
+        Assert.Equal(split, resumed.RequestedOffset);
+        Assert.False(File.Exists(objectPath + ".partial"));
+        Assert.Equal(pack.Bytes, File.ReadAllBytes(objectPath));
+    }
+
+    [Fact]
+    public async Task Acquire_DiscardsRightSizeWrongHashParkedPartialBeforeDownload()
+    {
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSinglePack(cachePack: false);
+        var pack = fixture.Packs[0];
+        var objectPath = scope.ObjectPath(pack);
+        Directory.CreateDirectory(Path.GetDirectoryName(objectPath)!);
+        File.WriteAllBytes(
+            objectPath + ".partial",
+            Enumerable.Repeat((byte)0x5A, pack.Bytes.Length).ToArray()
+        );
+        using var handler = new ResumeHandler(pack.Bytes);
+
+        await BundlePackInstaller.AcquireAndAssembleAsync(
+            fixture.TrustManifestPath,
+            scope.CacheDirectory,
+            scope.OutputDirectory,
+            TestContext.Current.CancellationToken,
+            handler
+        );
+
+        Assert.Null(handler.RequestedOffset);
+        Assert.False(File.Exists(objectPath + ".partial"));
+        Assert.Equal(pack.Bytes, File.ReadAllBytes(objectPath));
+    }
+
+    [Fact]
+    public async Task Acquire_ParallelInvocationsSerializeObjectOwnershipAndDownloadOnce()
+    {
+        using var scope = new BundlePackScope();
+        var fixture = scope.CreateValidSinglePack(cachePack: false);
+        var pack = fixture.Packs[0];
+        using var handler = new CountingHandler(pack.Bytes, TimeSpan.FromMilliseconds(150));
+        var firstOutput = scope.OutputDirectory + "-first";
+        var secondOutput = scope.OutputDirectory + "-second";
+
+        await Task.WhenAll(
+            BundlePackInstaller.AcquireAndAssembleAsync(
+                fixture.TrustManifestPath,
+                scope.CacheDirectory,
+                firstOutput,
+                TestContext.Current.CancellationToken,
+                handler
+            ),
+            BundlePackInstaller.AcquireAndAssembleAsync(
+                fixture.TrustManifestPath,
+                scope.CacheDirectory,
+                secondOutput,
+                TestContext.Current.CancellationToken,
+                handler
+            )
+        );
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(pack.Bytes, File.ReadAllBytes(scope.ObjectPath(pack)));
+        BundleManifestVerifier.Verify(firstOutput);
+        BundleManifestVerifier.Verify(secondOutput);
+        Assert.Empty(
+            Directory.EnumerateFiles(
+                scope.CacheDirectory,
+                "*.partial",
+                SearchOption.AllDirectories
+            )
+        );
     }
 
     [Fact]
@@ -907,6 +1262,14 @@ public sealed class BundlePackInstallerTests
     private static string Sha256(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLink(
+        string fileName,
+        string existingFileName,
+        IntPtr securityAttributes
+    );
+
     private sealed record TestPack(
         string Id,
         byte[] Bytes,
@@ -1067,6 +1430,19 @@ public sealed class BundlePackInstallerTests
                 id + (kind == BundlePackKind.Zip ? ".zip" : ".file")
             );
 
+        internal string ObjectPath(TestPack pack) =>
+            BundlePackInstaller.ContentObjectPath(
+                CacheDirectory,
+                new BundlePackDefinition(
+                    pack.Id,
+                    new Uri("https://example.test/pack"),
+                    pack.Bytes.LongLength,
+                    pack.Sha256,
+                    pack.Kind,
+                    pack.Target
+                )
+            );
+
         internal void AssertNoAssemblyTemporaryDirectories()
         {
             Assert.Empty(
@@ -1122,6 +1498,57 @@ public sealed class BundlePackInstallerTests
                 );
             }
             return Task.FromResult(response);
+        }
+    }
+
+    private sealed class ShortBodyHandler : HttpMessageHandler
+    {
+        private readonly byte[] _bytes;
+        private readonly int _bodyLength;
+
+        internal ShortBodyHandler(byte[] bytes, int bodyLength)
+        {
+            _bytes = bytes;
+            _bodyLength = bodyLength;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var content = new ByteArrayContent(_bytes[.._bodyLength]);
+            content.Headers.ContentLength = _bytes.Length;
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = content }
+            );
+        }
+    }
+
+    private sealed class CountingHandler : HttpMessageHandler
+    {
+        private readonly byte[] _bytes;
+        private readonly TimeSpan _delay;
+        private int _requestCount;
+
+        internal CountingHandler(byte[] bytes, TimeSpan delay)
+        {
+            _bytes = bytes;
+            _delay = delay;
+        }
+
+        internal int RequestCount => Volatile.Read(ref _requestCount);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            Interlocked.Increment(ref _requestCount);
+            await Task.Delay(_delay, cancellationToken);
+            var content = new ByteArrayContent(_bytes);
+            content.Headers.ContentLength = _bytes.Length;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         }
     }
 

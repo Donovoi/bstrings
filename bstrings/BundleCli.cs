@@ -34,11 +34,17 @@ internal static class BundleCli
         var acquireManifestOption = CreateManifestOption();
         var acquireCacheOption = CreateCacheOption();
         var acquireOutputOption = CreateOutputOption();
+        var acquireSeedBundleOption = new Option<string?>("--seed-bundle")
+        {
+            Description =
+                "Existing physical bundle root whose exact current-manifest file packs may seed missing cache objects before network acquisition",
+        };
         var acquireCommand = new Command("acquire")
         {
             acquireManifestOption,
             acquireCacheOption,
             acquireOutputOption,
+            acquireSeedBundleOption,
         };
         acquireCommand.Description =
             "Download and hash exact split packs with resumable cache, then assemble and verify a new complete offline bundle. Preserves verified cache on cancellation.";
@@ -145,7 +151,8 @@ internal static class BundleCli
                     result.GetValue(acquireOutputOption)!,
                     cancellationToken,
                     progress: (activity, completed, total) =>
-                        percentage.Report(activity, completed, total, "bytes")
+                        percentage.Report(activity, completed, total, "bytes"),
+                    seedBundleDirectory: result.GetValue(acquireSeedBundleOption)
                 )
             );
         }

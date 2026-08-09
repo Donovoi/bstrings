@@ -1,7 +1,7 @@
 # Magika CLI in the offline bundle
 
 Distribution status: this reviewed Magika payload is included in the complete
-v1.9.12 quality kit. It is not included in the standalone core ZIP. Examiners
+v1.9.13 quality kit. It is not included in the standalone core ZIP. Examiners
 should use the version-matched installer in the
 [download guide](download-and-install.md), not copy the runtime into another
 release.

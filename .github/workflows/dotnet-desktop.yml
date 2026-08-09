@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      full_offline:
+        description: Run the hosted full-offline build and prepare its verified component cache
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -75,9 +81,11 @@ jobs:
           -BaseRevision $env:BASE_SHA
           -HeadRevision $env:HEAD_SHA
 
-      - name: Test release version policy
+      - name: Test release policies
         shell: pwsh
-        run: ./tools/release/tests/Test-CodeVersionPolicy.ps1
+        run: |
+          ./tools/release/tests/Test-CodeVersionPolicy.ps1
+          ./tools/release/tests/Test-HostedReleaseLane.ps1
 
       - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v6
@@ -370,17 +378,22 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Restore pinned offline component cache
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-        uses: actions/cache@v5
+      - name: Restore exact default-branch offline component cache
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.full_offline)
+        id: offline-cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ${{ runner.temp }}\bstrings-offline\downloads
             ${{ runner.temp }}\bstrings-offline\ocr-downloads
-          key: bstrings-offline-${{ runner.os }}-${{ hashFiles('tools/airgap/offline-components.lock.json', 'tools/airgap/ocr-components.lock.json') }}
+          key: bstrings-offline-default-v1-${{ runner.os }}-${{ hashFiles('tools/airgap/offline-components.lock.json', 'tools/airgap/ocr-components.lock.json') }}
 
       - name: Build the complete highest-quality offline bundle
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.full_offline)
         shell: pwsh
         timeout-minutes: 150
         run: |
@@ -392,7 +405,9 @@ jobs:
             -TranslationProfile quality
 
       - name: Revalidate the warmed offline cache without network fallback
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.full_offline)
         shell: pwsh
         timeout-minutes: 20
         run: |
@@ -408,8 +423,23 @@ jobs:
             throw 'Cache-only offline validation unexpectedly created bundle output.'
           }
 
+      - name: Save validated default-branch offline component cache
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/master' &&
+          inputs.full_offline &&
+          steps.offline-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}\bstrings-offline\downloads
+            ${{ runner.temp }}\bstrings-offline\ocr-downloads
+          key: ${{ steps.offline-cache.outputs.cache-primary-key }}
+
       - name: Verify and split the offline release packs
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.full_offline)
         shell: pwsh
         timeout-minutes: 90
         run: |
@@ -503,7 +533,9 @@ jobs:
           }
 
       - name: Upload complete offline split packs
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.full_offline)
         uses: actions/upload-artifact@v7
         with:
           name: bstrings-win-x64-offline-packs

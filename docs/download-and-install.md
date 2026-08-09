@@ -2,7 +2,7 @@
 
 ## Current release
 
-[bstrings v1.9.12](https://github.com/Donovoi/bstrings/releases/tag/v1.9.12)
+[bstrings v1.9.13](https://github.com/Donovoi/bstrings/releases/tag/v1.9.13)
 is the complete Windows x64 release. Its quality installer assembles one
 verified offline directory containing the current native scanner and reporting
 code together with FLOSS, Magika, OCR, language detection, and local
@@ -11,7 +11,7 @@ the accepted Hy-MT2 7B Q8_0 translation model.
 
 | Installation | Included | Intended use |
 | --- | --- | --- |
-| Complete `bstrings-quality` kit | Every v1.9.12 stage, runtime, model, licence, manifest, all 66 patterns, TSV reports, and histograms | Normal and air-gapped forensic analysis |
+| Complete `bstrings-quality` kit | Every v1.9.13 stage, runtime, model, licence, manifest, all 66 patterns, TSV reports, and histograms | Normal and air-gapped forensic analysis |
 | Core ZIP only | Native CPU/Rust/CUDA/hybrid extraction, current patterns, native-only JSONL/TSV reports, and histograms | Small native-only installation or diagnostics |
 
 Do not combine executables, manifests, packs, tools, or models from different
@@ -25,11 +25,12 @@ Requirements: Windows 11 x64, a connected staging machine, and at least
 required. DirectML OCR requires a compatible Windows GPU/driver stack; CPU OCR
 and native CPU extraction remain available without a GPU.
 
-Run the [safe pinned installer bootstrap from the v1.9.12
-README](https://github.com/Donovoi/bstrings/blob/v1.9.12/README.md#get-started)
+Run the [safe pinned installer bootstrap from the v1.9.13
+README](https://github.com/Donovoi/bstrings/blob/v1.9.13/README.md#get-started)
 verbatim. Do not pipe a downloaded script into `Invoke-Expression`. The
-bootstrap downloads to a unique temporary file, authenticates the exact GitHub
-release and installer digest, and then replaces any existing physical
+bootstrap downloads to a unique temporary file, requires the exact GitHub
+release to be published and immutable, authenticates the installer digest, and
+then replaces any existing physical
 `Install-BstringsQuality.ps1` before launching it. A failed download or digest
 check preserves the previous installer. The installer then downloads, resumes,
 assembles, and strictly verifies the complete `bstrings-quality` directory.
@@ -41,8 +42,12 @@ Stale files that are absent from the current release therefore do not survive.
 
 The installer prints an overall percentage, while its bundle client prints
 measured percentages for each pack download and hash plus assembly and final
-verification. A retry resumes the verified cache and begins a new displayed
-attempt; percentages describe bytes or other completed work units, not an ETA.
+verification. The default shared cache is retained beside the destination so a
+retry or later release can reuse an unchanged exact pack. Every materialized
+cache hit is length-checked and fully SHA-256 hashed against the current trust
+manifest before use; cache metadata and prior success are never authoritative.
+An interrupted retry resumes private partial data and begins a new displayed
+attempt. Percentages describe bytes or other completed work units, not an ETA.
 
 Verify the completed bundle before use:
 
@@ -50,7 +55,7 @@ Verify the completed bundle before use:
 .\bstrings-quality\bstrings.exe bundle verify
 ```
 
-Run every v1.9.12 stage over one file:
+Run every v1.9.13 stage over one file:
 
 ```powershell
 .\bstrings-quality\bstrings.exe analyze `
@@ -100,8 +105,9 @@ installer script is stale: a successfully authenticated download always
 replaces that file. The bundle transaction then:
 
 1. assembles and verifies a complete sibling replacement on every run;
-2. can reuse only size- and SHA-256-verified same-release cache files after an
-   interrupted acquisition;
+2. can reuse an exact pack across releases only after reopening it and fully
+   checking its current expected size and SHA-256; cache hits never reuse a
+   verification decision;
 3. swaps the verified replacement over a valid physical destination, removes
    all stale old files, and restores the prior directory if final verification
    fails;
@@ -110,9 +116,14 @@ replaces that file. The bundle transaction then:
    or empty result directory.
 
 For a version upgrade, rerun the current pinned bootstrap from the same parent
-directory. The installer keeps the previous directory as an internal rollback
-backup until the new installed executable passes `bundle verify`; do not merge
-release files by hand.
+directory. The installer keeps the persistent cache but creates a new complete
+sibling installation, keeps the previous directory as an internal rollback
+backup, and replaces it only after both staged and installed verification pass.
+Use `-RemoveCacheAfterSuccess` only when the default script-owned cache should
+be deleted after a successful fresh overwrite. `-KeepCache` remains a
+compatible explicit spelling of the default, while a caller-supplied
+`-InstallerCacheDirectory` is always retained and cannot be removed by that
+cleanup switch. Do not merge release files by hand.
 If analysis failed, retain its `.incomplete` result for diagnosis and rerun into
 a different empty directory after correcting the cause.
 
@@ -140,7 +151,7 @@ network connection is required during examination.
 
 Use this smaller path only when native extraction and the current report set
 are sufficient. Open PowerShell in the directory where the new
-`bstrings-v1.9.12` directory should be created, then run this exact-tag,
+`bstrings-v1.9.13` directory should be created, then run this exact-tag,
 API-digest-verified download:
 
 ```powershell
@@ -148,10 +159,10 @@ API-digest-verified download:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.12'
+  $tag = 'v1.9.13'
   $repo = 'Donovoi/bstrings'
   $archiveName = 'bstrings-win-x64.zip'
-  $destination = Join-Path (Get-Location) 'bstrings-v1.9.12'
+  $destination = Join-Path (Get-Location) 'bstrings-v1.9.13'
   if ((Test-Path -LiteralPath $archiveName) -or
       (Test-Path -LiteralPath $destination)) {
     throw 'Refusing to overwrite the archive or destination.'
@@ -168,10 +179,12 @@ API-digest-verified download:
   $asset = @($release.assets | Where-Object { $_.name -CEQ $archiveName })
   $expectedUrl = "https://github.com/$repo/releases/download/$tag/$archiveName"
   if ($release.tag_name -CNE $tag -or $release.draft -or
-      $release.prerelease -or $asset.Count -ne 1 -or
+      $release.prerelease -or
+      -not ($release.PSObject.Properties.Name -ccontains 'immutable') -or
+      -not [bool]$release.immutable -or $asset.Count -ne 1 -or
       $asset[0].browser_download_url -CNE $expectedUrl -or
       ([string]$asset[0].digest) -CNotMatch '^sha256:[0-9a-f]{64}$') {
-    throw 'The exact published core asset could not be authenticated.'
+    throw 'The exact immutable published core asset could not be authenticated.'
   }
 
   Invoke-WebRequest $expectedUrl -OutFile $archiveName -UseBasicParsing
@@ -189,7 +202,7 @@ asset. Use the integrated native-only path when the filterable report set is
 wanted:
 
 ```powershell
-.\bstrings-v1.9.12\bstrings.exe analyze `
+.\bstrings-v1.9.13\bstrings.exe analyze `
   -f "C:\evidence\memory.raw" `
   -o "C:\results\memory-native" `
   --recover-executable-strings off `
@@ -203,7 +216,7 @@ The legacy command below writes one flat output file instead of the integrated
 TSV/histogram report set:
 
 ```powershell
-.\bstrings-v1.9.12\bstrings.exe `
+.\bstrings-v1.9.13\bstrings.exe `
   -f "C:\evidence\memory.raw" `
   --lr all --ro --off --trace `
   -o "C:\results\memory-hits.csv"
