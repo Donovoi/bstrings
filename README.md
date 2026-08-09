@@ -22,6 +22,10 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 - Language triage reuses successful detections for exact duplicate text only
   within its bounded batch; reviewed 50%-duplicate workloads were 1.85-1.91x
   faster without changing ordered report bytes.
+- Offline translation reuses an exact source/configuration result through a
+  run-local SQLite cache while preserving one ordered child per parent. The
+  cache is bounded in memory, never shared between cases, and removed after the
+  transaction.
 - The quality kit includes its runtimes, models, tools, licences, and strict
   manifest, so case work does not depend on Python, a package manager, or the
   internet.
@@ -31,7 +35,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.15](https://github.com/Donovoi/bstrings/releases/tag/v1.9.15).
+[v1.9.16](https://github.com/Donovoi/bstrings/releases/tag/v1.9.16).
 There is one install and one Full profile: the largest, highest-scoring accepted
 Hy-MT2 7B Q8_0 translation model is included instead of asking examiners to
 choose among quality/size tiers.
@@ -46,7 +50,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.15'
+  $tag = 'v1.9.16'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -151,6 +155,14 @@ Installer, bundle, direct extraction, and integrated-analysis commands print
 percentage completion. Integrated analysis combines stage progress with
 measured byte or record progress for long-running work. Percentages are
 completed work units, not elapsed-time estimates.
+
+Full remains the high-recall translation-selection profile. The optional
+`--translation-policy high-precision` expert setting uses effective floors of
+0.65 confidence and 0.15 target margin, but it is not a calibrated accuracy
+claim. The standard translation runtime is CPU-only. Translation reports its
+record percentage, rate, ETA, cache hits, model inputs, and preservation
+fallbacks; exact deduplication avoids redundant calls but mostly unique
+high-recall workloads can still be long-running.
 
 `--full` freezes input hashes, batch-classifies each supplied file once, always
 runs native extraction, routes applicable files to FLOSS/OCR, then performs

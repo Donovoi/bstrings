@@ -27,6 +27,8 @@ public sealed class AnalysisBundleIntegrityTests
         var runInput = run.RootElement.GetProperty("input");
         var summaryInput = summary.RootElement.GetProperty("inputIdentity");
         Assert.Equal(runIntegrity.GetRawText(), summaryIntegrity.GetRawText());
+        Assert.Equal(0, run.RootElement.GetProperty("preservationFallbacks").GetInt64());
+        Assert.Equal(0, summary.RootElement.GetProperty("preservationFallbacks").GetInt64());
         Assert.Equal(
             runInput.GetProperty("inventorySha256").GetString(),
             summaryInput.GetProperty("inventorySha256").GetString()

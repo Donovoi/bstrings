@@ -46,6 +46,10 @@ internal sealed record OcrAnalysisSummary(
 
 internal static class AnalysisOrchestrator
 {
+    private const string TranslationCachePrefix = ".bstrings-translation-cache-";
+    private const string TranslationCacheDatabaseSuffix = ".sqlite3";
+    private static readonly string[] TranslationCacheSidecarSuffixes =
+        ["-wal", "-shm", "-journal"];
     private const uint FileReadAttributes = 0x80;
     private const uint FileShareRead = 0x1;
     private const uint FileShareWrite = 0x2;
@@ -378,6 +382,7 @@ internal static class AnalysisOrchestrator
                 bundleIntegrity,
                 routing,
                 engineStatuses,
+                null,
                 null,
                 cancellationToken
             );
@@ -998,7 +1003,10 @@ internal static class AnalysisOrchestrator
                         patterns,
                         cancellationToken: cancellationToken,
                         trustedParentFirstInput: true,
-                        translationRequirements: translationRequirements
+                        translationRequirements: translationRequirements,
+                        translationIntegritySourcePath: translationRequirements is null
+                            ? null
+                            : translationsPath
                     )
             );
 
@@ -1127,6 +1135,7 @@ internal static class AnalysisOrchestrator
                 enrichedStrings = enrichedMerge.OutputRecords,
                 regexPatterns = patterns.Count,
                 regexMatches = matches.MatchRecords,
+                preservationFallbacks = matches.PreservationFallbackRecords,
                 forensicReports = new
                 {
                     findings = Path.GetFileName(findingsPath),
@@ -1154,6 +1163,7 @@ internal static class AnalysisOrchestrator
                 bundleIntegrity,
                 routing,
                 engineStatuses,
+                matches,
                 null,
                 cancellationToken
             );
@@ -1177,6 +1187,7 @@ internal static class AnalysisOrchestrator
                     bundleIntegrity,
                     routing,
                     engineStatuses,
+                    null,
                     ex.Message,
                     CancellationToken.None
                 );
@@ -1485,17 +1496,201 @@ internal static class AnalysisOrchestrator
         arguments.Add("--progress-total-records");
         arguments.Add(totalRecords.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-        await ChildProcessRunner.RunAsync(
-            toolchain.PythonExecutable,
-            arguments,
-            workingDirectory,
-            Path.Combine(logsDirectory, "translation.stdout.log"),
-            Path.Combine(logsDirectory, "translation.stderr.log"),
-            OfflineEnvironment(),
-            cancellationToken,
-            static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
+        await RunWithTranslationCacheCleanupAsync(
+            outputPath,
+            () =>
+                ChildProcessRunner.RunAsync(
+                    toolchain.PythonExecutable,
+                    arguments,
+                    workingDirectory,
+                    Path.Combine(logsDirectory, "translation.stdout.log"),
+                    Path.Combine(logsDirectory, "translation.stderr.log"),
+                    OfflineEnvironment(),
+                    cancellationToken,
+                    static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
+                )
         );
     }
+
+    internal static async Task RunWithTranslationCacheCleanupAsync(
+        string translationOutputPath,
+        Func<Task> runChild
+    )
+    {
+        ArgumentNullException.ThrowIfNull(runChild);
+        try
+        {
+            await runChild();
+        }
+        finally
+        {
+            CleanupTranslationCacheArtifacts(translationOutputPath);
+        }
+    }
+
+    internal static void CleanupTranslationCacheArtifacts(
+        string translationOutputPath,
+        Func<string, FileAttributes>? getAttributes = null,
+        Action<string>? deleteFile = null
+    )
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(translationOutputPath);
+        getAttributes ??= File.GetAttributes;
+        deleteFile ??= File.Delete;
+
+        var outputPath = Path.GetFullPath(translationOutputPath);
+        var outputDirectory = Path.GetDirectoryName(outputPath);
+        var outputFileName = Path.GetFileName(outputPath);
+        if (string.IsNullOrEmpty(outputDirectory) || !Directory.Exists(outputDirectory))
+        {
+            throw new DirectoryNotFoundException(
+                $"The translation output directory does not exist: '{outputDirectory}'."
+            );
+        }
+        if (string.IsNullOrEmpty(outputFileName))
+        {
+            throw new ArgumentException(
+                $"The translation output path does not identify a file: '{translationOutputPath}'.",
+                nameof(translationOutputPath)
+            );
+        }
+
+        EnsureNoReparsePoints(
+            outputDirectory,
+            "translation output directory",
+            getAttributes: getAttributes
+        );
+        var outputDirectoryAttributes = getAttributes(outputDirectory);
+        if (
+            (outputDirectoryAttributes & FileAttributes.Directory) == 0
+            || (outputDirectoryAttributes & FileAttributes.ReparsePoint) != 0
+        )
+        {
+            throw new IOException(
+                $"The translation output directory is not a physical directory: '{outputDirectory}'."
+            );
+        }
+
+        var artifacts = Directory
+            .EnumerateFileSystemEntries(
+                outputDirectory,
+                "*",
+                SearchOption.TopDirectoryOnly
+            )
+            .Where(path =>
+                IsTranslationRunArtifactName(Path.GetFileName(path), outputFileName)
+            )
+            .Select(Path.GetFullPath)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var artifact in artifacts)
+        {
+            ValidateTranslationCacheArtifact(artifact, outputDirectory, getAttributes);
+        }
+
+        foreach (var artifact in artifacts)
+        {
+            if (!File.Exists(artifact) && !Directory.Exists(artifact))
+            {
+                continue;
+            }
+            ValidateTranslationCacheArtifact(artifact, outputDirectory, getAttributes);
+            deleteFile(artifact);
+        }
+
+        var remaining = Directory
+            .EnumerateFileSystemEntries(
+                outputDirectory,
+                "*",
+                SearchOption.TopDirectoryOnly
+            )
+            .Where(path =>
+                IsTranslationRunArtifactName(Path.GetFileName(path), outputFileName)
+            )
+            .ToArray();
+        if (remaining.Length != 0)
+        {
+            throw new IOException(
+                "Translation cleanup did not remove all exact cache or staged-output artifacts: "
+                    + string.Join(", ", remaining.Select(Path.GetFileName))
+            );
+        }
+    }
+
+    private static void ValidateTranslationCacheArtifact(
+        string artifact,
+        string outputDirectory,
+        Func<string, FileAttributes> getAttributes
+    )
+    {
+        var parent = Path.GetDirectoryName(artifact);
+        if (!string.Equals(parent, outputDirectory, FileSystemPathComparison))
+        {
+            throw new IOException(
+                $"Translation cache cleanup escaped the exact output directory: '{artifact}'."
+            );
+        }
+
+        var attributes = getAttributes(artifact);
+        if (
+            (attributes & FileAttributes.Directory) != 0
+            || (attributes & FileAttributes.ReparsePoint) != 0
+        )
+        {
+            throw new IOException(
+                $"Refusing to remove an ambiguous or reparse translation cache artifact: '{artifact}'."
+            );
+        }
+    }
+
+    private static bool IsTranslationRunArtifactName(
+        string name,
+        string translationOutputFileName
+    )
+    {
+        if (IsTranslationCacheArtifactName(name))
+        {
+            return true;
+        }
+
+        var partialPrefix = translationOutputFileName + ".partial.";
+        return name.StartsWith(partialPrefix, StringComparison.Ordinal)
+            && name.Length > partialPrefix.Length;
+    }
+
+    private static bool IsTranslationCacheArtifactName(string name)
+    {
+        if (!name.StartsWith(TranslationCachePrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var databaseName = name;
+        foreach (var sidecarSuffix in TranslationCacheSidecarSuffixes)
+        {
+            if (name.EndsWith(sidecarSuffix, StringComparison.Ordinal))
+            {
+                databaseName = name[..^sidecarSuffix.Length];
+                break;
+            }
+        }
+        if (!databaseName.EndsWith(TranslationCacheDatabaseSuffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var tokenLength =
+            databaseName.Length
+            - TranslationCachePrefix.Length
+            - TranslationCacheDatabaseSuffix.Length;
+        return tokenLength > 0;
+    }
+
+    private static StringComparison FileSystemPathComparison =>
+        OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
     private static List<string> PythonPrefix(AnalysisToolchain toolchain) =>
         ["-I", "-B", toolchain.EnrichmentAdapter];
@@ -2080,6 +2275,7 @@ internal static class AnalysisOrchestrator
         BundleIntegrity? bundleIntegrity,
         ContentRoutingStats? routing,
         EngineStatusStats? engineStatuses,
+        EnrichmentPipelineStats? enrichmentStats,
         string? error,
         CancellationToken cancellationToken
     )
@@ -2115,6 +2311,7 @@ internal static class AnalysisOrchestrator
                     conflicts = routing.Value.Conflicts,
                 },
             engineStatuses = CreateEngineStatusSummary(engineStatuses),
+            preservationFallbacks = enrichmentStats?.PreservationFallbackRecords,
             options,
             error,
         };

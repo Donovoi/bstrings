@@ -35,6 +35,7 @@ internal static class ForensicReportCore
         + "\tOriginModel\tOriginRevision\tOriginModelSha256"
         + "\tTransformKind\tTransformEngine\tTransformEngineVersion\tTransformModel"
         + "\tTransformRevision\tTransformModelSha256\tSourceLanguage\tTargetLanguage\tTransformOutcome"
+        + "\tTranslationIntegrity"
         + "\tDecoderChain\tValidation"
         + "\tSourceRecordId\tParentRecordId\tEncoding\tConfidence\tAttributesJson";
 
@@ -311,6 +312,7 @@ internal static class ForensicReportCore
             "languageConfidence"
         );
         var encoding = GetAttribute(attributes, "encoding");
+        var translationIntegrity = GetAttribute(attributes, "translationIntegrity");
         var extractionEngine = record.Origin?.Extractor ?? string.Empty;
         var extractionKind = record.Origin?.Kind ?? string.Empty;
         var transformEngine = record.Transform?.Engine ?? string.Empty;
@@ -369,6 +371,7 @@ internal static class ForensicReportCore
                 record.Transform?.SourceLanguage ?? string.Empty,
                 record.Transform?.TargetLanguage ?? string.Empty,
                 record.Transform?.Outcome ?? string.Empty,
+                translationIntegrity ?? string.Empty,
                 decoderChain,
                 metadata.Validation,
                 record.SourceRecordId,

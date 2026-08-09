@@ -12,6 +12,10 @@ namespace bstrings;
 
 internal static class AnalysisCli
 {
+    internal const string DefaultTranslationPolicy = "high-recall";
+    internal const string TranslationPolicyHelp =
+        "Automatic translation gate used by --translation auto: high-recall keeps uncertain detections; balanced uses the configured confidence and margin; high-precision applies floors of 0.65 confidence and 0.15 margin";
+
     internal static async Task<int> RunAsync(string[] args)
     {
         var fileOption = new Option<string?>("-f")
@@ -65,17 +69,17 @@ internal static class AnalysisCli
         };
         var policyOption = new Option<string>("--translation-policy")
         {
-            Description = "Automatic translation gate: high-recall, balanced, or high-precision; used by --translation auto",
-            DefaultValueFactory = _ => "high-recall",
+            Description = TranslationPolicyHelp,
+            DefaultValueFactory = _ => DefaultTranslationPolicy,
         };
         var confidenceOption = new Option<double>("--language-confidence")
         {
-            Description = "Minimum top-language confidence for balanced/precision policies",
+            Description = "Configured minimum top-language confidence; high-precision raises values below 0.65",
             DefaultValueFactory = _ => 0.55,
         };
         var marginOption = new Option<double>("--language-margin")
         {
-            Description = "Minimum confidence lead over the target language",
+            Description = "Configured minimum confidence lead over the target language; high-precision raises values below 0.15",
             DefaultValueFactory = _ => 0.10,
         };
         var targetOption = new Option<string>("--translation-target")

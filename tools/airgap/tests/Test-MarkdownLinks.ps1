@@ -94,6 +94,13 @@ try {
     foreach ($documentName in @('README.md', 'LICENSE.md', 'THIRD_PARTY_NOTICES.md')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot $documentName) -Destination $builderBundle
     }
+    $bundleEnrichmentTools = Join-Path $builderBundle 'tools\enrichment'
+    [IO.Directory]::CreateDirectory($bundleEnrichmentTools) | Out-Null
+    foreach ($toolName in Get-LiteralArrayAssignment $builder 'bundleEnrichmentToolNames') {
+        Copy-Item `
+            -LiteralPath (Join-Path $repoRoot "tools\enrichment\$toolName") `
+            -Destination $bundleEnrichmentTools
+    }
     Copy-Item -LiteralPath (Join-Path $repoRoot 'licenses') -Destination $builderBundle -Recurse
     Write-Utf8File `
         (Join-Path $builderBundle 'runtime\ocr-cpu\Privacy.md') `

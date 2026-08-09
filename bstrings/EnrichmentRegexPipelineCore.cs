@@ -34,7 +34,9 @@ internal static class EnrichmentRegexPipelineCore
         TextWriter? consoleOutput = null,
         CancellationToken cancellationToken = default,
         bool trustedParentFirstInput = false,
-        TranslationValidationRequirements? translationRequirements = null
+        TranslationValidationRequirements? translationRequirements = null,
+        string? translationIntegritySourcePath = null,
+        Action<string>? fallbackIndexDeleteDirectory = null
     )
     {
         if (string.IsNullOrWhiteSpace(inputPath))
@@ -51,6 +53,30 @@ internal static class EnrichmentRegexPipelineCore
         }
 
         var inputFullPath = Path.GetFullPath(inputPath);
+        if (
+            translationIntegritySourcePath is not null
+            && (!trustedParentFirstInput || translationRequirements is null)
+        )
+        {
+            throw new ArgumentException(
+                "A translation integrity source requires trusted parent-first validation settings.",
+                nameof(translationIntegritySourcePath)
+            );
+        }
+        var translationIntegritySourceFullPath =
+            trustedParentFirstInput && translationRequirements is not null
+                ? Path.GetFullPath(translationIntegritySourcePath ?? inputFullPath)
+                : null;
+        if (
+            translationIntegritySourceFullPath is not null
+            && !File.Exists(translationIntegritySourceFullPath)
+        )
+        {
+            throw new FileNotFoundException(
+                "The translation integrity source was not found.",
+                translationIntegritySourceFullPath
+            );
+        }
         var outputFullPath = string.IsNullOrWhiteSpace(outputPath)
             ? null
             : Path.GetFullPath(outputPath);
@@ -96,6 +122,7 @@ internal static class EnrichmentRegexPipelineCore
         long inputRecords = 0;
         long translatedRecords = 0;
         long matchRecords = 0;
+        long preservationFallbackRecords = 0;
         var seenRecordIds = trustedParentFirstInput
             ? null
             : new HashSet<string>(StringComparer.Ordinal);
@@ -106,9 +133,26 @@ internal static class EnrichmentRegexPipelineCore
                     : Path.GetDirectoryName(outputFullPath)!
             )
             : null;
+        using var fallbackTextValidator = translationIntegritySourceFullPath is null
+            ? null
+            : new DiskBackedFallbackTextValidator(
+                outputFullPath is null
+                    ? Path.GetTempPath()
+                    : Path.GetDirectoryName(outputFullPath)!,
+                fallbackIndexDeleteDirectory
+            );
         var translatedSectionStarted = false;
         try
         {
+            if (fallbackTextValidator is not null)
+            {
+                await IndexPreservationFallbacksAsync(
+                    translationIntegritySourceFullPath!,
+                    translationRequirements!,
+                    fallbackTextValidator,
+                    cancellationToken
+                );
+            }
             using var reader = new StreamReader(
                 new FileStream(
                     inputFullPath,
@@ -178,11 +222,20 @@ internal static class EnrichmentRegexPipelineCore
                     if (isTranslation)
                     {
                         translatedSectionStarted = true;
-                        ValidateTranslationRequirements(
+                        var integrity = ValidateTranslationRequirements(
                             record,
                             translationRequirements,
                             lineNumber
                         );
+                        if (integrity == TranslationIntegrityStatus.PreservationFallback)
+                        {
+                            fallbackTextValidator!.ValidateFallbackChild(
+                                record.ParentRecordId!,
+                                record.RecordId,
+                                record.Text!
+                            );
+                            preservationFallbackRecords++;
+                        }
                         provenanceValidator!.AddTranslation(
                             record.RecordId,
                             record.ParentRecordId!,
@@ -197,6 +250,7 @@ internal static class EnrichmentRegexPipelineCore
                     }
                     else
                     {
+                        fallbackTextValidator?.ValidateParent(record.RecordId, record.Text!);
                         provenanceValidator!.AddOriginal(
                             record.RecordId,
                             CreateLineageIdentity(record)
@@ -272,6 +326,8 @@ internal static class EnrichmentRegexPipelineCore
             }
 
             provenanceValidator?.Validate(cancellationToken);
+            fallbackTextValidator?.ValidateComplete(requireChildReplay: true);
+            fallbackTextValidator?.Cleanup();
             await writer.FlushAsync(cancellationToken);
             if (ownedWriter is not null)
             {
@@ -281,7 +337,12 @@ internal static class EnrichmentRegexPipelineCore
                 temporaryOutputPath = null;
             }
 
-            return new EnrichmentPipelineStats(inputRecords, translatedRecords, matchRecords);
+            return new EnrichmentPipelineStats(
+                inputRecords,
+                translatedRecords,
+                matchRecords,
+                preservationFallbackRecords
+            );
         }
         finally
         {
@@ -297,6 +358,37 @@ internal static class EnrichmentRegexPipelineCore
                 }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
+            }
+        }
+    }
+
+    private static async Task IndexPreservationFallbacksAsync(
+        string translationSourcePath,
+        TranslationValidationRequirements requirements,
+        DiskBackedFallbackTextValidator fallbackTextValidator,
+        CancellationToken cancellationToken
+    )
+    {
+        await foreach (
+            var item in EnrichmentJsonlReader.ReadAsync(translationSourcePath, cancellationToken)
+        )
+        {
+            if (!IsTranslation(item.Record))
+            {
+                continue;
+            }
+            var integrity = ValidateTranslationRequirements(
+                item.Record,
+                requirements,
+                item.LineNumber
+            );
+            if (integrity == TranslationIntegrityStatus.PreservationFallback)
+            {
+                fallbackTextValidator.AddFallback(
+                    item.Record.ParentRecordId!,
+                    item.Record.RecordId,
+                    item.Record.Text!
+                );
             }
         }
     }
@@ -498,7 +590,7 @@ internal static class EnrichmentRegexPipelineCore
             record.Origin.Provider
         );
 
-    internal static void ValidateTranslationRequirements(
+    internal static TranslationIntegrityStatus? ValidateTranslationRequirements(
         EnrichmentStringRecord record,
         TranslationValidationRequirements? requirements,
         long lineNumber
@@ -506,7 +598,7 @@ internal static class EnrichmentRegexPipelineCore
     {
         if (requirements is null || !IsTranslation(record))
         {
-            return;
+            return null;
         }
 
         var transform = record.Transform!;
@@ -574,6 +666,93 @@ internal static class EnrichmentRegexPipelineCore
                 transform.ModelSha256
             );
         }
+
+        if (
+            record.Attributes is null
+            || !record.Attributes.TryGetValue("translationIntegrity", out var integrityElement)
+            || integrityElement.ValueKind != JsonValueKind.String
+        )
+        {
+            throw new InvalidDataException(
+                $"Translated enrichment record at line {lineNumber:N0} must record a string "
+                    + "attributes.translationIntegrity value."
+            );
+        }
+
+        var integrity = integrityElement.GetString() switch
+        {
+            "verified" => TranslationIntegrityStatus.Verified,
+            "source-retained-ambiguous" => TranslationIntegrityStatus.SourceRetainedAmbiguous,
+            "preservation-fallback" => TranslationIntegrityStatus.PreservationFallback,
+            var value => throw new InvalidDataException(
+                $"Translated enrichment record at line {lineNumber:N0} has unsupported "
+                    + $"attributes.translationIntegrity '{value ?? "<null>"}'."
+            ),
+        };
+
+        var hasReason = record.Attributes.TryGetValue(
+            "translationIntegrityReason",
+            out var reasonElement
+        );
+        if (integrity == TranslationIntegrityStatus.PreservationFallback)
+        {
+            if (!string.Equals(transform.Outcome, "unchanged", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Preservation-fallback translation at line {lineNumber:N0} must record "
+                        + "transform.outcome 'unchanged'."
+                );
+            }
+            if (
+                !hasReason
+                || reasonElement.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(reasonElement.GetString())
+            )
+            {
+                throw new InvalidDataException(
+                    $"Preservation-fallback translation at line {lineNumber:N0} must record a "
+                        + "non-empty attributes.translationIntegrityReason."
+                );
+            }
+        }
+        else if (hasReason)
+        {
+            throw new InvalidDataException(
+                $"Translated enrichment record at line {lineNumber:N0} records "
+                    + "attributes.translationIntegrityReason without a preservation fallback."
+            );
+        }
+
+        var hasAmbiguousCount = record.Attributes.TryGetValue(
+            "translationAmbiguousIdentifierCount",
+            out var ambiguousCountElement
+        );
+        if (integrity == TranslationIntegrityStatus.SourceRetainedAmbiguous)
+        {
+            if (
+                !hasAmbiguousCount
+                || (
+                    ambiguousCountElement.ValueKind != JsonValueKind.Number
+                    || !ambiguousCountElement.TryGetInt64(out var ambiguousCount)
+                    || ambiguousCount <= 0
+                )
+            )
+            {
+                throw new InvalidDataException(
+                    $"Translated enrichment record at line {lineNumber:N0} must record "
+                        + "attributes.translationAmbiguousIdentifierCount as a positive integer."
+                );
+            }
+        }
+        else if (hasAmbiguousCount)
+        {
+            throw new InvalidDataException(
+                $"Translated enrichment record at line {lineNumber:N0} records "
+                    + "attributes.translationAmbiguousIdentifierCount without source-retained-ambiguous integrity."
+            );
+        }
+
+        return integrity;
     }
 
     private static InvalidDataException TranslationSettingMismatch(

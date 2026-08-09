@@ -1,6 +1,6 @@
 # Output, completion, and provenance
 
-The complete v1.9.15 quality kit produces native, FLOSS, OCR, language, and
+The complete v1.9.16 quality kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
 
@@ -100,7 +100,7 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-In current source and v1.9.15, every completed integrated `analyze` run
+In current source and v1.9.16, every completed integrated `analyze` run
 also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,
@@ -226,8 +226,8 @@ Full analysis can assess eligible text before translation. Each
 - accurate, fast, or adaptive profile;
 - target and predicted language;
 - predicted, target-language, and second-place confidence scores;
-- target-language margin, configured thresholds, and the declared 12-decimal
-  report-score precision;
+- target-language margin, configured and effective thresholds, and the declared
+  12-decimal report-score precision;
 - explicit raw `confidenceGatePassed` and `marginGatePassed` outcomes;
 - high-recall, balanced, or high-precision policy;
 - decision and whether the source became a translation candidate; and
@@ -236,7 +236,10 @@ Full analysis can assess eligible text before translation. Each
 The assessment is useful even when a string is not translated: it explains why
 the record was treated as target-language, ambiguous, non-linguistic, or a
 translation candidate. High-recall policy sends uncertain detector failures to
-translation rather than silently discarding them.
+translation rather than silently discarding them. Full remains high-recall.
+The optional high-precision policy sets each effective threshold to the greater
+of the configured value and 0.65 confidence/0.15 target margin; these scores are
+not calibrated probabilities.
 
 Classification and candidate membership use the detector's unrounded values.
 Only the five confidence/margin numbers written to JSON are rounded to the
@@ -253,22 +256,53 @@ execution details such as CPU/CUDA policy and enforced air-gap state. It also
 records `outcome` as `translated` or `unchanged`; a successful identity result
 still gets a child instead of disappearing from the audit trail.
 
+Each child also records `attributes.translationIntegrity`:
+
+- `verified`: hard structured identifiers have exact code-point and occurrence
+  equality and no advisory alphabetic-hyphen token was present;
+- `source-retained-ambiguous`: hard checks passed, but the source contained one
+  or more advisory alphabetic-hyphen tokens; or
+- `preservation-fallback`: a model result failed hard-identifier retention, was
+  discarded, and the exact source text was retained instead.
+
+`source-retained-ambiguous` children carry
+`translationAmbiguousIdentifierCount` as a positive integer.
+`preservation-fallback` children carry the non-empty
+`translationIntegrityReason` and must record `outcome` as `unchanged`. The
+rejected model output is never evidence and is not published.
+
 The integrated workflow requires exactly one child for every candidate and
 checks that its source file, location, origin, target, model, revision, and
 model hash match the verified parent and run configuration. llama.cpp output
 must contain one terminal `stop` choice and prove that the complete prompt was
 accepted. Truncation, empty output, a missing candidate, or an extra child
-leaves the run incomplete.
+leaves the run incomplete. One isolated hard-identifier mismatch instead yields
+one explicit fallback child. More than 1% fallbacks after at least 100 distinct
+model results, or 100 consecutive fallbacks, opens the run-level circuit breaker
+and leaves the transaction incomplete.
+
+Managed completion validation reads translation and candidate files once each
+in lockstep. It requires every child to be in candidate order, retain exact
+lineage, and compare fallback text to its current parent with ordinal equality;
+no candidate text is indexed. Downstream pattern validation additionally replays
+the translation file before the merged stream, avoiding another pass over the
+much larger raw parent section. Its temporary disk index contains only fallback
+parent/child identities and fallback text, creates a 2 MiB bucket table when
+needed, and grows with fallback records/text rather than total candidate text.
+The index is strictly removed before report output publication; cleanup failure
+fails the stage and leaves prior output untouched.
 
 The advanced MADLAD adapter separately requires the complete input and an
 EOS-terminated row. Those outputs use the same record schema, but MADLAD is not
 an engine selectable by the integrated `bstrings.exe analyze` workflow.
 
-The translation stage fails closed if it changes a protected structured token,
-including an email, URL, IP address, hash, path, CVE, GUID, host/port value,
-file name, or placeholder. This protects important identifiers but does not
-make machine translation authoritative. Review the parent whenever a finding
-matters to attribution or reporting.
+The translation stage preserves hard structured tokens such as emails, URLs,
+IP addresses, hashes, paths, CVEs, GUIDs, host/port values, filenames,
+placeholders, underscore-bearing tokens, and all-uppercase ASCII code forms.
+Alphabetic hyphenation alone is advisory because ordinary language can use the
+same shape. This protects important identifiers but does not make machine
+translation authoritative. Review the parent whenever a finding matters to
+attribution or reporting.
 
 Identifier-only records are retained as source evidence and classified as
 non-linguistic rather than being sent to the model. Mixed natural-language
@@ -277,6 +311,19 @@ counts as well as values. `--translation-strict-determinism` selects the
 single-slot, no-prompt-cache path for maximum repeatability on the same accepted
 runtime; it does not promise identical output across different hardware or
 drivers.
+
+Exact source/configuration pairs are deduplicated through a run-local SQLite
+cache with a bounded in-memory hot set. It emits one child per parent in original
+order, never reuses text across examinations, and is removed on normal
+completion and handled failure. Parent-side `finally` cleanup also covers a
+killed or cancelled translation child while the managed process remains alive.
+It removes only exact physical SQLite cache files and their standard sidecars
+and exact `<translated-filename>.partial.*` staged-output siblings from the
+translation output directory; reparse ambiguity or cleanup failure fails the
+stage without replacing prior translated output. Console/log progress reports
+percentage, record rate, ETA, cache hits, distinct model inputs, and fallback
+count. Those statistics explain work avoided; they do not change record
+provenance or imply that a large high-recall CPU translation run will be short.
 
 ## Related guides
 

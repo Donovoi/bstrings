@@ -2,7 +2,7 @@
 param(
     [string]$DestinationDirectory = (Join-Path (Get-Location).Path 'bstrings-quality'),
     [string]$InstallerCacheDirectory,
-    [string]$ReleaseTag = 'v1.9.15',
+    [string]$ReleaseTag = 'v1.9.16',
     [switch]$KeepCache,
     [ValidateRange(1, 10)]
     [int]$AcquireAttempts = 3,
@@ -19,7 +19,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$expectedReleaseTag = 'v1.9.15'
+$expectedReleaseTag = 'v1.9.16'
 $repository = 'Donovoi/bstrings'
 $qualityManifestName = 'bundle-packs-quality.json'
 $coreArchiveName = 'bstrings-win-x64.zip'

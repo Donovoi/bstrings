@@ -15,11 +15,14 @@ import os
 import re
 import shutil
 import socket
+import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from collections import Counter, OrderedDict
@@ -122,7 +125,7 @@ FLOSS_DECODED_ITEM_FIELDS = frozenset(
 UINT64_MAX = (1 << 64) - 1
 INT64_MIN = -(1 << 63)
 INT64_MAX = (1 << 63) - 1
-PROTECTED_IDENTIFIER_PATTERNS = tuple(
+HARD_IDENTIFIER_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in (
         r"https?://[^\s<>\"']+",
@@ -133,14 +136,47 @@ PROTECTED_IDENTIFIER_PATTERNS = tuple(
         r"\b[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\b",
         r"\bCVE-[0-9]{4}-[0-9]{4,}\b",
         r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b",
-        r"\b[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?:[0-9]{1,5}\b",
+        r"\b(?:(?=[A-Z0-9.-]*[A-Z])[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?|(?:[0-9]{1,3}\.){3}[0-9]{1,3}):[0-9]{1,5}\b",
         r"\b[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+\b",
         r"\b[A-Z0-9_-]+\.(?:7Z|BAT|BIN|CAB|CFG|CONF|CSV|DLL|DOCX?|EXE|INI|JAR|JSONL?|LOG|PDF|PNG|PS1|RAR|RAW|SYS|TXT|XLSX?|XML|ZIP)\b",
-        r"(?<![A-Z0-9])[A-Z0-9]+(?:[-_][A-Z0-9]+)+(?![A-Z0-9])",
         r"\$\{[A-Z0-9_.-]+\}|\{[A-Z0-9_.-]+\}|%[A-Z0-9_]+%",
     )
 )
-_TRAILING_IDENTIFIER_PUNCTUATION = ".,;:!?)]}\u3002\uff0c\uff1b\uff1a\uff01\uff1f"
+FIXED_ASCII_HARD_IDENTIFIER_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{64}|[0-9A-Fa-f]{40}|[0-9A-Fa-f]{32})(?![0-9A-Fa-f])",
+        r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?![0-9A-Fa-f])",
+        r"(?<![A-Za-z0-9])CVE-[0-9]{4}-[0-9]{4,}(?![A-Za-z0-9])",
+        r"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])",
+    )
+)
+HARD_PATH_IDENTIFIER_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b[A-Z]:/[^\s<>\"']+",
+        r"\\\\[^\\\s<>\"']+\\[^\\\s<>\"']+(?:\\[^\\\s<>\"']+)*",
+        r"/(?:[^/\\\s<>\"']+/)*[^/\\\s<>\"']+",
+    )
+)
+PROTECTED_IDENTIFIER_PATTERNS = HARD_IDENTIFIER_PATTERNS
+_IDENTIFIER_SEPARATORS = frozenset(
+    ("-", "_", "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212", "\uff0d")
+)
+_UNCONDITIONAL_TRAILING_IDENTIFIER_PUNCTUATION = ".,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f"
+_BALANCED_IDENTIFIER_CLOSERS = {")": "(", "]": "[", "}": "{"}
+_BRACKETED_IPV6_PORT_PATTERN = re.compile(
+    r"\[(?P<address>[0-9A-Fa-f:.]+(?:%[A-Za-z0-9_.-]+)?)\]:(?P<port>[0-9]{1,5})"
+)
+_BARE_IPV6_CANDIDATE_PATTERN = re.compile(r"[0-9A-Fa-f:.]+(?:%[A-Za-z0-9_.-]+)?")
+TRANSLATION_PROMPT_VERSION = "llama-translation-prompt-v1"
+TRANSLATION_PRESERVATION_POLICY_VERSION = "translation-integrity-v2"
+TRANSLATION_CACHE_SCHEMA_VERSION = 1
+TRANSLATION_FALLBACK_RATE_NUMERATOR = 1
+TRANSLATION_FALLBACK_RATE_DENOMINATOR = 100
+TRANSLATION_FALLBACK_MINIMUM_RESULTS = 100
+TRANSLATION_FALLBACK_CONSECUTIVE_LIMIT = 100
+TRANSLATION_CACHE_COMMIT_BATCH_SIZE = 4096
 T = TypeVar("T")
 _AIRGAP_ENABLED = False
 
@@ -349,6 +385,362 @@ class TranslationCache:
             self._values.popitem(last=False)
 
 
+@dataclass(frozen=True)
+class TranslationOutcome:
+    text: str
+    integrity: str
+    reason: str | None = None
+    ambiguous_identifier_count: int = 0
+
+
+class TranslationOutcomeCache(Protocol):
+    hits: int
+    stores: int
+    batch_commits: int
+
+    def get(self, text: str) -> TranslationOutcome | None: ...
+
+    def put(self, text: str, outcome: TranslationOutcome) -> None: ...
+
+
+class BoundedTranslationOutcomeCache:
+    """Bounded exact LRU that retains translation integrity metadata."""
+
+    def __init__(self, capacity: int) -> None:
+        if capacity < 0:
+            raise ValueError("Translation outcome cache capacity cannot be negative")
+        self.capacity = capacity
+        self._values: OrderedDict[str, TranslationOutcome] = OrderedDict()
+        self.hits = 0
+        self.stores = 0
+        self.batch_commits = 0
+
+    def get(self, text: str) -> TranslationOutcome | None:
+        outcome = self._values.get(text)
+        if outcome is None:
+            return None
+        self._values.move_to_end(text)
+        self.hits += 1
+        return outcome
+
+    def put(self, text: str, outcome: TranslationOutcome) -> None:
+        if self.capacity == 0:
+            return
+        self._values[text] = outcome
+        self._values.move_to_end(text)
+        self.stores += 1
+        while len(self._values) > self.capacity:
+            self._values.popitem(last=False)
+
+
+class TranslationIntegrityMonitor:
+    """Count distinct model results and stop a systemically unsafe translation run."""
+
+    def __init__(self) -> None:
+        self.model_inputs = 0
+        self.fallbacks = 0
+        self.consecutive_fallbacks = 0
+
+    def record(self, *, fallback: bool) -> None:
+        self.model_inputs += 1
+        if fallback:
+            self.fallbacks += 1
+            self.consecutive_fallbacks += 1
+        else:
+            self.consecutive_fallbacks = 0
+        if self.consecutive_fallbacks >= TRANSLATION_FALLBACK_CONSECUTIVE_LIMIT:
+            raise EnrichmentError(
+                "Translation integrity circuit breaker opened after "
+                f"{self.consecutive_fallbacks} consecutive preservation fallbacks"
+            )
+        if (
+            self.model_inputs >= TRANSLATION_FALLBACK_MINIMUM_RESULTS
+            and self.fallbacks * TRANSLATION_FALLBACK_RATE_DENOMINATOR
+            > self.model_inputs * TRANSLATION_FALLBACK_RATE_NUMERATOR
+        ):
+            raise EnrichmentError(
+                "Translation integrity circuit breaker opened: "
+                f"{self.fallbacks:,} of {self.model_inputs:,} distinct model results "
+                "required preservation fallback"
+            )
+
+
+class RunLocalTranslationCache:
+    """Run-scoped SQLite exact cache with a bounded in-memory hot set."""
+
+    def __init__(self, directory: Path, identity: str, memory_capacity: int) -> None:
+        if memory_capacity < 0:
+            raise ValueError("Run-local cache memory capacity cannot be negative")
+        directory.mkdir(parents=True, exist_ok=True)
+        handle, raw_path = tempfile.mkstemp(
+            prefix=".bstrings-translation-cache-",
+            suffix=".sqlite3",
+            dir=directory,
+        )
+        os.close(handle)
+        self.path = Path(raw_path)
+        self.identity = identity
+        self.memory_capacity = memory_capacity
+        self._memory: OrderedDict[str, TranslationOutcome] = OrderedDict()
+        self._connection: sqlite3.Connection | None = None
+        atexit.register(self.close)
+        try:
+            details = os.lstat(self.path)
+        except OSError as exc:
+            self.close(strict=True)
+            raise EnrichmentError(f"Could not inspect run-local translation cache: {exc}") from exc
+        if not stat.S_ISREG(details.st_mode) or self.path.is_symlink():
+            self.close(strict=True)
+            raise EnrichmentError("Run-local translation cache path is not a physical file")
+        self.hot_hits = 0
+        self.disk_hits = 0
+        self.misses = 0
+        self.stores = 0
+        self.batch_commits = 0
+        self._pending_writes = 0
+        try:
+            connection = sqlite3.connect(self.path)
+            self._connection = connection
+            connection.execute("PRAGMA journal_mode=MEMORY")
+            connection.execute("PRAGMA synchronous=OFF")
+            connection.execute("PRAGMA trusted_schema=OFF")
+            connection.execute(
+                """
+                CREATE TABLE translations (
+                    digest BLOB NOT NULL,
+                    identity TEXT NOT NULL,
+                    source_text TEXT NOT NULL,
+                    translated_text TEXT NOT NULL,
+                    integrity TEXT NOT NULL,
+                    reason TEXT,
+                    ambiguous_identifier_count INTEGER NOT NULL,
+                    outcome_digest BLOB NOT NULL,
+                    PRIMARY KEY (digest, identity, source_text)
+                ) WITHOUT ROWID
+                """
+            )
+            connection.commit()
+            connection.execute("BEGIN IMMEDIATE")
+        except (OSError, sqlite3.Error) as exc:
+            self.close(strict=True)
+            raise EnrichmentError(f"Could not create run-local translation cache: {exc}") from exc
+
+    @staticmethod
+    def _digest(text: str) -> bytes:
+        return hashlib.sha256(text.encode("utf-8")).digest()
+
+    def _outcome_digest(self, text: str, outcome: TranslationOutcome) -> bytes:
+        serialized = json.dumps(
+            (
+                TRANSLATION_CACHE_SCHEMA_VERSION,
+                self.identity,
+                text,
+                outcome.text,
+                outcome.integrity,
+                outcome.reason,
+                outcome.ambiguous_identifier_count,
+            ),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(serialized).digest()
+
+    @property
+    def hits(self) -> int:
+        return self.hot_hits + self.disk_hits
+
+    def _remember(self, text: str, outcome: TranslationOutcome) -> None:
+        if self.memory_capacity == 0:
+            return
+        self._memory[text] = outcome
+        self._memory.move_to_end(text)
+        while len(self._memory) > self.memory_capacity:
+            self._memory.popitem(last=False)
+
+    def get(self, text: str) -> TranslationOutcome | None:
+        cached = self._memory.get(text)
+        if cached is not None:
+            self._validate_outcome(text, cached)
+            self._memory.move_to_end(text)
+            self.hot_hits += 1
+            return cached
+        connection = self._connection
+        if connection is None:
+            raise EnrichmentError("Run-local translation cache is closed")
+        try:
+            rows = connection.execute(
+                """
+                SELECT source_text, translated_text, integrity, reason,
+                       ambiguous_identifier_count, outcome_digest
+                FROM translations
+                WHERE digest = ? AND identity = ?
+                """,
+                (self._digest(text), self.identity),
+            )
+        except sqlite3.Error as exc:
+            raise EnrichmentError(f"Could not read run-local translation cache: {exc}") from exc
+        for (
+            source_text,
+            translated_text,
+            integrity,
+            reason,
+            ambiguous_count,
+            outcome_digest,
+        ) in rows:
+            if source_text != text:
+                continue
+            outcome = TranslationOutcome(
+                str(translated_text),
+                str(integrity),
+                None if reason is None else str(reason),
+                int(ambiguous_count),
+            )
+            if not isinstance(outcome_digest, bytes) or outcome_digest != self._outcome_digest(
+                text, outcome
+            ):
+                raise EnrichmentError(
+                    "Run-local translation cache failed outcome-integrity validation"
+                )
+            self._validate_outcome(text, outcome)
+            self.disk_hits += 1
+            self._remember(text, outcome)
+            return outcome
+        self.misses += 1
+        return None
+
+    def put(self, text: str, outcome: TranslationOutcome) -> None:
+        self._validate_outcome(text, outcome)
+        connection = self._connection
+        if connection is None:
+            raise EnrichmentError("Run-local translation cache is closed")
+        try:
+            connection.execute(
+                """
+                INSERT INTO translations (
+                    digest, identity, source_text, translated_text, integrity, reason,
+                    ambiguous_identifier_count, outcome_digest
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self._digest(text),
+                    self.identity,
+                    text,
+                    outcome.text,
+                    outcome.integrity,
+                    outcome.reason,
+                    outcome.ambiguous_identifier_count,
+                    self._outcome_digest(text, outcome),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            existing = self.get(text)
+            if existing != outcome:
+                raise EnrichmentError(
+                    "Run-local translation cache contains conflicting exact text"
+                ) from exc
+        except sqlite3.Error as exc:
+            raise EnrichmentError(f"Could not write run-local translation cache: {exc}") from exc
+        else:
+            self.stores += 1
+            self._pending_writes += 1
+            if self._pending_writes >= TRANSLATION_CACHE_COMMIT_BATCH_SIZE:
+                try:
+                    connection.commit()
+                    connection.execute("BEGIN IMMEDIATE")
+                except sqlite3.Error as exc:
+                    raise EnrichmentError(
+                        f"Could not commit run-local translation cache: {exc}"
+                    ) from exc
+                self.batch_commits += 1
+                self._pending_writes = 0
+        self._remember(text, outcome)
+
+    @staticmethod
+    def _validate_outcome(text: str, outcome: TranslationOutcome) -> None:
+        if not outcome.text:
+            raise EnrichmentError("Run-local translation cache cannot store empty text")
+        if outcome.integrity not in {
+            "verified",
+            "source-retained-ambiguous",
+            "preservation-fallback",
+        }:
+            raise EnrichmentError("Run-local translation cache has invalid integrity metadata")
+        if outcome.ambiguous_identifier_count < 0:
+            raise EnrichmentError("Run-local translation cache has a negative advisory count")
+        if outcome.integrity == "preservation-fallback":
+            if (
+                outcome.text != text
+                or not outcome.reason
+                or outcome.ambiguous_identifier_count != 0
+            ):
+                raise EnrichmentError("Run-local translation cache has an invalid fallback")
+        elif outcome.reason is not None:
+            raise EnrichmentError("Run-local translation cache has an unexpected fallback reason")
+        else:
+            advisory_count = len(advisory_identifier_spans(text))
+            expected_integrity = "source-retained-ambiguous" if advisory_count else "verified"
+            if (
+                outcome.integrity != expected_integrity
+                or outcome.ambiguous_identifier_count != advisory_count
+            ):
+                raise EnrichmentError(
+                    "Run-local translation cache has inconsistent advisory integrity metadata"
+                )
+        try:
+            validate_identifier_retention(text, outcome.text)
+        except EnrichmentError as exc:
+            raise EnrichmentError(
+                "Run-local translation cache failed hard-identifier validation"
+            ) from exc
+
+    def close(self, *, commit: bool = False, strict: bool = False) -> None:
+        failures: list[str] = []
+        connection = getattr(self, "_connection", None)
+        self._connection = None
+        if connection is not None:
+            try:
+                if commit:
+                    connection.commit()
+                else:
+                    connection.rollback()
+            except sqlite3.Error as exc:
+                failures.append(f"transaction finalization failed: {exc}")
+            finally:
+                try:
+                    connection.close()
+                except sqlite3.Error as exc:
+                    failures.append(f"database close failed: {exc}")
+        path = getattr(self, "path", None)
+        if path is not None:
+            for candidate in (
+                path,
+                Path(str(path) + "-journal"),
+                Path(str(path) + "-wal"),
+                Path(str(path) + "-shm"),
+            ):
+                try:
+                    candidate.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    failures.append(f"could not remove '{candidate.name}': {exc}")
+        memory = getattr(self, "_memory", None)
+        if memory is not None:
+            memory.clear()
+        if not failures:
+            with suppress(Exception):
+                atexit.unregister(self.close)
+        if strict and failures:
+            raise EnrichmentError(
+                "Run-local translation cache cleanup failed: " + "; ".join(failures)
+            )
+
+
+def finalize_run_translation_cache(cache: RunLocalTranslationCache, output_path: Path) -> None:
+    """Delete sensitive run-local cache before the staged output replaces prior evidence."""
+    cache.close(commit=True, strict=True)
+
+
 def map_ordered_parallel(
     function: Callable[[T], str], values: Sequence[T], workers: int
 ) -> list[str]:
@@ -359,26 +751,192 @@ def map_ordered_parallel(
         return list(executor.map(function, values))
 
 
-def protected_identifier_spans(text: str) -> tuple[tuple[int, int, str], ...]:
-    """Return non-overlapping structured-token spans that translation must preserve."""
-    matches: list[tuple[int, int, str]] = []
-    for pattern in PROTECTED_IDENTIFIER_PATTERNS:
-        for match in pattern.finditer(text):
-            value = match.group(0).rstrip(_TRAILING_IDENTIFIER_PUNCTUATION)
-            if value:
-                matches.append((match.start(), match.start() + len(value), value))
-    matches.sort(key=lambda item: (item[0], -len(item[2])))
-    accepted: list[tuple[int, int, str]] = []
-    accepted_ranges: list[tuple[int, int]] = []
-    for start, end, value in matches:
+def _is_identifier_component(character: str) -> bool:
+    return unicodedata.category(character)[:1] in {"L", "M", "N"}
+
+
+def _has_complete_identifier_boundaries(text: str, start: int, end: int) -> bool:
+    return not (
+        (start > 0 and _is_identifier_component(text[start - 1]))
+        or (end < len(text) and _is_identifier_component(text[end]))
+    )
+
+
+def _validated_ipv6_identifier_spans(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Find exact IPv6 evidence without treating arbitrary colon prose as an address."""
+    spans: list[tuple[int, int, str]] = []
+    suppressed_inner_ranges: list[tuple[int, int]] = []
+    for match in _BRACKETED_IPV6_PORT_PATTERN.finditer(text):
+        start, end = match.span()
+        try:
+            ipaddress.IPv6Address(match.group("address"))
+        except ipaddress.AddressValueError:
+            continue
+        port = int(match.group("port"))
+        if port > 65535:
+            continue
+        suppressed_inner_ranges.append((start, end))
+        if not _has_complete_identifier_boundaries(text, start, end):
+            continue
+        spans.append((start, end, match.group(0)))
+
+    for match in _BARE_IPV6_CANDIDATE_PATTERN.finditer(text):
+        value = match.group(0).rstrip(".")
+        if not value or ":" not in value:
+            continue
+        start = match.start()
+        end = start + len(value)
         if any(
-            parent_start <= start and end <= parent_end
-            for parent_start, parent_end in accepted_ranges
+            bracket_start <= start and end <= bracket_end
+            for bracket_start, bracket_end in suppressed_inner_ranges
         ):
             continue
-        accepted.append((start, end, value))
-        accepted_ranges.append((start, end))
-    return tuple(accepted)
+        if not _has_complete_identifier_boundaries(text, start, end):
+            continue
+        try:
+            ipaddress.IPv6Address(value)
+        except ipaddress.AddressValueError:
+            continue
+        spans.append((start, end, value))
+    return tuple(spans)
+
+
+def _hard_path_identifier_spans(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Find complete conservative absolute path forms promised by the evidence contract."""
+    spans: list[tuple[int, int, str]] = []
+    for pattern in HARD_PATH_IDENTIFIER_PATTERNS:
+        for match in pattern.finditer(text):
+            value = _trim_identifier_trailing_punctuation(match.group(0))
+            if not value:
+                continue
+            start = match.start()
+            end = start + len(value)
+            if start > 0 and (
+                _is_identifier_component(text[start - 1]) or text[start - 1] in "._-/\\:"
+            ):
+                continue
+            if end < len(text) and (_is_identifier_component(text[end]) or text[end] in "/\\"):
+                continue
+            spans.append((start, end, value))
+    return tuple(spans)
+
+
+def _separator_identifier_spans(
+    text: str,
+) -> tuple[tuple[int, int, str, bool], ...]:
+    """Return complete Unicode separator tokens and whether each token is hard."""
+    spans: list[tuple[int, int, str, bool]] = []
+    index = 0
+    while index < len(text):
+        if not _is_identifier_component(text[index]):
+            index += 1
+            continue
+        start = index
+        while index < len(text) and _is_identifier_component(text[index]):
+            index += 1
+        separators: list[str] = []
+        while (
+            index < len(text)
+            and text[index] in _IDENTIFIER_SEPARATORS
+            and index + 1 < len(text)
+            and _is_identifier_component(text[index + 1])
+        ):
+            separators.append(text[index])
+            index += 1
+            while index < len(text) and _is_identifier_component(text[index]):
+                index += 1
+        if not separators:
+            continue
+        if (start > 0 and text[start - 1] in _IDENTIFIER_SEPARATORS) or (
+            index < len(text) and text[index] in _IDENTIFIER_SEPARATORS
+        ):
+            continue
+        value = text[start:index]
+        contains_underscore = "_" in separators
+        uppercase_ascii = (
+            value.isascii()
+            and any("A" <= character <= "Z" for character in value)
+            and not any("a" <= character <= "z" for character in value)
+        )
+        classification = contains_underscore or uppercase_ascii
+        spans.append((start, index, value, classification))
+    return tuple(spans)
+
+
+def _merge_typed_identifier_spans(
+    text: str, matches: Iterable[tuple[int, int, str]]
+) -> tuple[tuple[int, int, str], ...]:
+    """Union overlapping class-specific spans so no composite evidence is dropped."""
+    ordered = sorted(matches, key=lambda item: (item[0], item[1]))
+    merged_ranges: list[tuple[int, int]] = []
+    for start, end, _ in ordered:
+        if merged_ranges and start < merged_ranges[-1][1]:
+            previous_start, previous_end = merged_ranges[-1]
+            merged_ranges[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged_ranges.append((start, end))
+    return tuple((start, end, text[start:end]) for start, end in merged_ranges)
+
+
+def _trim_identifier_trailing_punctuation(value: str) -> str:
+    """Trim sentence punctuation while retaining balanced identifier delimiters."""
+    while value:
+        final = value[-1]
+        if final in _UNCONDITIONAL_TRAILING_IDENTIFIER_PUNCTUATION:
+            value = value[:-1]
+            continue
+        opener = _BALANCED_IDENTIFIER_CLOSERS.get(final)
+        if opener is not None and value.count(final) > value.count(opener):
+            value = value[:-1]
+            continue
+        break
+    return value
+
+
+def protected_identifier_spans(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Return non-overlapping hard structured-token spans that must be preserved."""
+    typed_matches: list[tuple[int, int, str]] = []
+    for pattern in HARD_IDENTIFIER_PATTERNS:
+        for match in pattern.finditer(text):
+            value = _trim_identifier_trailing_punctuation(match.group(0))
+            if not value:
+                continue
+            start = match.start()
+            end = start + len(value)
+            if (
+                start > 0
+                and _is_identifier_component(value[0])
+                and _is_identifier_component(text[start - 1])
+            ):
+                continue
+            if (
+                end < len(text)
+                and _is_identifier_component(value[-1])
+                and _is_identifier_component(text[end])
+            ):
+                continue
+            typed_matches.append((start, end, value))
+    for pattern in FIXED_ASCII_HARD_IDENTIFIER_PATTERNS:
+        typed_matches.extend(
+            (match.start(), match.end(), match.group(0)) for match in pattern.finditer(text)
+        )
+    typed_matches.extend(_validated_ipv6_identifier_spans(text))
+    typed_matches.extend(_hard_path_identifier_spans(text))
+    hard_generic_spans = tuple(
+        (start, end, value) for start, end, value, hard in _separator_identifier_spans(text) if hard
+    )
+    return _merge_typed_identifier_spans(text, (*typed_matches, *hard_generic_spans))
+
+
+def advisory_identifier_spans(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Return complete alphabetic-hyphen tokens that are advisory, not hard invariants."""
+    hard_ranges = tuple((start, end) for start, end, _ in protected_identifier_spans(text))
+    return tuple(
+        (start, end, value)
+        for start, end, value, hard in _separator_identifier_spans(text)
+        if hard is False
+        and not any(start < hard_end and hard_start < end for hard_start, hard_end in hard_ranges)
+    )
 
 
 def protected_identifiers(text: str) -> tuple[str, ...]:
@@ -403,14 +961,42 @@ def contains_only_protected_identifiers(text: str) -> bool:
 def validate_identifier_retention(source: str, translated: str) -> None:
     source_counts = Counter(value for _, _, value in protected_identifier_spans(source))
     translated_counts = Counter(value for _, _, value in protected_identifier_spans(translated))
-    missing = [
-        value for value, required in source_counts.items() if translated_counts[value] < required
-    ]
-    if missing:
-        preview = ", ".join(repr(value) for value in missing[:3])
+    if source_counts != translated_counts:
+        changed = sorted((source_counts - translated_counts) + (translated_counts - source_counts))
+        preview = ", ".join(repr(value) for value in changed[:3])
         raise EnrichmentError(
-            "Translation changed or removed protected evidence identifiers: " + preview
+            "Translation changed, removed, or duplicated protected evidence identifiers: " + preview
         )
+
+
+def translation_cache_identity(
+    translator: Translator,
+    target_language: str,
+    *,
+    batch_size: int,
+    max_input_tokens: int,
+    max_new_tokens: int,
+    strict_determinism: bool,
+) -> str:
+    """Build the full output-affecting identity for one run-local exact cache."""
+    return canonical_json(
+        {
+            "schemaVersion": TRANSLATION_CACHE_SCHEMA_VERSION,
+            "targetLanguage": target_language,
+            "engine": translator.engine,
+            "engineVersion": translator.engine_version,
+            "model": translator.model_id,
+            "revision": translator.revision,
+            "modelSha256": translator.model_sha256,
+            "promptVersion": TRANSLATION_PROMPT_VERSION,
+            "preservationPolicyVersion": TRANSLATION_PRESERVATION_POLICY_VERSION,
+            "batchSize": batch_size,
+            "maxInputTokens": max_input_tokens,
+            "maxNewTokens": max_new_tokens,
+            "strictDeterminism": strict_determinism,
+            "execution": dict(getattr(translator, "execution_metadata", {}) or {}),
+        }
+    )
 
 
 def resolve_translation_parallelism(
@@ -1603,27 +2189,51 @@ def add_translations(
     minimum_characters: int,
     maximum_characters: int,
     cache: TranslationCache | None = None,
+    run_cache: TranslationOutcomeCache | None = None,
+    integrity_monitor: TranslationIntegrityMonitor | None = None,
 ) -> list[dict[str, Any]]:
     candidates = [
         record
         for record in records
         if should_translate(str(record["text"]), minimum_characters, maximum_characters)
     ]
-    translations_by_text: dict[str, str] = {}
+    translations_by_text: dict[str, TranslationOutcome] = {}
     missing_texts: list[str] = []
     missing_text_set: set[str] = set()
     for record in candidates:
         text = str(record["text"])
         if text in translations_by_text or text in missing_text_set:
             continue
+        if run_cache is not None:
+            cached_outcome = run_cache.get(text)
+            if cached_outcome is not None:
+                translations_by_text[text] = cached_outcome
+                continue
         if contains_only_protected_identifiers(text):
-            translations_by_text[text] = text
-            if cache:
+            outcome = TranslationOutcome(text, "verified")
+            translations_by_text[text] = outcome
+            if run_cache is not None:
+                run_cache.put(text, outcome)
+            elif cache:
                 cache.put(target_language, text, text)
             continue
         found, translated_text = cache.get(target_language, text) if cache else (False, "")
         if found:
-            translations_by_text[text] = translated_text
+            try:
+                validate_identifier_retention(text, translated_text)
+            except EnrichmentError:
+                translations_by_text[text] = TranslationOutcome(
+                    text,
+                    "preservation-fallback",
+                    "hard-identifier-retention-mismatch",
+                )
+            else:
+                ambiguous_count = len(advisory_identifier_spans(text))
+                translations_by_text[text] = TranslationOutcome(
+                    translated_text,
+                    "source-retained-ambiguous" if ambiguous_count else "verified",
+                    ambiguous_identifier_count=ambiguous_count,
+                )
         else:
             missing_texts.append(text)
             missing_text_set.add(text)
@@ -1641,16 +2251,35 @@ def add_translations(
             translated_text = translated_text.strip()
             if not translated_text:
                 raise EnrichmentError("Translation engine returned an empty translation")
-            validate_identifier_retention(source_text, translated_text)
-            translations_by_text[source_text] = translated_text
-            if cache:
-                cache.put(target_language, source_text, translated_text)
+            try:
+                validate_identifier_retention(source_text, translated_text)
+            except EnrichmentError:
+                outcome = TranslationOutcome(
+                    source_text,
+                    "preservation-fallback",
+                    "hard-identifier-retention-mismatch",
+                )
+            else:
+                ambiguous_count = len(advisory_identifier_spans(source_text))
+                outcome = TranslationOutcome(
+                    translated_text,
+                    "source-retained-ambiguous" if ambiguous_count else "verified",
+                    ambiguous_identifier_count=ambiguous_count,
+                )
+            if integrity_monitor is not None:
+                integrity_monitor.record(fallback=outcome.integrity == "preservation-fallback")
+            translations_by_text[source_text] = outcome
+            if run_cache is not None:
+                run_cache.put(source_text, outcome)
+            elif cache and outcome.integrity != "preservation-fallback":
+                cache.put(target_language, source_text, outcome.text)
 
     translated_records: list[dict[str, Any]] = []
     execution_metadata = getattr(translator, "execution_metadata", None)
     for parent in candidates:
         source_text = str(parent["text"])
-        translated_text = translations_by_text[source_text].strip()
+        outcome = translations_by_text[source_text]
+        translated_text = outcome.text.strip()
         if not translated_text:
             raise EnrichmentError("Translation engine returned an empty translation")
         validate_identifier_retention(source_text, translated_text)
@@ -1672,11 +2301,22 @@ def add_translations(
         }
         if execution_metadata:
             transform["execution"] = dict(execution_metadata)
+        attributes = dict(derived.get("attributes") or {})
+        attributes["translationIntegrity"] = outcome.integrity
+        if outcome.reason is not None:
+            attributes["translationIntegrityReason"] = outcome.reason
+        else:
+            attributes.pop("translationIntegrityReason", None)
+        if outcome.integrity == "source-retained-ambiguous":
+            attributes["translationAmbiguousIdentifierCount"] = outcome.ambiguous_identifier_count
+        else:
+            attributes.pop("translationAmbiguousIdentifierCount", None)
         derived.update(
             {
                 "text": translated_text,
                 "parentRecordId": parent["recordId"],
                 "transform": transform,
+                "attributes": attributes,
             }
         )
         translated_records.append(with_record_id(derived))
@@ -1902,8 +2542,7 @@ def read_routing_manifest(path: Path) -> Iterable[dict[str, Any]]:
                         for route in record["eligibleRoutes"]
                     )
                     or any(
-                        route not in record["eligibleRoutes"]
-                        for route in record["scheduledRoutes"]
+                        route not in record["eligibleRoutes"] for route in record["scheduledRoutes"]
                     )
                 ):
                     raise EnrichmentError(
@@ -1912,8 +2551,7 @@ def read_routing_manifest(path: Path) -> Iterable[dict[str, Any]]:
                 decision_id = record.get("decisionId")
                 material = {key: item for key, item in record.items() if key != "decisionId"}
                 expected_decision_id = (
-                    "sha256:"
-                    + hashlib.sha256(canonical_json(material).encode("utf-8")).hexdigest()
+                    "sha256:" + hashlib.sha256(canonical_json(material).encode("utf-8")).hexdigest()
                 )
                 if decision_id != expected_decision_id:
                     raise EnrichmentError(
@@ -2012,6 +2650,8 @@ def translate_normalized_records(
     cache: TranslationCache | None = None,
     include_parents: bool = True,
     progress: Callable[[int], None] | None = None,
+    run_cache: TranslationOutcomeCache | None = None,
+    integrity_monitor: TranslationIntegrityMonitor | None = None,
 ) -> Iterable[dict[str, Any]]:
     pending: list[dict[str, Any]] = []
     effective_window_size = window_size or batch_size
@@ -2028,6 +2668,8 @@ def translate_normalized_records(
             minimum_characters,
             maximum_characters,
             cache,
+            run_cache,
+            integrity_monitor,
         )
         pending.clear()
         completed += pending_count
@@ -2708,8 +3350,9 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--bounded-integrated-mode",
         action="store_true",
         help=(
-            "Trust unique parent IDs supplied by bstrings.exe and use only bounded per-file "
-            "deduplication; intended for the integrated large-dataset workflow"
+            "Use the integrated bstrings.exe trust and streaming contract: input-JSONL "
+            "translation uses run-local exact disk deduplication, while recovery uses bounded "
+            "in-memory translation deduplication"
         ),
     )
     parser.add_argument("-o", "--output", required=True, type=Path, help="Output enrichment JSONL")
@@ -2964,7 +3607,12 @@ def validate_arguments(args: argparse.Namespace) -> None:
             )
 
 
-def write_jsonl_atomic(output_path: Path, records: Iterable[dict[str, Any]]) -> int:
+def write_jsonl_atomic(
+    output_path: Path,
+    records: Iterable[dict[str, Any]],
+    *,
+    before_publish: Callable[[], None] | None = None,
+) -> int:
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary_name = tempfile.mkstemp(
@@ -2987,6 +3635,8 @@ def write_jsonl_atomic(output_path: Path, records: Iterable[dict[str, Any]]) -> 
                 count += 1
             output.flush()
             os.fsync(output.fileno())
+        if before_publish is not None:
+            before_publish()
         os.replace(temporary_name, output_path)
     except BaseException:
         with suppress(FileNotFoundError):
@@ -3006,9 +3656,7 @@ def verify_routing_input_identity(item: RoutingInput) -> None:
         raise EnrichmentError("A routing input became unavailable") from exc
     digest = sha256_file(item.path)
     if length != item.identity.length or digest != item.identity.sha256:
-        raise EnrichmentError(
-            "A routing input changed from the immutable evidence manifest"
-        )
+        raise EnrichmentError("A routing input changed from the immutable evidence manifest")
 
 
 def run_content_triage(
@@ -3061,9 +3709,7 @@ def run_content_triage(
                 try:
                     classifications = _run_magika_batch(magika, batch, args.magika_timeout)
                 except EnrichmentError:
-                    classifications = _magika_batch_errors(
-                        batch, "batch-classification-error"
-                    )
+                    classifications = _magika_batch_errors(batch, "batch-classification-error")
                 for item, classification in zip(batch, classifications, strict=True):
                     completed += 1
                     yield _make_routing_record(
@@ -3102,6 +3748,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_arguments(argv)
     translator: Translator | None = None
     translation_cache: TranslationCache | None = None
+    run_translation_cache: RunLocalTranslationCache | None = None
+    translation_outcome_cache: TranslationOutcomeCache | None = None
+    integrity_monitor = TranslationIntegrityMonitor()
     translation_window_size = args.translation_batch_size
     try:
         if args.airgap:
@@ -3155,10 +3804,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.translation_max_new_tokens,
                     args.translation_threads,
                 )
-            translation_cache = TranslationCache(args.translation_cache_size)
             translation_window_size = args.translation_window_size or (
                 args.translation_batch_size * max(4, translator.parallelism)
             )
+            if args.input_jsonl is not None and args.bounded_integrated_mode:
+                identity = translation_cache_identity(
+                    translator,
+                    args.translation_target,
+                    batch_size=args.translation_batch_size,
+                    max_input_tokens=args.translation_max_input_tokens,
+                    max_new_tokens=args.translation_max_new_tokens,
+                    strict_determinism=args.translation_strict_determinism,
+                )
+                run_translation_cache = RunLocalTranslationCache(
+                    args.output.resolve().parent,
+                    identity,
+                    args.translation_cache_size,
+                )
+                translation_outcome_cache = run_translation_cache
+            else:
+                translation_outcome_cache = BoundedTranslationOutcomeCache(
+                    args.translation_cache_size
+                )
             print(
                 "Translation plan: "
                 + json.dumps(
@@ -3167,6 +3834,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "batchSize": args.translation_batch_size,
                         "windowSize": translation_window_size,
                         "cacheSize": args.translation_cache_size,
+                        "cache": {
+                            "diskBacked": run_translation_cache is not None,
+                            "examinationLocal": run_translation_cache is not None,
+                            "memoryCapacity": args.translation_cache_size,
+                            "commitBatchSize": (
+                                TRANSLATION_CACHE_COMMIT_BATCH_SIZE
+                                if run_translation_cache is not None
+                                else 0
+                            ),
+                        },
                     },
                     separators=(",", ":"),
                     sort_keys=True,
@@ -3180,6 +3857,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         recovery_completed = 0
         last_progress_percent = -1.0
         last_progress_time = 0.0
+        translation_progress_started = time.monotonic()
+        final_cache_hits = 0
+        final_cache_stores = 0
+        final_cache_commits = 0
+
+        def duration_text(seconds: float) -> str:
+            if not math.isfinite(seconds) or seconds < 0:
+                return "unknown"
+            rounded = int(math.ceil(seconds))
+            hours, remainder = divmod(rounded, 3600)
+            minutes, remaining_seconds = divmod(remainder, 60)
+            if hours:
+                return f"{hours:d}h{minutes:02d}m{remaining_seconds:02d}s"
+            if minutes:
+                return f"{minutes:d}m{remaining_seconds:02d}s"
+            return f"{remaining_seconds:d}s"
 
         def report_translation_progress(completed: int, *, force: bool = False) -> None:
             nonlocal last_progress_percent, last_progress_time
@@ -3196,8 +3889,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 and now - last_progress_time < 5.0
             ):
                 return
+            elapsed = max(0.0, now - translation_progress_started)
+            rate = bounded / elapsed if bounded > 0 and elapsed > 0 else 0.0
+            eta = (total - bounded) / rate if rate > 0 else math.inf
+            cache_hits = (
+                translation_outcome_cache.hits
+                if translation_outcome_cache is not None
+                else final_cache_hits
+            )
             print(
-                f"Progress: offline translation: {percent:.1f}% ({bounded:,}/{total:,} records)",
+                f"Progress: offline translation: {percent:.1f}% "
+                f"({bounded:,}/{total:,} records; rate={rate:.2f}/s; "
+                f"eta={duration_text(eta)}; cacheHits={cache_hits:,}; "
+                f"modelInputs={integrity_monitor.model_inputs:,}; "
+                f"fallbacks={integrity_monitor.fallbacks:,})",
                 file=sys.stderr,
                 flush=True,
             )
@@ -3251,6 +3956,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     translation_cache,
                     include_parents=not args.translations_only,
                     progress=report_translation_progress,
+                    run_cache=translation_outcome_cache,
+                    integrity_monitor=integrity_monitor,
                 )
                 return
 
@@ -3329,7 +4036,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         args.translation_batch_size,
                         args.translation_min_characters,
                         args.translation_max_characters,
-                        translation_cache,
+                        cache=translation_cache,
+                        run_cache=translation_outcome_cache,
+                        integrity_monitor=integrity_monitor,
                     )
                     yield from translated_records
                 processed += 1
@@ -3352,7 +4061,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                     translated += 1
                 yield record
 
-        written = write_jsonl_atomic(args.output, count_unique_records())
+        def finalize_translation_cache_before_publish() -> None:
+            nonlocal final_cache_commits, final_cache_hits, final_cache_stores
+            nonlocal run_translation_cache, translation_outcome_cache
+            if args.input_jsonl is None:
+                return
+            if translation_outcome_cache is not None:
+                final_cache_hits = translation_outcome_cache.hits
+                final_cache_stores = translation_outcome_cache.stores
+                final_cache_commits = translation_outcome_cache.batch_commits
+            if run_translation_cache is not None:
+                finalize_run_translation_cache(run_translation_cache, args.output.resolve())
+                run_translation_cache = None
+                translation_outcome_cache = None
+
+        written = write_jsonl_atomic(
+            args.output,
+            count_unique_records(),
+            before_publish=finalize_translation_cache_before_publish,
+        )
+        if args.input_jsonl is not None:
+            if args.progress_total_records > 0:
+                report_translation_progress(args.progress_total_records, force=True)
+            print(
+                "Translation summary: "
+                f"cacheHits={final_cache_hits:,}; cacheStores={final_cache_stores:,}; "
+                f"cacheBatchCommits={final_cache_commits:,}; "
+                f"modelInputs={integrity_monitor.model_inputs:,}; "
+                f"fallbacks={integrity_monitor.fallbacks:,}",
+                file=sys.stderr,
+                flush=True,
+            )
         if args.input_jsonl is not None:
             print(
                 f"Wrote {written} enrichment strings ({translated} new translations) "
@@ -3373,6 +4112,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"enrichment failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
     finally:
+        if run_translation_cache is not None:
+            try:
+                run_translation_cache.close(commit=False, strict=True)
+            except EnrichmentError as cleanup_error:
+                print(f"enrichment cache cleanup failed: {cleanup_error}", file=sys.stderr)
         close = getattr(translator, "close", None)
         if close is not None:
             close()

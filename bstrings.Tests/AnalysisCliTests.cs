@@ -6,6 +6,25 @@ namespace bstrings.Tests;
 
 public sealed class AnalysisCliTests
 {
+    [Fact]
+    public void TranslationPolicyHelpAndDefaultMatchTheRuntimeContract()
+    {
+        Assert.True(
+            LanguageTriageCore.TryParsePolicy(
+                AnalysisCli.DefaultTranslationPolicy,
+                out var policy,
+                out var error
+            ),
+            error
+        );
+        Assert.Equal(LanguageTriagePolicy.HighRecall, policy);
+        Assert.Contains("high-recall", AnalysisCli.TranslationPolicyHelp, StringComparison.Ordinal);
+        Assert.Contains("balanced", AnalysisCli.TranslationPolicyHelp, StringComparison.Ordinal);
+        Assert.Contains("high-precision", AnalysisCli.TranslationPolicyHelp, StringComparison.Ordinal);
+        Assert.Contains("0.65", AnalysisCli.TranslationPolicyHelp, StringComparison.Ordinal);
+        Assert.Contains("0.15", AnalysisCli.TranslationPolicyHelp, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(new[] { "help" }, new[] { "--help" })]
     [InlineData(new[] { "help", "analyze" }, new[] { "analyze", "--help" })]

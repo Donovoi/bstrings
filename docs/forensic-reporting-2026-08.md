@@ -3,7 +3,7 @@
 Date: 7 August 2026
 
 Availability note: these projections are in current source and the complete
-v1.9.15 quality release, including runs that also use FLOSS, OCR, and
+v1.9.16 quality release, including runs that also use FLOSS, OCR, and
 translation. See [download and installation](download-and-install.md).
 
 ## Outcome
@@ -63,12 +63,19 @@ putting tab-separated data in a misleading `.csv` file.
 - location: typed location, match start/length, extractor-supplied source line,
   record-relative line, page, region, and evidence class;
 - engine: ordered extraction/transform chain, extractor/runtime/provider,
-  model revision/hash, languages, and transform outcome;
+  model revision/hash, languages, transform outcome, and the dedicated
+  `TranslationIntegrity` column;
 - decoder: only an actual decoded/deobfuscated origin, explicit decoder
   attribute, or non-translation transform is named as a decoder; detecting a
   Base64-shaped value is not falsely reported as decoding it; and
 - identity: source/parent record IDs, encoding, confidence, and the complete
   attributes object.
+
+`TranslationIntegrity` is filterable as `verified`,
+`source-retained-ambiguous`, or `preservation-fallback`. For ambiguous and
+fallback children, `AttributesJson` also retains the advisory count or fallback
+reason. A preservation fallback is exact source text after rejected model output;
+it is not a successful translation and should be reviewed with its parent.
 
 Every TSV record occupies exactly one physical line. Embedded tabs and line
 breaks are represented as visible escapes. Windows path separators remain
