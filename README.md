@@ -19,6 +19,9 @@ Windows kit runs offline through one interface: `bstrings.exe`.
   address families alongside the original forensic patterns.
 - Automatic extraction measures eligible CPU, GPU, and hybrid backends and
   selects an accelerator only when it projects a worthwhile win.
+- Language triage reuses successful detections for exact duplicate text only
+  within its bounded batch; reviewed 50%-duplicate workloads were 1.85-1.91x
+  faster without changing ordered report bytes.
 - The quality kit includes its runtimes, models, tools, licences, and strict
   manifest, so case work does not depend on Python, a package manager, or the
   internet.
@@ -28,7 +31,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.14](https://github.com/Donovoi/bstrings/releases/tag/v1.9.14).
+[v1.9.15](https://github.com/Donovoi/bstrings/releases/tag/v1.9.15).
 There is one install and one Full profile: the largest, highest-scoring accepted
 Hy-MT2 7B Q8_0 translation model is included instead of asking examiners to
 choose among quality/size tiers.
@@ -43,7 +46,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.14'
+  $tag = 'v1.9.15'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -167,6 +170,7 @@ Detailed guidance: [terminal help and command reference](docs/command-reference.
 [analysis and translation](docs/enrichment-pipeline.md), and
 [OCR and document analysis](docs/ocr-and-document-analysis.md),
 [document-reading research and roadmap](docs/document-reading-research-2026-08.md),
+the [C#/Native AOT/P/Invoke performance review](docs/language-triage-performance-2026-08.md),
 and [outputs and provenance](docs/output-and-provenance.md). The forensic report
 contract and its bulk_extractor/Timeline Explorer design evidence are recorded
 in [forensic reporting](docs/forensic-reporting-2026-08.md).

@@ -52,6 +52,7 @@ internal delegate bool LanguageDetectionHandler(
 internal static class LanguageTriageCore
 {
     internal const int DefaultMaximumBatchUtf8Bytes = 8 * 1024 * 1024;
+    internal const int AssessmentScoreDecimalPlaces = 12;
     private const string DetectorName = "lingua-rs";
     private const string DetectorVersion = "1.8.0";
     private const int AdaptiveSampleSize = 512;
@@ -112,7 +113,8 @@ internal static class LanguageTriageCore
         LanguageTriageOptions options,
         CancellationToken cancellationToken = default,
         LanguageDetectionHandler? detector = null,
-        Action<long, long>? progress = null
+        Action<long, long>? progress = null,
+        bool? reuseSuccessfulDetections = null
     )
     {
         ValidateOptions(options);
@@ -127,6 +129,7 @@ internal static class LanguageTriageCore
             throw new ArgumentException(targetError, nameof(options));
         }
         options = options with { TargetLanguage = options.TargetLanguage.Trim() };
+        var reuseDetections = reuseSuccessfulDetections ?? detector is null;
         detector ??= LanguageDetectionCore.TryDetect;
         var inputFullPath = Path.GetFullPath(inputPath);
         var candidatesFullPath = Path.GetFullPath(candidatesPath);
@@ -190,23 +193,56 @@ internal static class LanguageTriageCore
                     return;
                 }
                 var assessed = new AssessedRecord[pending.Count];
-                Parallel.For(
-                    0,
-                    pending.Count,
-                    new ParallelOptions
-                    {
-                        MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
-                        CancellationToken = cancellationToken,
-                    },
-                    index =>
-                        assessed[index] = Assess(
-                            pending[index],
-                            options,
-                            effectiveMode,
-                            detectorTargetLanguage,
-                            detector
-                        )
-                );
+                var parallelOptions = new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
+                    CancellationToken = cancellationToken,
+                };
+                if (reuseDetections)
+                {
+                    var groups = Enumerable
+                        .Range(0, pending.Count)
+                        .GroupBy(index => pending[index].Text, StringComparer.Ordinal)
+                        .ToArray();
+                    Parallel.ForEach(
+                        groups,
+                        parallelOptions,
+                        group =>
+                        {
+                            LanguageDetectionResult? successfulDetection = null;
+                            foreach (var index in group)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                assessed[index] = Assess(
+                                    pending[index],
+                                    options,
+                                    effectiveMode,
+                                    detectorTargetLanguage,
+                                    detector,
+                                    successfulDetection,
+                                    out var currentSuccessfulDetection
+                                );
+                                successfulDetection ??= currentSuccessfulDetection;
+                            }
+                        }
+                    );
+                }
+                else
+                {
+                    Parallel.For(
+                        0,
+                        pending.Count,
+                        parallelOptions,
+                        index =>
+                            assessed[index] = Assess(
+                                pending[index],
+                                options,
+                                effectiveMode,
+                                detectorTargetLanguage,
+                                detector
+                            )
+                    );
+                }
 
                 for (var index = 0; index < pending.Count; index++)
                 {
@@ -326,8 +362,28 @@ internal static class LanguageTriageCore
         LanguageDetectionMode effectiveMode,
         string detectorTargetLanguage,
         LanguageDetectionHandler detector
+    ) =>
+        Assess(
+            record,
+            options,
+            effectiveMode,
+            detectorTargetLanguage,
+            detector,
+            reusedDetection: null,
+            out _
+        );
+
+    private static AssessedRecord Assess(
+        PendingRecord record,
+        LanguageTriageOptions options,
+        LanguageDetectionMode effectiveMode,
+        string detectorTargetLanguage,
+        LanguageDetectionHandler detector,
+        LanguageDetectionResult? reusedDetection,
+        out LanguageDetectionResult? successfulDetection
     )
     {
+        successfulDetection = null;
         if (record.IsDerived)
         {
             return Assessment(
@@ -360,13 +416,19 @@ internal static class LanguageTriageCore
                 detectorTargetLanguage
             );
         }
-        if (
+        LanguageDetectionResult detection;
+        string? detectorError = null;
+        if (reusedDetection is { } cachedDetection)
+        {
+            detection = cachedDetection;
+        }
+        else if (
             !detector(
                 record.Text,
                 effectiveMode,
                 detectorTargetLanguage,
-                out var detection,
-                out var detectorError
+                out detection,
+                out detectorError
             )
         )
         {
@@ -382,6 +444,7 @@ internal static class LanguageTriageCore
                 detectorTargetLanguage
             );
         }
+        successfulDetection = detection;
 
         var isTarget = string.Equals(
             detection.Language,
@@ -444,6 +507,18 @@ internal static class LanguageTriageCore
         string? detectorTargetLanguage = null
     )
     {
+        bool? confidenceGatePassed =
+            detection is null ? null : detection.Value.Confidence >= options.MinimumConfidence;
+        bool? marginGatePassed =
+            detection is null
+                ? null
+                : string.Equals(
+                    detection.Value.Language,
+                    detectorTargetLanguage,
+                    StringComparison.OrdinalIgnoreCase
+                )
+                    ? detection.Value.TopLanguageMargin >= options.MinimumTargetMargin
+                    : detection.Value.TargetMargin >= options.MinimumTargetMargin;
         var assessment = new
         {
             schemaVersion = 1,
@@ -457,19 +532,36 @@ internal static class LanguageTriageCore
             targetLanguage = options.TargetLanguage,
             detectorTargetLanguage,
             language = detection?.Language,
-            confidence = detection?.Confidence,
-            targetConfidence = detection?.TargetConfidence,
-            secondConfidence = detection?.SecondConfidence,
-            topLanguageMargin = detection?.TopLanguageMargin,
-            targetMargin = detection?.TargetMargin,
+            confidence = NormalizeAssessmentMetric(detection?.Confidence),
+            targetConfidence = NormalizeAssessmentMetric(detection?.TargetConfidence),
+            secondConfidence = NormalizeAssessmentMetric(detection?.SecondConfidence),
+            topLanguageMargin = NormalizeAssessmentMetric(detection?.TopLanguageMargin),
+            targetMargin = NormalizeAssessmentMetric(detection?.TargetMargin),
+            scoreDecimalPlaces = AssessmentScoreDecimalPlaces,
             minimumConfidence = options.MinimumConfidence,
             minimumTargetMargin = options.MinimumTargetMargin,
+            confidenceGatePassed,
+            marginGatePassed,
             policy = PolicyName(options.Policy),
             decision,
             translationCandidate = candidate,
             error,
         };
         return new AssessedRecord(JsonSerializer.Serialize(assessment), candidate, decision);
+    }
+
+    internal static double? NormalizeAssessmentMetric(double? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+        var rounded = Math.Round(
+            value.Value,
+            AssessmentScoreDecimalPlaces,
+            MidpointRounding.ToEven
+        );
+        return rounded == 0d ? 0d : rounded;
     }
 
     private static PendingRecord ParseRecord(string line, long lineNumber)

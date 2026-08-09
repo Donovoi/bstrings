@@ -106,6 +106,508 @@ public sealed class LanguageTriageCoreTests
     }
 
     [Fact]
+    public void NormalizeAssessmentMetric_UsesDeclaredMidpointPolicyAndCanonicalZero()
+    {
+        Assert.Null(LanguageTriageCore.NormalizeAssessmentMetric(null));
+        Assert.Equal(0L, BitConverter.DoubleToInt64Bits(LanguageTriageCore.NormalizeAssessmentMetric(-0d)!.Value));
+        Assert.Equal(0.123456789012, LanguageTriageCore.NormalizeAssessmentMetric(0.1234567890125));
+        Assert.Equal(0.123456789014, LanguageTriageCore.NormalizeAssessmentMetric(0.1234567890135));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ReusesSuccessfulDetectionOncePerBatchLocalOrdinalText()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        var candidatesPath = scope.PathFor("candidates.jsonl");
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        const string duplicateText = "This duplicate linguistic evidence is already English.";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            Enumerable
+                .Range(0, 3)
+                .Select(index => CreateRecord($"duplicate-{index}", duplicateText)),
+            cancellationToken
+        );
+        var detectorCalls = 0;
+
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            Interlocked.Increment(ref detectorCalls);
+            result = new LanguageDetectionResult("en", 0.99, 0.99, 0.01, false);
+            error = null;
+            return true;
+        };
+
+        var stats = await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            candidatesPath,
+            assessmentsPath,
+            CreateOptions(batchSize: 3),
+            cancellationToken,
+            detector,
+            reuseSuccessfulDetections: true
+        );
+
+        Assert.Equal(1, detectorCalls);
+        Assert.Equal(3, stats.TargetLanguageRecords);
+        Assert.Equal(
+            ["target-language", "target-language", "target-language"],
+            await ReadDecisionsAsync(assessmentsPath, cancellationToken)
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RetriesFailedDuplicateDetectionsInInputOrder()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        const string duplicateText = "This duplicate linguistic evidence always fails detection.";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            Enumerable
+                .Range(0, 3)
+                .Select(index => CreateRecord($"failure-{index}", duplicateText)),
+            cancellationToken
+        );
+        var detectorCalls = 0;
+
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            var call = ++detectorCalls;
+            result = default;
+            error = $"synthetic failure {call}";
+            return false;
+        };
+
+        var stats = await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            scope.PathFor("candidates.jsonl"),
+            assessmentsPath,
+            CreateOptions(batchSize: 3),
+            cancellationToken,
+            detector,
+            reuseSuccessfulDetections: true
+        );
+
+        Assert.Equal(3, detectorCalls);
+        Assert.Equal(3, stats.DetectorFailures);
+        Assert.Equal(
+            ["synthetic failure 1", "synthetic failure 2", "synthetic failure 3"],
+            await ReadErrorsAsync(assessmentsPath, cancellationToken)
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_InjectedDetectorDoesNotReuseByDefault()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        const string duplicateText = "This injected detector evidence remains independently assessed.";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            Enumerable
+                .Range(0, 3)
+                .Select(index => CreateRecord($"injected-{index}", duplicateText)),
+            cancellationToken
+        );
+        var detectorCalls = 0;
+
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            Interlocked.Increment(ref detectorCalls);
+            result = new LanguageDetectionResult("en", 0.99, 0.99, 0.01, false);
+            error = null;
+            return true;
+        };
+
+        await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            scope.PathFor("candidates.jsonl"),
+            scope.PathFor("assessments.jsonl"),
+            CreateOptions(batchSize: 3),
+            cancellationToken,
+            detector
+        );
+
+        Assert.Equal(3, detectorCalls);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ReuseProducesByteIdenticalOutputsAndStats()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                CreateRecord("spanish-1", "Esta evidencia duplicada necesita traduccion."),
+                CreateRecord("english-1", "This duplicate evidence is already in English."),
+                CreateRecord("spanish-2", "Esta evidencia duplicada necesita traduccion."),
+                CreateRecord("english-2", "This duplicate evidence is already in English."),
+            ],
+            cancellationToken
+        );
+
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            var language = text.StartsWith("Esta", StringComparison.Ordinal) ? "es" : "en";
+            result = new LanguageDetectionResult(
+                language,
+                0.99,
+                language == targetLanguage ? 0.99 : 0.01,
+                0.01,
+                false
+            );
+            error = null;
+            return true;
+        };
+        var candidatesWithoutReuse = scope.PathFor("candidates-without-reuse.jsonl");
+        var assessmentsWithoutReuse = scope.PathFor("assessments-without-reuse.jsonl");
+        var candidatesWithReuse = scope.PathFor("candidates-with-reuse.jsonl");
+        var assessmentsWithReuse = scope.PathFor("assessments-with-reuse.jsonl");
+
+        var statsWithoutReuse = await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            candidatesWithoutReuse,
+            assessmentsWithoutReuse,
+            CreateOptions(batchSize: 4),
+            cancellationToken,
+            detector,
+            reuseSuccessfulDetections: false
+        );
+        var statsWithReuse = await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            candidatesWithReuse,
+            assessmentsWithReuse,
+            CreateOptions(batchSize: 4),
+            cancellationToken,
+            detector,
+            reuseSuccessfulDetections: true
+        );
+
+        Assert.Equal(statsWithoutReuse, statsWithReuse);
+        Assert.Equal(
+            await File.ReadAllBytesAsync(candidatesWithoutReuse, cancellationToken),
+            await File.ReadAllBytesAsync(candidatesWithReuse, cancellationToken)
+        );
+        Assert.Equal(
+            await File.ReadAllBytesAsync(assessmentsWithoutReuse, cancellationToken),
+            await File.ReadAllBytesAsync(assessmentsWithReuse, cancellationToken)
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_CanonicalScoresRemoveDetectorTailJitter()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        const string duplicateText =
+            "This repeated linguistic evidence exercises floating point stability.";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            Enumerable
+                .Range(0, 2)
+                .Select(index => CreateRecord($"jitter-{index}", duplicateText)),
+            cancellationToken
+        );
+
+        static LanguageDetectionHandler CreateJitteringDetector()
+        {
+            var calls = 0;
+            return (
+                string text,
+                LanguageDetectionMode mode,
+                string targetLanguage,
+                out LanguageDetectionResult result,
+                out string? error
+            ) =>
+            {
+                var confidence =
+                    Interlocked.Increment(ref calls) == 1
+                        ? 0.9999996642380474
+                        : 0.9999996642380476;
+                result = new LanguageDetectionResult("en", confidence, confidence, 0.10, false);
+                error = null;
+                return true;
+            };
+        }
+
+        var baselineCandidates = scope.PathFor("baseline-candidates.jsonl");
+        var baselineAssessments = scope.PathFor("baseline-assessments.jsonl");
+        var reuseCandidates = scope.PathFor("reuse-candidates.jsonl");
+        var reuseAssessments = scope.PathFor("reuse-assessments.jsonl");
+        var options = CreateOptions(batchSize: 2) with { MaxDegreeOfParallelism = 1 };
+
+        var baselineStats = await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            baselineCandidates,
+            baselineAssessments,
+            options,
+            cancellationToken,
+            CreateJitteringDetector(),
+            reuseSuccessfulDetections: false
+        );
+        var reuseStats = await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            reuseCandidates,
+            reuseAssessments,
+            options,
+            cancellationToken,
+            CreateJitteringDetector(),
+            reuseSuccessfulDetections: true
+        );
+
+        Assert.Equal(baselineStats, reuseStats);
+        Assert.Equal(
+            await File.ReadAllBytesAsync(baselineCandidates, cancellationToken),
+            await File.ReadAllBytesAsync(reuseCandidates, cancellationToken)
+        );
+        Assert.Equal(
+            await File.ReadAllBytesAsync(baselineAssessments, cancellationToken),
+            await File.ReadAllBytesAsync(reuseAssessments, cancellationToken)
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_RawScoresDriveGatesWhenDisplayedScoresMatch()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                CreateRecord("confidence-below", "Confidence below the policy gate in Spanish evidence."),
+                CreateRecord("confidence-above", "Confidence above the policy gate in Spanish evidence."),
+                CreateRecord("margin-below", "Margin below the policy gate in Spanish evidence."),
+                CreateRecord("margin-above", "Margin above the policy gate in Spanish evidence."),
+            ],
+            cancellationToken
+        );
+
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            result = text switch
+            {
+                var value when value.StartsWith("Confidence below", StringComparison.Ordinal) =>
+                    new LanguageDetectionResult("es", 0.7999999999998, 0.10, 0.10, false),
+                var value when value.StartsWith("Confidence above", StringComparison.Ordinal) =>
+                    new LanguageDetectionResult("es", 0.8000000000002, 0.10, 0.10, false),
+                var value when value.StartsWith("Margin below", StringComparison.Ordinal) =>
+                    new LanguageDetectionResult("es", 0.90, 0.7000000000002, 0.10, false),
+                _ => new LanguageDetectionResult("es", 0.90, 0.6999999999998, 0.10, false),
+            };
+            error = null;
+            return true;
+        };
+
+        await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            scope.PathFor("candidates.jsonl"),
+            assessmentsPath,
+            CreateOptions(batchSize: 4),
+            cancellationToken,
+            detector,
+            reuseSuccessfulDetections: true
+        );
+
+        var lines = await File.ReadAllLinesAsync(assessmentsPath, cancellationToken);
+        Assert.Equal(4, lines.Length);
+        var decisions = new string[lines.Length];
+        var confidenceGates = new bool[lines.Length];
+        var marginGates = new bool[lines.Length];
+        var confidences = new double[lines.Length];
+        var margins = new double[lines.Length];
+        for (var index = 0; index < lines.Length; index++)
+        {
+            using var row = JsonDocument.Parse(lines[index]);
+            var root = row.RootElement;
+            decisions[index] = root.GetProperty("decision").GetString()!;
+            confidenceGates[index] = root.GetProperty("confidenceGatePassed").GetBoolean();
+            marginGates[index] = root.GetProperty("marginGatePassed").GetBoolean();
+            confidences[index] = root.GetProperty("confidence").GetDouble();
+            margins[index] = root.GetProperty("targetMargin").GetDouble();
+            Assert.Equal(
+                LanguageTriageCore.AssessmentScoreDecimalPlaces,
+                root.GetProperty("scoreDecimalPlaces").GetInt32()
+            );
+        }
+
+        Assert.Equal(["ambiguous", "translate", "ambiguous", "translate"], decisions);
+        Assert.Equal([false, true, true, true], confidenceGates);
+        Assert.Equal([true, true, false, true], marginGates);
+        Assert.Equal(confidences[0], confidences[1]);
+        Assert.Equal(margins[2], margins[3]);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ReuseDoesNotDetectDerivedOrNonLinguisticRecords()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        const string linguisticText = "This duplicate evidence has already been translated.";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                CreateDerivedRecord("derived-1", linguisticText),
+                CreateRecord("original", linguisticText),
+                CreateDerivedRecord("derived-2", linguisticText),
+                CreateRecord("identifier-1", "$SYNTH_TOKEN001"),
+                CreateRecord("identifier-2", "$SYNTH_TOKEN001"),
+            ],
+            cancellationToken
+        );
+        var detectorCalls = 0;
+
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            detectorCalls++;
+            result = new LanguageDetectionResult("en", 0.99, 0.99, 0.01, false);
+            error = null;
+            return true;
+        };
+
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        var stats = await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            scope.PathFor("candidates.jsonl"),
+            assessmentsPath,
+            CreateOptions(batchSize: 5),
+            cancellationToken,
+            detector,
+            reuseSuccessfulDetections: true
+        );
+
+        Assert.Equal(1, detectorCalls);
+        Assert.Equal(4, stats.NonLinguisticRecords);
+        Assert.Equal(
+            [
+                "already-derived",
+                "target-language",
+                "already-derived",
+                "non-linguistic",
+                "non-linguistic",
+            ],
+            await ReadDecisionsAsync(assessmentsPath, cancellationToken)
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessAsync_CancellationPreservesExistingOutputsWithOrWithoutReuse(
+        bool reuseSuccessfulDetections
+    )
+    {
+        var testCancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        using var cancellationSource = CancellationTokenSource.CreateLinkedTokenSource(
+            testCancellationToken
+        );
+        var inputPath = scope.PathFor("input.jsonl");
+        var candidatesPath = scope.PathFor("candidates.jsonl");
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        const string duplicateText = "This duplicate evidence exercises cancellation behavior.";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            Enumerable
+                .Range(0, 3)
+                .Select(index => CreateRecord($"cancellation-{index}", duplicateText)),
+            testCancellationToken
+        );
+        await File.WriteAllTextAsync(candidatesPath, "previous-candidates", testCancellationToken);
+        await File.WriteAllTextAsync(
+            assessmentsPath,
+            "previous-assessments",
+            testCancellationToken
+        );
+        var detectorCalls = 0;
+
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            detectorCalls++;
+            cancellationSource.Cancel();
+            result = new LanguageDetectionResult("en", 0.99, 0.99, 0.01, false);
+            error = null;
+            return true;
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            LanguageTriageCore.ProcessAsync(
+                inputPath,
+                candidatesPath,
+                assessmentsPath,
+                CreateOptions(batchSize: 3) with { MaxDegreeOfParallelism = 1 },
+                cancellationSource.Token,
+                detector,
+                reuseSuccessfulDetections: reuseSuccessfulDetections
+            )
+        );
+
+        Assert.Equal(1, detectorCalls);
+        Assert.Equal(
+            "previous-candidates",
+            await File.ReadAllTextAsync(candidatesPath, testCancellationToken)
+        );
+        Assert.Equal(
+            "previous-assessments",
+            await File.ReadAllTextAsync(assessmentsPath, testCancellationToken)
+        );
+        Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.partial.*"));
+    }
+
+    [Fact]
     public async Task ProcessAsync_RejectsIdentifierOnlyTextBeforeLanguageDetection()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -625,6 +1127,31 @@ public sealed class LanguageTriageCoreTests
             }
         );
 
+    private static string CreateDerivedRecord(string recordId, string text) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion = 1,
+                recordType = "string",
+                recordId,
+                text,
+                sourceFile = "sample.bin",
+                location = new { kind = "file_offset", value = "0x10" },
+                origin = new { extractor = "bstrings", version = "test", kind = "static" },
+                parentRecordId = "parent",
+                transform = new
+                {
+                    kind = "translation",
+                    engine = "test",
+                    engineVersion = "1",
+                    model = "test-model",
+                    revision = "test-revision",
+                    modelSha256 = new string('a', 64),
+                    targetLanguage = "en",
+                },
+            }
+        );
+
     private static async Task<string[]> ReadDecisionsAsync(
         string path,
         CancellationToken cancellationToken
@@ -638,6 +1165,21 @@ public sealed class LanguageTriageCoreTests
             decisions[index] = row.RootElement.GetProperty("decision").GetString()!;
         }
         return decisions;
+    }
+
+    private static async Task<string[]> ReadErrorsAsync(
+        string path,
+        CancellationToken cancellationToken
+    )
+    {
+        var lines = await File.ReadAllLinesAsync(path, cancellationToken);
+        var errors = new string[lines.Length];
+        for (var index = 0; index < lines.Length; index++)
+        {
+            using var row = JsonDocument.Parse(lines[index]);
+            errors[index] = row.RootElement.GetProperty("error").GetString()!;
+        }
+        return errors;
     }
 
     private static async Task<(

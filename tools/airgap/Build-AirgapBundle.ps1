@@ -864,6 +864,7 @@ $bundleDocumentNames = @(
     'enrichment-pipeline.md',
     'floss-standalone-redistribution.md',
     'forensic-reporting-2026-08.md',
+    'language-triage-performance-2026-08.md',
     'magika-cli-redistribution.md',
     'ocr-and-document-analysis.md',
     'ocr-benchmark-2026-08-05.md',
@@ -877,14 +878,16 @@ $bundleDocumentNames = @(
 $bundleArchitectureDocumentNames = @(
     'adr-0001-early-fail-open-content-routing.md',
     'adr-0003-persistent-verified-bytes-and-batched-releases.md',
+    'adr-0004-bounded-language-detection-reuse.md',
     'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(
     'forensic-pattern-catalog-2026-08.csv',
-    'forensic-report-projection-2026-08.csv'
+    'forensic-report-projection-2026-08.csv',
+    'language-triage-reuse-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.14.md'
+    'v1.9.15.md'
 )
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `
