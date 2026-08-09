@@ -34,7 +34,7 @@ function Get-Step([string]$Name) {
     return $match.Value
 }
 
-$dispatchPattern = '(?ms)^  workflow_dispatch:\r?\n    inputs:\r?\n      full_offline:\r?\n        description: .+\r?\n        required: false\r?\n        type: boolean\r?\n        default: false$'
+$dispatchPattern = '(?ms)^  workflow_dispatch:\r?\n    inputs:\r?\n      full_offline:\r?\n        description: .+\r?\n        required: false\r?\n        type: boolean\r?\n        default: false\r?$'
 Assert-Matches $workflow $dispatchPattern 'workflow_dispatch must define full_offline as a default-false boolean.'
 
 $offlineSteps = @(
