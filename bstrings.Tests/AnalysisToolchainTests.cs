@@ -240,7 +240,7 @@ public sealed class AnalysisToolchainTests
                 StringComparison.OrdinalIgnoreCase
             );
             Assert.Contains(
-                "github.com/Donovoi/bstrings/blob/v1.9.13/README.md#get-started",
+                "github.com/Donovoi/bstrings/blob/v1.9.14/README.md#get-started",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );

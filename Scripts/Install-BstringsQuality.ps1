@@ -2,7 +2,7 @@
 param(
     [string]$DestinationDirectory = (Join-Path (Get-Location).Path 'bstrings-quality'),
     [string]$InstallerCacheDirectory,
-    [string]$ReleaseTag = 'v1.9.13',
+    [string]$ReleaseTag = 'v1.9.14',
     [switch]$KeepCache,
     [ValidateRange(1, 10)]
     [int]$AcquireAttempts = 3,
@@ -19,7 +19,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$expectedReleaseTag = 'v1.9.13'
+$expectedReleaseTag = 'v1.9.14'
 $repository = 'Donovoi/bstrings'
 $qualityManifestName = 'bundle-packs-quality.json'
 $coreArchiveName = 'bstrings-win-x64.zip'
@@ -356,6 +356,9 @@ function Expand-VerifiedCore(
     [IO.Directory]::CreateDirectory($runtimeRoot) | Out-Null
     Assert-PhysicalItem $runtimeRoot 'Core runtime staging directory' $true | Out-Null
 
+    # Windows PowerShell 5.1 does not reliably load ZipArchive when only the
+    # FileSystem companion assembly is requested.
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = $null
     $archiveStream = $null

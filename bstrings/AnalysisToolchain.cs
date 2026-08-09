@@ -46,7 +46,7 @@ internal static class AnalysisToolchainLocator
     private const string OfflineBundleAcquisition =
         "Use the checked Install-BstringsQuality.ps1 asset from the latest GitHub Release "
         + "to install and verify the complete quality kit: "
-        + "https://github.com/Donovoi/bstrings/blob/v1.9.13/README.md#get-started";
+        + "https://github.com/Donovoi/bstrings/blob/v1.9.14/README.md#get-started";
 
     private const string ConfigurationFileName = "airgap-config.json";
     private const string MagikaUrl = "https://github.com/google/magika#command-line-tool";
