@@ -1,7 +1,7 @@
 # Enrichment pipeline
 
 This document describes the integrated workflow in current source and the
-complete v1.9.14 quality release. See
+complete v1.9.15 quality release. See
 [download and installation](download-and-install.md) before choosing a command,
 and never combine assets from different versions.
 
@@ -27,7 +27,7 @@ interface is one command:
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete v1.9.14 bundle contains every worker, runtime, model, and dependency
+The complete v1.9.15 bundle contains every worker, runtime, model, and dependency
 published for that version. It does not ask the user to install or invoke
 Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
@@ -140,7 +140,7 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.14 profile
+page. Images are always OCR inputs when the stage is enabled. The v1.9.15 profile
 defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
 per-path inference smoke test. Those smokes do not establish cross-provider
 parity or corpus-level quality. CUDA OCR is not part of the profile. See
@@ -179,7 +179,20 @@ hard cases. Use `--translation detect-only` to review the distribution, or
 `--translation all` when the cost is acceptable and the gate should not decide.
 
 Every assessment records detector version/profile, policy, thresholds,
-confidence values, decision, and source record ID.
+confidence values, decision, and source record ID. Policy decisions use the raw
+detector values. The five displayed score fields are serialized to 12 decimal
+places with round-to-even so parallel reductions cannot change report bytes in
+an insignificant final bit. `scoreDecimalPlaces`, `confidenceGatePassed`, and
+`marginGatePassed` make that reporting policy and each raw gate outcome
+explicit. These are detector confidence scores, not calibrated probabilities.
+
+Successful detections for ordinally identical eligible text are reused only
+inside the existing 2,048-record/8 MiB batch. Unsuccessful detections still
+retry per record; no text or result cache survives the batch. On the reviewed
+synthetic host, 50% batch-local duplication reduced median language-triage time
+by 45.9% in accurate mode and 47.7% in fast mode, while all-unique input did not
+regress. See the [performance review](language-triage-performance-2026-08.md)
+for the exact-output gates and limitations.
 
 ## Offline translation profile
 

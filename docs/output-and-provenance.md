@@ -1,6 +1,6 @@
 # Output, completion, and provenance
 
-The complete v1.9.14 quality kit produces native, FLOSS, OCR, language, and
+The complete v1.9.15 quality kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
 
@@ -100,7 +100,7 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-In current source and v1.9.14, every completed integrated `analyze` run
+In current source and v1.9.15, every completed integrated `analyze` run
 also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,
@@ -226,7 +226,9 @@ Full analysis can assess eligible text before translation. Each
 - accurate, fast, or adaptive profile;
 - target and predicted language;
 - predicted, target-language, and second-place confidence scores;
-- target-language margin and configured thresholds;
+- target-language margin, configured thresholds, and the declared 12-decimal
+  report-score precision;
+- explicit raw `confidenceGatePassed` and `marginGatePassed` outcomes;
 - high-recall, balanced, or high-precision policy;
 - decision and whether the source became a translation candidate; and
 - any detector error.
@@ -235,6 +237,12 @@ The assessment is useful even when a string is not translated: it explains why
 the record was treated as target-language, ambiguous, non-linguistic, or a
 translation candidate. High-recall policy sends uncertain detector failures to
 translation rather than silently discarding them.
+
+Classification and candidate membership use the detector's unrounded values.
+Only the five confidence/margin numbers written to JSON are rounded to the
+declared precision, preventing insignificant parallel floating-point tails
+from changing report hashes. The gate fields preserve the authoritative raw
+comparison when a displayed value lies next to a threshold.
 
 ## Translation lineage
 

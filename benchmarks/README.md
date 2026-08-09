@@ -8,7 +8,7 @@ version-matched quality bundle, the full enrichment workflow is:
 bstrings.exe analyze -f evidence.raw --full -o results
 ```
 
-The current complete quality bundle is v1.9.12. See
+The current complete quality bundle is v1.9.15. See
 [download and installation](../docs/download-and-install.md) before treating
 this example as a distribution command.
 
@@ -29,6 +29,29 @@ The parser's document memory is bounded, but exact per-file duplicate
 suppression still retains one record ID for every unique normalized record from
 that file. Treat that set as the next memory-scaling target for unusually
 prolific binaries.
+
+## Bounded language-detection reuse
+
+`LanguageTriageBenchmark` generates synthetic attributed string records and
+alternates the original one-detection-per-record path with bounded exact-text
+reuse. Every pair must reproduce identical assessment and translation-candidate
+files, logical statistics, and record counts before its timing is accepted.
+
+```powershell
+dotnet run --project .\benchmarks\LanguageTriageBenchmark -c Release -- `
+  --records 100000 `
+  --duplicate-percent 50 `
+  --rounds 7 `
+  --mode accurate `
+  --output C:\bench\language-triage-accurate.csv
+```
+
+The reviewed run covered 0%, 50%, and 95% batch-local duplication in accurate
+and fast modes. It also included a one-million-record scale pair and 20 rotated
+determinism pairs. See the
+[reviewed result](../docs/language-triage-performance-2026-08.md), the
+[machine-readable summary](results/language-triage-reuse-2026-08.csv), and the
+[decision record](../docs/architecture/adr-0004-bounded-language-detection-reuse.md).
 
 ## Prerequisites and comparison tools
 
