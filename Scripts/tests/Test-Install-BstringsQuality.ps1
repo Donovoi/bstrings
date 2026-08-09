@@ -14,7 +14,16 @@ if ($installerSource -cmatch '(?m)\bGet-FileHash\b') {
 if ($installerSource -cnotmatch '\[Security\.Cryptography\.SHA256\]::Create\(\)') {
     throw 'The quality installer must hash through the .NET SHA-256 API.'
 }
-$releaseTag = 'v1.9.12'
+if ($installerSource -cmatch '\[IO\.Compression\.ZipFile\]::OpenRead\(\$ArchivePath\)') {
+    throw 'Core extraction must not reopen an authenticated archive by path.'
+}
+if (
+    $installerSource -cnotmatch '(?s)\$archiveStream\s*=\s*\[IO\.FileStream\]::new\(.*?\[IO\.FileShare\]::Read' -or
+    $installerSource -cnotmatch '(?s)\[IO\.Compression\.ZipArchive\]::new\(\s*\$archiveStream'
+) {
+    throw 'Core hashing and extraction must use one write-denying leased archive stream.'
+}
+$releaseTag = 'v1.9.13'
 $testBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot = Join-Path $testBase (
     'bstrings-quality-installer-test-' + [Guid]::NewGuid().ToString('N')
@@ -39,18 +48,6 @@ function Assert-Equal([object]$Actual, [object]$Expected, [string]$Message) {
 function Assert-PathAbsent([string]$Path, [string]$Message) {
     if (Test-Path -LiteralPath $Path) {
         throw "$Message Unexpected path: $Path"
-    }
-}
-
-function Assert-PathWithin([string]$Candidate, [string]$Parent, [string]$Message) {
-    $resolvedCandidate = [IO.Path]::GetFullPath($Candidate)
-    $resolvedParent = [IO.Path]::GetFullPath($Parent).TrimEnd(
-        [IO.Path]::DirectorySeparatorChar,
-        [IO.Path]::AltDirectorySeparatorChar
-    )
-    $prefix = $resolvedParent + [IO.Path]::DirectorySeparatorChar
-    if (-not $resolvedCandidate.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "$Message Candidate '$resolvedCandidate' is not beneath '$resolvedParent'."
     }
 }
 
@@ -146,6 +143,11 @@ internal static class Program
         var cache = RequiredOption(args, "--cache");
         var output = RequiredOption(args, "--output");
         _ = RequiredOption(args, "--manifest");
+        var seedBundle = OptionalOption(args, "--seed-bundle");
+        if (seedBundle is not null && !Directory.Exists(seedBundle))
+        {
+            return 28;
+        }
         Directory.CreateDirectory(cache);
         File.WriteAllText(Path.Combine(cache, "stub-partial.cache"), "partial");
 
@@ -330,9 +332,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         request_path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         with request_log.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(request_path + "\n")
-        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v1.9.12"):
+        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v1.9.13"):
             candidate = root / "release.json"
-        elif "/Donovoi/bstrings/releases/download/v1.9.12/" in request_path:
+        elif "/Donovoi/bstrings/releases/download/v1.9.13/" in request_path:
             name = pathlib.PurePosixPath(request_path).name
             candidate = root / name
         else:
@@ -434,7 +436,8 @@ function New-ReleaseFixture(
     [switch]$WrongCoreChecksum,
     [switch]$WrongTrustChecksum,
     [switch]$WrongCoreApiDigest,
-    [switch]$NoncanonicalCoreUrl
+    [switch]$NoncanonicalCoreUrl,
+    [switch]$MutableRelease
 ) {
     $assetRoot = Join-Path $testRoot "fixture-$Name"
     [IO.Directory]::CreateDirectory($assetRoot) | Out-Null
@@ -511,6 +514,7 @@ function New-ReleaseFixture(
         tag_name = $releaseTag
         draft = $false
         prerelease = $false
+        immutable = -not $MutableRelease
         assets = @($assets)
     })
     return [pscustomobject]@{
@@ -591,6 +595,7 @@ function New-InstallerArguments(
     [string]$Cache,
     [int]$AcquireAttempts,
     [switch]$KeepCache,
+    [switch]$RemoveCacheAfterSuccess,
     [switch]$UseDefaultReleaseTag
 ) {
     $arguments = @{
@@ -608,6 +613,9 @@ function New-InstallerArguments(
     }
     if ($KeepCache) {
         $arguments.KeepCache = $true
+    }
+    if ($RemoveCacheAfterSuccess) {
+        $arguments.RemoveCacheAfterSuccess = $true
     }
     return $arguments
 }
@@ -755,10 +763,11 @@ try {
     })
 
     # A complete default-profile run must acquire quality, verify through the
-    # installed executable, use exact argument values, and clean its cache.
+    # installed executable, use exact argument values, and retain one shared
+    # cache whose release assets remain isolated under the exact tag.
     $successFixture = New-ReleaseFixture 'success' $coreArchive $airgapManifest
     $successDestination = Join-Path $testRoot ('destination success ' + [char]0x00b5)
-    $successCache = Join-Path $testRoot ".bstrings-quality-installer-cache\$releaseTag"
+    $successCache = Join-Path $testRoot '.bstrings-quality-installer-cache'
     $successEnvironment = New-StubEnvironment 'success' $airgapManifest
     $successArguments = New-InstallerArguments `
         $successFixture `
@@ -774,7 +783,10 @@ try {
         'The installer did not report completion at 100 percent.'
     Assert-True (Test-Path -LiteralPath (Join-Path $successDestination 'quality-profile.txt') -PathType Leaf) `
         'The successful installation did not publish the quality marker.'
-    Assert-PathAbsent $successCache 'A successful default installation did not clean its installer cache.'
+    Assert-True (Test-Path -LiteralPath $successCache -PathType Container) `
+        'A successful default installation did not retain its shared installer cache.'
+    Assert-True ($success.Text -cmatch 'Verified shared installer cache retained:') `
+        'The installer did not report the default shared cache lifetime accurately.'
     $successInvocations = @(Read-StubInvocations $successEnvironment.BSTRINGS_INSTALLER_STUB_LOG)
     Assert-Equal $successInvocations.Count 3 'A successful installation used an unexpected command count.'
     Assert-CommandPrefix $successInvocations[0] 'acquire'
@@ -783,13 +795,18 @@ try {
     $successManifestArgument = Get-InvocationOption $successInvocations[0] '--manifest'
     Assert-Equal ([IO.Path]::GetFileName($successManifestArgument)) 'bundle-packs-quality.json' `
         'The installer did not pass the quality trust manifest to bundle acquire.'
-    Assert-PathWithin $successManifestArgument $successCache `
-        'The installer staged its trust manifest outside its bounded cache.'
+    Assert-Equal `
+        ([IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($successManifestArgument))) `
+        ([IO.Path]::GetFullPath((Join-Path $successCache "release-assets\$releaseTag"))) `
+        'The installer did not isolate release assets under the exact release tag.'
     $successPackCacheArgument = Get-InvocationOption $successInvocations[0] '--cache'
     Assert-Equal `
         ([IO.Path]::GetFullPath($successPackCacheArgument)) `
         ([IO.Path]::GetFullPath((Join-Path $successCache 'bundle-packs'))) `
         'The installer passed the wrong owned pack cache to bundle acquire.'
+    Assert-True `
+        (-not ($successInvocations[0].Arguments -ccontains '--seed-bundle')) `
+        'A new installation unexpectedly attempted to seed from an installed bundle.'
     $successStaging = Get-InvocationOption $successInvocations[0] '--output'
     Assert-ReplacementStagingPath `
         $successStaging `
@@ -810,7 +827,7 @@ try {
 
     # With no DestinationDirectory argument, the one-command path must remain
     # relative to the caller, install only the quality profile, verify it, and
-    # remove the complete default cache tree.
+    # retain the caller-relative shared cache beside the installation.
     $defaultCallerRoot = Join-Path $testRoot (
         'default-caller-' + [Guid]::NewGuid().ToString('N')
     )
@@ -857,14 +874,15 @@ try {
     Assert-True `
         (Test-Path -LiteralPath (Join-Path $defaultCallerDestination 'quality-profile.txt') -PathType Leaf) `
         'The caller-relative default did not install the quality profile.'
-    Assert-PathAbsent $defaultCallerCacheParent `
-        'The caller-relative default left its installer cache behind.'
+    Assert-True (Test-Path -LiteralPath $defaultCallerCacheParent -PathType Container) `
+        'The caller-relative default did not retain its shared installer cache.'
     $defaultCallerChildren = @(Get-ChildItem -LiteralPath $defaultCallerRoot -Force)
-    Assert-Equal $defaultCallerChildren.Count 1 `
+    Assert-Equal $defaultCallerChildren.Count 2 `
         'The caller-relative default published content outside bstrings-quality.'
+    $defaultCallerChildNames = @($defaultCallerChildren.Name | Sort-Object)
     Assert-Equal `
-        ([IO.Path]::GetFullPath($defaultCallerChildren[0].FullName)) `
-        ([IO.Path]::GetFullPath($defaultCallerDestination)) `
+        ($defaultCallerChildNames -join '|') `
+        ((@('.bstrings-quality-installer-cache', 'bstrings-quality') | Sort-Object) -join '|') `
         'The caller-relative default published an unexpected top-level path.'
     $defaultCallerInvocations = @(
         Read-StubInvocations $defaultCallerEnvironment.BSTRINGS_INSTALLER_STUB_LOG
@@ -896,10 +914,10 @@ try {
         ([IO.Path]::GetFullPath((Join-Path $defaultCallerDestination 'bstrings.exe'))) `
         'The caller-relative default was not verified by its installed executable.'
 
-    # KeepCache retains only installer-owned cache material after a verified run.
+    # KeepCache remains a compatible explicit spelling of the new default.
     $keptFixture = New-ReleaseFixture 'kept-cache' $coreArchive $airgapManifest
     $keptDestination = Join-Path $testRoot 'destination-kept'
-    $keptCache = Join-Path $testRoot ".bstrings-quality-installer-cache\$releaseTag"
+    $keptCache = Join-Path $testRoot '.bstrings-quality-installer-cache'
     $keptEnvironment = New-StubEnvironment 'kept-cache' $airgapManifest
     $keptArguments = New-InstallerArguments `
         $keptFixture `
@@ -934,6 +952,111 @@ try {
     Assert-CommandPrefix $idempotentInvocations[3] 'acquire'
     Assert-CommandPrefix $idempotentInvocations[4] 'verify'
     Assert-CommandPrefix $idempotentInvocations[5] 'verify'
+    Assert-Equal `
+        ([IO.Path]::GetFullPath((Get-InvocationOption $idempotentInvocations[3] '--seed-bundle'))) `
+        ([IO.Path]::GetFullPath($keptDestination)) `
+        'The replacement did not offer the exact physical installed bundle as a cache seed.'
+
+    # Explicit cleanup removes the bounded shared default cache only after a
+    # fully verified installation. The compatibility spelling cannot conflict
+    # with cleanup, and caller-owned explicit caches are never removal targets.
+    $cleanupFixture = New-ReleaseFixture 'cleanup-cache' $coreArchive $airgapManifest
+    $cleanupDestination = Join-Path $testRoot 'destination-cleanup-cache'
+    $cleanupEnvironment = New-StubEnvironment 'cleanup-cache' $airgapManifest
+    Write-Utf8File `
+        (Join-Path $successCache 'v1.9.11\bundle-packs\legacy.cache') `
+        'legacy version-scoped installer cache'
+    Write-Utf8File `
+        (Join-Path $successCache '.core-runtime-0123456789abcdef0123456789abcdef\bstrings.exe') `
+        'interrupted installer runtime'
+    $cleanupArguments = New-InstallerArguments `
+        $cleanupFixture `
+        $cleanupDestination `
+        '' `
+        3 `
+        -RemoveCacheAfterSuccess
+    $cleanup = Invoke-Installer $cleanupArguments $cleanupEnvironment
+    Assert-True $cleanup.Succeeded "The explicit cache cleanup installation failed: $($cleanup.Text)"
+    Assert-PathAbsent $successCache `
+        'RemoveCacheAfterSuccess did not remove the bounded shared default cache.'
+    Assert-True ($cleanup.Text -cmatch 'Verified installer cache removed\.') `
+        'The installer did not report explicit cache cleanup accurately.'
+    Assert-True (Test-Path -LiteralPath $cleanupDestination -PathType Container) `
+        'Explicit cache cleanup removed or failed to publish the verified destination.'
+
+    $unownedCleanupFixture = New-ReleaseFixture `
+        'unowned-cache-cleanup' `
+        $coreArchive `
+        $airgapManifest
+    [IO.Directory]::CreateDirectory($successCache) | Out-Null
+    $unownedCacheSentinel = Join-Path $successCache 'must-survive.txt'
+    Write-Utf8File $unownedCacheSentinel 'unowned cache-root content'
+    $unownedCleanupDestination = Join-Path $testRoot 'destination-unowned-cache-cleanup'
+    $unownedCleanupEnvironment = New-StubEnvironment `
+        'unowned-cache-cleanup' `
+        $airgapManifest
+    $unownedCleanupArguments = New-InstallerArguments `
+        $unownedCleanupFixture `
+        $unownedCleanupDestination `
+        '' `
+        3 `
+        -RemoveCacheAfterSuccess
+    $unownedCleanup = Invoke-Installer `
+        $unownedCleanupArguments `
+        $unownedCleanupEnvironment
+    Assert-InstallerFailed `
+        $unownedCleanup `
+        'unowned top-level entries' `
+        'Unowned shared-cache cleanup'
+    Assert-True (Test-Path -LiteralPath $unownedCacheSentinel -PathType Leaf) `
+        'Bounded cache cleanup removed an unowned top-level file.'
+    Assert-True (Test-Path -LiteralPath $unownedCleanupDestination -PathType Container) `
+        'Rejected cache cleanup rolled back the already verified installation.'
+
+    $conflictFixture = New-ReleaseFixture 'cache-switch-conflict' $coreArchive $airgapManifest
+    $conflictDestination = Join-Path $testRoot 'destination-cache-switch-conflict'
+    $conflictEnvironment = New-StubEnvironment 'cache-switch-conflict' $airgapManifest
+    $conflictArguments = New-InstallerArguments `
+        $conflictFixture `
+        $conflictDestination `
+        '' `
+        3 `
+        -KeepCache `
+        -RemoveCacheAfterSuccess
+    $conflict = Invoke-Installer $conflictArguments $conflictEnvironment
+    Assert-InstallerFailed `
+        $conflict `
+        'KeepCache and RemoveCacheAfterSuccess cannot be used together' `
+        'Conflicting cache lifecycle switches'
+    Assert-PathAbsent $conflictDestination `
+        'Conflicting cache lifecycle switches created a destination.'
+
+    $explicitCleanupFixture = New-ReleaseFixture `
+        'explicit-cache-cleanup-conflict' `
+        $coreArchive `
+        $airgapManifest
+    $explicitCleanupDestination = Join-Path $testRoot 'destination-explicit-cache-cleanup-conflict'
+    $explicitCleanupCache = Join-Path $testRoot 'caller-owned-cache-cleanup-conflict'
+    $explicitCleanupEnvironment = New-StubEnvironment `
+        'explicit-cache-cleanup-conflict' `
+        $airgapManifest
+    $explicitCleanupArguments = New-InstallerArguments `
+        $explicitCleanupFixture `
+        $explicitCleanupDestination `
+        $explicitCleanupCache `
+        3 `
+        -RemoveCacheAfterSuccess
+    $explicitCleanup = Invoke-Installer `
+        $explicitCleanupArguments `
+        $explicitCleanupEnvironment
+    Assert-InstallerFailed `
+        $explicitCleanup `
+        'cannot remove a caller-owned InstallerCacheDirectory' `
+        'Caller-owned cache cleanup'
+    Assert-PathAbsent $explicitCleanupCache `
+        'Rejected caller-owned cache cleanup created or removed cache state.'
+    Assert-PathAbsent $explicitCleanupDestination `
+        'Rejected caller-owned cache cleanup created a destination.'
 
     # A transient acquire failure must retry against the same manifest, cache,
     # and output paths before performing one installed verification.
@@ -978,6 +1101,12 @@ try {
         ([string](Get-InvocationOption $retryInvocations[0] '--cache')) `
         ([IO.Path]::GetFullPath((Join-Path $retryCache 'bundle-packs'))) `
         'The installer did not use the exact explicit cache root for bundle packs.'
+    Assert-Equal `
+        ([IO.Path]::GetFullPath([IO.Path]::GetDirectoryName(
+            (Get-InvocationOption $retryInvocations[0] '--manifest')
+        ))) `
+        ([IO.Path]::GetFullPath((Join-Path $retryCache "release-assets\$releaseTag"))) `
+        'The explicit cache did not isolate release assets under the exact tag.'
     $retryStaging = Get-InvocationOption $retryInvocations[0] '--output'
     Assert-ReplacementStagingPath `
         $retryStaging `
@@ -1089,8 +1218,27 @@ try {
     Assert-PathAbsent $trustHashEnvironment.BSTRINGS_INSTALLER_STUB_LOG `
         'A trust-manifest hash mismatch executed bstrings.exe.'
 
-    # GitHub release metadata is an independent size/digest and URL binding.
-    # A bad API digest or noncanonical tagged URL must fail before extraction.
+    # GitHub release metadata is an independent publication-state, size/digest,
+    # and URL binding. Mutable or mismatched metadata must fail before extraction.
+    $mutableFixture = New-ReleaseFixture `
+        'mutable-release' `
+        $coreArchive `
+        $airgapManifest `
+        -MutableRelease
+    $mutableDestination = Join-Path $testRoot 'destination-mutable-release'
+    $mutableCache = Join-Path $testRoot 'cache-mutable-release'
+    $mutableEnvironment = New-StubEnvironment 'mutable-release' $airgapManifest
+    $mutableArguments = New-InstallerArguments `
+        $mutableFixture `
+        $mutableDestination `
+        $mutableCache `
+        1
+    $mutable = Invoke-Installer $mutableArguments $mutableEnvironment
+    Assert-InstallerFailed $mutable 'immutable published' 'Mutable release metadata'
+    Assert-PathAbsent $mutableDestination 'Mutable release metadata created the destination.'
+    Assert-PathAbsent $mutableEnvironment.BSTRINGS_INSTALLER_STUB_LOG `
+        'Mutable release metadata executed bstrings.exe.'
+
     $apiDigestFixture = New-ReleaseFixture `
         'wrong-api-digest' `
         $coreArchive `
@@ -1173,6 +1321,10 @@ try {
     Assert-CommandPrefix $existingInvocations[0] 'acquire'
     Assert-CommandPrefix $existingInvocations[1] 'verify'
     Assert-CommandPrefix $existingInvocations[2] 'verify'
+    Assert-Equal `
+        ([IO.Path]::GetFullPath((Get-InvocationOption $existingInvocations[0] '--seed-bundle'))) `
+        ([IO.Path]::GetFullPath($existingDestination)) `
+        'The stale-destination refresh did not bound seeding to the installed bundle.'
 
     # If the installed-path verification fails after the swap, the complete
     # previous destination must be restored and the staged replacement removed.
@@ -1208,6 +1360,10 @@ try {
     Assert-CommandPrefix $rollbackInvocations[0] 'acquire'
     Assert-CommandPrefix $rollbackInvocations[1] 'verify'
     Assert-CommandPrefix $rollbackInvocations[2] 'verify'
+    Assert-Equal `
+        ([IO.Path]::GetFullPath((Get-InvocationOption $rollbackInvocations[0] '--seed-bundle'))) `
+        ([IO.Path]::GetFullPath($rollbackDestination)) `
+        'The rollback refresh did not seed only from the existing destination.'
     Assert-True (Test-Path -LiteralPath $rollbackCache -PathType Container) `
         'The failed replacement unexpectedly removed its resumable cache.'
 

@@ -2,12 +2,16 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
@@ -61,6 +65,11 @@ internal static class BundlePackInstaller
     private const int MaximumRedirects = 8;
     private const long MaximumTrustManifestBytes = 4L * 1024 * 1024;
     private const int CopyBufferBytes = 1024 * 1024;
+    private const string ContentStoreSchema = "v1";
+    private const string ContentStoreDirectoryName = "objects";
+    private const string PartialStoreDirectoryName = "partials";
+    private static readonly TimeSpan ObjectLeaseTimeout = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan ObjectLeasePollInterval = TimeSpan.FromMilliseconds(200);
 
     internal static string DefaultManifestPath =>
         Path.Combine(AppContext.BaseDirectory, PackManifestFileName);
@@ -71,7 +80,8 @@ internal static class BundlePackInstaller
         string outputDirectory,
         CancellationToken cancellationToken = default,
         HttpMessageHandler? messageHandler = null,
-        Action<string, long, long>? progress = null
+        Action<string, long, long>? progress = null,
+        string? seedBundleDirectory = null
     )
     {
         var manifest = ReadTrustManifest(manifestPath);
@@ -84,20 +94,37 @@ internal static class BundlePackInstaller
             "bundle output parent"
         );
         EnsurePhysicalDirectory(cache, "bundle pack cache");
+        var seedBundle = ResolveSeedBundleDirectory(seedBundleDirectory);
+        var invocationDirectory = CreateInvocationDirectory(cache);
 
-        var ownsHandler = messageHandler is null;
-        messageHandler ??= CreateDefaultHandler();
-        using var client = new HttpClient(messageHandler, disposeHandler: ownsHandler)
+        try
         {
-            Timeout = Timeout.InfiniteTimeSpan,
-        };
-        foreach (var pack in manifest.Packs)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await AcquirePackAsync(client, cache, pack, cancellationToken, progress);
+            var ownsHandler = messageHandler is null;
+            messageHandler ??= CreateDefaultHandler();
+            using var client = new HttpClient(messageHandler, disposeHandler: ownsHandler)
+            {
+                Timeout = Timeout.InfiniteTimeSpan,
+            };
+            foreach (var pack in manifest.Packs)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await AcquirePackAsync(
+                    client,
+                    cache,
+                    invocationDirectory,
+                    seedBundle,
+                    pack,
+                    cancellationToken,
+                    progress
+                );
+            }
+
+            return AssembleCore(manifest, cache, output, cancellationToken, progress);
         }
-
-        return AssembleCore(manifest, cache, output, cancellationToken, progress);
+        finally
+        {
+            DeleteInvocationDirectory(invocationDirectory);
+        }
     }
 
     internal static BundlePackInstallationResult Assemble(
@@ -112,7 +139,29 @@ internal static class BundlePackInstaller
         var cache = ResolveCacheDirectory(manifest, cacheDirectory);
         var output = NormalizeAbsentOutput(outputDirectory);
         ValidateCacheDoesNotCreateOutput(cache, output);
-        return AssembleCore(manifest, cache, output, cancellationToken, progress);
+        if (!Directory.Exists(cache))
+        {
+            throw new DirectoryNotFoundException(
+                $"Bundle pack cache directory was not found: '{cache}'."
+            );
+        }
+        RejectExistingReparsePoints(cache, "bundle pack cache");
+        var invocationDirectory = CreateInvocationDirectory(cache);
+        try
+        {
+            ImportLegacyPacksForAssembly(
+                manifest,
+                cache,
+                invocationDirectory,
+                cancellationToken,
+                progress
+            );
+            return AssembleCore(manifest, cache, output, cancellationToken, progress);
+        }
+        finally
+        {
+            DeleteInvocationDirectory(invocationDirectory);
+        }
     }
 
     internal static BundlePackTrustManifest ReadTrustManifest(string? manifestPath)
@@ -356,83 +405,131 @@ internal static class BundlePackInstaller
     private static async Task AcquirePackAsync(
         HttpClient client,
         string cacheDirectory,
+        string invocationDirectory,
+        string? seedBundleDirectory,
         BundlePackDefinition pack,
         CancellationToken cancellationToken,
         Action<string, long, long>? progress
     )
     {
-        var finalPath = PackPath(cacheDirectory, pack);
-        var partialPath = finalPath + ".partial";
-        ValidateCacheEntry(finalPath, "cached bundle pack");
-        ValidateCacheEntry(partialPath, "partial bundle pack");
-        if (File.Exists(finalPath) && TryVerifyPack(finalPath, pack, progress))
+        var objectPath = ContentObjectPath(cacheDirectory, pack);
+        EnsureContentObjectParent(cacheDirectory, objectPath);
+        ValidateCacheEntry(objectPath, "cached bundle pack object");
+        if (File.Exists(objectPath))
         {
-            if (File.Exists(partialPath))
+            RejectHardLinkedPath(objectPath, $"cached bundle pack object '{pack.Id}'");
+            if (TryVerifyPack(objectPath, pack, progress))
             {
-                File.Delete(partialPath);
+                return;
             }
+        }
+
+        await using var lease = await AcquireObjectLeaseAsync(
+            ObjectLeasePath(objectPath),
+            cancellationToken
+        );
+        if (
+            TryUseOrQuarantineContentObject(
+                objectPath,
+                invocationDirectory,
+                pack,
+                progress
+            )
+        )
+        {
             return;
         }
 
-        var offset = 0L;
-        if (File.Exists(partialPath))
+        if (
+            TryImportVerifiedSource(
+                LegacyPackPath(cacheDirectory, pack),
+                "legacy cached bundle pack",
+                objectPath,
+                invocationDirectory,
+                pack,
+                cancellationToken,
+                progress
+            )
+        )
         {
-            var partialLength = new FileInfo(partialPath).Length;
-            if (partialLength == pack.Bytes && TryVerifyPack(partialPath, pack, progress))
-            {
-                MoveVerifiedPartial(partialPath, finalPath);
-                return;
-            }
-            if (partialLength >= pack.Bytes)
-            {
-                File.Delete(partialPath);
-            }
-            else
-            {
-                offset = partialLength;
-            }
+            return;
+        }
+        if (
+            pack.Kind == BundlePackKind.File
+            && seedBundleDirectory is not null
+            && TryImportVerifiedSource(
+                ResolveSeedPackPath(seedBundleDirectory, pack),
+                "seed bundle file pack",
+                objectPath,
+                invocationDirectory,
+                pack,
+                cancellationToken,
+                progress
+            )
+        )
+        {
+            return;
         }
 
+        var parkedPartialPath = ParkedPartialPath(objectPath);
+        var offset = InspectParkedPartial(parkedPartialPath, pack, progress);
         try
         {
+            if (offset == pack.Bytes)
+            {
+                PublishVerifiedObject(
+                    parkedPartialPath,
+                    objectPath,
+                    invocationDirectory,
+                    pack,
+                    progress
+                );
+                return;
+            }
             await DownloadPackOnceAsync(
                 client,
                 pack,
-                partialPath,
+                parkedPartialPath,
                 offset,
                 cancellationToken,
                 progress
             );
-            if (!TryVerifyPack(partialPath, pack, progress))
+            if (!TryVerifyPack(parkedPartialPath, pack, progress))
             {
                 if (offset == 0)
                 {
-                    File.Delete(partialPath);
+                    File.Delete(parkedPartialPath);
                     throw new InvalidDataException(
                         $"Downloaded bundle pack '{pack.Id}' failed its exact SHA-256 verification."
                     );
                 }
 
-                File.Delete(partialPath);
+                File.Delete(parkedPartialPath);
                 await DownloadPackOnceAsync(
                     client,
                     pack,
-                    partialPath,
+                    parkedPartialPath,
                     offset: 0,
                     cancellationToken,
                     progress
                 );
                 try
                 {
-                    VerifyPack(partialPath, pack, progress);
+                    VerifyPack(parkedPartialPath, pack, progress);
                 }
                 catch
                 {
-                    File.Delete(partialPath);
+                    File.Delete(parkedPartialPath);
                     throw;
                 }
             }
-            MoveVerifiedPartial(partialPath, finalPath);
+            PublishVerifiedObject(
+                parkedPartialPath,
+                objectPath,
+                invocationDirectory,
+                pack,
+                progress
+            );
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -451,6 +548,10 @@ internal static class BundlePackInstaller
                 $"Bundle pack '{pack.Id}' could not be acquired and verified safely: {ex.Message}",
                 ex
             );
+        }
+        finally
+        {
+            NormalizeParkedPartial(parkedPartialPath, pack, progress);
         }
     }
 
@@ -518,6 +619,7 @@ internal static class BundlePackInstaller
             CopyBufferBytes,
             FileOptions.Asynchronous | FileOptions.SequentialScan
         );
+        RejectHardLinkedFile(output, $"partial bundle pack '{pack.Id}'");
         if (writeOffset == 0)
         {
             output.SetLength(0);
@@ -754,12 +856,12 @@ internal static class BundlePackInstaller
             foreach (var pack in manifest.Packs)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var path = PackPath(cacheDirectory, pack);
-                ValidateCacheEntry(path, "cached bundle pack");
+                var path = ContentObjectPath(cacheDirectory, pack);
+                ValidateCacheEntry(path, "cached bundle pack object");
                 if (!File.Exists(path))
                 {
                     throw new FileNotFoundException(
-                        $"Verified bundle pack '{pack.Id}' is missing from the cache.",
+                        $"Verified bundle pack object '{pack.Id}' is missing from the cache.",
                         path
                     );
                 }
@@ -1286,6 +1388,125 @@ internal static class BundlePackInstaller
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
     }
 
+    private static string? ResolveSeedBundleDirectory(string? seedBundleDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(seedBundleDirectory))
+        {
+            return null;
+        }
+        var path = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(seedBundleDirectory)
+        );
+        if (IsLinkOrReparsePoint(path))
+        {
+            throw new InvalidDataException(
+                "The seed bundle directory is a link or reparse point."
+            );
+        }
+        if (!Directory.Exists(path))
+        {
+            throw new DirectoryNotFoundException(
+                $"Seed bundle directory was not found: '{path}'."
+            );
+        }
+        RejectExistingReparsePoints(path, "seed bundle directory");
+        return path;
+    }
+
+    private static string ResolveSeedPackPath(
+        string seedBundleDirectory,
+        BundlePackDefinition pack
+    )
+    {
+        var target = pack.Target
+            ?? throw new InvalidDataException(
+                $"File bundle pack '{pack.Id}' has no seed target."
+            );
+        var path = Path.GetFullPath(
+            Path.Combine(
+                seedBundleDirectory,
+                target.Replace('/', Path.DirectorySeparatorChar)
+            )
+        );
+        EnsurePathWithinRoot(seedBundleDirectory, path, "seed bundle file pack");
+        return path;
+    }
+
+    private static string CreateInvocationDirectory(string cacheDirectory)
+    {
+        var partialRoot = Path.Combine(cacheDirectory, PartialStoreDirectoryName);
+        EnsurePathWithinRoot(cacheDirectory, partialRoot, "bundle pack partial root");
+        EnsurePhysicalDirectory(partialRoot, "bundle pack partial root");
+        var invocationDirectory = Path.Combine(partialRoot, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(invocationDirectory);
+        RejectExistingReparsePoints(
+            invocationDirectory,
+            "bundle pack invocation workspace"
+        );
+        return invocationDirectory;
+    }
+
+    private static void DeleteInvocationDirectory(string invocationDirectory)
+    {
+        if (!Directory.Exists(invocationDirectory))
+        {
+            return;
+        }
+        RejectExistingReparsePoints(
+            invocationDirectory,
+            "bundle pack invocation workspace"
+        );
+        Directory.Delete(invocationDirectory, recursive: true);
+    }
+
+    private static void ImportLegacyPacksForAssembly(
+        BundlePackTrustManifest manifest,
+        string cacheDirectory,
+        string invocationDirectory,
+        CancellationToken cancellationToken,
+        Action<string, long, long>? progress
+    )
+    {
+        foreach (var pack in manifest.Packs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var objectPath = ContentObjectPath(cacheDirectory, pack);
+            EnsureContentObjectParent(cacheDirectory, objectPath);
+            ValidateCacheEntry(objectPath, "cached bundle pack object");
+            if (File.Exists(objectPath) && TryVerifyPack(objectPath, pack, progress))
+            {
+                continue;
+            }
+            using var lease = AcquireObjectLeaseAsync(
+                    ObjectLeasePath(objectPath),
+                    cancellationToken
+                )
+                .GetAwaiter()
+                .GetResult();
+            if (
+                TryUseOrQuarantineContentObject(
+                    objectPath,
+                    invocationDirectory,
+                    pack,
+                    progress
+                )
+            )
+            {
+                continue;
+            }
+            TryImportVerifiedSource(
+                LegacyPackPath(cacheDirectory, pack),
+                "legacy cached bundle pack",
+                objectPath,
+                invocationDirectory,
+                pack,
+                cancellationToken,
+                progress,
+                rejectInvalidSource: true
+            );
+        }
+    }
+
     private static string NormalizeAbsentOutput(string outputDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
@@ -1396,16 +1617,393 @@ internal static class BundlePackInstaller
             || new DirectoryInfo(path).LinkTarget is not null;
     }
 
-    private static string PackPath(string cacheDirectory, BundlePackDefinition pack) =>
+    internal static string ContentObjectPath(
+        string cacheDirectory,
+        BundlePackDefinition pack
+    )
+    {
+        var cache = Path.TrimEndingDirectorySeparator(Path.GetFullPath(cacheDirectory));
+        var kind = pack.Kind == BundlePackKind.Zip ? "zip" : "file";
+        var path = Path.GetFullPath(
+            Path.Combine(
+                cache,
+                ContentStoreDirectoryName,
+                ContentStoreSchema,
+                kind,
+                pack.Bytes.ToString(CultureInfo.InvariantCulture),
+                pack.Sha256[..2],
+                pack.Sha256 + ".object"
+            )
+        );
+        EnsurePathWithinRoot(cache, path, "bundle pack content object");
+        return path;
+    }
+
+    private static string LegacyPackPath(
+        string cacheDirectory,
+        BundlePackDefinition pack
+    ) =>
         Path.Combine(
             cacheDirectory,
             pack.Id + (pack.Kind == BundlePackKind.Zip ? ".zip" : ".file")
         );
 
-    private static void MoveVerifiedPartial(string partialPath, string finalPath)
+    private static string ObjectLeasePath(string objectPath) => objectPath + ".lock";
+
+    private static string ParkedPartialPath(string objectPath) => objectPath + ".partial";
+
+    private static void EnsureContentObjectParent(
+        string cacheDirectory,
+        string objectPath
+    )
     {
-        ValidateCacheEntry(finalPath, "cached bundle pack");
-        File.Move(partialPath, finalPath, overwrite: true);
+        EnsurePathWithinRoot(cacheDirectory, objectPath, "bundle pack content object");
+        EnsurePhysicalDirectory(
+            Path.GetDirectoryName(objectPath)
+                ?? throw new InvalidDataException(
+                    "Bundle pack content object has no parent directory."
+                ),
+            "bundle pack content object parent"
+        );
+    }
+
+    private static void EnsurePathWithinRoot(
+        string rootDirectory,
+        string path,
+        string description
+    )
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootDirectory));
+        var candidate = Path.GetFullPath(path);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (
+            string.Equals(root, candidate, comparison)
+            || !candidate.StartsWith(root + Path.DirectorySeparatorChar, comparison)
+        )
+        {
+            throw new InvalidDataException(
+                $"The {description} escapes its bounded physical root."
+            );
+        }
+    }
+
+    private static async Task<FileStream> AcquireObjectLeaseAsync(
+        string leasePath,
+        CancellationToken cancellationToken
+    )
+    {
+        var timer = Stopwatch.StartNew();
+        IOException? lastError = null;
+        while (timer.Elapsed < ObjectLeaseTimeout)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ValidateCacheEntry(leasePath, "bundle pack object lease");
+            try
+            {
+                var lease = new FileStream(
+                    leasePath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    1,
+                    FileOptions.Asynchronous
+                );
+                try
+                {
+                    ValidateCacheEntry(leasePath, "bundle pack object lease");
+                    return lease;
+                }
+                catch
+                {
+                    lease.Dispose();
+                    throw;
+                }
+            }
+            catch (IOException ex)
+            {
+                lastError = ex;
+                var remaining = ObjectLeaseTimeout - timer.Elapsed;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    break;
+                }
+                await Task.Delay(
+                    remaining < ObjectLeasePollInterval
+                        ? remaining
+                        : ObjectLeasePollInterval,
+                    cancellationToken
+                );
+            }
+        }
+        throw new IOException(
+            $"Timed out waiting for exclusive ownership of bundle pack object lease '{leasePath}'.",
+            lastError
+        );
+    }
+
+    private static bool TryUseOrQuarantineContentObject(
+        string objectPath,
+        string invocationDirectory,
+        BundlePackDefinition pack,
+        Action<string, long, long>? progress
+    )
+    {
+        ValidateCacheEntry(objectPath, "cached bundle pack object");
+        if (!File.Exists(objectPath))
+        {
+            return false;
+        }
+        RejectHardLinkedPath(objectPath, $"cached bundle pack object '{pack.Id}'");
+        if (TryVerifyPack(objectPath, pack, progress))
+        {
+            return true;
+        }
+
+        var quarantinePath = Path.Combine(
+            invocationDirectory,
+            $"quarantine.{Guid.NewGuid():N}.object"
+        );
+        try
+        {
+            File.Move(objectPath, quarantinePath, overwrite: false);
+            return false;
+        }
+        catch (IOException ex)
+        {
+            if (File.Exists(objectPath) && TryVerifyPack(objectPath, pack, progress))
+            {
+                return true;
+            }
+            throw new InvalidDataException(
+                $"Corrupt bundle pack object '{pack.Id}' could not be quarantined safely.",
+                ex
+            );
+        }
+    }
+
+    private static bool TryImportVerifiedSource(
+        string sourcePath,
+        string sourceDescription,
+        string objectPath,
+        string invocationDirectory,
+        BundlePackDefinition pack,
+        CancellationToken cancellationToken,
+        Action<string, long, long>? progress,
+        bool rejectInvalidSource = false
+    )
+    {
+        ValidateCacheEntry(sourcePath, sourceDescription);
+        if (!File.Exists(sourcePath))
+        {
+            return false;
+        }
+
+        var candidatePath = Path.Combine(
+            invocationDirectory,
+            $"import.{Guid.NewGuid():N}.partial"
+        );
+        try
+        {
+            using var source = new FileStream(
+                sourcePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                CopyBufferBytes,
+                FileOptions.SequentialScan
+            );
+            try
+            {
+                VerifyPack(source, pack, progress);
+            }
+            catch (InvalidDataException ex)
+            {
+                if (rejectInvalidSource)
+                {
+                    throw new InvalidDataException(
+                        $"The {sourceDescription} '{pack.Id}' failed exact verification: {ex.Message}",
+                        ex
+                    );
+                }
+                return false;
+            }
+
+            using (
+                var candidate = new FileStream(
+                    candidatePath,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None,
+                    CopyBufferBytes,
+                    FileOptions.SequentialScan
+                )
+            )
+            {
+                source.Position = 0;
+                CopyExactPack(
+                    source,
+                    candidate,
+                    pack,
+                    cancellationToken,
+                    progress
+                );
+                candidate.Flush(flushToDisk: true);
+            }
+            PublishVerifiedObject(
+                candidatePath,
+                objectPath,
+                invocationDirectory,
+                pack,
+                progress
+            );
+            return true;
+        }
+        catch (InvalidDataException)
+        {
+            if (rejectInvalidSource)
+            {
+                throw;
+            }
+            return false;
+        }
+        finally
+        {
+            if (File.Exists(candidatePath))
+            {
+                File.Delete(candidatePath);
+            }
+        }
+    }
+
+    private static void CopyExactPack(
+        FileStream source,
+        FileStream destination,
+        BundlePackDefinition pack,
+        CancellationToken cancellationToken,
+        Action<string, long, long>? progress
+    )
+    {
+        var buffer = new byte[CopyBufferBytes];
+        var copied = 0L;
+        progress?.Invoke($"bundle pack import ({pack.Id})", 0, pack.Bytes);
+        while (copied < pack.Bytes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var requested = (int)Math.Min(buffer.Length, pack.Bytes - copied);
+            var read = source.Read(buffer, 0, requested);
+            if (read == 0)
+            {
+                throw new InvalidDataException(
+                    $"Bundle pack import source '{pack.Id}' ended before its verified length."
+                );
+            }
+            destination.Write(buffer, 0, read);
+            copied = checked(copied + read);
+            progress?.Invoke($"bundle pack import ({pack.Id})", copied, pack.Bytes);
+        }
+        if (source.ReadByte() != -1)
+        {
+            throw new InvalidDataException(
+                $"Bundle pack import source '{pack.Id}' exceeded its verified length."
+            );
+        }
+        if (destination.Length != pack.Bytes)
+        {
+            throw new InvalidDataException(
+                $"Bundle pack import candidate '{pack.Id}' has an unexpected length."
+            );
+        }
+    }
+
+    private static long InspectParkedPartial(
+        string parkedPartialPath,
+        BundlePackDefinition pack,
+        Action<string, long, long>? progress
+    )
+    {
+        ValidateCacheEntry(parkedPartialPath, "parked partial bundle pack object");
+        if (!File.Exists(parkedPartialPath))
+        {
+            return 0;
+        }
+        var length = new FileInfo(parkedPartialPath).Length;
+        if (length <= 0 || length > pack.Bytes)
+        {
+            File.Delete(parkedPartialPath);
+            return 0;
+        }
+        if (length == pack.Bytes && !TryVerifyPack(parkedPartialPath, pack, progress))
+        {
+            File.Delete(parkedPartialPath);
+            return 0;
+        }
+        return length;
+    }
+
+    private static void NormalizeParkedPartial(
+        string parkedPartialPath,
+        BundlePackDefinition pack,
+        Action<string, long, long>? progress
+    )
+    {
+        if (!File.Exists(parkedPartialPath))
+        {
+            return;
+        }
+        ValidateCacheEntry(parkedPartialPath, "parked partial bundle pack object");
+        var length = new FileInfo(parkedPartialPath).Length;
+        if (
+            length <= 0
+            || length > pack.Bytes
+            || (length == pack.Bytes && !TryVerifyPack(parkedPartialPath, pack, progress))
+        )
+        {
+            File.Delete(parkedPartialPath);
+        }
+    }
+
+    private static void PublishVerifiedObject(
+        string candidatePath,
+        string objectPath,
+        string invocationDirectory,
+        BundlePackDefinition pack,
+        Action<string, long, long>? progress
+    )
+    {
+        ValidateCacheEntry(candidatePath, "verified bundle pack publication candidate");
+        VerifyPack(candidatePath, pack, progress);
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            if (
+                TryUseOrQuarantineContentObject(
+                    objectPath,
+                    invocationDirectory,
+                    pack,
+                    progress
+                )
+            )
+            {
+                File.Delete(candidatePath);
+                return;
+            }
+            try
+            {
+                RejectExistingReparsePoints(
+                    Path.GetDirectoryName(objectPath)!,
+                    "bundle pack content object parent"
+                );
+                File.Move(candidatePath, objectPath, overwrite: false);
+                return;
+            }
+            catch (IOException) when (File.Exists(objectPath))
+            {
+            }
+        }
+        throw new IOException(
+            $"Verified bundle pack object '{pack.Id}' could not be published atomically."
+        );
     }
 
     private static bool TryVerifyPack(
@@ -1448,6 +2046,7 @@ internal static class BundlePackInstaller
         Action<string, long, long>? progress
     )
     {
+        RejectHardLinkedFile(stream, $"bundle pack '{pack.Id}'");
         if (stream.Length != pack.Bytes)
         {
             throw new InvalidDataException(
@@ -1475,6 +2074,62 @@ internal static class BundlePackInstaller
             );
         }
         stream.Position = 0;
+    }
+
+    private static void RejectHardLinkedFile(FileStream stream, string description)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        if (!GetFileInformationByHandle(stream.SafeFileHandle, out var information))
+        {
+            throw new InvalidDataException(
+                $"Could not inspect the physical link identity of {description}.",
+                new Win32Exception(Marshal.GetLastWin32Error())
+            );
+        }
+        if (information.NumberOfLinks != 1)
+        {
+            throw new InvalidDataException(
+                $"The {description} must have exactly one physical filesystem link."
+            );
+        }
+    }
+
+    private static void RejectHardLinkedPath(string path, string description)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            1,
+            FileOptions.SequentialScan
+        );
+        RejectHardLinkedFile(stream, description);
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandle(
+        Microsoft.Win32.SafeHandles.SafeFileHandle file,
+        out ByHandleFileInformation information
+    );
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ByHandleFileInformation
+    {
+        internal uint FileAttributes;
+        internal System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+        internal System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+        internal System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        internal uint VolumeSerialNumber;
+        internal uint FileSizeHigh;
+        internal uint FileSizeLow;
+        internal uint NumberOfLinks;
+        internal uint FileIndexHigh;
+        internal uint FileIndexLow;
     }
 
     private static string ValidateZipRelativePath(string value)

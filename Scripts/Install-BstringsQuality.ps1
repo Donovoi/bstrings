@@ -2,10 +2,11 @@
 param(
     [string]$DestinationDirectory = (Join-Path (Get-Location).Path 'bstrings-quality'),
     [string]$InstallerCacheDirectory,
-    [string]$ReleaseTag = 'v1.9.12',
+    [string]$ReleaseTag = 'v1.9.13',
     [switch]$KeepCache,
     [ValidateRange(1, 10)]
     [int]$AcquireAttempts = 3,
+    [switch]$RemoveCacheAfterSuccess,
     [Parameter(DontShow = $true)]
     [uri]$ReleaseApiUri,
     [Parameter(DontShow = $true)]
@@ -18,7 +19,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$expectedReleaseTag = 'v1.9.12'
+$expectedReleaseTag = 'v1.9.13'
 $repository = 'Donovoi/bstrings'
 $qualityManifestName = 'bundle-packs-quality.json'
 $coreArchiveName = 'bstrings-win-x64.zip'
@@ -338,7 +339,15 @@ function Assert-AssetChecksum(
     }
 }
 
-function Expand-VerifiedCore([string]$ArchivePath, [string]$CacheDirectory) {
+function Expand-VerifiedCore(
+    [string]$ArchivePath,
+    [string]$CacheDirectory,
+    [long]$ExpectedBytes,
+    [string]$ExpectedSha256
+) {
+    if ($ExpectedBytes -lt 1 -or $ExpectedSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Authenticated core archive identity is invalid.'
+    }
     $runtimeLeaf = '.core-runtime-' + [Guid]::NewGuid().ToString('N')
     $runtimeRoot = Join-Path $CacheDirectory $runtimeLeaf
     if (Test-Path -LiteralPath $runtimeRoot) {
@@ -349,8 +358,38 @@ function Expand-VerifiedCore([string]$ArchivePath, [string]$CacheDirectory) {
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = $null
+    $archiveStream = $null
     try {
-        $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+        $archiveItem = Assert-PhysicalItem $ArchivePath 'Core release archive' $false
+        $archiveStream = [IO.FileStream]::new(
+            $archiveItem.FullName,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::Read,
+            1MB,
+            [IO.FileOptions]::SequentialScan
+        )
+        if ([long]$archiveStream.Length -ne $ExpectedBytes) {
+            throw 'The leased core release archive has an unexpected byte length.'
+        }
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try {
+            $leasedHash = ([BitConverter]::ToString(
+                $hasher.ComputeHash($archiveStream)
+            )).Replace('-', '').ToLowerInvariant()
+        }
+        finally {
+            $hasher.Dispose()
+        }
+        if ($leasedHash -cne $ExpectedSha256) {
+            throw 'The leased core release archive failed exact SHA-256 authentication.'
+        }
+        $archiveStream.Position = 0
+        $archive = [IO.Compression.ZipArchive]::new(
+            $archiveStream,
+            [IO.Compression.ZipArchiveMode]::Read,
+            $true
+        )
         if ($archive.Entries.Count -lt 1 -or $archive.Entries.Count -gt 10000) {
             throw 'The core archive has an invalid entry count.'
         }
@@ -433,6 +472,7 @@ function Expand-VerifiedCore([string]$ArchivePath, [string]$CacheDirectory) {
     }
     finally {
         if ($null -ne $archive) { $archive.Dispose() }
+        if ($null -ne $archiveStream) { $archiveStream.Dispose() }
     }
     $executable = Join-Path $runtimeRoot 'bstrings.exe'
     Assert-PhysicalItem $executable 'Extracted core bstrings.exe' $false | Out-Null
@@ -580,6 +620,33 @@ function Remove-ValidatedDirectory(
     [IO.Directory]::Delete($fullPath, $true)
 }
 
+function Remove-OwnedInstallerCache([string]$Path, [string]$ExpectedParent) {
+    $fullPath = Get-FullPath $Path 'Shared installer cache'
+    Assert-PhysicalDirectoryTree $fullPath 'Shared installer cache'
+    $entries = @(Get-ChildItem -LiteralPath $fullPath -Force -ErrorAction Stop)
+    $requiredNames = @('bundle-packs', 'release-assets')
+    $actualNames = @($entries.Name)
+    $unexpected = @($entries | Where-Object {
+        -not $_.PSIsContainer -or
+        (
+            $_.Name -cnotin $requiredNames -and
+            $_.Name -cnotmatch '^\.core-runtime-[0-9a-f]{32}$' -and
+            $_.Name -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$'
+        )
+    })
+    if (
+        @($requiredNames | Where-Object { $actualNames -cnotcontains $_ }).Count -ne 0 -or
+        $unexpected.Count -ne 0
+    ) {
+        throw 'Refusing to remove the shared installer cache because it contains unowned top-level entries.'
+    }
+    Remove-ValidatedDirectory `
+        $fullPath `
+        $ExpectedParent `
+        '.bstrings-quality-installer-cache' `
+        'shared installer cache'
+}
+
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'The quality installer supports Windows only.'
 }
@@ -596,6 +663,15 @@ if ($operatingSystemArchitecture -cne 'AMD64') {
 }
 if ($ReleaseTag -cne $expectedReleaseTag) {
     throw "This installer is pinned to $expectedReleaseTag; '$ReleaseTag' is not supported."
+}
+if ($KeepCache -and $RemoveCacheAfterSuccess) {
+    throw 'KeepCache and RemoveCacheAfterSuccess cannot be used together.'
+}
+if (
+    $RemoveCacheAfterSuccess -and
+    -not [string]::IsNullOrWhiteSpace($InstallerCacheDirectory)
+) {
+    throw 'RemoveCacheAfterSuccess cannot remove a caller-owned InstallerCacheDirectory.'
 }
 
 $expectedApiUri = [uri]"https://api.github.com/repos/$repository/releases/tags/$ReleaseTag"
@@ -642,14 +718,12 @@ Assert-ExistingPathChain $destination 'DestinationDirectory'
 
 if ([string]::IsNullOrWhiteSpace($InstallerCacheDirectory)) {
     $ownedCache = $true
-    $ownedCacheParent = Join-Path $destinationParent '.bstrings-quality-installer-cache'
-    $cacheRoot = Join-Path $ownedCacheParent $ReleaseTag
+    $cacheRoot = Join-Path $destinationParent '.bstrings-quality-installer-cache'
 }
 else {
     $cacheRoot = Get-NormalizedDirectoryPath `
         $InstallerCacheDirectory `
         'InstallerCacheDirectory'
-    $ownedCacheParent = $null
 }
 $cacheRoot = Get-NormalizedDirectoryPath $cacheRoot 'InstallerCacheDirectory'
 $cachePathRoot = [IO.Path]::GetPathRoot($cacheRoot)
@@ -670,8 +744,11 @@ Assert-FreeSpace @($destination, $cacheRoot) $MinimumFreeBytes
 
 $destinationParent = Ensure-PhysicalDirectory $destinationParent 'Destination parent directory'
 $cacheRoot = Ensure-PhysicalDirectory $cacheRoot 'Installer cache directory'
-$releaseAssetCache = Ensure-PhysicalDirectory `
+$releaseAssetRoot = Ensure-PhysicalDirectory `
     (Join-Path $cacheRoot 'release-assets') `
+    'Release-asset cache root'
+$releaseAssetCache = Ensure-PhysicalDirectory `
+    (Join-Path $releaseAssetRoot $ReleaseTag) `
     'Release-asset cache directory'
 $packCache = Ensure-PhysicalDirectory `
     (Join-Path $cacheRoot 'bundle-packs') `
@@ -699,9 +776,11 @@ try {
     if (
         [string]$release.tag_name -cne $ReleaseTag -or
         [bool]$release.draft -or
-        [bool]$release.prerelease
+        [bool]$release.prerelease -or
+        -not ($release.PSObject.Properties.Name -ccontains 'immutable') -or
+        -not [bool]$release.immutable
     ) {
-        throw "The release API did not return the exact published $ReleaseTag release."
+        throw "The release API did not return the exact immutable published $ReleaseTag release."
     }
 
     $installerAsset = Get-RequiredAsset $release $installerName $maximumMetadataBytes
@@ -752,7 +831,11 @@ try {
     Write-InstallerProgress 25 'quality manifest downloaded and verified'
 
     $trustIdentity = Get-TrustManifestIdentity $qualityManifestPath
-    $coreRuntime = Expand-VerifiedCore $coreArchivePath $cacheRoot
+    $coreRuntime = Expand-VerifiedCore `
+        $coreArchivePath `
+        $cacheRoot `
+        ([long]$coreAsset.Bytes) `
+        ([string]$coreAsset.Sha256)
     Write-InstallerProgress 30 'authenticated core runtime ready'
 
     $destinationLeaf = [IO.Path]::GetFileName($destination)
@@ -771,7 +854,7 @@ try {
     $lastAcquireExit = 0
     for ($attempt = 1; $attempt -le $AcquireAttempts; $attempt++) {
         Write-Host "Acquiring the quality bundle (attempt $attempt of $AcquireAttempts)..."
-        $lastAcquireExit = Invoke-NativeProcess $coreRuntime.Executable @(
+        $acquireArguments = @(
             'bundle',
             'acquire',
             '--manifest',
@@ -781,6 +864,12 @@ try {
             '--output',
             $stagingDestination
         )
+        if ($null -ne $existingDestination) {
+            $acquireArguments += @('--seed-bundle', $destination)
+        }
+        $lastAcquireExit = Invoke-NativeProcess `
+            $coreRuntime.Executable `
+            $acquireArguments
         if ($lastAcquireExit -eq 0) {
             $stagingDestinationCreated = $true
             break
@@ -860,26 +949,12 @@ try {
         ([IO.Path]::GetFileName([string]$coreRuntime.Root)) `
         'temporary authenticated core runtime'
 
-    if ($ownedCache -and -not $KeepCache) {
-        Remove-ValidatedDirectory `
-            $cacheRoot `
-            $ownedCacheParent `
-            $ReleaseTag `
-            'versioned installer cache'
-        if (
-            (Test-Path -LiteralPath $ownedCacheParent -PathType Container) -and
-            @(Get-ChildItem -LiteralPath $ownedCacheParent -Force).Count -eq 0
-        ) {
-            Remove-ValidatedDirectory `
-                $ownedCacheParent `
-                $destinationParent `
-                '.bstrings-quality-installer-cache' `
-                'installer cache parent'
-        }
+    if ($ownedCache -and $RemoveCacheAfterSuccess) {
+        Remove-OwnedInstallerCache $cacheRoot $destinationParent
         Write-Host 'Verified installer cache removed.'
     }
     else {
-        Write-Host "Verified installer cache retained: $cacheRoot"
+        Write-Host "Verified shared installer cache retained: $cacheRoot"
     }
     Write-InstallerProgress 100 'complete'
     Write-Host "Run: $destination\bstrings.exe analyze -d <input> --full -o <output>"

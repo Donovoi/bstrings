@@ -72,10 +72,39 @@ jobs:
             $tagRef = $tagRefJson | ConvertFrom-Json
             if (
               [string]$tagRef.ref -cne "refs/tags/$tag" -or
-              [string]$tagRef.object.type -cne 'commit' -or
-              [string]$tagRef.object.sha -cne $env:RELEASE_SHA
+              [string]$tagRef.object.type -cne 'commit'
             ) {
-              throw "Tag $tag does not identify the exact tested master commit."
+              throw "Tag $tag has an unexpected Git identity."
+            }
+            if ([string]$tagRef.object.sha -cne $env:RELEASE_SHA) {
+              if (-not $releaseExists) {
+                throw "Tag $tag exists without a release and does not identify the tested commit."
+              }
+              $priorRelease = $releaseJson | ConvertFrom-Json
+              if ($priorRelease.tagName -cne $tag -or $priorRelease.isPrerelease) {
+                throw "Existing release $tag has an unexpected identity or state."
+              }
+              if ($priorRelease.isDraft -and $priorRelease.isImmutable) {
+                throw "Draft release $tag unexpectedly reports immutable state."
+              }
+              if ($priorRelease.isDraft) {
+                $priorAssetNames = @(
+                  $priorRelease.assets | ForEach-Object { [string]$_.name } | Sort-Object
+                )
+                $priorExpected = @('bstrings-win-x64.zip', 'SHA256SUMS.txt') | Sort-Object
+                if (($priorAssetNames -join "`n") -cne ($priorExpected -join "`n")) {
+                  throw "Existing draft $tag has unexpected assets: $($priorAssetNames -join ', ')"
+                }
+              } elseif (-not $priorRelease.isImmutable) {
+                throw "Published release $tag must report immutable state."
+              }
+              Write-Host (
+                "$tag already belongs to an earlier release-preparation commit; " +
+                'this equal-version master run is ordinary CI and will not stage another release.'
+              )
+              "stage=false" >> $env:GITHUB_OUTPUT
+              "tag=$tag" >> $env:GITHUB_OUTPUT
+              return
             }
           }
 

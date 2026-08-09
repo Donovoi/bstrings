@@ -28,7 +28,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.12](https://github.com/Donovoi/bstrings/releases/tag/v1.9.12).
+[v1.9.13](https://github.com/Donovoi/bstrings/releases/tag/v1.9.13).
 There is one install and one Full profile: the largest, highest-scoring accepted
 Hy-MT2 7B Q8_0 translation model is included instead of asking examiners to
 choose among quality/size tiers.
@@ -43,7 +43,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.12'
+  $tag = 'v1.9.13'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -55,9 +55,11 @@ this pinned, checksum-verified installer bootstrap:
   $asset = @($release.assets | Where-Object { $_.name -CEQ 'Install-BstringsQuality.ps1' })
   $url = "https://github.com/$repo/releases/download/$tag/Install-BstringsQuality.ps1"
   if ($release.tag_name -CNE $tag -or $release.draft -or $release.prerelease -or
+      -not ($release.PSObject.Properties.Name -ccontains 'immutable') -or
+      -not [bool]$release.immutable -or
       $asset.Count -ne 1 -or $asset[0].browser_download_url -CNE $url -or
       ([string]$asset[0].digest) -CNotMatch '^sha256:[0-9a-f]{64}$') {
-    throw 'The exact published installer asset could not be authenticated.'
+    throw 'The exact immutable published installer asset could not be authenticated.'
   }
   $installerPath = [IO.Path]::GetFullPath(
     (Join-Path (Get-Location).Path 'Install-BstringsQuality.ps1')
@@ -112,13 +114,20 @@ analysis with:
 ```
 
 The bootstrap always replaces an existing physical
-`Install-BstringsQuality.ps1`, but only after the new download matches the
-published release SHA-256. The installer also always refreshes an existing
+`Install-BstringsQuality.ps1`, but only after the release reports immutable
+state and the new download matches its published SHA-256. The installer also
+always refreshes an existing
 physical `bstrings-quality` directory with the complete authenticated release;
 it never patches old files in place. The replacement is assembled and verified
 beside the destination first, and the previous directory is restored if the
-swap or installed-path verification fails. A same-release retry may reuse only
-its size- and SHA-256-verified resumable cache.
+swap or installed-path verification fails. A retry or later release may reuse
+only fully size- and SHA-256-reverified bytes. The default shared cache is
+retained beside the installation and can reuse an unchanged exact pack across
+releases, but its filename or prior presence never authorizes its bytes: every
+use reopens and fully hashes the pack against the current release manifest. Add
+`-RemoveCacheAfterSuccess` to the authenticated installer's final invocation
+when bounded cache cleanup is preferred over later reuse. The installer still
+creates and verifies a fresh sibling replacement on every run.
 
 ## Choose a command
 
@@ -168,6 +177,9 @@ selection, routing, privacy, or performance defaults use the
 The evidence, detractor review, falsifiers, implementation, and release gates
 for the early shared fail-open routing stage are recorded in
 [ADR-0001](docs/architecture/adr-0001-early-fail-open-content-routing.md).
+The hostile-cache trust boundary, fresh-overwrite guarantee, and batched
+release policy are recorded in
+[ADR-0003](docs/architecture/adr-0003-persistent-verified-bytes-and-batched-releases.md).
 
 The project remains under its upstream terms in [LICENSE.md](LICENSE.md), with
 component attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

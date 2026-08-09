@@ -50,11 +50,19 @@ function Assert-Throws([scriptblock]$Action, [string]$Pattern) {
     }
 }
 
+function Assert-Output([scriptblock]$Action, [string]$Pattern) {
+    $output = @(& $Action 6>&1) -join "`n"
+    if ($output -notmatch $Pattern) {
+        throw "Expected output matching '$Pattern', received '$output'."
+    }
+}
+
 try {
     [IO.Directory]::CreateDirectory($testRoot) | Out-Null
     $null = Invoke-TestGit -Arguments @('init', '--initial-branch=master')
     $null = Invoke-TestGit -Arguments @('config', 'user.name', 'bstrings release test')
     $null = Invoke-TestGit -Arguments @('config', 'user.email', 'release-test@example.invalid')
+    $null = Invoke-TestGit -Arguments @('config', 'core.autocrlf', 'false')
 
     Write-Version '1.9.2'
     [IO.Directory]::CreateDirectory((Join-Path $testRoot 'docs')) | Out-Null
@@ -71,7 +79,9 @@ try {
         [Text.UTF8Encoding]::new($false)
     )
     $docsOnly = Commit-All 'docs only'
-    & $policy -BaseRevision $base -HeadRevision $docsOnly -RepositoryRoot $testRoot
+    Assert-Output {
+        & $policy -BaseRevision $base -HeadRevision $docsOnly -RepositoryRoot $testRoot
+    } 'Ordinary change retains project Version 1\.9\.2'
 
     [IO.File]::WriteAllText(
         (Join-Path $testRoot 'bstrings\Program.cs'),
@@ -79,13 +89,21 @@ try {
         [Text.UTF8Encoding]::new($false)
     )
     $unversionedCode = Commit-All 'code without version'
-    Assert-Throws {
+    Assert-Output {
         & $policy -BaseRevision $docsOnly -HeadRevision $unversionedCode -RepositoryRoot $testRoot
-    } 'require a forward project Version bump'
+    } 'Ordinary change retains project Version 1\.9\.2'
+
+    Write-Version '1.9.1'
+    $decreasedVersion = Commit-All 'decrease version'
+    Assert-Throws {
+        & $policy -BaseRevision $unversionedCode -HeadRevision $decreasedVersion -RepositoryRoot $testRoot
+    } 'Project Version must not decrease.*Base=1\.9\.2 Head=1\.9\.1'
 
     Write-Version '1.9.3'
     $versionedCode = Commit-All 'bump version'
-    & $policy -BaseRevision $docsOnly -HeadRevision $versionedCode -RepositoryRoot $testRoot
+    Assert-Output {
+        & $policy -BaseRevision $unversionedCode -HeadRevision $versionedCode -RepositoryRoot $testRoot
+    } 'Forward unused project Version recognized as release preparation.*v1\.9\.3'
 
     $null = Invoke-TestGit -Arguments @('tag', 'v1.9.3', $versionedCode)
     Assert-Throws {

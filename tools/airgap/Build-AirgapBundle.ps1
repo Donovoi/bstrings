@@ -876,6 +876,7 @@ $bundleDocumentNames = @(
 )
 $bundleArchitectureDocumentNames = @(
     'adr-0001-early-fail-open-content-routing.md',
+    'adr-0003-persistent-verified-bytes-and-batched-releases.md',
     'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(
@@ -883,7 +884,7 @@ $bundleBenchmarkResultNames = @(
     'forensic-report-projection-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.12.md'
+    'v1.9.13.md'
 )
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `

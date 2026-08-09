@@ -46,46 +46,19 @@ function Get-ProjectVersion([string]$Revision) {
     return [Version]$versions[0]
 }
 
-function Test-ReleaseRelevantPath([string]$Path) {
-    $normalized = $Path.Replace('\', '/')
-    if ($normalized -match '^(bstrings|bstrings\.Tests|native|Scripts|tools|\.github/workflows)/') {
-        return $true
-    }
-    return $normalized -in @(
-        'bstrings.sln',
-        'global.json',
-        'Directory.Build.props',
-        'Directory.Build.targets',
-        'Directory.Packages.props'
-    )
-}
-
 $null = Invoke-Git -Arguments @('rev-parse', '--verify', "$BaseRevision^{commit}")
 $null = Invoke-Git -Arguments @('rev-parse', '--verify', "$HeadRevision^{commit}")
-$changedPaths = @(
-    Invoke-Git -Arguments @(
-        'diff',
-        '--name-only',
-        '--diff-filter=ACMRTUXB',
-        $BaseRevision,
-        $HeadRevision,
-        '--'
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-)
-$releasePaths = @($changedPaths | Where-Object { Test-ReleaseRelevantPath $_ })
-
-if ($releasePaths.Count -eq 0) {
-    Write-Host 'No release-relevant code or build changes; a version bump is not required.'
-    return
-}
-
 $baseVersion = Get-ProjectVersion $BaseRevision
 $headVersion = Get-ProjectVersion $HeadRevision
-if ($headVersion.CompareTo($baseVersion) -le 0) {
-    throw (
-        "Release-relevant changes require a forward project Version bump. " +
-        "Base=$baseVersion Head=$headVersion Paths=$($releasePaths -join ', ')"
-    )
+$comparison = $headVersion.CompareTo($baseVersion)
+
+if ($comparison -lt 0) {
+    throw "Project Version must not decrease. Base=$baseVersion Head=$headVersion"
+}
+
+if ($comparison -eq 0) {
+    Write-Host "Ordinary change retains project Version $headVersion; no release is being prepared."
+    return
 }
 
 $releaseTag = "v$headVersion"
@@ -95,6 +68,6 @@ if ($existingTags.Count -ne 0) {
 }
 
 Write-Host (
-    "Release version policy passed: $baseVersion -> $headVersion " +
-    "for $($releasePaths.Count) release-relevant path(s)."
+    "Forward unused project Version recognized as release preparation: " +
+    "$baseVersion -> $headVersion ($releaseTag)."
 )

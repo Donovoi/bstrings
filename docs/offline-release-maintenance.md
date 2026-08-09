@@ -5,13 +5,13 @@ This guide is for maintainers of the Windows x64 release. Examiners should use
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-Current publication status: v1.9.12 is the fully gated Windows x64
+Current publication status: v1.9.13 is the fully gated Windows x64
 quality/offline release. Its automatic core artifact and complete asset set are
 bound to the same tag and commit. Do not combine them with another version.
 
-## v1.9.12 release process and asset set
+## v1.9.13 release process and asset set
 
-The exact v1.9.12 project-version tag publishes the asset set below after every
+The exact v1.9.13 project-version tag publishes the asset set below after every
 required gate passes. Do not combine a core ZIP with manifests from another
 version.
 
@@ -29,7 +29,7 @@ The tag- and commit-bound `offline-profile-acceptance.json` remains an internal
 Actions gate artifact. The release job validates it, but does not publish it as
 a user download.
 
-The workflow uses [`releases/v1.9.12.md`](releases/v1.9.12.md) as the human
+The workflow uses [`releases/v1.9.13.md`](releases/v1.9.13.md) as the human
 release body. Review it against the final filenames, profile identities, and
 known boundaries before tagging.
 
@@ -48,17 +48,18 @@ known boundaries before tagging.
 `Scripts/Install-BstringsQuality.ps1` is published unchanged as
 `Install-BstringsQuality.ps1`. `SHA256SUMS.txt` must contain exactly one
 lowercase SHA-256 row for it alongside every other public release asset. The
-README bootstrap uses GitHub's exact-tag API for `v1.9.12`, rejects a draft or
-prerelease, downloads the installer to a unique physical temporary file, and
-verifies its API digest before replacing an existing physical installer and
-launching `powershell.exe -File`. Failed authentication preserves the previous
-installer. The installer independently authenticates `SHA256SUMS.txt`; the
+README bootstrap uses GitHub's exact-tag API for `v1.9.13`, requires the release
+to be published, non-prerelease, and immutable, downloads the installer to a
+unique physical temporary file, and verifies its API digest before replacing
+an existing physical installer and launching `powershell.exe -File`. Failed
+authentication preserves the previous installer. The installer independently
+requires the same immutable release and authenticates `SHA256SUMS.txt`; the
 release body links users to that canonical flow. Never document or offer a web
 response piped into `Invoke-Expression`.
 
 The installer is deliberately narrow:
 
-- default release tag: `v1.9.12`;
+- default release tag: `v1.9.13`;
 - default destination: `.\bstrings-quality` under the caller's current
   directory;
 - quality profile only;
@@ -74,15 +75,22 @@ The installer is deliberately narrow:
   fails, without ever merging old and new release files;
 - visible overall installer progress plus measured pack download, hashing,
   assembly, and final-verification percentages;
-- three acquisition attempts by default; and
-- deletion of its script-owned versioned cache only after success, with failed
-  cache state retained for a resumable retry.
+- three acquisition attempts by default;
+- a persistent script-owned shared cache beside the destination, split into
+  tag-specific release metadata and content-addressed pack bytes;
+- complete current-manifest size and SHA-256 verification whenever cached pack
+  bytes are materialized, even after a prior successful installation; and
+- optional bounded deletion of that cache after success with
+  `-RemoveCacheAfterSuccess`.
 
 Supported controls are `-ReleaseTag`, `-DestinationDirectory`,
-`-InstallerCacheDirectory`, `-KeepCache`, and `-AcquireAttempts`. Do not weaken
-the exact-tag, checksum, path-containment, free-space, or final-verification
-checks for convenience. `-KeepCache` retains the default script-owned cache;
-an explicitly supplied cache directory is user-owned and is always retained.
+`-InstallerCacheDirectory`, `-KeepCache`, `-RemoveCacheAfterSuccess`, and
+`-AcquireAttempts`. Do not weaken the exact-tag, immutable-release, checksum,
+path-containment, free-space, or final-verification checks for convenience.
+Retention is the default and `-KeepCache` remains its compatible explicit
+spelling. `-RemoveCacheAfterSuccess` removes only the bounded script-owned
+cache; it cannot be combined with `-KeepCache` or a caller-owned
+`-InstallerCacheDirectory`. An explicit cache directory is always retained.
 
 The shared base must remain smaller than 2,000,000,000 bytes. This conservative
 project ceiling stays below GitHub's strict 2 GiB per-release-file limit,
@@ -95,9 +103,12 @@ air-gap manifest. The integrated `bstrings.exe bundle acquire` command resumes,
 verifies, caches, assembles, and verifies these parts. This keeps every GitHub
 asset within the limit without asking examiners to manipulate files manually.
 
-Manual workflow dispatches retain the same generated files as a workflow
-artifact for review. They do not create an untagged GitHub release, so their
-generated tagged-release URLs are not a public acquisition channel.
+An ordinary manual workflow dispatch runs only fast CI. A manual `master`
+dispatch with `full_offline=true` runs the hosted complete-bundle lane, retains
+the generated files as workflow artifacts for review, and may warm the exact
+default-branch component cache only after `-ValidateOnly` fully rehashes it.
+Neither form creates an untagged GitHub release, so generated tagged-release
+URLs from a branch run are not a public acquisition channel.
 
 GitHub Releases are reserved for the usable application, acquisition and
 installation inputs, licenses, checksums, manifests, and the bounded
@@ -173,7 +184,7 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 
 ## Build and test the self-contained core
 
-The v1.9.12 release process uses
+The v1.9.13 release process uses
 [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
 repository-pinned Rust toolchain:
 
@@ -414,30 +425,41 @@ complete bundle and reviewed locks.
 
 ## Release CI gates
 
-Ordinary pushes and pull requests run Rust format/Clippy/tests, .NET
+Ordinary pushes, pull requests, and default manual dispatches run Rust
+format/Clippy/tests, .NET
 restore/build/tests/publish, Python unit tests/Ruff/bytecode compilation,
 PowerShell parser checks, the quality-installer suite under Windows PowerShell
-5.1 and PowerShell 7, lock dry-runs, and core packaging. Version tags and manual
-dispatches additionally:
+5.1 and PowerShell 7, lock dry-runs, and core packaging. Version tags and a
+manual `master` dispatch with `full_offline=true` additionally:
 
-- cache exact ordinary and OCR downloads keyed by both lock files;
+- restore exact ordinary and OCR component bytes under the key derived from
+  both lock files, with no prefix fallback;
 - build the complete quality bundle from connected inputs;
-- revalidate the warmed cache with no network fallback;
+- revalidate every cached byte with no network fallback;
 - run real translation and CPU OCR smokes under dead external proxies;
 - generate and checksum split packs;
 - locally assemble/verify the quality pack; and
 - retain the generated artifacts for the next gate.
 
-For a complete release, first merge only after the `master` build succeeds.
-The automatic Windows release workflow creates the exact project-version tag,
-verifies the tested core, and stages that core plus its checksum in a private
-draft release. Then manually dispatch `Build and test` with that tag—not
-`master`—as the selected ref. A tag-ref dispatch satisfies the tag-only
-conditions below, rebuilds the core from the same commit, runs every offline
-gate, replaces the preliminary draft assets with the accepted tagged build,
-adds the complete asset set and release body, and publishes the draft exactly
-once. GitHub then makes the tag and assets immutable. A branch-ref dispatch
-builds packs only as review artifacts and cannot publish them.
+Only an explicit `full_offline=true` dispatch on `master` may save a missing
+exact cache, and only after that revalidation succeeds. A tag run restores the
+exact default-branch cache but never writes a duplicate tag-scoped cache.
+Compiled bundles, split packs, smokes, and acceptance evidence are never cached
+or reused across releases.
+
+Ordinary same-version changes batch under the current version. Their successful
+`master` runs do not create another draft or tag. For a complete release,
+deliberately advance the project to an unused version and merge only after the
+fast `master` build succeeds. The automatic Windows release workflow creates
+the exact project-version tag, verifies the tested core, and stages that core
+plus its checksum in a private draft release. Manually dispatch `Build and
+test` on `master` with `full_offline=true` to exercise the hosted bundle lane
+and prepare the exact default-branch cache. Then dispatch `Build and test` with
+the version tag as the selected ref. The tag run rebuilds the core and complete
+bundle from the same commit, runs every offline gate, replaces the preliminary
+draft assets with the accepted tagged build, adds the complete asset set and
+release body, and publishes the draft exactly once. GitHub then makes the tag
+and assets immutable. A branch-ref dispatch cannot publish a full release.
 
 An exact tag then queues `profile-acceptance` on
 `[self-hosted, Windows, X64, bstrings-offline-release]`. That runner must have
@@ -446,7 +468,8 @@ artifact upload, and artifact download actions use the Node 24 action runtime.
 It must also have at least 30,000,000,000 free bytes and enough CPU/RAM for the
 7B Q8 model. The connected acceptance phase needs outbound HTTPS to GitHub
 Actions and the immutable official model URLs. The job uses the core and split
-packs from the same workflow run, preloads the release-owned packs, and runs
+packs from the same workflow run, starts from a new per-run working/cache
+directory, preloads only the release-owned packs, and runs cold upstream
 `bundle acquire`, assembled `bundle verify`, and the full offline translation
 smoke for the quality profile. Verified temporary model/bundle copies are
 removed within a path-checked per-run work directory.
@@ -545,8 +568,11 @@ for a protocol revision,
 or promote an unsealed output, failed ledger, stale calibration, or synthetic
 smoke as quality acceptance.
 
-Do not weaken the exactness gates to make CI faster. If a large transfer is the
-bottleneck, preserve resumability and immutable caches rather than skipping
+Do not weaken the exactness gates to make CI faster. The hosted cache accelerates
+only immutable input bytes: its key, presence, and previous success are not
+evidence, and every restored byte passes the current lock's full hash gate.
+Self-hosted acceptance deliberately remains cold. If a large transfer is the
+bottleneck, preserve resumability and immutable inputs rather than skipping
 byte verification.
 
 ## Licenses and redistribution closure
