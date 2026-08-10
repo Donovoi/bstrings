@@ -177,7 +177,10 @@ TRANSLATION_FALLBACK_RATE_DENOMINATOR = 100
 TRANSLATION_FALLBACK_MINIMUM_RESULTS = 100
 TRANSLATION_FALLBACK_CONSECUTIVE_LIMIT = 100
 TRANSLATION_CACHE_COMMIT_BATCH_SIZE = 4096
+ACCEPTED_CUDA_COMPUTE_CAPABILITIES = frozenset(("8.9",))
+MINIMUM_ACCEPTED_CUDA_FREE_MEMORY_MIB = 7000
 T = TypeVar("T")
+U = TypeVar("U")
 _AIRGAP_ENABLED = False
 
 AIRGAP_ENVIRONMENT = {
@@ -196,6 +199,14 @@ AIRGAP_ENVIRONMENT = {
 
 class EnrichmentError(RuntimeError):
     """Raised when an enrichment stage cannot produce complete, attributable output."""
+
+
+class TranslationRowError(EnrichmentError):
+    """A bounded single-row model failure that can retain the exact source as evidence."""
+
+    def __init__(self, reason: str, diagnostic: str) -> None:
+        super().__init__(diagnostic)
+        self.reason = reason
 
 
 class AirgapNetworkError(EnrichmentError):
@@ -391,6 +402,14 @@ class TranslationOutcome:
     integrity: str
     reason: str | None = None
     ambiguous_identifier_count: int = 0
+
+
+@dataclass(frozen=True)
+class TranslationAttempt:
+    """One model attempt; failures deliberately carry no rejected model text."""
+
+    text: str | None
+    failure_reason: str | None = None
 
 
 class TranslationOutcomeCache(Protocol):
@@ -741,9 +760,7 @@ def finalize_run_translation_cache(cache: RunLocalTranslationCache, output_path:
     cache.close(commit=True, strict=True)
 
 
-def map_ordered_parallel(
-    function: Callable[[T], str], values: Sequence[T], workers: int
-) -> list[str]:
+def map_ordered_parallel(function: Callable[[T], U], values: Sequence[T], workers: int) -> list[U]:
     """Run independent calls concurrently while retaining input order and fatal errors."""
     if workers <= 1 or len(values) <= 1:
         return [function(value) for value in values]
@@ -935,6 +952,7 @@ def advisory_identifier_spans(text: str) -> tuple[tuple[int, int, str], ...]:
         (start, end, value)
         for start, end, value, hard in _separator_identifier_spans(text)
         if hard is False
+        and any(character.isalpha() for character in value)
         and not any(start < hard_end and hard_start < end for hard_start, hard_end in hard_ranges)
     )
 
@@ -2242,12 +2260,38 @@ def add_translations(
     missing_texts.sort(key=lambda value: (len(value), value))
     for start in range(0, len(missing_texts), batch_size):
         batch = missing_texts[start : start + batch_size]
-        translated = translator.translate(batch, target_language)
-        if len(translated) != len(batch):
+        translate_attempts = getattr(translator, "translate_attempts", None)
+        if callable(translate_attempts):
+            attempts = translate_attempts(batch, target_language)
+        else:
+            attempts = [
+                TranslationAttempt(text=value)
+                for value in translator.translate(batch, target_language)
+            ]
+        if len(attempts) != len(batch):
             raise EnrichmentError(
-                f"Translation engine returned {len(translated)} rows for a batch of {len(batch)}"
+                f"Translation engine returned {len(attempts)} rows for a batch of {len(batch)}"
             )
-        for source_text, translated_text in zip(batch, translated, strict=True):
+        for source_text, attempt in zip(batch, attempts, strict=True):
+            if not isinstance(attempt, TranslationAttempt):
+                raise EnrichmentError("Translation engine returned an invalid row attempt")
+            if attempt.failure_reason is not None:
+                if attempt.text is not None or not attempt.failure_reason:
+                    raise EnrichmentError("Translation engine returned an invalid failed row")
+                outcome = TranslationOutcome(
+                    source_text,
+                    "preservation-fallback",
+                    attempt.failure_reason,
+                )
+                if integrity_monitor is not None:
+                    integrity_monitor.record(fallback=True)
+                translations_by_text[source_text] = outcome
+                if run_cache is not None:
+                    run_cache.put(source_text, outcome)
+                continue
+            translated_text = attempt.text
+            if not isinstance(translated_text, str):
+                raise EnrichmentError("Translation engine returned a missing successful row")
             translated_text = translated_text.strip()
             if not translated_text:
                 raise EnrichmentError("Translation engine returned an empty translation")
@@ -2920,6 +2964,8 @@ def build_llama_server_command(
 ) -> list[str]:
     command = [
         server,
+        "-lv",
+        "4",
         "-m",
         str(model_path.resolve()),
         "-ngl",
@@ -2953,6 +2999,7 @@ class LlamaCppTranslator:
     """Offline GGUF translation through a private, short-lived llama.cpp server."""
 
     engine = "llama.cpp"
+    _SELF_TEST_SOURCE = "Bonjour. Preserve CVE-2099-99999 exactly."
 
     def __init__(
         self,
@@ -2982,6 +3029,7 @@ class LlamaCppTranslator:
             )
 
         self._server = executable_path(server)
+        runtime_sha256 = sha256_file(Path(self._server))
         version_result = run_checked([self._server, "--version"], 30)
         version_lines = (version_result.stdout + "\n" + version_result.stderr).splitlines()
         version = next(
@@ -3023,71 +3071,236 @@ class LlamaCppTranslator:
             )
         if gpu_layers > 0 and not cuda_available:
             raise EnrichmentError("GPU layer offload was requested but CUDA is unavailable")
-        if device == "cpu" or not cuda_available:
-            actual_device = "cpu"
-            selected_gpu_layers = "0"
-            server_device = "none"
-        elif device == "cuda":
-            actual_device = "cuda"
-            selected_gpu_layers = "all"
-            server_device = str(cuda_device)
-        else:
-            selected_gpu_layers = str(gpu_layers) if gpu_layers >= 0 else "auto"
-            actual_device = (
-                "hybrid-cuda-cpu" if selected_gpu_layers != "auto" else "adaptive-cuda-offload"
-            )
-            server_device = str(cuda_device)
-
-        self.parallelism = resolve_translation_parallelism(
-            parallelism,
-            strict_determinism=strict_determinism,
-            has_cuda=cuda_available and device != "cpu",
-            model_size_bytes=model_path.stat().st_size,
-            batch_size=batch_size,
-        )
-        self._strict_determinism = strict_determinism
-        self.execution_metadata = {
-            "device": actual_device,
-            "airgap": airgap_mode_enabled(),
-            "gpuLayers": selected_gpu_layers,
-            "parallelism": self.parallelism,
-            "continuousBatching": True,
-            "promptCache": not strict_determinism,
-            "decoding": "greedy-top1",
-            "threads": threads if threads > 0 else "runtime-auto",
-        }
-        self.engine_version = (
-            f"{version};device={actual_device};parallelism={self.parallelism};"
-            f"gpu-layers={selected_gpu_layers};"
-            f"prompt-cache={'off' if strict_determinism else 'on'}"
-        )
         self.model_id = model_id
         self.revision = revision
         self.model_sha256 = actual_model_sha256
+        self._model_path = model_path.resolve()
+        self._version = version
+        self._runtime_sha256 = runtime_sha256
+        self._requested_device = device
+        self._requested_parallelism = parallelism
+        self._batch_size = batch_size
+        self._model_size_bytes = model_path.stat().st_size
+        self._strict_determinism = strict_determinism
+        self._threads = threads
         self._max_input_tokens = max_input_tokens
         self._max_new_tokens = max_new_tokens
         self._request_timeout_seconds = request_timeout_seconds
         self._health_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self._thread_state = threading.local()
+        self._evidence_inference_started = False
         self._closed = False
+        self._process: subprocess.Popen[Any] | None = None
+        self._stdout_handle: Any = None
+        self._stderr_handle: Any = None
         self._temporary_directory = tempfile.TemporaryDirectory(prefix="bstrings-llama-")
+        try:
+            auto_cuda_failure: str | None = None
+            cuda_device_metadata = (
+                self._nvidia_device_metadata(str(cuda_device))
+                if cuda_available and device != "cpu"
+                else {}
+            )
+            if cuda_available and device != "cpu":
+                cuda_device_metadata = {
+                    **cuda_device_metadata,
+                    "gpuMinimumFreeMemoryMiB": MINIMUM_ACCEPTED_CUDA_FREE_MEMORY_MIB,
+                }
+            cuda_policy_failure = self._cuda_policy_failure(cuda_device_metadata)
+            if device in {"cuda", "hybrid"} and cuda_policy_failure is not None:
+                raise EnrichmentError(
+                    self._cuda_policy_error(cuda_policy_failure, cuda_device_metadata)
+                )
+            if device == "auto" and cuda_available and cuda_policy_failure is None:
+                try:
+                    self._start_preflighted_runtime(
+                        actual_device="cuda",
+                        server_device=str(cuda_device),
+                        gpu_layers="all",
+                        cuda_device_description=self._cuda_device_description(
+                            devices, str(cuda_device)
+                        ),
+                        cuda_device_metadata=cuda_device_metadata,
+                        require_full_cuda=True,
+                        startup_timeout_seconds=startup_timeout_seconds,
+                    )
+                except (EnrichmentError, OSError) as exc:
+                    auto_cuda_failure = self._preflight_failure_reason(exc)
+                    self._stop_server_attempt()
+                    print(
+                        "CUDA translation preflight failed before evidence processing; "
+                        "using the CPU runtime.",
+                        file=sys.stderr,
+                    )
+                    self._start_preflighted_runtime(
+                        actual_device="cpu",
+                        server_device="none",
+                        gpu_layers="0",
+                        cuda_device_description=None,
+                        cuda_device_metadata=cuda_device_metadata,
+                        require_full_cuda=False,
+                        startup_timeout_seconds=startup_timeout_seconds,
+                        auto_cuda_failure=auto_cuda_failure,
+                    )
+            elif device == "auto" and cuda_available:
+                print(
+                    "CUDA translation hardware is outside the accepted capability policy; "
+                    "using the CPU runtime before evidence processing.",
+                    file=sys.stderr,
+                )
+                self._start_preflighted_runtime(
+                    actual_device="cpu",
+                    server_device="none",
+                    gpu_layers="0",
+                    cuda_device_description=None,
+                    cuda_device_metadata=cuda_device_metadata,
+                    require_full_cuda=False,
+                    startup_timeout_seconds=startup_timeout_seconds,
+                    auto_cuda_failure=cuda_policy_failure,
+                )
+            elif device == "cuda":
+                self._start_preflighted_runtime(
+                    actual_device="cuda",
+                    server_device=str(cuda_device),
+                    gpu_layers="all",
+                    cuda_device_description=self._cuda_device_description(
+                        devices, str(cuda_device)
+                    ),
+                    cuda_device_metadata=cuda_device_metadata,
+                    require_full_cuda=True,
+                    startup_timeout_seconds=startup_timeout_seconds,
+                )
+            elif device == "hybrid":
+                self._start_preflighted_runtime(
+                    actual_device="hybrid-cuda-cpu",
+                    server_device=str(cuda_device),
+                    gpu_layers=str(gpu_layers),
+                    cuda_device_description=self._cuda_device_description(
+                        devices, str(cuda_device)
+                    ),
+                    cuda_device_metadata=cuda_device_metadata,
+                    require_full_cuda=False,
+                    startup_timeout_seconds=startup_timeout_seconds,
+                )
+            else:
+                self._start_preflighted_runtime(
+                    actual_device="cpu",
+                    server_device="none",
+                    gpu_layers="0",
+                    cuda_device_description=None,
+                    cuda_device_metadata={},
+                    require_full_cuda=False,
+                    startup_timeout_seconds=startup_timeout_seconds,
+                )
+        except BaseException:
+            self.close()
+            raise
+        atexit.register(self.close)
+
+    @staticmethod
+    def _cuda_device_description(devices: str, device: str) -> str | None:
+        for line in devices.splitlines():
+            prefix, separator, description = line.strip().partition(":")
+            if separator and prefix == device:
+                normalized = description.strip()
+                normalized = re.sub(
+                    r"\((\d+)\s+MiB,\s*\d+\s+MiB\s+free\)\s*$",
+                    r"(\1 MiB)",
+                    normalized,
+                    flags=re.IGNORECASE,
+                )
+                return normalized or None
+        return None
+
+    @staticmethod
+    def _preflight_failure_reason(error: BaseException) -> str:
+        if isinstance(error, TranslationRowError):
+            return error.reason
+        message = str(error).lower()
+        if "offload" in message or "cuda placement" in message:
+            return "cuda-placement-validation-failed"
+        return "cuda-runtime-preflight-failed"
+
+    @staticmethod
+    def _cuda_policy_failure(metadata: dict[str, Any]) -> str | None:
+        compute_capability = metadata.get("gpuComputeCapability")
+        if not compute_capability:
+            return "cuda-compute-capability-unavailable"
+        if compute_capability not in ACCEPTED_CUDA_COMPUTE_CAPABILITIES:
+            return "cuda-compute-capability-not-accepted"
+        total_memory = metadata.get("gpuMemoryTotalMiB")
+        free_memory = metadata.get("gpuMemoryFreePreflightMiB")
+        if (
+            not isinstance(total_memory, int)
+            or isinstance(total_memory, bool)
+            or not isinstance(free_memory, int)
+            or isinstance(free_memory, bool)
+            or total_memory <= 0
+            or free_memory < 0
+            or free_memory > total_memory
+        ):
+            return "cuda-free-memory-unavailable"
+        if free_memory < MINIMUM_ACCEPTED_CUDA_FREE_MEMORY_MIB:
+            return "cuda-insufficient-free-memory"
+        return None
+
+    @staticmethod
+    def _cuda_policy_error(reason: str, metadata: dict[str, Any]) -> str:
+        if reason in {
+            "cuda-compute-capability-unavailable",
+            "cuda-compute-capability-not-accepted",
+        }:
+            accepted = ", ".join(sorted(ACCEPTED_CUDA_COMPUTE_CAPABILITIES))
+            observed = metadata.get("gpuComputeCapability", "unavailable")
+            return (
+                "CUDA translation requires an accepted compute capability "
+                f"({accepted}); detected {observed}"
+            )
+        observed_free = metadata.get("gpuMemoryFreePreflightMiB", "unavailable")
+        return (
+            "CUDA translation requires authenticated preflight free VRAM of at least "
+            f"{MINIMUM_ACCEPTED_CUDA_FREE_MEMORY_MIB} MiB; detected {observed_free} MiB"
+        )
+
+    def _start_preflighted_runtime(
+        self,
+        *,
+        actual_device: str,
+        server_device: str,
+        gpu_layers: str,
+        cuda_device_description: str | None,
+        cuda_device_metadata: dict[str, Any],
+        require_full_cuda: bool,
+        startup_timeout_seconds: int,
+        auto_cuda_failure: str | None = None,
+    ) -> None:
+        if self._evidence_inference_started:
+            raise EnrichmentError("Translation runtime cannot change after evidence inference")
+        self.parallelism = resolve_translation_parallelism(
+            self._requested_parallelism,
+            strict_determinism=self._strict_determinism,
+            has_cuda=actual_device != "cpu",
+            model_size_bytes=self._model_size_bytes,
+            batch_size=self._batch_size,
+        )
         temporary_path = Path(self._temporary_directory.name)
-        self._stdout_path = temporary_path / "stdout.log"
-        self._stderr_path = temporary_path / "stderr.log"
+        attempt_name = "cuda" if actual_device != "cpu" else "cpu"
+        self._stdout_path = temporary_path / f"{attempt_name}-stdout.log"
+        self._stderr_path = temporary_path / f"{attempt_name}-stderr.log"
         self._stdout_handle = self._stdout_path.open("w", encoding="utf-8")
         self._stderr_handle = self._stderr_path.open("w", encoding="utf-8")
         self._port = self._available_loopback_port()
-        per_slot_context = max(2048, max_input_tokens + max_new_tokens + 512)
+        per_slot_context = max(2048, self._max_input_tokens + self._max_new_tokens + 512)
         context_size = per_slot_context * self.parallelism
         command = build_llama_server_command(
             self._server,
-            model_path,
-            gpu_layers=selected_gpu_layers,
+            self._model_path,
+            gpu_layers=gpu_layers,
             device=server_device,
             context_size=context_size,
             parallelism=self.parallelism,
             port=self._port,
-            threads=threads,
+            threads=self._threads,
         )
         creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
@@ -3099,10 +3312,161 @@ class LlamaCppTranslator:
                 creationflags=creation_flags,
             )
             self._wait_until_healthy(startup_timeout_seconds)
+            placement = self._runtime_placement_metadata(require_full_cuda=require_full_cuda)
+            self._run_pre_evidence_self_test()
         except BaseException:
-            self.close()
+            self._stop_server_attempt()
             raise
-        atexit.register(self.close)
+
+        runtime_libraries = self._runtime_library_hashes(actual_device)
+        self.execution_metadata = {
+            "requestedDevice": self._requested_device,
+            "device": actual_device,
+            "resolvedDevice": server_device,
+            "deviceDescription": cuda_device_description,
+            "airgap": airgap_mode_enabled(),
+            "gpuLayers": gpu_layers,
+            "parallelism": self.parallelism,
+            "continuousBatching": True,
+            "promptCache": not self._strict_determinism,
+            "decoding": "greedy-top1",
+            "threads": self._threads if self._threads > 0 else "runtime-auto",
+            "preEvidenceSelfTest": "passed",
+            "runtimeExecutableSha256": self._runtime_sha256,
+            "runtimeLibraries": runtime_libraries,
+            **placement,
+            **cuda_device_metadata,
+        }
+        if auto_cuda_failure is not None:
+            self.execution_metadata["autoCudaFallback"] = auto_cuda_failure
+        self.engine_version = (
+            f"{self._version};device={actual_device};parallelism={self.parallelism};"
+            f"gpu-layers={gpu_layers};"
+            f"prompt-cache={'off' if self._strict_determinism else 'on'}"
+        )
+
+    def _run_pre_evidence_self_test(self) -> None:
+        translated = self._translate_one(self._SELF_TEST_SOURCE, "en")
+        validate_identifier_retention(self._SELF_TEST_SOURCE, translated)
+
+    def _runtime_log_text(self) -> str:
+        handle = self._stderr_handle
+        if handle is not None:
+            handle.flush()
+        try:
+            return self._stderr_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            raise EnrichmentError(
+                f"Could not inspect llama.cpp runtime placement log: {exc}"
+            ) from exc
+
+    def _runtime_placement_metadata(self, *, require_full_cuda: bool) -> dict[str, Any]:
+        log_text = self._runtime_log_text()
+        offload_matches = re.findall(
+            r"offloaded\s+(\d+)/(\d+)\s+layers\s+to\s+GPU", log_text, re.IGNORECASE
+        )
+        observed_layers = int(offload_matches[-1][0]) if offload_matches else 0
+        total_layers = int(offload_matches[-1][1]) if offload_matches else 0
+        allocation_fallback_observed = bool(
+            re.search(
+                r"(?:failed to allocate|out of device memory|falling back to CPU)",
+                log_text,
+                re.IGNORECASE,
+            )
+        )
+        if require_full_cuda and (
+            total_layers <= 0 or observed_layers != total_layers or allocation_fallback_observed
+        ):
+            raise EnrichmentError(
+                "llama.cpp CUDA placement did not prove complete model-layer offload"
+            )
+
+        def last_buffer(pattern: str) -> float | None:
+            values = re.findall(pattern, log_text, re.IGNORECASE)
+            return float(values[-1]) if values else None
+
+        metadata: dict[str, Any] = {
+            "observedGpuLayers": observed_layers,
+            "observedTotalLayers": total_layers,
+            "fullLayerOffloadValidated": bool(
+                total_layers > 0
+                and observed_layers == total_layers
+                and not allocation_fallback_observed
+            ),
+            "cudaAllocationFallbackObserved": allocation_fallback_observed,
+        }
+        buffer_patterns = {
+            "hostModelBufferMiB": r"(?:CPU(?:_Mapped)?)\s+model buffer size\s*=\s*([0-9.]+)\s+MiB",
+            "gpuModelBufferMiB": r"CUDA\d+\s+model buffer size\s*=\s*([0-9.]+)\s+MiB",
+            "gpuKvBufferMiB": r"CUDA\d+\s+KV buffer size\s*=\s*([0-9.]+)\s+MiB",
+            "gpuComputeBufferMiB": r"CUDA\d+\s+compute buffer size\s*=\s*([0-9.]+)\s+MiB",
+            "hostComputeBufferMiB": r"CUDA_Host\s+compute buffer size\s*=\s*([0-9.]+)\s+MiB",
+        }
+        for name, pattern in buffer_patterns.items():
+            value = last_buffer(pattern)
+            if value is not None:
+                metadata[name] = value
+        return metadata
+
+    def _runtime_library_hashes(self, actual_device: str) -> dict[str, str]:
+        log_text = self._runtime_log_text()
+        paths: dict[str, Path] = {}
+        for match in re.finditer(
+            r"loaded\s+(?:CUDA|CPU)\s+backend\s+from\s+(.+?\.dll)\s*$",
+            log_text,
+            re.IGNORECASE | re.MULTILINE,
+        ):
+            path = Path(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", match.group(1)).strip())
+            if path.is_file():
+                paths[path.name] = path
+        runtime_directory = Path(self._server).parent
+        for name in ("ggml.dll", "ggml-base.dll", "llama.dll"):
+            path = runtime_directory / name
+            if path.is_file():
+                paths[name] = path
+        for path in runtime_directory.glob("ggml-cpu-*.dll"):
+            if path.is_file():
+                paths[path.name] = path
+        if actual_device != "cpu":
+            for name in ("cublas64_12.dll", "cublasLt64_12.dll", "cudart64_12.dll"):
+                path = runtime_directory / name
+                if path.is_file():
+                    paths[name] = path
+        return {name: sha256_file(path) for name, path in sorted(paths.items())}
+
+    @staticmethod
+    def _nvidia_device_metadata(device: str) -> dict[str, Any]:
+        nvidia_smi = shutil.which("nvidia-smi")
+        device_match = re.fullmatch(r"CUDA(\d+)", device)
+        if nvidia_smi is None or device_match is None:
+            return {}
+        try:
+            result = run_checked(
+                [
+                    nvidia_smi,
+                    "--query-gpu=index,driver_version,compute_cap,memory.total,memory.free",
+                    "--format=csv,noheader,nounits",
+                ],
+                30,
+            )
+        except EnrichmentError:
+            return {}
+        expected_index = device_match.group(1)
+        for line in result.stdout.splitlines():
+            values = [value.strip() for value in line.split(",")]
+            if len(values) >= 3 and values[0] == expected_index:
+                metadata: dict[str, Any] = {
+                    "gpuDriverVersion": values[1],
+                    "gpuComputeCapability": values[2],
+                }
+                if len(values) == 5:
+                    try:
+                        metadata["gpuMemoryTotalMiB"] = int(values[3])
+                        metadata["gpuMemoryFreePreflightMiB"] = int(values[4])
+                    except ValueError:
+                        pass
+                return metadata
+        return {}
 
     @staticmethod
     def _available_loopback_port() -> int:
@@ -3131,11 +3495,28 @@ class LlamaCppTranslator:
         raise EnrichmentError(f"llama.cpp did not become healthy within {timeout_seconds} seconds")
 
     def translate(self, texts: Sequence[str], target_language: str) -> list[str]:
+        self._evidence_inference_started = True
         return map_ordered_parallel(
             lambda text: self._translate_one(text, target_language),
             texts,
             self.parallelism,
         )
+
+    def translate_attempts(
+        self, texts: Sequence[str], target_language: str
+    ) -> list[TranslationAttempt]:
+        """Translate independent rows without ever publishing a rejected model completion."""
+        self._evidence_inference_started = True
+
+        def attempt(text: str) -> TranslationAttempt:
+            try:
+                return TranslationAttempt(self._translate_one(text, target_language))
+            except TranslationRowError as exc:
+                return TranslationAttempt(None, exc.reason)
+            except EnrichmentError:
+                return TranslationAttempt(None, "translation-engine-row-failure")
+
+        return map_ordered_parallel(attempt, texts, self.parallelism)
 
     def _thread_opener(self) -> urllib.request.OpenerDirector:
         opener = getattr(self._thread_state, "opener", None)
@@ -3162,16 +3543,25 @@ class LlamaCppTranslator:
             urllib.error.URLError,
             json.JSONDecodeError,
         ) as exc:
-            raise EnrichmentError(f"llama.cpp request to {path} failed: {exc}") from exc
+            raise TranslationRowError(
+                "translation-request-failure",
+                f"llama.cpp request to {path} failed: {exc}",
+            ) from exc
         if not isinstance(body, dict):
-            raise EnrichmentError(f"llama.cpp request to {path} returned a non-object response")
+            raise TranslationRowError(
+                "invalid-engine-response",
+                f"llama.cpp request to {path} returned a non-object response",
+            )
         return body
 
     def _validated_prompt_token_count(self, messages: list[dict[str, str]]) -> int:
         template_body = self._post_json("/apply-template", {"messages": messages})
         prompt = template_body.get("prompt")
         if not isinstance(prompt, str) or not prompt:
-            raise EnrichmentError("llama.cpp /apply-template returned an empty prompt")
+            raise TranslationRowError(
+                "invalid-engine-response",
+                "llama.cpp /apply-template returned an empty prompt",
+            )
         token_body = self._post_json(
             "/tokenize",
             {
@@ -3187,14 +3577,21 @@ class LlamaCppTranslator:
         if not isinstance(tokens, list) or any(
             not isinstance(token, int) or isinstance(token, bool) for token in tokens
         ):
-            raise EnrichmentError("llama.cpp /tokenize returned invalid token IDs")
+            raise TranslationRowError(
+                "invalid-engine-response",
+                "llama.cpp /tokenize returned invalid token IDs",
+            )
         token_count = len(tokens)
         if token_count == 0:
-            raise EnrichmentError("llama.cpp /tokenize returned no prompt tokens")
+            raise TranslationRowError(
+                "invalid-engine-response",
+                "llama.cpp /tokenize returned no prompt tokens",
+            )
         if token_count > self._max_input_tokens:
-            raise EnrichmentError(
+            raise TranslationRowError(
+                "input-token-limit-exceeded",
                 f"llama.cpp prompt requires {token_count} tokens, exceeding the "
-                f"{self._max_input_tokens}-token input safety limit; source was not truncated"
+                f"{self._max_input_tokens}-token input safety limit; source was not truncated",
             )
         return token_count
 
@@ -3223,17 +3620,27 @@ class LlamaCppTranslator:
             )
             choices = body.get("choices")
             if not isinstance(choices, list) or len(choices) != 1:
-                raise EnrichmentError(
-                    "llama.cpp translation response must contain exactly one choice"
+                raise TranslationRowError(
+                    "invalid-engine-response",
+                    "llama.cpp translation response must contain exactly one choice",
                 )
             choice = choices[0]
             if not isinstance(choice, dict):
-                raise EnrichmentError("llama.cpp translation choice is not an object")
+                raise TranslationRowError(
+                    "invalid-engine-response",
+                    "llama.cpp translation choice is not an object",
+                )
             finish_reason = choice.get("finish_reason")
             if finish_reason != "stop":
-                raise EnrichmentError(
+                reason = (
+                    "generation-limit-reached"
+                    if finish_reason == "length"
+                    else "non-terminal-generation"
+                )
+                raise TranslationRowError(
+                    reason,
                     "llama.cpp returned a non-terminal translation finish_reason: "
-                    f"{finish_reason!r}"
+                    f"{finish_reason!r}",
                 )
             content = choice["message"]["content"]
         except (
@@ -3245,7 +3652,10 @@ class LlamaCppTranslator:
             IndexError,
             TypeError,
         ) as exc:
-            raise EnrichmentError(f"llama.cpp translation request failed: {exc}") from exc
+            raise TranslationRowError(
+                "invalid-engine-response",
+                f"llama.cpp translation request failed: {exc}",
+            ) from exc
         usage = body.get("usage")
         observed_prompt_tokens = usage.get("prompt_tokens") if isinstance(usage, dict) else None
         if (
@@ -3253,19 +3663,20 @@ class LlamaCppTranslator:
             or isinstance(observed_prompt_tokens, bool)
             or observed_prompt_tokens != expected_prompt_tokens
         ):
-            raise EnrichmentError(
+            raise TranslationRowError(
+                "incomplete-prompt-acceptance",
                 "llama.cpp could not prove complete prompt acceptance: "
                 f"expected {expected_prompt_tokens} prompt tokens, response reported "
-                f"{observed_prompt_tokens!r}"
+                f"{observed_prompt_tokens!r}",
             )
         if not isinstance(content, str) or not content.strip():
-            raise EnrichmentError("llama.cpp returned an empty translation")
+            raise TranslationRowError(
+                "empty-engine-response",
+                "llama.cpp returned an empty translation",
+            )
         return content.strip()
 
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
+    def _stop_server_attempt(self) -> None:
         process = getattr(self, "_process", None)
         if process is not None and process.poll() is None:
             process.terminate()
@@ -3274,10 +3685,18 @@ class LlamaCppTranslator:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=10)
+        self._process = None
         for handle_name in ("_stdout_handle", "_stderr_handle"):
             handle = getattr(self, handle_name, None)
             if handle is not None:
                 handle.close()
+                setattr(self, handle_name, None)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stop_server_attempt()
         temporary_directory = getattr(self, "_temporary_directory", None)
         if temporary_directory is not None:
             temporary_directory.cleanup()

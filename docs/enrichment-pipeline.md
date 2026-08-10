@@ -1,7 +1,7 @@
 # Enrichment pipeline
 
 This document describes the integrated workflow in current source and the
-complete v1.9.16 quality release. See
+complete v1.9.17 quality release. See
 [download and installation](download-and-install.md) before choosing a command,
 and never combine assets from different versions.
 
@@ -27,7 +27,7 @@ interface is one command:
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete v1.9.16 bundle contains every worker, runtime, model, and dependency
+The complete v1.9.17 bundle contains every worker, runtime, model, and dependency
 published for that version. It does not ask the user to install or invoke
 Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
@@ -140,7 +140,7 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.16 profile
+page. Images are always OCR inputs when the stage is enabled. The v1.9.17 profile
 defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
 per-path inference smoke test. Those smokes do not establish cross-provider
 parity or corpus-level quality. CUDA OCR is not part of the profile. See
@@ -209,14 +209,17 @@ through a private local llama.cpp server. Current source publishes one profile:
 
 | Profile | Model | Bytes | WMT24++ chrF++ | Forensic chrF++ | Identifiers | Strings/s |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `quality` | Hy-MT2-7B Q8_0 | 7,981,928,896 | **62.6786** | **92.8310** | 22/22 | 0.2793 |
+| `quality` | Hy-MT2-7B Q4_K_M | 4,624,648,896 | **62.4386 CPU / 62.6129 CUDA p2** | **93.6923** | 22/22 | 0.1086 CPU / 1.3085 CUDA p2 |
 
-The strict synthetic/attribution-safe gate is described in the historical
-[translation report](translation-benchmark-2026-08-04.md), which also records
-the retired smaller candidates. The 7B Q8_0 model remains because it produced
-the strongest measured scores; it is not claimed to be fastest or best for
-every language/domain. `balanced` still names a language-triage policy above—it
-is not an install or model profile.
+The strict synthetic/attribution-safe gates are described in the
+[translation report](translation-benchmark-2026-08-04.md). CPU Q4 and the
+mixed source-built CPU server plus official CUDA overlay both retained 22/22
+identifiers and 10/10 downstream patterns. These small-corpus results are a
+bounded acceptance result, not a universal quality or hardware claim. The
+model/runtime choice, exact bytes, failure policy, and release falsifiers are
+recorded in [ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
+`balanced` still names a language-triage policy above—it is not an install or
+model profile.
 
 TranslateGemma remains a research challenger, not the production one-executable
 engine. After gated access was accepted, the official BF16 4B model completed
@@ -237,17 +240,25 @@ integrated examiner CLI.
 
 `--translation-device` accepts `auto`, `cpu`, `cuda`, or `hybrid`:
 
-The standard split-pack bundle contains the reviewed CPU llama.cpp runtime, so
-its normal resolved path is CPU. The remaining choices describe supported
-custom runtime profiles; they require a separately built/accepted CUDA-capable
-llama.cpp closure and a compatible host driver.
+The current Full split-pack design contains the reviewed CPU llama.cpp server
+plus a separately authenticated official CUDA overlay. CUDA validation is
+scoped to Windows RTX 4060 Laptop/sm89 rather than all NVIDIA hardware.
 
-- `auto` uses adaptive GPU offload when the bundled runtime sees compatible
-  CUDA support; otherwise it uses CPU;
+- `auto` tries full Q4 model load, one synthetic request, and observed 33/33
+  layer offload at p2. Any failure closes CUDA and self-tests CPU before the
+  first evidence inference, cache insertion, or output;
 - `cpu` forces zero GPU layers and needs no graphics hardware;
-- `cuda` requires a validated CUDA runtime/driver and full model offload; and
+- `cuda` requires the validated CUDA runtime/driver and full model offload and
+  fails closed rather than selecting CPU; and
 - `hybrid` requires an explicit positive `--translation-gpu-layers` count so
-  the CPU/GPU split is auditable.
+  the CPU/GPU split is auditable, but hybrid and p4 remain unaccepted
+  expert/experimental boundaries.
+
+After the first evidence request, device, provider, placement, and parallelism
+are frozen. A later device/server failure leaves the translation transaction
+incomplete. Full observed offload is reported as 33/33 layers together with
+the real runtime buffers: the accepted command retained a 410.69 MiB
+`CPU_Mapped` model buffer and therefore does not claim zero host residency.
 
 `--translation-parallelism 0` selects conservative slots from hardware and
 model size. The adapter processes bounded windows, groups similar lengths, and
@@ -269,8 +280,8 @@ ordered concurrent requests.
 
 This exact deduplication can remove many redundant model calls without reducing
 Full's candidate recall. It does not make every noisy or mostly unique workload
-fast: the standard translation runtime is CPU-only and large high-recall runs
-can still take a long time. Translation progress therefore reports completed
+fast: CPU fallback and large high-recall runs can still take a long time.
+Translation progress therefore reports completed
 record percentage, rate, ETA, cache hits, distinct model inputs, and preservation
 fallbacks rather than promising a fixed completion time.
 

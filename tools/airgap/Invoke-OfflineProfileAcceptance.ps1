@@ -260,6 +260,7 @@ if ($freeBytesAtStart -lt $MinimumFreeBytes) {
 $profiles = @('quality')
 $releaseAssetNames = [Collections.Generic.List[string]]::new()
 $releaseAssetNames.Add('bstrings-win-x64-offline-base.zip')
+$releaseAssetNames.Add('bstrings-win-x64-offline-cuda.zip')
 $releaseAssetNames.Add('Install-BstringsQuality.ps1')
 foreach ($profile in $profiles) {
     $releaseAssetNames.Add("airgap-config-$profile.json")
@@ -296,6 +297,7 @@ foreach ($profile in $profiles) {
     $trustManifest = Get-RequiredPack $packRoot "bundle-packs-$profile.json"
     $cacheInputs = [ordered]@{
         'bstrings-win-x64-offline-base.zip' = 'base.zip'
+        'bstrings-win-x64-offline-cuda.zip' = 'cuda-runtime.zip'
         "airgap-config-$profile.json" = 'configuration.file'
         "Hy-MT2-Apache-2.0-$profile.txt" = 'translation-license.file'
         "airgap-manifest-$profile.json" = 'airgap-manifest.file'

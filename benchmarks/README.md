@@ -8,7 +8,7 @@ version-matched quality bundle, the full enrichment workflow is:
 bstrings.exe analyze -f evidence.raw --full -o results
 ```
 
-The current complete quality bundle is v1.9.16. See
+The current complete quality bundle is v1.9.17. See
 [download and installation](../docs/download-and-install.md) before treating
 this example as a distribution command.
 
@@ -55,7 +55,7 @@ determinism pairs. See the
 
 ## Run-local translation deduplication
 
-The v1.9.16 translation adapter combines a bounded in-memory hot set with an
+The v1.9.17 translation adapter combines a bounded in-memory hot set with an
 exact run-local SQLite cache. A correct performance probe must include exact
 duplicates separated by more than 4,096 other entries, prove one model call per
 distinct complete source/configuration key, and still compare the emitted child

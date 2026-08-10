@@ -5,13 +5,13 @@ This guide is for maintainers of the Windows x64 release. Examiners should use
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-Current publication status: v1.9.16 is the fully gated Windows x64
+Current publication status: v1.9.17 is the fully gated Windows x64
 quality/offline release. Its automatic core artifact and complete asset set are
 bound to the same tag and commit. Do not combine them with another version.
 
-## v1.9.16 release process and asset set
+## v1.9.17 release process and asset set
 
-The exact v1.9.16 project-version tag publishes the asset set below after every
+The exact v1.9.17 project-version tag publishes the asset set below after every
 required gate passes. Do not combine a core ZIP with manifests from another
 version.
 
@@ -29,7 +29,7 @@ The tag- and commit-bound `offline-profile-acceptance.json` remains an internal
 Actions gate artifact. The release job validates it, but does not publish it as
 a user download.
 
-The workflow uses [`releases/v1.9.16.md`](releases/v1.9.16.md) as the human
+The workflow uses [`releases/v1.9.17.md`](releases/v1.9.17.md) as the human
 release body. Review it against the final filenames, profile identities, and
 known boundaries before tagging.
 
@@ -48,7 +48,7 @@ known boundaries before tagging.
 `Scripts/Install-BstringsQuality.ps1` is published unchanged as
 `Install-BstringsQuality.ps1`. `SHA256SUMS.txt` must contain exactly one
 lowercase SHA-256 row for it alongside every other public release asset. The
-README bootstrap uses GitHub's exact-tag API for `v1.9.16`, requires the release
+README bootstrap uses GitHub's exact-tag API for `v1.9.17`, requires the release
 to be published, non-prerelease, and immutable, downloads the installer to a
 unique physical temporary file, and verifies its API digest before replacing
 an existing physical installer and launching `powershell.exe -File`. Failed
@@ -59,7 +59,7 @@ response piped into `Invoke-Expression`.
 
 The installer is deliberately narrow:
 
-- default release tag: `v1.9.16`;
+- default release tag: `v1.9.17`;
 - default destination: `.\bstrings-quality` under the caller's current
   directory;
 - quality profile only;
@@ -129,22 +129,34 @@ plan. It uses profile `windows-x64-offline-v2`, defaults to `quality`, and pins:
 | Magika | Official [`cli/v1.1.0`](https://github.com/google/magika/releases/tag/cli%2Fv1.1.0) Windows x64 CLI ZIP |
 | FLOSS | Official [v3.1.1](https://github.com/mandiant/flare-floss/releases/tag/v3.1.1) standalone Windows ZIP |
 | llama.cpp | Source ZIP for tag `b10248`, commit `e8e06f78e253a98a739b8ae4c6b661b357249ce4` |
-| Quality translation | Hy-MT2-7B Q8_0, revision `707464294cf5b2a5a69982855020858ed58cf1d1` |
+| Quality translation | Hy-MT2-7B Q4_K_M, revision `ab8472660ac61fac25f1af43fac2599d52a8a775` |
+| CUDA translation overlay | Official llama.cpp b10248 CUDA 12.4 archives; Windows sm89 acceptance scope |
 
 Exact model identities are:
 
 | Profile | Filename | Bytes | SHA-256 |
 | --- | --- | ---: | --- |
-| `quality` | `HY-MT2-7B-Q8_0.gguf` | 7,981,928,896 | `58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0` |
+| `quality` | `Hy-MT2-7B-Q4_K_M.gguf` | 4,624,648,896 | `9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b` |
 
-Filename case matters: the official 7B repository uses uppercase
-`HY-MT2-7B-Q8_0.gguf`. The lock uses immutable model revisions and a separately
-verified immutable 7B license revision.
+Filename case matters: use the exact filename in the lock. The lock uses an
+immutable model revision, a separately verified immutable 7B license revision,
+and exact official CUDA/backend redistributable identities.
 
-The standard translation closure is CPU-only. Do not describe the generic
-`cuda` or `hybrid` CLI choices as release capabilities unless a separately
-reviewed CUDA llama.cpp runtime, driver/VRAM envelope, output-parity evidence,
-and bundle acceptance gate have been added.
+The accepted Full design is one Q4 model with the source-built CPU server and a
+separate authenticated official CUDA overlay. Automatic CUDA promotion is
+limited to the reviewed Windows sm89 closure, full observed 33/33 layer offload,
+and p2. The runtime also reported a 410.69 MiB `CPU_Mapped` model buffer; do not
+turn full layer placement into a zero-host-residency claim. Auto may select CPU
+only after CUDA load, synthetic inference, or placement fails before evidence
+work. Explicit CUDA fails closed, no provider changes mid-run, and hybrid/p4
+remain deferred. See
+[ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
+
+The strict 72-row CPU gate measured 62.4386 WMT24++ chrF++, 93.6923
+forensic chrF++, 22/22 identifiers, 10/10 patterns, and 0.1086 strings/s. The
+mixed source-built CPU server plus official CUDA overlay at p2 measured
+62.6129, 93.6923, 22/22, 10/10, and 1.3085 strings/s. These establish the
+bounded release configuration, not population-wide equivalence.
 
 `tools/airgap/ocr-components.lock.json` independently pins profile
 `windows-x64-ocr-cpu-directml-v1`: two CPython runtimes, 26 exact packages,
@@ -189,7 +201,7 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 
 ## Build and test the self-contained core
 
-The v1.9.16 release process uses
+The v1.9.17 release process uses
 [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
 repository-pinned Rust toolchain:
 
@@ -475,8 +487,9 @@ An exact tag then queues `profile-acceptance` on
 GitHub Actions Runner **2.327.1 or newer** because the pinned checkout,
 artifact upload, and artifact download actions use the Node 24 action runtime.
 It must also have at least 30,000,000,000 free bytes and enough CPU/RAM for the
-7B Q8 model. The connected acceptance phase needs outbound HTTPS to GitHub
-Actions and the immutable official model URLs. The job uses the core and split
+7B Q4 model and separate CUDA closure. The connected acceptance phase needs
+outbound HTTPS to GitHub Actions and the immutable official model URLs. The job
+uses the core and split
 packs from the same workflow run, starts from a new per-run working/cache
 directory, preloads only the release-owned packs, and runs cold upstream
 `bundle acquire`, assembled `bundle verify`, and the full offline translation
@@ -512,6 +525,17 @@ A missing runner, failed download, failed hash, failed assembly, failed strict
 verification, or failed translation smoke blocks publication. This exact
 quality-profile gate runs for every version tag.
 
+Q4/CUDA promotion additionally requires the exact reviewed Full run to exit
+zero with one ordered translation child per candidate, model calls equal to the
+exact distinct cache-key count, cache hits reconciling every repeated row,
+complete `run.json` and `summary.json`, no `.incomplete`, monotonic
+percentage/ETA, and valid final reports. Private exact totals remain outside
+the repository. The predeclared host target is 48 hours. A small positional
+private sample showed a material p2 gain and one audited fallback, but covered
+substantially less than one percent of the distinct population and was neither
+random nor stratified. It proves neither population duration nor fallback
+rate; the exact run remains the release gate.
+
 Release artifacts use fixed names and become immutable only after the complete
 draft is published. Never publish the preliminary core draft: GitHub does not
 permit assets to be added to a release that was published while immutable
@@ -527,7 +551,7 @@ DirectML/hybrid acceptance is intentionally separate. Manually dispatch
 `.github/workflows/ocr-hardware-acceptance.yml` with the source build run ID.
 It targets only `[self-hosted, Windows, X64, bstrings-directml]`, downloads the
 core and split-pack artifacts from that run, preloads the release-owned quality
-packs, acquires the immutable 7B Q8 model through the trust manifest,
+packs, acquires the immutable 7B Q4 model through the trust manifest,
 assembles/verifies the exact bundle, and then requires full CPU, DirectML, and
 hybrid image/PDF inference. It uploads a small synthetic hardware-acceptance
 record containing the source run ID, manifest/lock hashes, resolved providers,

@@ -651,6 +651,7 @@ jobs:
           files: |
             release-assets/bstrings-win-x64.zip
             release-assets/bstrings-win-x64-offline-base.zip
+            release-assets/bstrings-win-x64-offline-cuda.zip
             release-assets/Install-BstringsQuality.ps1
             release-assets/airgap-config-*.json
             release-assets/airgap-manifest-*.json
@@ -684,6 +685,7 @@ jobs:
             'airgap-config-quality.json'
             'airgap-manifest-quality.json'
             'bstrings-win-x64-offline-base.zip'
+            'bstrings-win-x64-offline-cuda.zip'
             'bstrings-win-x64.zip'
             'bundle-packs-quality.json'
             'Hy-MT2-Apache-2.0-quality.txt'

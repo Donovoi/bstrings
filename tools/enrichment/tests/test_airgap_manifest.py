@@ -340,7 +340,7 @@ class AirgapManifestTests(unittest.TestCase):
             repo_root / "README.md",
             repo_root / "CORE_RELEASE_README.md",
             repo_root / "docs" / "air-gapped-deployment.md",
-            repo_root / "docs" / "releases" / "v1.9.16.md",
+            repo_root / "docs" / "releases" / "v1.9.17.md",
         )
         public_sources = {
             path: path.read_text(encoding="utf-8") for path in public_paths

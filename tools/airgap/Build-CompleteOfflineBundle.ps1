@@ -422,6 +422,58 @@ foreach ($notice in @($llamaComponent.license) + @($llamaComponent.notices)) {
         throw 'The locked llama.cpp source notice inventory is invalid.'
     }
 }
+$cudaOverlay = $lock.llamaCudaOverlay
+if (
+    $null -eq $cudaOverlay -or
+    [string]$cudaOverlay.sourceTag -ne [string]$llamaComponent.sourceTag -or
+    [string]$cudaOverlay.sourceCommit -ne [string]$llamaComponent.sourceCommit -or
+    [string]$cudaOverlay.platform -cne 'windows-x64' -or
+    [string]$cudaOverlay.acceptanceHardware.computeCapability -cne '8.9' -or
+    [string]$cudaOverlay.provenancePath -cne 'llama-cuda-overlay-provenance.json'
+) {
+    throw 'The locked llama.cpp CUDA overlay is missing or does not match the source-built CPU runtime.'
+}
+$cudaArchiveIds = @($cudaOverlay.archives | ForEach-Object { [string]$_.id })
+if (
+    (@($cudaArchiveIds | Sort-Object) -join '|') -cne 'cuda-runtime|llama-cuda-backend' -or
+    @($cudaArchiveIds | Sort-Object -Unique).Count -ne 2
+) {
+    throw 'The llama.cpp CUDA overlay must pin exactly the backend and CUDA runtime archives.'
+}
+foreach ($archive in @($cudaOverlay.archives)) {
+    Assert-LockedFileSpec $archive "CUDA archive $($archive.id)"
+    if ([int]$archive.entries -lt 1 -or [long]$archive.expandedBytes -lt 1) {
+        throw "CUDA archive '$($archive.id)' has an invalid inventory bound."
+    }
+}
+$cudaRuntimeNames = @($cudaOverlay.runtimeFiles | ForEach-Object { [string]$_.path })
+if (
+    (@($cudaRuntimeNames | Sort-Object) -join '|') -cne
+        'cublas64_12.dll|cublasLt64_12.dll|cudart64_12.dll|ggml-cuda.dll' -or
+    @($cudaRuntimeNames | Sort-Object -Unique).Count -ne 4
+) {
+    throw 'The llama.cpp CUDA overlay must lock exactly the reviewed four-file runtime closure.'
+}
+foreach ($runtimeFile in @($cudaOverlay.runtimeFiles)) {
+    Assert-SafeLeafName ([string]$runtimeFile.entry) 'CUDA runtime archive entry'
+    Assert-SafeLeafName ([string]$runtimeFile.path) 'CUDA runtime path'
+    if (
+        [string]$runtimeFile.archive -notin $cudaArchiveIds -or
+        [long]$runtimeFile.bytes -lt 1 -or
+        [string]$runtimeFile.sha256 -notmatch '^[0-9a-f]{64}$' -or
+        @($runtimeFile.imports).Count -lt 1
+    ) {
+        throw "The locked CUDA runtime record is invalid: $($runtimeFile.path)"
+    }
+}
+Assert-LockedFileSpec $cudaOverlay.license 'NVIDIA CUDA 12.4 EULA'
+if (
+    [string]$cudaOverlay.license.source -cne 'download' -or
+    [string]$cudaOverlay.license.path -cne
+        'notices/nvidia-cuda/NVIDIA-CUDA-12.4-EULA.pdf'
+) {
+    throw 'The locked NVIDIA CUDA license destination is invalid.'
+}
 $magikaRedistribution = $lock.components.magika.redistribution
 if (
     $null -eq $magikaRedistribution -or
@@ -554,6 +606,9 @@ $runtimeStager = Resolve-ExistingFile `
 $llamaBuilder = Resolve-ExistingFile `
     (Join-Path $PSScriptRoot 'Build-LlamaCpuRuntime.ps1') `
     'Pinned llama.cpp CPU runtime builder'
+$cudaOverlayStager = Resolve-ExistingFile `
+    (Join-Path $PSScriptRoot 'Stage-LlamaCudaOverlay.ps1') `
+    'Pinned official llama.cpp CUDA overlay stager'
 $ocrBuilder = Resolve-ExistingFile `
     (Join-Path $PSScriptRoot 'Build-OcrComponents.ps1') `
     'Pinned offline OCR component builder'
@@ -619,6 +674,10 @@ if ($DryRun) {
             Write-Host "  redistribution overlay: $($flossRedistribution.stagedBytes) bytes; inventory $($flossRedistribution.inventorySha256)"
         }
     }
+    foreach ($archive in @($cudaOverlay.archives)) {
+        Write-Host "- CUDA archive $($archive.id): $($archive.bytes) bytes; $($archive.sha256); $($archive.url)"
+    }
+    Write-Host "  NVIDIA CUDA EULA: $($cudaOverlay.license.bytes) bytes; $($cudaOverlay.license.sha256); $($cudaOverlay.license.url)"
     & $ocrBuilder `
         -DestinationDirectory ($outputRoot + '-ocr-dry-run') `
         -DownloadCacheDirectory $ocrDownloadsDirectory `
@@ -645,6 +704,7 @@ if (-not $ValidateOnly) {
 
 $downloadPaths = @{}
 $licensePaths = @{}
+$cudaArchivePaths = @{}
 $translationProfileLicensePaths = @{}
 try {
     foreach ($componentName in $componentOrder) {
@@ -668,6 +728,23 @@ try {
             $licensePaths[$componentName] = $licensePath
         }
     }
+    foreach ($archive in @($cudaOverlay.archives)) {
+        $archivePath = Join-Path $script:downloadsDirectory ([string]$archive.fileName)
+        Get-VerifiedDownload `
+            $archive `
+            $archivePath `
+            "CUDA archive $($archive.id)" `
+            (-not $ValidateOnly)
+        $cudaArchivePaths[[string]$archive.id] = $archivePath
+    }
+    $cudaLicensePath = Join-Path `
+        $script:downloadsDirectory `
+        ([string]$cudaOverlay.license.fileName)
+    Get-VerifiedDownload `
+        $cudaOverlay.license `
+        $cudaLicensePath `
+        'NVIDIA CUDA 12.4 EULA' `
+        (-not $ValidateOnly)
     foreach ($profileName in $translationProfileNames) {
         $license = $translationProfileSpecs[$profileName].license
         $licensePath = Join-Path $script:downloadsDirectory ([string]$license.fileName)
@@ -694,6 +771,7 @@ if ($ValidateOnly) {
         $validationFloss = Join-Path $validationRoot 'floss'
         $validationMagikaOverlay = Join-Path $validationRoot 'magika-redistribution'
         $validationFlossOverlay = Join-Path $validationRoot 'floss-redistribution'
+        $validationCudaOverlay = Join-Path $validationRoot 'llama-cuda-overlay'
         Expand-VerifiedZip `
             $downloadPaths.floss `
             $validationFloss `
@@ -707,6 +785,17 @@ if ($ValidateOnly) {
         $null = New-VerifiedFlossRedistribution `
             -FlossExecutable $validationFlossExecutable `
             -DestinationDirectory $validationFlossOverlay
+        $cudaValidation = @(
+            & $cudaOverlayStager `
+                -BackendArchive $cudaArchivePaths['llama-cuda-backend'] `
+                -CudaRuntimeArchive $cudaArchivePaths['cuda-runtime'] `
+                -LicenseFile $cudaLicensePath `
+                -DestinationDirectory $validationCudaOverlay `
+                -ComponentLockPath $lockPath
+        )
+        if ($cudaValidation.Count -ne 1) {
+            throw 'Pinned CUDA overlay cache validation did not return one verified result.'
+        }
         & $ocrBuilder `
             -DestinationDirectory (Join-Path $validationRoot 'ocr-components-unused') `
             -DownloadCacheDirectory $ocrDownloadsDirectory `
@@ -717,7 +806,7 @@ if ($ValidateOnly) {
     finally {
         Remove-ControlledStaging $workingRoot $validationRoot
     }
-    Write-Host 'Every cached offline component, license, Magika dependency artifact, and FLOSS redistribution closure matches its locked bytes.'
+    Write-Host 'Every cached offline component, license, CUDA archive, Magika dependency artifact, and FLOSS redistribution closure matches its locked bytes.'
     return
 }
 
@@ -790,6 +879,17 @@ try {
     )
     if ($forbiddenLlamaFiles.Count -ne 0) {
         throw "Locked llama.cpp archive contains a non-redistributable Visual Studio OpenMP/debug artifact: $($forbiddenLlamaFiles.FullName -join ', ')"
+    }
+    $cudaStageResult = @(
+        & $cudaOverlayStager `
+            -BackendArchive $cudaArchivePaths['llama-cuda-backend'] `
+            -CudaRuntimeArchive $cudaArchivePaths['cuda-runtime'] `
+            -LicenseFile $cudaLicensePath `
+            -DestinationDirectory $staged.llamaCpp `
+            -ComponentLockPath $lockPath
+    )
+    if ($cudaStageResult.Count -ne 1) {
+        throw 'Pinned official llama.cpp CUDA overlay stager did not return one verified result.'
     }
 
     [IO.Directory]::CreateDirectory($staged.translationModel) | Out-Null

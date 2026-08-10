@@ -15,6 +15,10 @@ internal static class AnalysisCli
     internal const string DefaultTranslationPolicy = "high-recall";
     internal const string TranslationPolicyHelp =
         "Automatic translation gate used by --translation auto: high-recall keeps uncertain detections; balanced uses the configured confidence and margin; high-precision applies floors of 0.65 confidence and 0.15 margin";
+    internal const string FullProfileHelp =
+        "Run the single Full profile: hash inputs, classify each input in one early shared pass, always extract native strings, route applicable files to FLOSS/OCR, then language triage, pinned 7B Q4_K_M offline translation (validated sm89 CUDA p2 or pre-evidence CPU selection), all patterns, and reports; an explicit stage 'off' overrides its default";
+    internal const string TranslationDeviceHelp =
+        "Translation hardware: auto, cpu, cuda, or hybrid; separate from native --processor (the quality kit promotes only validated compute capability 8.9 to full-offload CUDA p2, otherwise auto selects CPU before evidence inference; explicit cuda fails closed)";
 
     internal static async Task<int> RunAsync(string[] args)
     {
@@ -37,8 +41,7 @@ internal static class AnalysisCli
         };
         var fullOption = new Option<bool>("--full")
         {
-            Description =
-                "Run the single Full profile: hash inputs, classify each input in one early shared pass, always extract native strings, route applicable files to FLOSS/OCR, then language triage, 7B-Q8 offline translation, all patterns, and reports; an explicit stage 'off' overrides its default",
+            Description = FullProfileHelp,
         };
         var ocrOption = new Option<string?>("--ocr")
         {
@@ -89,7 +92,7 @@ internal static class AnalysisCli
         };
         var translationDeviceOption = new Option<string>("--translation-device")
         {
-            Description = "Translation hardware: auto, cpu, cuda, or hybrid; separate from native --processor (the standard kit resolves auto to its accepted CPU runtime)",
+            Description = TranslationDeviceHelp,
             DefaultValueFactory = _ => "auto",
         };
         var translationParallelismOption = new Option<int>("--translation-parallelism")

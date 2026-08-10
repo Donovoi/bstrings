@@ -35,10 +35,11 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Get started
 
 The complete Windows x64 quality/offline release is
-[v1.9.16](https://github.com/Donovoi/bstrings/releases/tag/v1.9.16).
-There is one install and one Full profile: the largest, highest-scoring accepted
-Hy-MT2 7B Q8_0 translation model is included instead of asking examiners to
-choose among quality/size tiers.
+[v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17).
+There is one install and one Full profile rather than a user-facing model tier.
+Full uses the accepted Hy-MT2 7B Q4_K_M model and a separately authenticated
+CUDA overlay under [ADR-0006](docs/architecture/adr-0006-q4-cuda-full-translation.md).
+Users do not choose among quality/size tiers.
 Requirements: Windows 11 x64, a connected staging machine, and at least
 **30 GiB free**. Administrator rights are not required.
 
@@ -50,7 +51,7 @@ this pinned, checksum-verified installer bootstrap:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.16'
+  $tag = 'v1.9.17'
   $repo = 'Donovoi/bstrings'
   $headers = @{
     Accept = 'application/vnd.github+json'
@@ -159,10 +160,17 @@ completed work units, not elapsed-time estimates.
 Full remains the high-recall translation-selection profile. The optional
 `--translation-policy high-precision` expert setting uses effective floors of
 0.65 confidence and 0.15 target margin, but it is not a calibrated accuracy
-claim. The standard translation runtime is CPU-only. Translation reports its
-record percentage, rate, ETA, cache hits, model inputs, and preservation
-fallbacks; exact deduplication avoids redundant calls but mostly unique
-high-recall workloads can still be long-running.
+claim. Translation reports its record percentage, rate, ETA, cache hits, model
+inputs, and preservation fallbacks; exact deduplication avoids redundant calls
+but mostly unique high-recall workloads can still be long-running. In current
+source, Full `auto` first probes the authenticated Windows sm89 CUDA path with
+complete Q4 model load, a synthetic request, observed 33/33 layer offload, and
+p2. A failed probe closes CUDA and self-tests CPU before evidence work. Explicit
+CUDA fails closed, and the provider never changes after the first evidence
+request. This validation is scoped to the reviewed RTX 4060 Laptop/sm89 host,
+not a universal CUDA claim. The accepted placement still reported a
+410.69 MiB `CPU_Mapped` model buffer; 33/33 offload does not mean zero host
+residency. Hybrid and p4 remain deferred.
 
 `--full` freezes input hashes, batch-classifies each supplied file once, always
 runs native extraction, routes applicable files to FLOSS/OCR, then performs
@@ -196,6 +204,9 @@ for the early shared fail-open routing stage are recorded in
 The hostile-cache trust boundary, fresh-overwrite guarantee, and batched
 release policy are recorded in
 [ADR-0003](docs/architecture/adr-0003-persistent-verified-bytes-and-batched-releases.md).
+The single Q4 model, scoped Windows sm89 CUDA p2 path, pre-evidence CPU
+fallback, and release falsifiers are recorded in
+[ADR-0006](docs/architecture/adr-0006-q4-cuda-full-translation.md).
 
 The project remains under its upstream terms in [LICENSE.md](LICENSE.md), with
 component attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -3,7 +3,7 @@
 The application version lives in `bstrings/bstrings.csproj`:
 
 ```xml
-<Version>1.9.16</Version>
+<Version>1.9.17</Version>
 ```
 
 The project uses `MAJOR.MINOR.PATCH`:
@@ -14,7 +14,7 @@ The project uses `MAJOR.MINOR.PATCH`:
 
 ## Current release
 
-v1.9.16 is the complete Windows x64 quality/offline release. Its release assets
+v1.9.17 is the complete Windows x64 quality/offline release. Its release assets
 contain the current core plus the version-matched installer, offline base,
 quality manifest, licence, and trust metadata needed to assemble and verify the
 single advertised Full profile. See
@@ -67,8 +67,9 @@ lint/compilation/tests, PowerShell syntax, third-party inventories, the
 self-contained publish, the quality installer under Windows PowerShell 5.1 and
 PowerShell 7, and the integrated offline smoke. An ordinary manual dispatch
 runs this fast lane. A manual dispatch on `master` with `full_offline=true`, or
-any version tag, also builds the complete CPU/7B-Q8 archive, fully rehashes the
-exact restored component cache without network fallback, enforces the
+any version tag, also builds the complete CPU/Q4 archive and authenticated CUDA
+overlay, fully rehashes the exact restored component cache without network
+fallback, enforces the
 archive-size/checksum boundary, extracts the exact ZIP, verifies its manifest,
 and runs the CPU translation and FLOSS recovery smokes. The exact procedure is in
 [offline release maintenance](docs/offline-release-maintenance.md). Do not run
@@ -129,8 +130,8 @@ adds the full asset set, and publishes exactly once. GitHub then makes the tag
 and assets immutable. Dispatching against a branch cannot publish a full
 release.
 
-For v1.9.16 the complete release body is
-[`docs/releases/v1.9.16.md`](docs/releases/v1.9.16.md). Keep historical release
+For v1.9.17 the complete release body is
+[`docs/releases/v1.9.17.md`](docs/releases/v1.9.17.md). Keep historical release
 documents unchanged. Before promoting a version to the full quality/offline
 asset set, update its installer pin, documentation inventory, human release
 body, and the quality-profile acceptance evidence.

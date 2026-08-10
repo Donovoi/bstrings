@@ -48,7 +48,7 @@ failed or cancelled run; retain it for diagnosis and choose a new output path.
 - one batched, fail-open Magika/signature routing pass;
 - automatic routed FLOSS recovery and PDF/image OCR;
 - adaptive language detection and high-recall translation selection; and
-- offline translation with the single installed 7B Q8_0 quality profile.
+- offline translation with the single installed Hy-MT2 7B Q4_K_M Full model.
 
 Full deliberately stays `high-recall`. Examiners who accept lower candidate
 volume can explicitly select `--translation-policy high-precision`; its
@@ -109,7 +109,7 @@ The three hardware selectors control different work:
 | --- | --- | --- |
 | `--processor` | Native byte-string extraction | Leave `auto`; it avoids CUDA startup below the displayed host threshold and calibrates larger eligible inputs |
 | `--ocr-provider` | Raster/PDF OCR inference | Leave `auto`, or use `cpu`, `directml`, or `hybrid` when a specific accepted path is required |
-| `--translation-device` | Local llama.cpp translation | Leave `auto`; the standard quality kit uses its accepted CPU runtime |
+| `--translation-device` | Local llama.cpp translation | Leave `auto`; current Full source probes the accepted Windows sm89 CUDA p2 path and otherwise selects CPU before evidence work |
 
 High CPU/GPU utilization is not the objective. Storage reads, memory
 bandwidth, result transfer, and serialized output can be the limiting stage.
@@ -117,15 +117,24 @@ Use `--trace` on the legacy scanner to see native backend selection and final
 CPU/GPU chunk totals. Explicit `gpu` or `hybrid` is a diagnostic/forced choice,
 not a promise of lower wall time.
 
-For a custom accepted CUDA translation runtime, `cuda` requests full offload.
-`hybrid` additionally requires a positive, exact
-`--translation-gpu-layers`. `--translation-strict-determinism` forces one
-translation slot and disables prompt-cache reuse; do not combine it with
-`--translation-parallelism` above 1.
+Current Full `auto` treats CUDA as accepted only after the bundled backend has
+loaded the exact Q4 model, completed a synthetic request, and reported full
+33/33 layer offload at parallelism two. The reviewed placement also reported a
+410.69 MiB `CPU_Mapped` model buffer, so full layer offload is not described as
+zero CPU residency. If this transaction-free probe fails, CUDA is closed and
+CPU is started and tested before evidence inference, cache insertion, or
+translation output. Explicit `cuda` fails closed. The selected provider is
+frozen after the first evidence request; a later failure leaves the stage
+incomplete rather than switching providers.
 
-The standard release does not contain the custom CUDA translation closure, so
-`auto` resolves translation to CPU. Native extraction and OCR keep their own
-independent GPU policies.
+This CUDA acceptance is scoped to Windows and the reviewed RTX 4060
+Laptop/sm89 host. It is not a general NVIDIA compatibility claim. The automatic
+schedule is p2; p4 and `hybrid` remain expert/experimental boundaries and have
+not inherited Full acceptance. `--translation-strict-determinism` forces one
+translation slot and disables prompt-cache reuse; do not combine it with
+`--translation-parallelism` above 1. Native extraction and OCR keep their own
+independent GPU policies. See
+[ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
 
 ## Progress, cancellation, and completion
 

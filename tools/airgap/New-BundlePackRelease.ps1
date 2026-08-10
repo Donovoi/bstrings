@@ -156,6 +156,18 @@ foreach ($profileName in $profileNames) {
         throw "$profileName translation license must be a locked download."
     }
 }
+$cudaLock = $lock.llamaCudaOverlay
+if (
+    $null -eq $cudaLock -or
+    [string]$cudaLock.sourceTag -ne [string]$lock.components.llamaCpp.sourceTag -or
+    [string]$cudaLock.sourceCommit -ne [string]$lock.components.llamaCpp.sourceCommit -or
+    [string]$cudaLock.platform -cne 'windows-x64' -or
+    @($cudaLock.runtimeFiles).Count -ne 4 -or
+    [string]$cudaLock.provenancePath -cne 'llama-cuda-overlay-provenance.json'
+) {
+    throw 'Offline component lock does not contain the reviewed same-commit CUDA overlay.'
+}
+Assert-LockedFileSpec $cudaLock.license 'NVIDIA CUDA 12.4 EULA'
 $configurationPath = Join-Path $bundleRoot 'airgap-config.json'
 $manifestPath = Join-Path $bundleRoot 'airgap-manifest.json'
 $bstringsPath = Join-Path $bundleRoot 'bstrings.exe'
@@ -202,11 +214,51 @@ if ([int]$originalManifest.schemaVersion -ne 1 -or @($originalManifest.files).Co
 $modelTargets = @(
     $profileNames | ForEach-Object { "models/hy-mt2/$($lock.translationProfiles.$_.fileName)" }
 )
+$cudaTargets = @(
+    $cudaLock.runtimeFiles | ForEach-Object { "runtime/llama/$($_.path)" }
+) + @(
+    "runtime/llama/$($cudaLock.provenancePath)",
+    "runtime/llama/$($cudaLock.license.path)",
+    'licenses/NVIDIA-CUDA-12.4-EULA.pdf'
+)
+$cudaRows = @(
+    foreach ($target in $cudaTargets) {
+        $matches = @($originalManifest.files | Where-Object {
+            [string]$_.path -ceq $target
+        })
+        if ($matches.Count -ne 1) {
+            throw "Complete bundle manifest must contain exactly one CUDA pack row: $target"
+        }
+        $matches[0]
+    }
+)
+foreach ($runtimeFile in @($cudaLock.runtimeFiles)) {
+    $target = "runtime/llama/$($runtimeFile.path)"
+    $row = @($cudaRows | Where-Object { [string]$_.path -ceq $target })[0]
+    if (
+        [long]$row.bytes -ne [long]$runtimeFile.bytes -or
+        [string]$row.sha256 -ne [string]$runtimeFile.sha256
+    ) {
+        throw "Complete bundle CUDA runtime differs from its lock: $target"
+    }
+}
+foreach ($target in @(
+    "runtime/llama/$($cudaLock.license.path)",
+    'licenses/NVIDIA-CUDA-12.4-EULA.pdf'
+)) {
+    $row = @($cudaRows | Where-Object { [string]$_.path -ceq $target })[0]
+    if (
+        [long]$row.bytes -ne [long]$cudaLock.license.bytes -or
+        [string]$row.sha256 -ne [string]$cudaLock.license.sha256
+    ) {
+        throw "Complete bundle CUDA license differs from its lock: $target"
+    }
+}
 $baseExclusions = @(
     'airgap-config.json',
     'airgap-manifest.json',
     'licenses/Hy-MT2-Apache-2.0.txt'
-) + $modelTargets
+) + $modelTargets + $cudaTargets
 $baseRows = @(
     $originalManifest.files | Where-Object { [string]$_.path -notin $baseExclusions }
 )
@@ -273,6 +325,54 @@ if ($baseIdentity.bytes -lt 1 -or $baseIdentity.bytes -ge 2000000000) {
     throw "Base ZIP must be between 1 and 1,999,999,999 bytes; found $($baseIdentity.bytes)."
 }
 
+$cudaArchiveName = 'bstrings-win-x64-offline-cuda.zip'
+$cudaArchivePath = Join-Path $output $cudaArchiveName
+$archiveStream = $null
+$archive = $null
+try {
+    $archiveStream = [IO.FileStream]::new(
+        $cudaArchivePath,
+        [IO.FileMode]::CreateNew,
+        [IO.FileAccess]::ReadWrite,
+        [IO.FileShare]::None
+    )
+    $archive = [IO.Compression.ZipArchive]::new(
+        $archiveStream,
+        [IO.Compression.ZipArchiveMode]::Create,
+        $false,
+        [Text.Encoding]::UTF8
+    )
+    foreach ($row in @($cudaRows | Sort-Object { [string]$_.path })) {
+        $relative = [string]$row.path
+        $source = Join-Path $bundleRoot ($relative -replace '/', '\')
+        $identity = Get-FileIdentity $source
+        if ($identity.bytes -ne [long]$row.bytes -or $identity.sha256 -ne [string]$row.sha256) {
+            throw "CUDA pack source changed after complete-bundle verification: $relative"
+        }
+        $entry = $archive.CreateEntry($relative, [IO.Compression.CompressionLevel]::Optimal)
+        $entry.LastWriteTime = [DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
+        $input = $null
+        $entryOutput = $null
+        try {
+            $input = [IO.File]::OpenRead($source)
+            $entryOutput = $entry.Open()
+            $input.CopyTo($entryOutput, 1024 * 1024)
+        }
+        finally {
+            if ($null -ne $entryOutput) { $entryOutput.Dispose() }
+            if ($null -ne $input) { $input.Dispose() }
+        }
+    }
+}
+finally {
+    if ($null -ne $archive) { $archive.Dispose() }
+    if ($null -ne $archiveStream) { $archiveStream.Dispose() }
+}
+$cudaIdentity = Get-FileIdentity $cudaArchivePath
+if ($cudaIdentity.bytes -lt 1 -or $cudaIdentity.bytes -ge 2000000000) {
+    throw "CUDA ZIP must be between 1 and 1,999,999,999 bytes; found $($cudaIdentity.bytes)."
+}
+
 $licenseSources = @{
     quality = 'licenses/Hy-MT2-7B-Apache-2.0.txt'
 }
@@ -308,6 +408,13 @@ foreach ($profileName in @('quality')) {
 
     $rows = [Collections.Generic.List[object]]::new()
     foreach ($row in $baseRows) {
+        $rows.Add([ordered]@{
+            path = [string]$row.path
+            bytes = [long]$row.bytes
+            sha256 = [string]$row.sha256
+        })
+    }
+    foreach ($row in $cudaRows) {
         $rows.Add([ordered]@{
             path = [string]$row.path
             bytes = [long]$row.bytes
@@ -351,6 +458,12 @@ foreach ($profileName in @('quality')) {
                 url = Get-AssetUrl $baseArchiveName
                 bytes = $baseIdentity.bytes
                 sha256 = $baseIdentity.sha256
+            },
+            [ordered]@{
+                id = 'cuda-runtime'
+                url = Get-AssetUrl $cudaArchiveName
+                bytes = $cudaIdentity.bytes
+                sha256 = $cudaIdentity.sha256
             },
             [ordered]@{
                 id = 'configuration'
@@ -449,6 +562,7 @@ if (-not $SkipAssemblyTest) {
     [IO.Directory]::CreateDirectory($cache) | Out-Null
     try {
         Copy-Item -LiteralPath $baseArchivePath -Destination (Join-Path $cache 'base.zip')
+        Copy-Item -LiteralPath $cudaArchivePath -Destination (Join-Path $cache 'cuda-runtime.zip')
         Copy-Item `
             -LiteralPath (Join-Path $output "airgap-config-$testProfile.json") `
             -Destination (Join-Path $cache 'configuration.file')
@@ -498,4 +612,5 @@ if (-not $SkipAssemblyTest) {
 $results | Format-Table -AutoSize | Out-Host
 Write-Host "Split-pack release created: $output"
 Write-Host "Base ZIP: $($baseIdentity.bytes) bytes; $($baseIdentity.sha256)"
+Write-Host "CUDA ZIP: $($cudaIdentity.bytes) bytes; $($cudaIdentity.sha256)"
 Write-Host 'Quality is the default; each model remains an immutable, hash-gated external file pack.'

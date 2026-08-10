@@ -294,6 +294,7 @@ if ([IO.Path]::GetFileName($resolvedEvidence) -cne 'offline-profile-acceptance.j
 $profiles = @('quality')
 $packAssetNames = [Collections.Generic.List[string]]::new()
 $packAssetNames.Add('bstrings-win-x64-offline-base.zip')
+$packAssetNames.Add('bstrings-win-x64-offline-cuda.zip')
 $packAssetNames.Add('Install-BstringsQuality.ps1')
 foreach ($profile in $profiles) {
     $packAssetNames.Add("airgap-config-$profile.json")
@@ -468,6 +469,8 @@ if ((@($profileRows.profile) -join '|') -cne ($profiles -join '|')) {
 
 $baseName = 'bstrings-win-x64-offline-base.zip'
 $baseEvidence = Get-RequiredMapValue $evidenceAssetByName $baseName 'Release evidence assets'
+$cudaName = 'bstrings-win-x64-offline-cuda.zip'
+$cudaEvidence = Get-RequiredMapValue $evidenceAssetByName $cudaName 'Release evidence assets'
 foreach ($profile in $profiles) {
     $profileEvidence = Get-RequiredMapValue $profileByName $profile 'Profile evidence'
     if (
@@ -582,8 +585,8 @@ foreach ($profile in $profiles) {
         throw "$profile trust manifest identity differs from checked evidence."
     }
     $trustPacks = @($trust.packs)
-    if ($trustPacks.Count -ne 5) {
-        throw "$profile trust manifest must contain exactly five packs."
+    if ($trustPacks.Count -ne 6) {
+        throw "$profile trust manifest must contain exactly six packs."
     }
     $trustById = [Collections.Generic.Dictionary[string, object]]::new(
         [StringComparer]::Ordinal
@@ -594,13 +597,16 @@ foreach ($profile in $profiles) {
             throw "$profile trust manifest contains duplicate pack ID: $packId"
         }
     }
-    if ((@($trustById.Keys | Sort-Object) -join '|') -cne 'airgap-manifest|base|configuration|translation-license|translation-model') {
+    if ((@($trustById.Keys | Sort-Object) -join '|') -cne 'airgap-manifest|base|configuration|cuda-runtime|translation-license|translation-model') {
         throw "$profile trust manifest does not contain the exact pack ID set."
     }
 
     $assetPackChecks = @(
         [pscustomobject]@{
             id = 'base'; fileName = $baseName; target = $null; evidence = $baseEvidence
+        }
+        [pscustomobject]@{
+            id = 'cuda-runtime'; fileName = $cudaName; target = $null; evidence = $cudaEvidence
         }
         [pscustomobject]@{
             id = 'configuration'; fileName = $configurationName; target = 'airgap-config.json'; evidence = $configurationEvidence

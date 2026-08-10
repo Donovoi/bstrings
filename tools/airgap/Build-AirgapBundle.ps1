@@ -34,7 +34,7 @@ param(
     [string]$MagikaExecutable = 'magika.exe',
     [string]$FlossExecutable = 'floss.exe',
     [string]$LlamaServerExecutable = 'llama-server.exe',
-    [string]$TranslationModel = 'HY-MT2-7B-Q8_0.gguf',
+    [string]$TranslationModel = 'Hy-MT2-7B-Q4_K_M.gguf',
     [string]$ComponentLockPath,
     [string]$RapidsPythonDirectory,
     [string]$RapidsPythonExecutable = 'python.exe',
@@ -206,6 +206,17 @@ if (
     [string]$llamaLock.sourceTag -ne [string]$llamaLock.version
 ) {
     throw 'The offline component lock must pin a full llama.cpp source commit and matching tag.'
+}
+$cudaOverlayLock = $componentLock.llamaCudaOverlay
+if (
+    $null -eq $cudaOverlayLock -or
+    [string]$cudaOverlayLock.sourceTag -ne [string]$llamaLock.sourceTag -or
+    [string]$cudaOverlayLock.sourceCommit -ne [string]$llamaLock.sourceCommit -or
+    [string]$cudaOverlayLock.platform -cne 'windows-x64' -or
+    [string]$cudaOverlayLock.acceptanceHardware.computeCapability -cne '8.9' -or
+    [string]$cudaOverlayLock.provenancePath -cne 'llama-cuda-overlay-provenance.json'
+) {
+    throw 'The offline component lock must pin the reviewed same-commit Windows CUDA overlay.'
 }
 $magikaRedistributionLock = $componentLock.components.magika.redistribution
 if (
@@ -600,12 +611,89 @@ foreach ($runtimeFile in @($llamaProvenance.runtimeFiles)) {
         throw "llama.cpp runtime provenance is missing PE imports for $($runtimeFile.name)."
     }
 }
+$cudaProvenancePath = Resolve-ChildFile `
+    $sources.llama `
+    ([string]$cudaOverlayLock.provenancePath) `
+    'llama.cpp CUDA overlay provenance'
+$cudaProvenance = Get-Content -LiteralPath $cudaProvenancePath -Raw | ConvertFrom-Json
+if (
+    $cudaProvenance.schemaVersion -ne 1 -or
+    [string]$cudaProvenance.component -cne 'llama.cpp-cuda-overlay' -or
+    [string]$cudaProvenance.version -ne [string]$cudaOverlayLock.version -or
+    [string]$cudaProvenance.sourceTag -ne [string]$cudaOverlayLock.sourceTag -or
+    [string]$cudaProvenance.sourceCommit -ne [string]$cudaOverlayLock.sourceCommit -or
+    [string]$cudaProvenance.platform -ne [string]$cudaOverlayLock.platform -or
+    $cudaProvenance.cpuFallback.sourceBuiltRuntimeRetained -ne $true
+) {
+    throw 'llama.cpp CUDA overlay provenance is missing or inconsistent with its lock.'
+}
+foreach ($archive in @($cudaOverlayLock.archives)) {
+    $recordedArchives = @($cudaProvenance.archives | Where-Object {
+        [string]$_.id -ceq [string]$archive.id
+    })
+    if (
+        $recordedArchives.Count -ne 1 -or
+        [string]$recordedArchives[0].fileName -ne [string]$archive.fileName -or
+        [string]$recordedArchives[0].url -ne [string]$archive.url -or
+        [long]$recordedArchives[0].bytes -ne [long]$archive.bytes -or
+        [string]$recordedArchives[0].sha256 -ne [string]$archive.sha256 -or
+        [int]$recordedArchives[0].entries -ne [int]$archive.entries -or
+        [long]$recordedArchives[0].expandedBytes -ne [long]$archive.expandedBytes
+    ) {
+        throw "llama.cpp CUDA archive provenance differs from its lock: $($archive.id)"
+    }
+}
+$cudaRuntimeNames = @()
+foreach ($runtimeFile in @($cudaOverlayLock.runtimeFiles)) {
+    $cudaRuntimePath = Resolve-ChildFile `
+        $sources.llama `
+        ([string]$runtimeFile.path) `
+        "llama.cpp CUDA runtime $($runtimeFile.path)"
+    Assert-ExactFile `
+        $cudaRuntimePath `
+        ([long]$runtimeFile.bytes) `
+        ([string]$runtimeFile.sha256) `
+        "llama.cpp CUDA runtime $($runtimeFile.path)"
+    $recordedRuntimeFiles = @($cudaProvenance.runtimeFiles | Where-Object {
+        [string]$_.path -ceq [string]$runtimeFile.path
+    })
+    $lockedImports = @($runtimeFile.imports | ForEach-Object {
+        ([string]$_).ToLowerInvariant()
+    } | Sort-Object)
+    $recordedImports = if ($recordedRuntimeFiles.Count -eq 1) {
+        @($recordedRuntimeFiles[0].imports | ForEach-Object {
+            ([string]$_).ToLowerInvariant()
+        } | Sort-Object)
+    }
+    else { @() }
+    if (
+        $recordedRuntimeFiles.Count -ne 1 -or
+        [string]$recordedRuntimeFiles[0].archive -ne [string]$runtimeFile.archive -or
+        [string]$recordedRuntimeFiles[0].entry -ne [string]$runtimeFile.entry -or
+        [long]$recordedRuntimeFiles[0].bytes -ne [long]$runtimeFile.bytes -or
+        [string]$recordedRuntimeFiles[0].sha256 -ne [string]$runtimeFile.sha256 -or
+        [string]$recordedRuntimeFiles[0].role -ne [string]$runtimeFile.role -or
+        ($recordedImports -join '|') -cne ($lockedImports -join '|')
+    ) {
+        throw "llama.cpp CUDA runtime provenance differs from its lock: $($runtimeFile.path)"
+    }
+    $cudaRuntimeNames += [string]$runtimeFile.path
+}
+$cudaLicense = Resolve-ChildFile `
+    $sources.llama `
+    ([string]$cudaOverlayLock.license.path) `
+    'NVIDIA CUDA 12.4 EULA'
+Assert-ExactFile `
+    $cudaLicense `
+    ([long]$cudaOverlayLock.license.bytes) `
+    ([string]$cudaOverlayLock.license.sha256) `
+    'NVIDIA CUDA 12.4 EULA'
 $actualLlamaPeNames = @(
     Get-ChildItem -LiteralPath $sources.llama -File | Where-Object {
         $_.Extension -in @('.exe', '.dll')
     } | ForEach-Object { $_.Name }
 )
-$expectedLlamaPeNames = @($expectedLlamaRuntimeNames) + @(
+$expectedLlamaPeNames = @($expectedLlamaRuntimeNames) + @($cudaRuntimeNames) + @(
     $componentLock.runtimeDlls | ForEach-Object { [string]$_ }
 )
 if (
@@ -859,7 +947,8 @@ $bundleEnrichmentToolNames = @(
     'bstrings_enrich.py',
     'bstrings_ocr.py',
     'benchmark_ocr.py',
-    'benchmark_translation_cache.py'
+    'benchmark_translation_cache.py',
+    'benchmark_translation.py'
 )
 $bundleDocumentNames = @(
     'air-gapped-deployment.md',
@@ -886,6 +975,7 @@ $bundleArchitectureDocumentNames = @(
     'adr-0003-persistent-verified-bytes-and-batched-releases.md',
     'adr-0004-bounded-language-detection-reuse.md',
     'adr-0005-translation-integrity-and-run-dedup.md',
+    'adr-0006-q4-cuda-full-translation.md',
     'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(
@@ -894,7 +984,7 @@ $bundleBenchmarkResultNames = @(
     'language-triage-reuse-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.16.md'
+    'v1.9.17.md'
 )
 foreach ($toolName in $bundleEnrichmentToolNames) {
     $null = Resolve-ChildFile `
@@ -1025,6 +1115,8 @@ try {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) `
             -Destination (Join-Path $output "tools\airgap\$name")
     }
+    Copy-Item -LiteralPath $resolvedComponentLock `
+        -Destination (Join-Path $output 'tools\airgap\offline-components.lock.json')
     Copy-DirectoryContents `
         $fixtureSourceDirectory `
         (Join-Path $output 'tools\airgap\fixtures')
@@ -1148,6 +1240,9 @@ try {
     Copy-DirectoryContents `
         (Join-Path $sources.llama 'notices\llama.cpp') `
         (Join-Path $bundleLicenses 'llama.cpp')
+    Copy-Item `
+        -LiteralPath $cudaLicense `
+        -Destination (Join-Path $bundleLicenses 'NVIDIA-CUDA-12.4-EULA.pdf')
     Copy-Item -LiteralPath $resolvedComponentLock `
         -Destination (Join-Path $output 'offline-components.lock.json')
     & (Join-Path $output 'tools\airgap\Verify-MarkdownLinks.ps1') `
@@ -1194,6 +1289,17 @@ try {
             provenance = 'runtime/llama/llama-build-provenance.json'
             openMp = $false
             offlineArgument = '--offline'
+        }
+        llamaCudaOverlay = [ordered]@{
+            version = [string]$cudaOverlayLock.version
+            sourceTag = [string]$cudaOverlayLock.sourceTag
+            sourceCommit = [string]$cudaOverlayLock.sourceCommit
+            platform = [string]$cudaOverlayLock.platform
+            acceptanceComputeCapability = [string]$cudaOverlayLock.acceptanceHardware.computeCapability
+            provenance = "runtime/llama/$($cudaOverlayLock.provenancePath)"
+            runtimeFiles = @($cudaRuntimeNames | ForEach-Object { "runtime/llama/$_" })
+            license = 'licenses/NVIDIA-CUDA-12.4-EULA.pdf'
+            cpuFallback = $true
         }
         magikaRedistribution = [ordered]@{
             inventory = [string]$magikaRedistributionLock.inventoryPath
