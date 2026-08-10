@@ -197,6 +197,194 @@ public sealed class EnrichmentRegexPipelineCoreTests
     }
 
     [Fact]
+    public async Task ProcessAsync_CountsAndValidatesPreservationFallbacks()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("fallback.jsonl");
+        const string sourceText = "contact owner@example.com";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                OcrRecord("ocr-1", sourceText, "revision-1"),
+                OcrTranslation(
+                    "translated-1",
+                    "ocr-1",
+                    sourceText,
+                    "revision-1",
+                    outcome: "unchanged",
+                    integrity: "preservation-fallback",
+                    integrityReason: "hard-identifier-retention-mismatch"
+                ),
+            ],
+            cancellationToken
+        );
+
+        var stats = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            outputPath: null,
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            new StringWriter(),
+            cancellationToken,
+            trustedParentFirstInput: true,
+            translationRequirements: new TranslationValidationRequirements(
+                "llama.cpp",
+                "en",
+                "fixture/translation-model",
+                "translation-revision",
+                new string('b', 64)
+            )
+        );
+
+        Assert.Equal(1, stats.PreservationFallbackRecords);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TrustedStreamRejectsFallbackThatDiffersFromParentText()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("fallback-mismatch.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                OcrRecord("ocr-1", "retain CASE_TOKEN001 exactly", "revision-1"),
+                OcrTranslation(
+                    "translated-1",
+                    "ocr-1",
+                    "retain case_token001 exactly",
+                    "revision-1",
+                    outcome: "unchanged",
+                    integrity: "preservation-fallback",
+                    integrityReason: "hard-identifier-retention-mismatch"
+                ),
+            ],
+            cancellationToken
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                outputPath: null,
+                [("token", "CASE_TOKEN001")],
+                new StringWriter(),
+                cancellationToken,
+                trustedParentFirstInput: true,
+                translationRequirements: new TranslationValidationRequirements(
+                    "llama.cpp",
+                    "en",
+                    "fixture/translation-model",
+                    "translation-revision",
+                    new string('b', 64)
+                )
+            )
+        );
+
+        Assert.Contains("exact parent text", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(Directory.GetDirectories(scope.DirectoryPath, ".bstrings-fallback-text.*"));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_FallbackIndexCleanupFailureBlocksOutputPublication()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("fallback-cleanup.jsonl");
+        var outputPath = scope.PathFor("matches.jsonl");
+        const string sourceText = "retain CASE_TOKEN001 exactly";
+        await File.WriteAllTextAsync(outputPath, "previous-result", cancellationToken);
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                OcrRecord("ocr-1", sourceText, "revision-1"),
+                OcrTranslation(
+                    "translated-1",
+                    "ocr-1",
+                    sourceText,
+                    "revision-1",
+                    outcome: "unchanged",
+                    integrity: "preservation-fallback",
+                    integrityReason: "hard-identifier-retention-mismatch"
+                ),
+            ],
+            cancellationToken
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                outputPath,
+                [("token", "CASE_TOKEN001")],
+                cancellationToken: cancellationToken,
+                trustedParentFirstInput: true,
+                translationRequirements: new TranslationValidationRequirements(
+                    "llama.cpp",
+                    "en",
+                    "fixture/translation-model",
+                    "translation-revision",
+                    new string('b', 64)
+                ),
+                fallbackIndexDeleteDirectory: _ =>
+                    throw new IOException("synthetic cleanup failure")
+            )
+        );
+
+        Assert.Contains("not published", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("previous-result", await File.ReadAllTextAsync(outputPath, cancellationToken));
+        Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.partial.*"));
+        Assert.Empty(Directory.GetDirectories(scope.DirectoryPath, ".bstrings-fallback-text.*"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    public async Task ProcessAsync_TrustedStreamRequiresPositiveAmbiguousCount(int? count)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("ambiguous-count.jsonl");
+        var outputPath = scope.PathFor("matches.jsonl");
+        await File.WriteAllTextAsync(outputPath, "previous-result", cancellationToken);
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                OcrRecord("ocr-1", "ordinary-hyphen language", "revision-1"),
+                OcrTranslation(
+                    "translated-1",
+                    "ocr-1",
+                    "ordinary language",
+                    "revision-1",
+                    integrity: "source-retained-ambiguous",
+                    ambiguousIdentifierCount: count
+                ),
+            ],
+            cancellationToken
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                outputPath,
+                [("ordinary", "ordinary")],
+                cancellationToken: cancellationToken,
+                trustedParentFirstInput: true,
+                translationRequirements: new TranslationValidationRequirements(
+                    "llama.cpp",
+                    "en",
+                    "fixture/translation-model",
+                    "translation-revision",
+                    new string('b', 64)
+                )
+            )
+        );
+
+        Assert.Contains("positive integer", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("previous-result", await File.ReadAllTextAsync(outputPath, cancellationToken));
+        Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.partial.*"));
+        Assert.Empty(Directory.GetDirectories(scope.DirectoryPath, ".bstrings-fallback-text.*"));
+    }
+
+    [Fact]
     public async Task ProcessAsync_UsesBuiltInCaptureSemantics()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -445,9 +633,26 @@ public sealed class EnrichmentRegexPipelineCoreTests
         string recordId,
         string parentRecordId,
         string text,
-        string originRevision
-    ) =>
-        JsonSerializer.Serialize(
+        string originRevision,
+        string outcome = "translated",
+        string integrity = "verified",
+        string? integrityReason = null,
+        int? ambiguousIdentifierCount = null
+    )
+    {
+        var attributes = new Dictionary<string, object>
+        {
+            ["translationIntegrity"] = integrity,
+        };
+        if (integrityReason is not null)
+        {
+            attributes["translationIntegrityReason"] = integrityReason;
+        }
+        if (ambiguousIdentifierCount is not null)
+        {
+            attributes["translationAmbiguousIdentifierCount"] = ambiguousIdentifierCount.Value;
+        }
+        return JsonSerializer.Serialize(
             new
             {
                 schemaVersion = 1,
@@ -475,10 +680,12 @@ public sealed class EnrichmentRegexPipelineCoreTests
                     revision = "translation-revision",
                     modelSha256 = new string('b', 64),
                     targetLanguage = "en",
-                    outcome = "translated",
+                    outcome,
                 },
+                attributes,
             }
         );
+    }
 
     private sealed class TemporaryDirectory : IDisposable
     {

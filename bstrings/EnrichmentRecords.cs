@@ -44,6 +44,13 @@ internal sealed record TranslationValidationRequirements(
     string ModelSha256
 );
 
+internal enum TranslationIntegrityStatus
+{
+    Verified,
+    SourceRetainedAmbiguous,
+    PreservationFallback,
+}
+
 internal sealed record OcrValidationRequirements(
     string Engine,
     string EngineVersion,
@@ -112,5 +119,6 @@ internal sealed record EnrichmentRegexMatchRecord
 internal readonly record struct EnrichmentPipelineStats(
     long InputRecords,
     long TranslatedRecords,
-    long MatchRecords
+    long MatchRecords,
+    long PreservationFallbackRecords = 0
 );

@@ -53,6 +53,8 @@ internal static class LanguageTriageCore
 {
     internal const int DefaultMaximumBatchUtf8Bytes = 8 * 1024 * 1024;
     internal const int AssessmentScoreDecimalPlaces = 12;
+    internal const double HighPrecisionMinimumConfidence = 0.65;
+    internal const double HighPrecisionMinimumTargetMargin = 0.15;
     private const string DetectorName = "lingua-rs";
     private const string DetectorVersion = "1.8.0";
     private const int AdaptiveSampleSize = 512;
@@ -384,6 +386,8 @@ internal static class LanguageTriageCore
     )
     {
         successfulDetection = null;
+        var (effectiveMinimumConfidence, effectiveMinimumTargetMargin) =
+            ResolveEffectiveThresholds(options);
         if (record.IsDerived)
         {
             return Assessment(
@@ -454,8 +458,8 @@ internal static class LanguageTriageCore
         if (isTarget)
         {
             var confidentTarget =
-                detection.Confidence >= options.MinimumConfidence
-                && detection.TopLanguageMargin >= options.MinimumTargetMargin;
+                detection.Confidence >= effectiveMinimumConfidence
+                && detection.TopLanguageMargin >= effectiveMinimumTargetMargin;
             return Assessment(
                 record,
                 options,
@@ -469,8 +473,8 @@ internal static class LanguageTriageCore
         }
 
         var clearsGate =
-            detection.Confidence >= options.MinimumConfidence
-            && detection.TargetMargin >= options.MinimumTargetMargin;
+            detection.Confidence >= effectiveMinimumConfidence
+            && detection.TargetMargin >= effectiveMinimumTargetMargin;
         if (clearsGate || options.Policy == LanguageTriagePolicy.HighRecall)
         {
             return Assessment(
@@ -507,8 +511,12 @@ internal static class LanguageTriageCore
         string? detectorTargetLanguage = null
     )
     {
+        var (effectiveMinimumConfidence, effectiveMinimumTargetMargin) =
+            ResolveEffectiveThresholds(options);
         bool? confidenceGatePassed =
-            detection is null ? null : detection.Value.Confidence >= options.MinimumConfidence;
+            detection is null
+                ? null
+                : detection.Value.Confidence >= effectiveMinimumConfidence;
         bool? marginGatePassed =
             detection is null
                 ? null
@@ -517,8 +525,8 @@ internal static class LanguageTriageCore
                     detectorTargetLanguage,
                     StringComparison.OrdinalIgnoreCase
                 )
-                    ? detection.Value.TopLanguageMargin >= options.MinimumTargetMargin
-                    : detection.Value.TargetMargin >= options.MinimumTargetMargin;
+                    ? detection.Value.TopLanguageMargin >= effectiveMinimumTargetMargin
+                    : detection.Value.TargetMargin >= effectiveMinimumTargetMargin;
         var assessment = new
         {
             schemaVersion = 1,
@@ -538,8 +546,14 @@ internal static class LanguageTriageCore
             topLanguageMargin = NormalizeAssessmentMetric(detection?.TopLanguageMargin),
             targetMargin = NormalizeAssessmentMetric(detection?.TargetMargin),
             scoreDecimalPlaces = AssessmentScoreDecimalPlaces,
-            minimumConfidence = options.MinimumConfidence,
-            minimumTargetMargin = options.MinimumTargetMargin,
+            configuredMinimumConfidence = options.MinimumConfidence,
+            configuredMinimumTargetMargin = options.MinimumTargetMargin,
+            effectiveMinimumConfidence,
+            effectiveMinimumTargetMargin,
+            // Retain the schema-1 field names as aliases for the thresholds that
+            // actually drove the recorded gate booleans and decision.
+            minimumConfidence = effectiveMinimumConfidence,
+            minimumTargetMargin = effectiveMinimumTargetMargin,
             confidenceGatePassed,
             marginGatePassed,
             policy = PolicyName(options.Policy),
@@ -549,6 +563,15 @@ internal static class LanguageTriageCore
         };
         return new AssessedRecord(JsonSerializer.Serialize(assessment), candidate, decision);
     }
+
+    private static (double MinimumConfidence, double MinimumTargetMargin)
+        ResolveEffectiveThresholds(LanguageTriageOptions options) =>
+        options.Policy == LanguageTriagePolicy.HighPrecision
+            ? (
+                Math.Max(options.MinimumConfidence, HighPrecisionMinimumConfidence),
+                Math.Max(options.MinimumTargetMargin, HighPrecisionMinimumTargetMargin)
+            )
+            : (options.MinimumConfidence, options.MinimumTargetMargin);
 
     internal static double? NormalizeAssessmentMetric(double? value)
     {

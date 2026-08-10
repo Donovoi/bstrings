@@ -4,13 +4,14 @@ import hashlib
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 from argparse import Namespace
-from contextlib import nullcontext, redirect_stderr
+from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from bstrings_enrich import (  # noqa: E402
     JSON_READ_CHUNK_BYTES,
+    BoundedTranslationOutcomeCache,
     Classification,
     EnrichmentError,
     EvidenceReadLease,
@@ -28,12 +30,17 @@ from bstrings_enrich import (  # noqa: E402
     MadladTranslator,
     MagikaClassification,
     RoutingInput,
+    RunLocalTranslationCache,
     TranslationCache,
+    TranslationIntegrityMonitor,
+    TranslationOutcome,
     _iter_magika_batches,
     _make_routing_record,
     _run_magika_batch,
     add_translations,
+    advisory_identifier_spans,
     build_llama_server_command,
+    finalize_run_translation_cache,
     iter_extraction_paths,
     iter_normalized_floss,
     iter_unique_records,
@@ -50,8 +57,10 @@ from bstrings_enrich import (  # noqa: E402
     run_floss,
     selected_translation_engine,
     translate_normalized_records,
+    translation_cache_identity,
     unique_records,
     validate_arguments,
+    validate_identifier_retention,
     validate_transformers_version,
     write_jsonl_atomic,
 )
@@ -521,6 +530,7 @@ class EnrichmentTests(unittest.TestCase):
         self.assertEqual("deadbeef", child["transform"]["revision"])
         self.assertEqual("a" * 64, child["transform"]["modelSha256"])
         self.assertEqual("cpu", child["transform"]["execution"]["device"])
+        self.assertEqual("verified", child["attributes"]["translationIntegrity"])
         self.assertEqual("language text", parent["text"])
         self.assertEqual("translated language text", child["text"])
 
@@ -602,7 +612,7 @@ class EnrichmentTests(unittest.TestCase):
         self.assertEqual(4, len(output))
         self.assertEqual([1, 2], progress)
 
-    def test_changed_structured_identifier_is_fatal(self) -> None:
+    def test_changed_structured_identifier_becomes_explicit_source_fallback(self) -> None:
         parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
         parent = {**parent, "text": "cuenta analyst@example.com"}
 
@@ -610,8 +620,835 @@ class EnrichmentTests(unittest.TestCase):
             def translate(self, texts: list[str], target_language: str) -> list[str]:
                 return ["translated account"]
 
+        children = add_translations([parent], IdentifierBreakingTranslator(), "en", 4, 4, 200)
+
+        self.assertEqual(1, len(children))
+        self.assertEqual(parent["text"], children[0]["text"])
+        self.assertEqual("unchanged", children[0]["transform"]["outcome"])
+        self.assertEqual(
+            "preservation-fallback",
+            children[0]["attributes"]["translationIntegrity"],
+        )
+        self.assertEqual(
+            "hard-identifier-retention-mismatch",
+            children[0]["attributes"]["translationIntegrityReason"],
+        )
+
+    def test_hard_identifier_validation_rejects_surplus_duplicates(self) -> None:
         with self.assertRaisesRegex(EnrichmentError, "analyst@example.com"):
-            add_translations([parent], IdentifierBreakingTranslator(), "en", 4, 4, 200)
+            validate_identifier_retention(
+                "cuenta analyst@example.com",
+                "account analyst@example.com analyst@example.com",
+            )
+
+    def test_hard_identifier_retention_is_case_and_unicode_normalization_exact(self) -> None:
+        cases = (
+            ("SYNTH-CODE", "synth-code"),
+            ("Café_TOKEN", "Cafe\u0301_TOKEN"),
+        )
+
+        for source, changed in cases:
+            with self.subTest(source=source), self.assertRaises(EnrichmentError):
+                validate_identifier_retention(source, changed)
+
+    def test_promised_structured_identifier_classes_reject_exact_mutations(self) -> None:
+        cases = (
+            (
+                "guid",
+                "550e8400-e29b-41d4-a716-446655440000",
+                "550e8400-e29b-41d4-a716-446655440001",
+            ),
+            ("ipv4", "192.168.1.10", "192.168.1.11"),
+            ("ipv4-port", "192.168.1.10:443", "192.168.1.10:8443"),
+            ("registry", r"HKLM\Software\Vendor", r"HKLM\Software\Other"),
+            ("filename", "report.pdf", "report.txt"),
+            ("braced-placeholder", "${API_TOKEN}", "${API_KEY}"),
+            ("percent-placeholder", "%TEMP_DIR%", "%TMP_DIR%"),
+        )
+
+        for identifier_class, source, changed in cases:
+            with self.subTest(identifier_class=identifier_class):
+                self.assertEqual((source,), protected_identifiers(source))
+                with self.assertRaises(EnrichmentError):
+                    validate_identifier_retention(source, changed)
+
+    def test_hyphenated_words_are_advisory_with_unicode_complete_boundaries(self) -> None:
+        text = "Software-Angebotsmesse prοd-api Cafe\u0301‐Profile служба‑резерв"
+
+        self.assertEqual((), protected_identifiers(text))
+        self.assertEqual(
+            (
+                "Software-Angebotsmesse",
+                "prοd-api",
+                "Cafe\u0301‐Profile",
+                "служба‑резерв",
+            ),
+            tuple(value for _, _, value in advisory_identifier_spans(text)),
+        )
+
+    def test_generic_machine_signals_are_hard_without_numeric_language_false_positive(self) -> None:
+        text = "svc_backup SYNTH-CODE 17-jährig server-01"
+
+        self.assertEqual(("svc_backup", "SYNTH-CODE"), protected_identifiers(text))
+        self.assertEqual(
+            ("17-jährig", "server-01"),
+            tuple(value for _, _, value in advisory_identifier_spans("17-jährig server-01")),
+        )
+
+    def test_advisory_subspan_is_suppressed_inside_hard_hostname(self) -> None:
+        text = "server-alpha.example"
+
+        self.assertEqual((text,), protected_identifiers(text))
+        self.assertEqual((), advisory_identifier_spans(text))
+
+    def test_typed_spans_take_precedence_over_overlapping_machine_prefixes(self) -> None:
+        cases = (
+            "FOO-HTTPS://example.com",
+            r"FOO-C:\Temp\x.txt",
+            r"FOO-HKLM\Software\Vendor",
+        )
+
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual((text,), protected_identifiers(text))
+                with self.assertRaises(EnrichmentError):
+                    validate_identifier_retention(text, text.replace("FOO", "BAR"))
+
+    def test_posix_slash_drive_and_unc_paths_are_exact_hard_identifiers(self) -> None:
+        posix = "/etc/passwd"
+        slash_drive = "C:/Windows/System32/cmd.exe"
+        unc = r"\\server\share\file.txt"
+        source = f"Paths: {posix}, {slash_drive}; {unc}."
+
+        self.assertEqual((posix, slash_drive, unc), protected_identifiers(source))
+        for original, changed in (
+            (posix, "/etc/shadow"),
+            (slash_drive, "C:/Windows/System32/powershell.exe"),
+            (unc, r"\\server\share\other.txt"),
+        ):
+            with self.subTest(original=original), self.assertRaises(EnrichmentError):
+                validate_identifier_retention(source, source.replace(original, changed))
+
+    def test_one_component_posix_paths_and_command_switches_are_hard(self) -> None:
+        source = "Inspect /tmp and /root with switches /v /quiet."
+
+        self.assertEqual(
+            ("/tmp", "/root", "/v", "/quiet"),
+            protected_identifiers(source),
+        )
+        for original, changed in (
+            ("/tmp", "/var"),
+            ("/root", "/home"),
+            ("/v", "/x"),
+            ("/quiet", "/silent"),
+        ):
+            with self.subTest(original=original), self.assertRaises(EnrichmentError):
+                validate_identifier_retention(source, source.replace(original, changed))
+
+    def test_path_scanner_rejects_partial_boundaries_and_ordinary_slash_prose(self) -> None:
+        cases = (
+            "prefix/etc/passwd",
+            "./etc/passwd",
+            "prefixC:/Windows/System32/cmd.exe",
+            r"prefix\\server\share\file.txt",
+            "Use and/or prose / one / two without an absolute path",
+        )
+
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertFalse(
+                    any("/" in value or "\\" in value for value in protected_identifiers(text))
+                )
+
+        unicode_path = "/etc/passwd界"
+        self.assertEqual((unicode_path,), protected_identifiers(unicode_path))
+
+    def test_balanced_url_closing_parenthesis_is_part_of_hard_identifier(self) -> None:
+        url = "https://en.wikipedia.org/wiki/Function_(mathematics)"
+        source = f"See {url} now"
+
+        self.assertEqual((url,), protected_identifiers(source))
+        with self.assertRaisesRegex(EnrichmentError, "Function_\\(mathematics\\)"):
+            validate_identifier_retention(source, f"See {url[:-1]} now")
+
+    def test_overlapping_email_and_port_spans_form_one_exact_composite(self) -> None:
+        source = "Connect to user@example.com:443 now"
+
+        self.assertEqual(("user@example.com:443",), protected_identifiers(source))
+        with self.assertRaisesRegex(EnrichmentError, "user@example.com:443"):
+            validate_identifier_retention(source, "Connect to user@example.com:8443 now")
+
+    def test_validated_bare_and_bracketed_ipv6_are_exact_hard_identifiers(self) -> None:
+        bare = "2001:0db8:85a3::8a2e:0370:7334"
+        endpoint = "[2001:db8::1]:443"
+        scoped = "fe80::1%eth0"
+        source = f"Connect {bare} through {endpoint} on {scoped} now"
+
+        self.assertEqual((bare, endpoint, scoped), protected_identifiers(source))
+        with self.assertRaisesRegex(EnrichmentError, "\\[2001:db8::1\\]:443"):
+            validate_identifier_retention(source, source.replace(":443", ":8443"))
+        with self.assertRaisesRegex(EnrichmentError, "fe80::1%eth0"):
+            validate_identifier_retention(source, source.replace("%eth0", "%eth1"))
+
+    def test_invalid_bracketed_port_still_preserves_valid_inner_ipv6(self) -> None:
+        source = "Endpoint [2001:db8::1]:99999 is invalid"
+
+        self.assertEqual(("2001:db8::1",), protected_identifiers(source))
+
+    def test_ipv6_validation_rejects_partial_unicode_boundaries_and_colon_prose(self) -> None:
+        address = "2001:db8::1"
+        cases = (
+            f"α{address}",
+            f"{address}界",
+            f"α[{address}]:443",
+            f"[{address}]:443界",
+            "Time: 12:30 and ratio 1:2; namespace foo::bar",
+            "Invalid 2001:db8::1::2 address",
+        )
+
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual((), protected_identifiers(text))
+
+    def test_fixed_ascii_hash_is_hard_before_an_attached_unicode_suffix(self) -> None:
+        digest = "0123456789abcdef" * 4
+        text = digest + "입니다"
+
+        self.assertEqual((digest,), protected_identifiers(text))
+
+    def test_partial_separator_tokens_are_not_accepted(self) -> None:
+        for text in ("tenant--prod", "-tenant-prod", "tenant-prod-"):
+            with self.subTest(text=text):
+                self.assertEqual((), protected_identifiers(text))
+                self.assertEqual((), advisory_identifier_spans(text))
+
+    def test_one_bad_row_falls_back_without_poisoning_good_sibling(self) -> None:
+        first = normalize_floss(self.payload, Path("first.exe"), self.classification, "3.1.1")[0]
+        second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
+        first = {**first, "text": "cuenta analyst@example.com"}
+        second = {**second, "text": "hola mundo"}
+
+        class MixedTranslator(FakeTranslator):
+            def translate(self, texts: list[str], target_language: str) -> list[str]:
+                self.calls.append(list(texts))
+                return [
+                    "translated account" if "analyst@example.com" in text else "hello world"
+                    for text in texts
+                ]
+
+        monitor = TranslationIntegrityMonitor()
+        children = add_translations(
+            [first, second],
+            MixedTranslator(),
+            "en",
+            8,
+            4,
+            200,
+            integrity_monitor=monitor,
+        )
+
+        self.assertEqual([first["text"], "hello world"], [child["text"] for child in children])
+        self.assertEqual(
+            ["preservation-fallback", "verified"],
+            [child["attributes"]["translationIntegrity"] for child in children],
+        )
+        self.assertEqual(2, monitor.model_inputs)
+        self.assertEqual(1, monitor.fallbacks)
+
+    def test_successful_ambiguous_source_is_explicit_and_counted(self) -> None:
+        parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
+        parent = {**parent, "text": "Die Software-Angebotsmesse wurde geändert"}
+
+        child = add_translations([parent], FakeTranslator(), "en", 4, 4, 200)[0]
+
+        self.assertEqual(
+            "source-retained-ambiguous",
+            child["attributes"]["translationIntegrity"],
+        )
+        self.assertEqual(1, child["attributes"]["translationAmbiguousIdentifierCount"])
+
+    def test_integrity_circuit_breaker_uses_exact_rate_and_consecutive_boundaries(self) -> None:
+        rate_monitor = TranslationIntegrityMonitor()
+        rate_monitor.record(fallback=True)
+        for _ in range(99):
+            rate_monitor.record(fallback=False)
+        self.assertEqual((100, 1), (rate_monitor.model_inputs, rate_monitor.fallbacks))
+        with self.assertRaisesRegex(EnrichmentError, "circuit breaker"):
+            rate_monitor.record(fallback=True)
+
+        consecutive_monitor = TranslationIntegrityMonitor()
+        for _ in range(99):
+            consecutive_monitor.record(fallback=True)
+        with self.assertRaisesRegex(EnrichmentError, "100 consecutive"):
+            consecutive_monitor.record(fallback=True)
+
+    def test_bounded_outcome_cache_reuses_fallback_metadata_without_recounting(self) -> None:
+        parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
+        parent = {**parent, "text": "cuenta analyst@example.com"}
+
+        class IdentifierBreakingTranslator(FakeTranslator):
+            def translate(self, texts: list[str], target_language: str) -> list[str]:
+                self.calls.append(list(texts))
+                return ["translated account" for _ in texts]
+
+        translator = IdentifierBreakingTranslator()
+        monitor = TranslationIntegrityMonitor()
+        cache = BoundedTranslationOutcomeCache(1)
+
+        first = add_translations(
+            [parent],
+            translator,
+            "en",
+            1,
+            4,
+            200,
+            run_cache=cache,
+            integrity_monitor=monitor,
+        )[0]
+        second = add_translations(
+            [parent],
+            translator,
+            "en",
+            1,
+            4,
+            200,
+            run_cache=cache,
+            integrity_monitor=monitor,
+        )[0]
+
+        self.assertEqual([[parent["text"]]], translator.calls)
+        self.assertEqual(1, monitor.model_inputs)
+        self.assertEqual(1, monitor.fallbacks)
+        self.assertEqual(1, cache.hits)
+        self.assertEqual(
+            ["preservation-fallback", "preservation-fallback"],
+            [
+                first["attributes"]["translationIntegrity"],
+                second["attributes"]["translationIntegrity"],
+            ],
+        )
+
+    def test_run_local_cache_uses_exact_text_under_digest_collision_and_cleans_up(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RunLocalTranslationCache(Path(directory), "identity", 1)
+            cache._digest = lambda _text: b"collision"  # type: ignore[method-assign]
+            cache.put("first source", TranslationOutcome("first result", "verified"))
+            cache.put("second source", TranslationOutcome("second result", "verified"))
+            cache_path = cache.path
+
+            self.assertEqual("first result", cache.get("first source").text)
+            self.assertEqual("second result", cache.get("second source").text)
+            self.assertTrue(cache_path.is_file())
+            cache.close(commit=True)
+            self.assertFalse(cache_path.exists())
+
+    def test_run_local_cache_setup_failure_closes_handle_and_removes_temporary_file(self) -> None:
+        class FailingSetupConnection:
+            def __init__(self, fail_fragment: str) -> None:
+                self.fail_fragment = fail_fragment
+                self.rolled_back = False
+                self.closed = False
+
+            def execute(self, statement: str):
+                if self.fail_fragment in statement:
+                    raise sqlite3.OperationalError("synthetic setup failure")
+                return self
+
+            def rollback(self) -> None:
+                self.rolled_back = True
+
+            def close(self) -> None:
+                self.closed = True
+
+        for fail_fragment in ("PRAGMA journal_mode", "CREATE TABLE"):
+            with (
+                self.subTest(fail_fragment=fail_fragment),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                connection = FailingSetupConnection(fail_fragment)
+                root = Path(directory)
+                with (
+                    patch("bstrings_enrich.sqlite3.connect", return_value=connection),
+                    self.assertRaisesRegex(EnrichmentError, "Could not create run-local"),
+                ):
+                    RunLocalTranslationCache(root, "identity", 1)
+
+                self.assertTrue(connection.rolled_back)
+                self.assertTrue(connection.closed)
+                self.assertEqual([], list(root.glob(".bstrings-translation-cache-*.sqlite3*")))
+
+    def test_run_local_cache_commits_in_bounded_batches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RunLocalTranslationCache(Path(directory), "identity", 2)
+            try:
+                for index in range(4097):
+                    source = f"source text {index}"
+                    cache.put(source, TranslationOutcome(f"translated text {index}", "verified"))
+
+                self.assertEqual(1, cache.batch_commits)
+                self.assertEqual(1, cache._pending_writes)
+                self.assertLessEqual(len(cache._memory), 2)
+            finally:
+                cache.close(commit=False)
+
+    def test_run_local_cache_uses_ephemeral_performance_pragmas(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RunLocalTranslationCache(Path(directory), "identity", 1)
+            try:
+                assert cache._connection is not None
+                journal_mode = cache._connection.execute("PRAGMA journal_mode").fetchone()[0]
+                synchronous = cache._connection.execute("PRAGMA synchronous").fetchone()[0]
+
+                self.assertEqual("memory", str(journal_mode).lower())
+                self.assertEqual(0, synchronous)
+            finally:
+                cache.close(commit=False)
+
+    def test_cache_cleanup_failure_preserves_prior_output_and_removes_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "translations.jsonl"
+            output.write_text("previous result\n", encoding="utf-8")
+            cache = RunLocalTranslationCache(root, "identity", 1)
+            cache_path = cache.path
+            original_unlink = Path.unlink
+
+            def fail_cache_unlink(path: Path, *args, **kwargs) -> None:
+                if path == cache_path:
+                    raise PermissionError("synthetic cache lock")
+                original_unlink(path, *args, **kwargs)
+
+            with (
+                patch.object(Path, "unlink", new=fail_cache_unlink),
+                self.assertRaisesRegex(EnrichmentError, "cache cleanup failed"),
+            ):
+                write_jsonl_atomic(
+                    output,
+                    [{"new": "result"}],
+                    before_publish=lambda: finalize_run_translation_cache(cache, output),
+                )
+
+            self.assertEqual("previous result\n", output.read_text(encoding="utf-8"))
+            self.assertEqual([], list(root.glob("*.partial.*")))
+            cache.close(commit=False)
+
+    def test_run_local_cache_rejects_corrupt_translated_text_by_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RunLocalTranslationCache(Path(directory), "identity", 0)
+            source = "ordinary language text"
+            cache.put(source, TranslationOutcome("translated language text", "verified"))
+            assert cache._connection is not None
+            cache._connection.execute(
+                "UPDATE translations SET translated_text = ?",
+                ("silently changed text",),
+            )
+            try:
+                with self.assertRaisesRegex(EnrichmentError, "outcome-integrity validation"):
+                    cache.get(source)
+            finally:
+                cache.close(commit=False)
+
+    def test_run_local_cache_rejects_corrupt_integrity_status_and_count_by_digest(self) -> None:
+        mutations = (
+            ("integrity = ?", ("source-retained-ambiguous",)),
+            ("ambiguous_identifier_count = ?", (1,)),
+        )
+        for assignment, parameters in mutations:
+            with self.subTest(assignment=assignment), tempfile.TemporaryDirectory() as directory:
+                cache = RunLocalTranslationCache(Path(directory), "identity", 0)
+                source = "ordinary language text"
+                cache.put(source, TranslationOutcome("translated language text", "verified"))
+                assert cache._connection is not None
+                cache._connection.execute(f"UPDATE translations SET {assignment}", parameters)
+                try:
+                    with self.assertRaisesRegex(EnrichmentError, "outcome-integrity validation"):
+                        cache.get(source)
+                finally:
+                    cache.close(commit=False)
+
+    def test_run_local_cache_recomputes_advisory_status_after_digest_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RunLocalTranslationCache(Path(directory), "identity", 0)
+            source = "translate server-01 label"
+            translated = "translated server-01 label"
+            cache.put(
+                source,
+                TranslationOutcome(translated, "source-retained-ambiguous", None, 1),
+            )
+            corrupted = TranslationOutcome(translated, "verified", None, 0)
+            assert cache._connection is not None
+            cache._connection.execute(
+                """
+                UPDATE translations
+                SET integrity = ?, ambiguous_identifier_count = ?, outcome_digest = ?
+                """,
+                (
+                    corrupted.integrity,
+                    corrupted.ambiguous_identifier_count,
+                    cache._outcome_digest(source, corrupted),
+                ),
+            )
+            try:
+                with self.assertRaisesRegex(EnrichmentError, "inconsistent advisory"):
+                    cache.get(source)
+            finally:
+                cache.close(commit=False)
+
+    def test_run_local_cache_deduplicates_beyond_hot_lru_without_collapsing_parents(self) -> None:
+        first = normalize_floss(self.payload, Path("first.exe"), self.classification, "3.1.1")[0]
+        second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
+        third = normalize_floss(self.payload, Path("third.exe"), self.classification, "3.1.1")[0]
+        first = {**first, "text": "repeated language text"}
+        second = {**second, "text": "different language text"}
+        third = {**third, "text": "repeated language text"}
+        translator = FakeTranslator()
+        monitor = TranslationIntegrityMonitor()
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RunLocalTranslationCache(Path(directory), "identity", 1)
+            try:
+                children = list(
+                    translate_normalized_records(
+                        [first, second, third],
+                        translator,
+                        "en",
+                        batch_size=1,
+                        minimum_characters=4,
+                        maximum_characters=200,
+                        window_size=1,
+                        include_parents=False,
+                        run_cache=cache,
+                        integrity_monitor=monitor,
+                    )
+                )
+            finally:
+                cache.close(commit=True)
+
+        self.assertEqual(2, monitor.model_inputs)
+        self.assertEqual(1, cache.disk_hits)
+        self.assertEqual(3, len(children))
+        self.assertEqual(
+            [first["recordId"], second["recordId"], third["recordId"]],
+            [child["parentRecordId"] for child in children],
+        )
+
+    def test_disk_cache_children_are_byte_exact_to_distinct_inference_reference(self) -> None:
+        first = normalize_floss(self.payload, Path("first.exe"), self.classification, "3.1.1")[0]
+        second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
+        third = normalize_floss(self.payload, Path("third.exe"), self.classification, "3.1.1")[0]
+        records = [
+            {**first, "text": "repeated language text"},
+            {**second, "text": "different language text"},
+            {**third, "text": "repeated language text"},
+        ]
+
+        reference_translator = FakeTranslator()
+        reference_children = add_translations(
+            records,
+            reference_translator,
+            "en",
+            8,
+            4,
+            200,
+        )
+
+        cached_translator = FakeTranslator()
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RunLocalTranslationCache(Path(directory), "identity", 1)
+            try:
+                cached_children = list(
+                    translate_normalized_records(
+                        records,
+                        cached_translator,
+                        "en",
+                        batch_size=1,
+                        minimum_characters=4,
+                        maximum_characters=200,
+                        window_size=1,
+                        include_parents=False,
+                        run_cache=cache,
+                        integrity_monitor=TranslationIntegrityMonitor(),
+                    )
+                )
+                self.assertEqual(1, cache.disk_hits)
+            finally:
+                cache.close(commit=True)
+
+        def serialized_jsonl(children: list[dict]) -> bytes:
+            return b"".join(
+                json.dumps(child, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+                for child in children
+            )
+
+        self.assertCountEqual(
+            ["repeated language text", "different language text"],
+            [text for batch in reference_translator.calls for text in batch],
+        )
+        self.assertCountEqual(
+            ["repeated language text", "different language text"],
+            [text for batch in cached_translator.calls for text in batch],
+        )
+        self.assertEqual(serialized_jsonl(reference_children), serialized_jsonl(cached_children))
+
+    def test_translation_cache_identity_changes_with_output_affecting_settings(self) -> None:
+        translator = FakeTranslator()
+        base = translation_cache_identity(
+            translator,
+            "en",
+            batch_size=8,
+            max_input_tokens=512,
+            max_new_tokens=512,
+            strict_determinism=False,
+        )
+        changed = translation_cache_identity(
+            translator,
+            "fr",
+            batch_size=8,
+            max_input_tokens=512,
+            max_new_tokens=512,
+            strict_determinism=False,
+        )
+
+        self.assertNotEqual(base, changed)
+
+    def test_translation_cache_identity_covers_every_output_affecting_field(self) -> None:
+        base_translator = {
+            "engine": "engine-a",
+            "engine_version": "1.0",
+            "model_id": "model-a",
+            "revision": "revision-a",
+            "model_sha256": "a" * 64,
+            "execution_metadata": {
+                "device": "cpu",
+                "gpuLayers": "0",
+                "decoding": "greedy-top1",
+            },
+        }
+        base_options = {
+            "batch_size": 8,
+            "max_input_tokens": 512,
+            "max_new_tokens": 256,
+            "strict_determinism": False,
+        }
+        base = translation_cache_identity(
+            SimpleNamespace(**base_translator),
+            "en",
+            **base_options,
+        )
+        cases = (
+            ("engine", {"engine": "engine-b"}, {}, None, None),
+            ("engine-version", {"engine_version": "2.0"}, {}, None, None),
+            ("model", {"model_id": "model-b"}, {}, None, None),
+            ("revision", {"revision": "revision-b"}, {}, None, None),
+            ("model-hash", {"model_sha256": "b" * 64}, {}, None, None),
+            (
+                "prompt-version",
+                {},
+                {},
+                "TRANSLATION_PROMPT_VERSION",
+                "changed-prompt",
+            ),
+            (
+                "preservation-policy",
+                {},
+                {},
+                "TRANSLATION_PRESERVATION_POLICY_VERSION",
+                "changed-policy",
+            ),
+            ("batch-size", {}, {"batch_size": 9}, None, None),
+            ("max-input-tokens", {}, {"max_input_tokens": 513}, None, None),
+            ("max-new-tokens", {}, {"max_new_tokens": 257}, None, None),
+            ("strict-determinism", {}, {"strict_determinism": True}, None, None),
+            (
+                "execution-device",
+                {"execution_metadata": {**base_translator["execution_metadata"], "device": "cuda"}},
+                {},
+                None,
+                None,
+            ),
+            (
+                "execution-offload",
+                {
+                    "execution_metadata": {
+                        **base_translator["execution_metadata"],
+                        "gpuLayers": "-1",
+                    }
+                },
+                {},
+                None,
+                None,
+            ),
+            (
+                "execution-decoding",
+                {
+                    "execution_metadata": {
+                        **base_translator["execution_metadata"],
+                        "decoding": "beam",
+                    }
+                },
+                {},
+                None,
+                None,
+            ),
+        )
+
+        for label, translator_changes, option_changes, constant_name, constant_value in cases:
+            translator = SimpleNamespace(**(base_translator | translator_changes))
+            options = base_options | option_changes
+            context = (
+                patch(f"bstrings_enrich.{constant_name}", constant_value)
+                if constant_name is not None
+                else nullcontext()
+            )
+            with self.subTest(label=label), context:
+                changed = translation_cache_identity(translator, "en", **options)
+                self.assertNotEqual(base, changed)
+
+    @patch("bstrings_enrich.LlamaCppTranslator")
+    def test_integrated_translation_reports_disk_plan_progress_stats_and_cleans_cache(
+        self, translator_type
+    ) -> None:
+        first = normalize_floss(self.payload, Path("first.exe"), self.classification, "3.1.1")[0]
+        second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
+        translator = FakeTranslator()
+        translator_type.return_value = translator
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "candidates.jsonl"
+            output_path = root / "translations.jsonl"
+            model_path = root / "model.gguf"
+            model_path.write_bytes(b"model")
+            input_path.write_text(
+                "\n".join(json.dumps(record) for record in (first, second)) + "\n",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+
+            with redirect_stderr(stderr):
+                result = main(
+                    [
+                        "--input-jsonl",
+                        str(input_path),
+                        "--translate",
+                        "--translations-only",
+                        "--bounded-integrated-mode",
+                        "--translation-model-path",
+                        str(model_path),
+                        "--translation-model-id",
+                        translator.model_id,
+                        "--translation-revision",
+                        translator.revision,
+                        "--translation-model-sha256",
+                        translator.model_sha256,
+                        "--translation-batch-size",
+                        "1",
+                        "--translation-cache-size",
+                        "1",
+                        "--translation-window-size",
+                        "1",
+                        "--progress-total-records",
+                        "2",
+                        "-o",
+                        str(output_path),
+                    ]
+                )
+
+            self.assertEqual(0, result)
+            self.assertEqual(2, len(output_path.read_text(encoding="utf-8").splitlines()))
+            self.assertEqual([["language text"]], translator.calls)
+            log = stderr.getvalue()
+            self.assertIn('"diskBacked":true', log)
+            self.assertIn('"examinationLocal":true', log)
+            self.assertIn('"commitBatchSize":4096', log)
+            self.assertIn("Progress: offline translation: 0.0%", log)
+            self.assertIn("Progress: offline translation: 100.0%", log)
+            self.assertIn("rate=", log)
+            self.assertIn("eta=", log)
+            self.assertIn("Translation summary: cacheHits=1", log)
+            final_progress = [
+                line for line in log.splitlines() if "Progress: offline translation: 100.0%" in line
+            ][-1]
+            self.assertIn("cacheHits=1", final_progress)
+            self.assertIn("modelInputs=1", final_progress)
+            self.assertFalse(any(root.glob(".bstrings-translation-cache-*.sqlite3*")))
+
+    def test_bounded_integrated_help_describes_exact_disk_and_bounded_recovery_caches(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), self.assertRaises(SystemExit) as raised:
+            parse_arguments(["--help"])
+
+        self.assertEqual(0, raised.exception.code)
+        normalized_help = " ".join(stdout.getvalue().split()).replace("in- memory", "in-memory")
+        self.assertIn(
+            "input-JSONL translation uses run-local exact disk deduplication", normalized_help
+        )
+        self.assertIn("recovery uses bounded in-memory translation deduplication", normalized_help)
+
+    def test_combined_recovery_translation_reuses_outcome_aware_fallback(self) -> None:
+        class IdentifierBreakingTranslator(FakeTranslator):
+            def translate(self, texts: list[str], target_language: str) -> list[str]:
+                self.calls.append(list(texts))
+                return ["translated account" for _ in texts]
+
+        translator = IdentifierBreakingTranslator()
+        payload = json.loads(json.dumps(self.payload))
+        for category in payload["strings"]:
+            payload["strings"][category] = []
+        payload["strings"]["language_strings"] = [
+            {"string": "cuenta analyst@example.com", "offset": 24, "encoding": "UTF-8"}
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "first.exe"
+            second = root / "second.exe"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            model_path = root / "model.gguf"
+            model_path.write_bytes(b"model")
+            output = root / "combined.jsonl"
+
+            with (
+                patch("bstrings_enrich.executable_path", side_effect=lambda command: command),
+                patch("bstrings_enrich.tool_version", return_value="3.1.1"),
+                patch("bstrings_enrich.classify_file", return_value=self.classification),
+                patch("bstrings_enrich.run_floss", return_value=payload),
+                patch("bstrings_enrich.LlamaCppTranslator", return_value=translator),
+            ):
+                result = main(
+                    [
+                        str(first),
+                        str(second),
+                        "--force-floss",
+                        "--translate",
+                        "--bounded-integrated-mode",
+                        "--translation-model-path",
+                        str(model_path),
+                        "--translation-model-id",
+                        translator.model_id,
+                        "--translation-revision",
+                        translator.revision,
+                        "--translation-model-sha256",
+                        translator.model_sha256,
+                        "--translation-cache-size",
+                        "1",
+                        "-o",
+                        str(output),
+                    ]
+                )
+
+            self.assertEqual(0, result)
+            self.assertEqual([["cuenta analyst@example.com"]], translator.calls)
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            children = [
+                record
+                for record in records
+                if (record.get("transform") or {}).get("kind") == "translation"
+            ]
+            self.assertEqual(2, len(children))
+            self.assertEqual(
+                {"preservation-fallback"},
+                {child["attributes"]["translationIntegrity"] for child in children},
+            )
 
     def test_identifier_only_candidate_bypasses_translation_and_is_auditable(self) -> None:
         parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
@@ -1218,9 +2055,7 @@ class EnrichmentTests(unittest.TestCase):
             records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(1, len(records))
             self.assertEqual("error", records[0]["classifier"]["status"])
-            self.assertEqual(
-                "batch-classification-error", records[0]["classifier"]["errorCode"]
-            )
+            self.assertEqual("batch-classification-error", records[0]["classifier"]["errorCode"])
             self.assertEqual(["native"], records[0]["scheduledRoutes"])
 
     @patch("bstrings_enrich.classify_file", side_effect=AssertionError("Magika was relaunched"))
@@ -1281,9 +2116,7 @@ class EnrichmentTests(unittest.TestCase):
             tool_version_mock.assert_called_once_with("floss")
             run_floss_mock.assert_called_once()
             self.assertIn("Progress: FLOSS recovery: 100.0% (1/1 files)", stderr.getvalue())
-            records = [
-                json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()
-            ]
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
             self.assertTrue(records)
             self.assertEqual(
                 {route["decisionId"]},

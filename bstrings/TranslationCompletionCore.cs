@@ -33,24 +33,107 @@ internal static class TranslationCompletionCore
             requireEveryOriginalReferenced: true
         );
         long candidateRecords = 0;
-        await foreach (
-            var item in EnrichmentJsonlReader.ReadAsync(candidatesPath, cancellationToken)
-        )
+        long translationRecords = 0;
+        await using var candidateEnumerator = EnrichmentJsonlReader
+            .ReadAsync(candidatesPath, cancellationToken)
+            .GetAsyncEnumerator(cancellationToken);
+        await using var translationEnumerator = EnrichmentJsonlReader
+            .ReadAsync(translationsPath, cancellationToken)
+            .GetAsyncEnumerator(cancellationToken);
+        while (true)
         {
+            var hasCandidate = await candidateEnumerator.MoveNextAsync();
+            var hasTranslation = await translationEnumerator.MoveNextAsync();
+            if (!hasCandidate || !hasTranslation)
+            {
+                if (hasCandidate)
+                {
+                    throw new InvalidDataException(
+                        $"Translation candidate '{candidateEnumerator.Current.Record.RecordId}' does not have exactly one translated child in candidate order."
+                    );
+                }
+                if (hasTranslation)
+                {
+                    throw new InvalidDataException(
+                        $"Translation output line {translationEnumerator.Current.LineNumber:N0} has no ordered candidate parent."
+                    );
+                }
+                break;
+            }
+
+            var candidate = candidateEnumerator.Current;
+            var translation = translationEnumerator.Current;
             if (
-                item.Record.Transform is not null
-                || !string.IsNullOrWhiteSpace(item.Record.ParentRecordId)
+                candidate.Record.Transform is not null
+                || !string.IsNullOrWhiteSpace(candidate.Record.ParentRecordId)
             )
             {
                 throw new InvalidDataException(
-                    $"Translation candidate at line {item.LineNumber:N0} is not an original record."
+                    $"Translation candidate at line {candidate.LineNumber:N0} is not an original record."
                 );
             }
+            if (!EnrichmentRegexPipelineCore.IsTranslation(translation.Record))
+            {
+                throw new InvalidDataException(
+                    $"Translation output at line {translation.LineNumber:N0} is not a translated child record."
+                );
+            }
+
+            var integrity = EnrichmentRegexPipelineCore.ValidateTranslationRequirements(
+                translation.Record,
+                requirements,
+                translation.LineNumber
+            );
+            if (
+                !string.Equals(
+                    candidate.Record.RecordId,
+                    translation.Record.ParentRecordId,
+                    StringComparison.Ordinal
+                )
+            )
+            {
+                throw new InvalidDataException(
+                    $"Translation output at line {translation.LineNumber:N0} is not the ordered child of candidate line {candidate.LineNumber:N0}."
+                );
+            }
+
+            var candidateLineage = EnrichmentRegexPipelineCore.CreateLineageIdentity(
+                candidate.Record
+            );
+            var translationLineage = EnrichmentRegexPipelineCore.CreateLineageIdentity(
+                translation.Record
+            );
+            if (!candidateLineage.Equals(translationLineage))
+            {
+                throw new InvalidDataException(
+                    $"Translation output at line {translation.LineNumber:N0} does not retain the exact sourceFile, location, and origin of its ordered candidate."
+                );
+            }
+            if (
+                integrity == TranslationIntegrityStatus.PreservationFallback
+                && !string.Equals(
+                    candidate.Record.Text,
+                    translation.Record.Text,
+                    StringComparison.Ordinal
+                )
+            )
+            {
+                throw new InvalidDataException(
+                    $"Preservation-fallback child for candidate line {candidate.LineNumber:N0} does not contain the exact parent text."
+                );
+            }
+
             validator.AddOriginal(
-                item.Record.RecordId,
-                EnrichmentRegexPipelineCore.CreateLineageIdentity(item.Record)
+                candidate.Record.RecordId,
+                candidateLineage
+            );
+            validator.AddTranslation(
+                translation.Record.RecordId,
+                translation.Record.ParentRecordId!,
+                translationLineage
             );
             candidateRecords++;
+            translationRecords++;
         }
 
         if (candidateRecords != expectedCandidateCount)
@@ -59,30 +142,6 @@ internal static class TranslationCompletionCore
                 $"Translation candidate count changed: expected {expectedCandidateCount:N0}, "
                     + $"found {candidateRecords:N0}."
             );
-        }
-
-        long translationRecords = 0;
-        await foreach (
-            var item in EnrichmentJsonlReader.ReadAsync(translationsPath, cancellationToken)
-        )
-        {
-            if (!EnrichmentRegexPipelineCore.IsTranslation(item.Record))
-            {
-                throw new InvalidDataException(
-                    $"Translation output at line {item.LineNumber:N0} is not a translated child record."
-                );
-            }
-            EnrichmentRegexPipelineCore.ValidateTranslationRequirements(
-                item.Record,
-                requirements,
-                item.LineNumber
-            );
-            validator.AddTranslation(
-                item.Record.RecordId,
-                item.Record.ParentRecordId!,
-                EnrichmentRegexPipelineCore.CreateLineageIdentity(item.Record)
-            );
-            translationRecords++;
         }
 
         validator.Validate(cancellationToken);

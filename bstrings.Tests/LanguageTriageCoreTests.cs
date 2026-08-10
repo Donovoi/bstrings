@@ -479,6 +479,139 @@ public sealed class LanguageTriageCoreTests
     }
 
     [Fact]
+    public async Task ProcessAsync_HighPrecisionAppliesFloorsUsingRawScores()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                CreateRecord("confidence-below", "Confidence is just below the precision floor."),
+                CreateRecord("confidence-above", "Confidence is just above the precision floor."),
+                CreateRecord("margin-below", "Target margin is just below the precision floor."),
+                CreateRecord("margin-above", "Target margin is just above the precision floor."),
+            ],
+            cancellationToken
+        );
+
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            result = text switch
+            {
+                var value when value.StartsWith("Confidence is just below", StringComparison.Ordinal) =>
+                    new LanguageDetectionResult("es", 0.6499999999998, 0.10, 0.10, false),
+                var value when value.StartsWith("Confidence is just above", StringComparison.Ordinal) =>
+                    new LanguageDetectionResult("es", 0.6500000000002, 0.10, 0.10, false),
+                var value when value.StartsWith("Target margin is just below", StringComparison.Ordinal) =>
+                    new LanguageDetectionResult("es", 0.90, 0.7500000000002, 0.10, false),
+                _ => new LanguageDetectionResult("es", 0.90, 0.7499999999998, 0.10, false),
+            };
+            error = null;
+            return true;
+        };
+
+        var options = CreateOptions(policy: LanguageTriagePolicy.HighPrecision, batchSize: 4) with
+        {
+            MinimumConfidence = 0.55,
+            MinimumTargetMargin = 0.10,
+        };
+        await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            scope.PathFor("candidates.jsonl"),
+            assessmentsPath,
+            options,
+            cancellationToken,
+            detector,
+            reuseSuccessfulDetections: true
+        );
+
+        var lines = await File.ReadAllLinesAsync(assessmentsPath, cancellationToken);
+        Assert.Equal(4, lines.Length);
+        var decisions = new string[lines.Length];
+        var confidenceGates = new bool[lines.Length];
+        var marginGates = new bool[lines.Length];
+        var displayedConfidences = new double[lines.Length];
+        var displayedMargins = new double[lines.Length];
+        for (var index = 0; index < lines.Length; index++)
+        {
+            using var row = JsonDocument.Parse(lines[index]);
+            var root = row.RootElement;
+            decisions[index] = root.GetProperty("decision").GetString()!;
+            confidenceGates[index] = root.GetProperty("confidenceGatePassed").GetBoolean();
+            marginGates[index] = root.GetProperty("marginGatePassed").GetBoolean();
+            displayedConfidences[index] = root.GetProperty("confidence").GetDouble();
+            displayedMargins[index] = root.GetProperty("targetMargin").GetDouble();
+            Assert.Equal(0.55, root.GetProperty("configuredMinimumConfidence").GetDouble());
+            Assert.Equal(0.10, root.GetProperty("configuredMinimumTargetMargin").GetDouble());
+            Assert.Equal(0.65, root.GetProperty("effectiveMinimumConfidence").GetDouble());
+            Assert.Equal(0.15, root.GetProperty("effectiveMinimumTargetMargin").GetDouble());
+            Assert.Equal(0.65, root.GetProperty("minimumConfidence").GetDouble());
+            Assert.Equal(0.15, root.GetProperty("minimumTargetMargin").GetDouble());
+            Assert.Equal("high-precision", root.GetProperty("policy").GetString());
+        }
+
+        Assert.Equal(["ambiguous", "translate", "ambiguous", "translate"], decisions);
+        Assert.Equal([false, true, true, true], confidenceGates);
+        Assert.Equal([true, true, false, true], marginGates);
+        Assert.Equal(displayedConfidences[0], displayedConfidences[1]);
+        Assert.Equal(displayedMargins[2], displayedMargins[3]);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_HighPrecisionKeepsStricterConfiguredThresholds()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        await File.WriteAllTextAsync(
+            inputPath,
+            CreateRecord("configured-gate", "Configured precision threshold remains authoritative.")
+                + Environment.NewLine,
+            cancellationToken
+        );
+
+        await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            scope.PathFor("candidates.jsonl"),
+            assessmentsPath,
+            CreateOptions(policy: LanguageTriagePolicy.HighPrecision),
+            cancellationToken,
+            (
+                string text,
+                LanguageDetectionMode mode,
+                string targetLanguage,
+                out LanguageDetectionResult result,
+                out string? error
+            ) =>
+            {
+                result = new LanguageDetectionResult("es", 0.79, 0.10, 0.10, false);
+                error = null;
+                return true;
+            }
+        );
+
+        using var row = JsonDocument.Parse(
+            (await File.ReadAllLinesAsync(assessmentsPath, cancellationToken)).Single()
+        );
+        var root = row.RootElement;
+        Assert.Equal("ambiguous", root.GetProperty("decision").GetString());
+        Assert.False(root.GetProperty("confidenceGatePassed").GetBoolean());
+        Assert.Equal(0.80, root.GetProperty("configuredMinimumConfidence").GetDouble());
+        Assert.Equal(0.20, root.GetProperty("configuredMinimumTargetMargin").GetDouble());
+        Assert.Equal(0.80, root.GetProperty("effectiveMinimumConfidence").GetDouble());
+        Assert.Equal(0.20, root.GetProperty("effectiveMinimumTargetMargin").GetDouble());
+    }
+
+    [Fact]
     public async Task ProcessAsync_ReuseDoesNotDetectDerivedOrNonLinguisticRecords()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

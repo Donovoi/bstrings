@@ -855,6 +855,12 @@ $null = Resolve-ChildFile `
     $PSScriptRoot `
     'Verify-MarkdownLinks.ps1' `
     'Bundled Markdown-link verifier'
+$bundleEnrichmentToolNames = @(
+    'bstrings_enrich.py',
+    'bstrings_ocr.py',
+    'benchmark_ocr.py',
+    'benchmark_translation_cache.py'
+)
 $bundleDocumentNames = @(
     'air-gapped-deployment.md',
     'command-reference.md',
@@ -879,6 +885,7 @@ $bundleArchitectureDocumentNames = @(
     'adr-0001-early-fail-open-content-routing.md',
     'adr-0003-persistent-verified-bytes-and-batched-releases.md',
     'adr-0004-bounded-language-detection-reuse.md',
+    'adr-0005-translation-integrity-and-run-dedup.md',
     'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(
@@ -887,8 +894,14 @@ $bundleBenchmarkResultNames = @(
     'language-triage-reuse-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.15.md'
+    'v1.9.16.md'
 )
+foreach ($toolName in $bundleEnrichmentToolNames) {
+    $null = Resolve-ChildFile `
+        (Join-Path $repoRoot 'tools\enrichment') `
+        $toolName `
+        "Bundled enrichment tool $toolName"
+}
 foreach ($documentName in $bundleDocumentNames) {
     $null = Resolve-ChildFile `
         (Join-Path $repoRoot 'docs') `
@@ -996,9 +1009,7 @@ try {
     }
 
     [IO.Directory]::CreateDirectory((Join-Path $output 'tools\enrichment')) | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\enrichment\bstrings_enrich.py') `
-        -Destination (Join-Path $output 'tools\enrichment\bstrings_enrich.py')
-    foreach ($name in @('bstrings_ocr.py', 'benchmark_ocr.py')) {
+    foreach ($name in $bundleEnrichmentToolNames) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "tools\enrichment\$name") `
             -Destination (Join-Path $output "tools\enrichment\$name")
     }

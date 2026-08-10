@@ -50,6 +50,13 @@ failed or cancelled run; retain it for diagnosis and choose a new output path.
 - adaptive language detection and high-recall translation selection; and
 - offline translation with the single installed 7B Q8_0 quality profile.
 
+Full deliberately stays `high-recall`. Examiners who accept lower candidate
+volume can explicitly select `--translation-policy high-precision`; its
+effective gates are the greater of the configured values and 0.65 confidence /
+0.15 target margin. The assessment records both configured and effective
+thresholds. High precision is a conservative operating gate, not a calibrated
+probability or an accuracy guarantee.
+
 An explicit stage choice overrides the corresponding full default. For
 example, this keeps reporting and the complete pattern catalogue but disables
 FLOSS, OCR, and translation:
@@ -88,7 +95,8 @@ and these review surfaces:
 
 - `content-routing.jsonl` and `engine-status.jsonl`, which explain each route
   and the terminal native/FLOSS/OCR coverage of every routed input;
-- `findings.tsv`, suitable for Timeline Explorer and spreadsheet filtering;
+- `findings.tsv`, suitable for Timeline Explorer and spreadsheet filtering,
+  including a dedicated `TranslationIntegrity` column;
 - `pattern-histogram.tsv`, including zero-count requested patterns;
 - `feature-histogram.tsv`, with exact matched-feature counts; and
 - `pattern-histogram.html`, a self-contained pattern-volume chart.
@@ -115,6 +123,10 @@ For a custom accepted CUDA translation runtime, `cuda` requests full offload.
 translation slot and disables prompt-cache reuse; do not combine it with
 `--translation-parallelism` above 1.
 
+The standard release does not contain the custom CUDA translation closure, so
+`auto` resolves translation to CPU. Native extraction and OCR keep their own
+independent GPU policies.
+
 ## Progress, cancellation, and completion
 
 Long-running user operations report percentage completion:
@@ -124,12 +136,16 @@ Long-running user operations report percentage completion:
 - content triage reports all fixed inputs;
 - FLOSS recovery and OCR report their routed candidate files;
 - language triage and translation filtering report bytes;
-- offline translation reports completed candidate records; and
+- offline translation reports completed candidate records plus record rate,
+  ETA, run-local cache hits, distinct model inputs, and preservation fallbacks;
+  and
 - downloads, pack hashing, assembly, and bundle verification report bytes or
   manifested files.
 
-Percentages are completed work units, not an estimated time remaining. A stage
-can spend unequal time between percentage points.
+Percentages are completed work units. Translation additionally calculates its
+ETA from observed record throughput; it is an estimate and can change as input
+lengths change. Exact run-local deduplication reduces redundant model calls but
+can still leave long CPU runs when Full selects many mostly unique records.
 
 Press Ctrl+C once to request cancellation. A cancelled analysis exits with
 code 130 and retains `.incomplete`; a cancelled bundle acquisition preserves
@@ -188,4 +204,7 @@ High-level changes that can alter forensic coverage, provenance, engine/model
 selection, privacy, or performance defaults use the
 [Robin-round decision policy](architecture/decision-review-policy.md). The early
 Magika/content-triage design and its fail-open acceptance gates are recorded in
-[ADR-0001](architecture/adr-0001-early-fail-open-content-routing.md).
+[ADR-0001](architecture/adr-0001-early-fail-open-content-routing.md). Translation
+identifier semantics, isolated fallbacks, run-local exact deduplication, and the
+decision to keep Full high-recall are recorded in
+[ADR-0005](architecture/adr-0005-translation-integrity-and-run-dedup.md).

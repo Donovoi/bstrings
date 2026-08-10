@@ -5,13 +5,13 @@ This guide is for maintainers of the Windows x64 release. Examiners should use
 [air-gapped deployment](air-gapped-deployment.md); they do not need the build
 tools, Python commands, or dependency details below.
 
-Current publication status: v1.9.15 is the fully gated Windows x64
+Current publication status: v1.9.16 is the fully gated Windows x64
 quality/offline release. Its automatic core artifact and complete asset set are
 bound to the same tag and commit. Do not combine them with another version.
 
-## v1.9.15 release process and asset set
+## v1.9.16 release process and asset set
 
-The exact v1.9.15 project-version tag publishes the asset set below after every
+The exact v1.9.16 project-version tag publishes the asset set below after every
 required gate passes. Do not combine a core ZIP with manifests from another
 version.
 
@@ -29,7 +29,7 @@ The tag- and commit-bound `offline-profile-acceptance.json` remains an internal
 Actions gate artifact. The release job validates it, but does not publish it as
 a user download.
 
-The workflow uses [`releases/v1.9.15.md`](releases/v1.9.15.md) as the human
+The workflow uses [`releases/v1.9.16.md`](releases/v1.9.16.md) as the human
 release body. Review it against the final filenames, profile identities, and
 known boundaries before tagging.
 
@@ -48,7 +48,7 @@ known boundaries before tagging.
 `Scripts/Install-BstringsQuality.ps1` is published unchanged as
 `Install-BstringsQuality.ps1`. `SHA256SUMS.txt` must contain exactly one
 lowercase SHA-256 row for it alongside every other public release asset. The
-README bootstrap uses GitHub's exact-tag API for `v1.9.15`, requires the release
+README bootstrap uses GitHub's exact-tag API for `v1.9.16`, requires the release
 to be published, non-prerelease, and immutable, downloads the installer to a
 unique physical temporary file, and verifies its API digest before replacing
 an existing physical installer and launching `powershell.exe -File`. Failed
@@ -59,7 +59,7 @@ response piped into `Invoke-Expression`.
 
 The installer is deliberately narrow:
 
-- default release tag: `v1.9.15`;
+- default release tag: `v1.9.16`;
 - default destination: `.\bstrings-quality` under the caller's current
   directory;
 - quality profile only;
@@ -141,6 +141,11 @@ Filename case matters: the official 7B repository uses uppercase
 `HY-MT2-7B-Q8_0.gguf`. The lock uses immutable model revisions and a separately
 verified immutable 7B license revision.
 
+The standard translation closure is CPU-only. Do not describe the generic
+`cuda` or `hybrid` CLI choices as release capabilities unless a separately
+reviewed CUDA llama.cpp runtime, driver/VRAM envelope, output-parity evidence,
+and bundle acceptance gate have been added.
+
 `tools/airgap/ocr-components.lock.json` independently pins profile
 `windows-x64-ocr-cpu-directml-v1`: two CPython runtimes, 26 exact packages,
 CPU and DirectML ONNX Runtime sets, immutable PP-OCRv6
@@ -184,7 +189,7 @@ Primary upstreams are the [CPython embeddable package](https://docs.python.org/3
 
 ## Build and test the self-contained core
 
-The v1.9.15 release process uses
+The v1.9.16 release process uses
 [.NET 10 LTS](https://dotnet.microsoft.com/download/dotnet/10.0) and the
 repository-pinned Rust toolchain:
 
@@ -436,7 +441,11 @@ manual `master` dispatch with `full_offline=true` additionally:
   both lock files, with no prefix fallback;
 - build the complete quality bundle from connected inputs;
 - revalidate every cached byte with no network fallback;
-- run real translation and CPU OCR smokes under dead external proxies;
+- run real translation and CPU OCR smokes under dead external proxies,
+  including a natural alphabetic-hyphen sentence and a hard structured token;
+- verify exact-count identifier retention, the three translation-integrity
+  statuses, isolated fallback continuation, the circuit-breaker boundaries,
+  run-local cache cleanup, and monotonic translation progress/statistics;
 - generate and checksum split packs;
 - locally assemble/verify the quality pack; and
 - retain the generated artifacts for the next gate.

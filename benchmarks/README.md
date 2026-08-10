@@ -8,7 +8,7 @@ version-matched quality bundle, the full enrichment workflow is:
 bstrings.exe analyze -f evidence.raw --full -o results
 ```
 
-The current complete quality bundle is v1.9.15. See
+The current complete quality bundle is v1.9.16. See
 [download and installation](../docs/download-and-install.md) before treating
 this example as a distribution command.
 
@@ -52,6 +52,41 @@ determinism pairs. See the
 [reviewed result](../docs/language-triage-performance-2026-08.md), the
 [machine-readable summary](results/language-triage-reuse-2026-08.csv), and the
 [decision record](../docs/architecture/adr-0004-bounded-language-detection-reuse.md).
+
+## Run-local translation deduplication
+
+The v1.9.16 translation adapter combines a bounded in-memory hot set with an
+exact run-local SQLite cache. A correct performance probe must include exact
+duplicates separated by more than 4,096 other entries, prove one model call per
+distinct complete source/configuration key, and still compare the emitted child
+records byte-for-byte with the one-inference-per-key reference. It must also use
+an all-unique workload to expose SQLite overhead and cache growth.
+
+Run the private-free one-million-row cache gate with:
+
+```powershell
+python .\tools\enrichment\benchmark_translation_cache.py
+```
+
+The final reviewed Windows/Python 3.14.5 run reduced duplicate-cycle model
+inputs from 1,000,000 to 10,000 and measured 133.08 microseconds per row, a
+2,252,800-byte database, and an approximately 1,551,212-byte hot set. The
+all-unique exact-cache path measured 169.79 microseconds per row, a
+233,582,592-byte database, and an approximately 1,350,557-byte hot set. That is
+0.004742% of the pinned CPU model's per-input time. The old LRU's subsecond
+all-unique loop still proves that the cache is not intrinsically free; ADR-0005
+therefore applies both a 250-microsecond absolute ceiling and a pinned-model
+end-to-end ceiling, with a mandatory revisit for materially faster inference
+providers.
+
+Model-call reduction is the primary metric; cache-hit percentage alone is not
+enough. Exact deduplication can materially help repetitive evidence while still
+leaving a long CPU run when Full/high-recall selects millions of mostly unique
+records. The standard release does not contain a CUDA translation runtime.
+Progress rate and ETA must therefore be checked for truthful monotonic behavior,
+not treated as a substitute for throughput measurement. See
+[ADR-0005](../docs/architecture/adr-0005-translation-integrity-and-run-dedup.md)
+for the frozen acceptance and privacy gates.
 
 ## Prerequisites and comparison tools
 

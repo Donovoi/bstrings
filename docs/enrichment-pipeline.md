@@ -1,7 +1,7 @@
 # Enrichment pipeline
 
 This document describes the integrated workflow in current source and the
-complete v1.9.15 quality release. See
+complete v1.9.16 quality release. See
 [download and installation](download-and-install.md) before choosing a command,
 and never combine assets from different versions.
 
@@ -27,7 +27,7 @@ interface is one command:
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete v1.9.15 bundle contains every worker, runtime, model, and dependency
+The complete v1.9.16 bundle contains every worker, runtime, model, and dependency
 published for that version. It does not ask the user to install or invoke
 Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
@@ -140,7 +140,7 @@ on all of them.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.15 profile
+page. Images are always OCR inputs when the stage is enabled. The v1.9.16 profile
 defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
 per-path inference smoke test. Those smokes do not establish cross-provider
 parity or corpus-level quality. CUDA OCR is not part of the profile. See
@@ -170,19 +170,26 @@ Assessment decisions are explicit:
 `--language-detection adaptive` samples the workload and selects the accurate
 or fast local detector profile. `--translation-policy high-recall` is the
 default and is appropriate when missing a foreign-language sentence costs more
-than translating extra candidates. `balanced` and `high-precision` apply the
-configured `--language-confidence` and `--language-margin` thresholds.
+than translating extra candidates. `balanced` applies the configured
+`--language-confidence` and `--language-margin` thresholds. The optional
+`high-precision` policy uses the greater of each configured value and its
+conservative floor: 0.65 confidence and 0.15 target margin. It is an expert
+volume-control policy, not the Full default and not a calibrated accuracy
+claim.
 
 These normalized confidences are not universally calibrated probabilities.
 Short strings, names, mixed-language text, OCR errors, and transliteration are
 hard cases. Use `--translation detect-only` to review the distribution, or
 `--translation all` when the cost is acceptable and the gate should not decide.
 
-Every assessment records detector version/profile, policy, thresholds,
-confidence values, decision, and source record ID. Policy decisions use the raw
-detector values. The five displayed score fields are serialized to 12 decimal
-places with round-to-even so parallel reductions cannot change report bytes in
-an insignificant final bit. `scoreDecimalPlaces`, `confidenceGatePassed`, and
+Every assessment records detector version/profile, policy, configured and
+effective thresholds, confidence values, decision, and source record ID.
+`configuredMinimumConfidence`, `configuredMinimumTargetMargin`,
+`effectiveMinimumConfidence`, and `effectiveMinimumTargetMargin` make an
+optional high-precision floor auditable. Policy decisions use the raw detector
+values. The five displayed score fields are serialized to 12 decimal places
+with round-to-even so parallel reductions cannot change report bytes in an
+insignificant final bit. `scoreDecimalPlaces`, `confidenceGatePassed`, and
 `marginGatePassed` make that reporting policy and each raw gate outcome
 explicit. These are detector confidence scores, not calibrated probabilities.
 
@@ -243,10 +250,29 @@ llama.cpp closure and a compatible host driver.
   the CPU/GPU split is auditable.
 
 `--translation-parallelism 0` selects conservative slots from hardware and
-model size. The adapter processes bounded windows, groups similar lengths,
-deduplicates exact source text for inference, and reuses a bounded cache, while
-still writing a separate child for every parent. One model server is shared
-across ordered concurrent requests.
+model size. The adapter processes bounded windows, groups similar lengths, and
+uses a bounded in-memory hot set over a run-local SQLite exact cache. An exact
+source/configuration pair is inferred at most once during that examination,
+including repeats farther apart than the memory window, while one ordered child
+is still written for every parent. The database uses complete source equality,
+is never shared between cases, and is removed on normal completion and handled
+failure. It uses an in-memory journal, synchronous-off writes, and 4,096-row
+commit batches because it is ephemeral and never resumed; translated output is
+staged and cannot replace prior output until strict cache cleanup succeeds. If
+the translation child is killed or cancelled while the managed parent remains
+alive, the parent's `finally` cleanup removes only the exact SQLite cache,
+its `-wal`, `-shm`, or `-journal` sidecars, and exact
+`<translated-filename>.partial.*` staged-output siblings from the physical
+output directory. A link, reparse point, or cleanup failure fails the stage and
+leaves prior translated output untouched. One model server is shared across
+ordered concurrent requests.
+
+This exact deduplication can remove many redundant model calls without reducing
+Full's candidate recall. It does not make every noisy or mostly unique workload
+fast: the standard translation runtime is CPU-only and large high-recall runs
+can still take a long time. Translation progress therefore reports completed
+record percentage, rate, ETA, cache hits, distinct model inputs, and preservation
+fallbacks rather than promising a fixed completion time.
 
 Hy-MT2's model card recommends stochastic decoding (`temperature 0.7`,
 `top-p 0.6`, `top-k 20`) for general use. Bstrings deliberately uses the
@@ -267,17 +293,42 @@ failure; choose CPU or isolate the workstation workload when needed.
 
 ### Identifier and completion gates
 
-Before a translated child is committed, the adapter checks exact retention of
-structured evidence tokens including emails, URLs, IP addresses, hashes,
-Windows/registry paths, CVEs, GUIDs, host/port values, common filenames,
-hyphenated/underscored identifiers, and placeholders. A missing or changed
-protected token aborts the output transaction.
+Before a translated child is committed, the adapter checks exact code-point and
+occurrence-count retention of hard structured evidence tokens including
+emails, URLs, IP addresses, hashes, Windows/registry paths, CVEs, GUIDs,
+host/port values, common filenames, placeholders, underscore-bearing tokens,
+and all-uppercase ASCII code forms. Alphabetic hyphenation by itself is
+advisory because it can be ordinary language, not a machine identifier.
 
 A record containing only protected identifiers is classified as
 `non-linguistic` and does not enter model inference. The adapter independently
 applies the same bypass if such a record reaches its input. Mixed natural
-language containing protected identifiers is still translated and remains
-fail-closed if any protected occurrence changes, disappears, or is duplicated.
+language containing hard protected identifiers is still translated. If one
+model result changes, removes, normalizes, changes the case of, or duplicates a
+hard occurrence, the rejected model text is discarded and that source receives
+one exact-source fallback child. Other candidates continue. The complete
+translation transaction aborts only when the integrity circuit breaker sees
+more than 1% fallbacks after at least 100 distinct model results, or 100
+consecutive fallbacks.
+
+Every translated child records `attributes.translationIntegrity` as
+`verified`, `source-retained-ambiguous`, or `preservation-fallback`. An advisory
+child also records a positive `translationAmbiguousIdentifierCount`; a fallback
+records `translationIntegrityReason` and has `transform.outcome` equal to
+`unchanged`.
+These fields distinguish a successful translation, a result containing an
+ambiguous alphabetic-hyphen token, and exact source retained after a rejected
+model result.
+
+Managed completion validation streams candidates and translations in lockstep:
+each child must immediately correspond to the current candidate, retain exact
+lineage, and compare fallback text with ordinal equality to that parent. It does
+not build a candidate-text index. Pattern matching replays the translation file
+once to build a selective disk index before consuming the parent-first merged
+stream. That index contains only fallback parent/child IDs and fallback text,
+has a 2 MiB bucket table when a fallback exists, grows only with fallback
+records/text, and uses bounded heap memory. Strict cleanup runs before report
+output publication; cleanup failure fails the stage and preserves prior output.
 
 The local server must return exactly one terminal `stop` choice and the expected
 prompt-token count. Empty, truncated, missing, extra, or duplicated translations

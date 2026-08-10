@@ -3,7 +3,7 @@
 The application version lives in `bstrings/bstrings.csproj`:
 
 ```xml
-<Version>1.9.15</Version>
+<Version>1.9.16</Version>
 ```
 
 The project uses `MAJOR.MINOR.PATCH`:
@@ -14,7 +14,7 @@ The project uses `MAJOR.MINOR.PATCH`:
 
 ## Current release
 
-v1.9.15 is the complete Windows x64 quality/offline release. Its release assets
+v1.9.16 is the complete Windows x64 quality/offline release. Its release assets
 contain the current core plus the version-matched installer, offline base,
 quality manifest, licence, and trust metadata needed to assemble and verify the
 single advertised Full profile. See
@@ -129,8 +129,8 @@ adds the full asset set, and publishes exactly once. GitHub then makes the tag
 and assets immutable. Dispatching against a branch cannot publish a full
 release.
 
-For v1.9.15 the complete release body is
-[`docs/releases/v1.9.15.md`](docs/releases/v1.9.15.md). Keep historical release
+For v1.9.16 the complete release body is
+[`docs/releases/v1.9.16.md`](docs/releases/v1.9.16.md). Keep historical release
 documents unchanged. Before promoting a version to the full quality/offline
 asset set, update its installer pin, documentation inventory, human release
 body, and the quality-profile acceptance evidence.

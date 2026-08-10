@@ -284,6 +284,9 @@ if ($TranslationSmoke) {
         if ($run.status -ne 'complete' -or $summary.status -ne 'complete') {
             throw 'Integrated smoke did not produce complete run and summary records.'
         }
+        if ($run.preservationFallbacks -ne 0 -or $summary.preservationFallbacks -ne 0) {
+            throw 'Integrated smoke unexpectedly required a translation preservation fallback.'
+        }
         if ($run.input.fileCount -ne 1 -or $summary.inputFiles -ne 1) {
             throw 'Integrated smoke did not freeze exactly one evidence input.'
         }
@@ -349,10 +352,23 @@ if ($TranslationSmoke) {
                 [string]::IsNullOrWhiteSpace($translation.parentRecordId) -or
                 $translation.transform.kind -ne 'translation' -or
                 $translation.transform.engine -ne 'llama.cpp' -or
-                $translation.transform.execution.airgap -ne $true
+                $translation.transform.execution.airgap -ne $true -or
+                $translation.transform.execution.device -ne 'cpu' -or
+                $translation.attributes.translationIntegrity -notin @(
+                    'verified',
+                    'source-retained-ambiguous',
+                    'preservation-fallback'
+                )
             ) {
-                throw 'Integrated smoke translation is missing verified parent or air-gap provenance.'
+                throw 'Integrated smoke translation is missing verified parent, CPU, air-gap, or integrity provenance.'
             }
+        }
+        $ambiguousTranslation = @($translations | Where-Object {
+            $_.attributes.translationIntegrity -eq 'source-retained-ambiguous' -and
+            $_.attributes.translationAmbiguousIdentifierCount -ge 1
+        })
+        if ($ambiguousTranslation.Count -lt 1) {
+            throw 'The offline translation smoke did not expose its ordinary hyphenated term as advisory.'
         }
         $retainedIdentifier = @($translations | Where-Object {
             $_.text -match [regex]::Escape('analyst@example.com')
@@ -369,6 +385,22 @@ if ($TranslationSmoke) {
             })
         if ($matches.Count -lt 1 -or $summary.regexMatches -lt $matches.Count) {
             throw 'Integrated smoke did not retain and match the synthetic evidence email.'
+        }
+
+        $findingsHeader = Get-Content -LiteralPath (Join-Path $resultsPath 'findings.tsv') -TotalCount 1
+        if ($findingsHeader -notmatch '(^|\t)TranslationIntegrity(\t|$)') {
+            throw 'Integrated smoke findings report is missing the TranslationIntegrity column.'
+        }
+        $translationLog = Get-Content -LiteralPath (
+            Join-Path $resultsPath 'logs\translation.stderr.log'
+        ) -Raw
+        if (
+            $translationLog -notmatch 'Progress: offline translation: 0[.]0%' -or
+            $translationLog -notmatch 'Progress: offline translation: 100[.]0%' -or
+            $translationLog -notmatch 'eta=' -or
+            $translationLog -notmatch 'Translation summary: .*cacheHits=.*modelInputs=.*fallbacks='
+        ) {
+            throw 'Integrated smoke translation log is missing percentage, ETA, or cache/integrity totals.'
         }
 
         if (-not ($config.PSObject.Properties.Name -contains 'smokeRecoveryFixture')) {

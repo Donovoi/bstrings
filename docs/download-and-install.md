@@ -2,7 +2,7 @@
 
 ## Current release
 
-[bstrings v1.9.15](https://github.com/Donovoi/bstrings/releases/tag/v1.9.15)
+[bstrings v1.9.16](https://github.com/Donovoi/bstrings/releases/tag/v1.9.16)
 is the complete Windows x64 release. Its quality installer assembles one
 verified offline directory containing the current native scanner and reporting
 code together with FLOSS, Magika, OCR, language detection, and local
@@ -11,7 +11,7 @@ the accepted Hy-MT2 7B Q8_0 translation model.
 
 | Installation | Included | Intended use |
 | --- | --- | --- |
-| Complete `bstrings-quality` kit | Every v1.9.15 stage, runtime, model, licence, manifest, all 66 patterns, TSV reports, and histograms | Normal and air-gapped forensic analysis |
+| Complete `bstrings-quality` kit | Every v1.9.16 stage, runtime, model, licence, manifest, all 66 patterns, TSV reports, and histograms | Normal and air-gapped forensic analysis |
 | Core ZIP only | Native CPU/Rust/CUDA/hybrid extraction, current patterns, native-only JSONL/TSV reports, and histograms | Small native-only installation or diagnostics |
 
 Do not combine executables, manifests, packs, tools, or models from different
@@ -23,10 +23,12 @@ installations.
 Requirements: Windows 11 x64, a connected staging machine, and at least
 30 GiB free on the installation/cache volume. Administrator rights are not
 required. DirectML OCR requires a compatible Windows GPU/driver stack; CPU OCR
-and native CPU extraction remain available without a GPU.
+and native CPU extraction remain available without a GPU. The standard local
+translation runtime is CPU-only; CUDA translation needs a separate custom
+runtime that is not part of this release.
 
-Run the [safe pinned installer bootstrap from the v1.9.15
-README](https://github.com/Donovoi/bstrings/blob/v1.9.15/README.md#get-started)
+Run the [safe pinned installer bootstrap from the v1.9.16
+README](https://github.com/Donovoi/bstrings/blob/v1.9.16/README.md#get-started)
 verbatim. Do not pipe a downloaded script into `Invoke-Expression`. The
 bootstrap downloads to a unique temporary file, requires the exact GitHub
 release to be published and immutable, authenticates the installer digest, and
@@ -55,7 +57,7 @@ Verify the completed bundle before use:
 .\bstrings-quality\bstrings.exe bundle verify
 ```
 
-Run every v1.9.15 stage over one file:
+Run every v1.9.16 stage over one file:
 
 ```powershell
 .\bstrings-quality\bstrings.exe analyze `
@@ -85,6 +87,16 @@ coverage ledger, `findings.tsv`,
 During the run, `Progress: analysis:` lines show overall stage completion.
 Long-running stages also report their own byte, file, chunk, or record percentages,
 so a quiet stage is distinguishable from a stalled process.
+
+Full retains high-recall translation selection. Exact source/configuration
+duplicates are inferred once through a bounded-memory, run-local SQLite cache,
+but one child and provenance link are still emitted for every parent. The cache
+is never reused across cases and is removed when the translation transaction
+finishes or fails cleanly. Translation progress includes percentage, measured
+rate, ETA, cache hits, model-input count, and integrity-fallback count. Dedup can
+remove many redundant calls, but a mostly unique high-recall CPU run can still
+take a long time. The explicit `high-precision` policy uses at least 0.65
+confidence and 0.15 target margin if reduced candidate volume is acceptable.
 
 Discover commands and current defaults without touching evidence:
 
@@ -151,7 +163,7 @@ network connection is required during examination.
 
 Use this smaller path only when native extraction and the current report set
 are sufficient. Open PowerShell in the directory where the new
-`bstrings-v1.9.15` directory should be created, then run this exact-tag,
+`bstrings-v1.9.16` directory should be created, then run this exact-tag,
 API-digest-verified download:
 
 ```powershell
@@ -159,10 +171,10 @@ API-digest-verified download:
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v1.9.15'
+  $tag = 'v1.9.16'
   $repo = 'Donovoi/bstrings'
   $archiveName = 'bstrings-win-x64.zip'
-  $destination = Join-Path (Get-Location) 'bstrings-v1.9.15'
+  $destination = Join-Path (Get-Location) 'bstrings-v1.9.16'
   if ((Test-Path -LiteralPath $archiveName) -or
       (Test-Path -LiteralPath $destination)) {
     throw 'Refusing to overwrite the archive or destination.'
@@ -202,7 +214,7 @@ asset. Use the integrated native-only path when the filterable report set is
 wanted:
 
 ```powershell
-.\bstrings-v1.9.15\bstrings.exe analyze `
+.\bstrings-v1.9.16\bstrings.exe analyze `
   -f "C:\evidence\memory.raw" `
   -o "C:\results\memory-native" `
   --recover-executable-strings off `
@@ -216,7 +228,7 @@ The legacy command below writes one flat output file instead of the integrated
 TSV/histogram report set:
 
 ```powershell
-.\bstrings-v1.9.15\bstrings.exe `
+.\bstrings-v1.9.16\bstrings.exe `
   -f "C:\evidence\memory.raw" `
   --lr all --ro --off --trace `
   -o "C:\results\memory-hits.csv"

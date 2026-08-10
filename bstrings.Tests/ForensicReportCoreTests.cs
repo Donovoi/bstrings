@@ -74,8 +74,13 @@ public sealed class ForensicReportCoreTests
                     Engine = "llama.cpp",
                     EngineVersion = "1.0",
                     TargetLanguage = "en",
+                    Outcome = "translated",
                 },
                 EvidenceClass = "derived-translation",
+                Attributes = new Dictionary<string, JsonElement>
+                {
+                    ["translationIntegrity"] = JsonSerializer.SerializeToElement("verified"),
+                },
             },
         };
         await File.WriteAllLinesAsync(
@@ -108,6 +113,16 @@ public sealed class ForensicReportCoreTests
         Assert.Contains("Default", findings[1]);
         Assert.Contains("paddleocr -> llama.cpp:translation", findings[2]);
         Assert.Contains("page=3", findings[2]);
+        var header = findings[0].Split('\t');
+        var translatedRow = findings[2].Split('\t');
+        Assert.Equal(
+            "verified",
+            translatedRow[Array.IndexOf(header, "TranslationIntegrity")]
+        );
+        Assert.Contains(
+            "\"translationIntegrity\":\"verified\"",
+            translatedRow[Array.IndexOf(header, "AttributesJson")]
+        );
 
         var patternHistogram = await File.ReadAllTextAsync(patternHistogramPath, cancellationToken);
         Assert.Contains("email\tpii", patternHistogram);
