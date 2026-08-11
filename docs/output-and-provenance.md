@@ -4,6 +4,13 @@ The complete v1.9.17 quality kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
 
+Current source after v1.9.17 lets an examiner select native extraction, FLOSS,
+or OCR as the sole source producer; the already-published v1.9.17 binaries do
+not contain `--native-extraction`. Translation remains a transform over records
+emitted by at least one selected producer. Matching, reports, input
+verification, and completion records remain part of every `analyze` result
+regardless of engine selection.
+
 With a complete version-matched quality bundle, the full enrichment workflow
 writes a result set from one command:
 
@@ -44,18 +51,24 @@ The workflow writes `input-files.txt` and `input-manifest.jsonl` once, before
 extraction. The manifest records each canonical path, byte length, and SHA-256;
 `run.json` and `summary.json` record the manifest filename, its own SHA-256, and
 the content-hash algorithm instead of embedding a potentially huge path array.
-Native extraction consumes that complete fixed inventory and manifest. It
+When native extraction is selected, it consumes that complete fixed inventory,
 hashes, calibrates, rewinds, and scans the same write-denying source handle,
-rechecks it after scanning, and publishes native JSONL atomically. Early content triage
-writes `content-routing.jsonl`, exactly one identity-bound row per input, then
-projects ordered `floss-input-*` and `ocr-input-*` inventory/manifest pairs.
-Specialists consume only those proven subsets, so a recursive directory is not
-independently re-enumerated and a zero-candidate stage does not load its runtime.
-`run.json` and `summary.json` record the routing policy, manifest SHA-256,
-candidate counts, classifier errors, and conflicts. They also bind
-`engine-status.jsonl` by SHA-256. That terminal ledger has three rows per routed
-input, one each for native extraction, FLOSS, and OCR, keyed by the routing
-decision and source identity.
+rechecks it after scanning, and publishes native JSONL atomically. When native
+is disabled, `native-strings.jsonl` is atomically empty and no native scan or
+native pre/post stage runs.
+
+When FLOSS or OCR is selected, content routing writes `content-routing.jsonl`,
+exactly one identity-bound row per input, then projects ordered `floss-input-*`
+and `ocr-input-*` inventory/manifest pairs. Specialist modes bind the Magika
+classifier identity. A native-only run does not start Magika and retains the
+verified input manifest plus native records without fabricating a classifier or
+specialist ledger. Specialists consume only proven subsets, so a
+recursive directory is not independently re-enumerated and a zero-candidate
+stage does not load its runtime. `run.json` and `summary.json` record the
+routing policy, manifest SHA-256, candidate counts, classifier errors, and
+conflicts when routing ran. Specialist runs also bind `engine-status.jsonl` by SHA-256. That terminal ledger
+has three rows per input, one each for native extraction, FLOSS, and OCR, keyed
+by the routing decision and source identity.
 
 When analysis uses the complete offline bundle, `run.json` and `summary.json`
 also contain the same `bundleIntegrity` object. It records the bundle manifest
@@ -67,6 +80,14 @@ missing, extra, linked, resized, hash-mismatched, or executable-mismatched files
 stop the run.
 This proves which manifest governed the toolchain used for the examination. It
 is an integrity record, not publisher authentication or code signing.
+
+The complete quality bundle is an atomic trust profile. Disabling an engine at
+runtime does not exclude its bytes from whole-manifest verification: corruption
+of an unselected component still blocks the run. This prevents unverified DLLs,
+Python packages, or models in the same loadable tree from being mistaken for a
+partially trusted installation. Independently installable physical capability
+profiles are not part of v1.9.17 and remain deferred by
+[ADR-0008](architecture/adr-0008-independent-engine-execution.md).
 
 Input content is hashed while the manifest is created and verified around and
 after requested external stages. OCR also compares applicable input length and
@@ -130,7 +151,8 @@ report set for the same native-only examination, use a result directory:
 ```powershell
 .\bstrings.exe analyze -f D:\evidence\memory.raw `
   -o D:\results\memory-strings `
-  --recover-executable-strings off --ocr off --translation off --lr all
+  --native-extraction on --recover-executable-strings off `
+  --ocr off --translation off --lr all
 ```
 
 `analyze` records native byte offsets automatically; its structured stage log
@@ -189,10 +211,12 @@ their page/parent and surrounding source evidence.
 its terminal `succeeded`, `not-applicable`, or `disabled-by-user` state, and its
 output-record count. Selected engines remain present when they succeed with
 zero records, so an empty FLOSS or OCR result cannot be confused with an engine
-that was never attempted. The file is written atomically only after source
-identity, route lineage, OCR assessments, and specialist output coverage agree.
-The `engineStatuses` objects in `run.json` and `summary.json` record its filename,
-SHA-256, row count, per-engine terminal counts, and output-record totals.
+that was never attempted. Native-off produces one `disabled-by-user`, selected
+`false`, zero-output native row for every input. The file is written atomically
+only after source identity, route lineage, OCR assessments, and specialist
+output coverage agree. The `engineStatuses` objects in `run.json` and
+`summary.json` record its filename, SHA-256, row count, per-engine terminal
+counts, and output-record totals.
 
 ## OCR records and assessments
 

@@ -11,6 +11,11 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 - One recursive workflow combines native CPU/Rust/CUDA/hybrid extraction,
   validated patterns, FLOSS, OCR, language triage, offline translation, and
   provenance.
+- Native extraction, FLOSS, and OCR are independently selectable source
+  producers. Native stays on by default and in Full; an explicit
+  `--native-extraction off` permits FLOSS-only or OCR-only analysis without
+  starting the native scanner. This option is in current source and is not part
+  of the already-published v1.9.17 assets.
 - Completed analysis writes a filterable `findings.tsv`, exact pattern and
   feature histograms, and a self-contained HTML pattern visualization while
   retaining the authoritative JSONL evidence graph.
@@ -152,10 +157,40 @@ creates and verifies a fresh sibling replacement on every run.
 
 - Use `analyze --full` for the complete provenance-preserving workflow and
   filterable reports.
-- Use `analyze` with explicit stages set to `off` for a native-only report
-  directory.
+- Use `analyze` with FLOSS, OCR, and translation set to `off` for a native-only
+  report directory.
+- Use `--native-extraction off` with one or both specialist producers for a
+  deliberate FLOSS-only or OCR-only run.
 - Use the root `-f`/`-d` options only for the legacy single-file output.
 - Use `bundle verify` before examination and after copying the kit offline.
+
+The source-producer controls are orthogonal:
+
+```powershell
+# Native extraction only
+.\bstrings-quality\bstrings.exe analyze -f D:\evidence\memory.raw `
+  --native-extraction on --recover-executable-strings off `
+  --ocr off --translation off -o D:\results\native
+
+# FLOSS only; force deliberately attempts every supplied input
+.\bstrings-quality\bstrings.exe analyze -d D:\evidence\executables `
+  --native-extraction off --recover-executable-strings force `
+  --ocr off --translation off -o D:\results\floss
+
+# OCR only
+.\bstrings-quality\bstrings.exe analyze -d D:\evidence\documents `
+  --native-extraction off --recover-executable-strings off `
+  --ocr force --translation off -o D:\results\ocr
+```
+
+Native extraction, FLOSS, and OCR produce source records. Translation is a
+transform over records produced by one or more of them, so `auto`, `all`, and
+`detect-only` never substitute for a producer. Disabling every producer is
+invalid for any `analyze` run. Pattern matching and the JSONL/TSV/histogram
+reports remain mandatory finalization for every `analyze` run; “only” refers to
+the selected source producer, not to removing integrity checks or reports.
+FLOSS-only output includes FLOSS static strings, while native-plus-FLOSS keeps
+the existing static-string deduplication.
 
 Installer, bundle, direct extraction, and integrated-analysis commands print
 percentage completion. Integrated analysis combines stage progress with
@@ -177,17 +212,24 @@ not a universal CUDA claim. The accepted placement still reported a
 410.69 MiB `CPU_Mapped` model buffer; 33/33 offload does not mean zero host
 residency. Hybrid and p4 remain deferred.
 
-`--full` freezes input hashes, batch-classifies each supplied file once, always
-runs native extraction, routes applicable files to FLOSS/OCR, then performs
-language assessment, local translation, all 66 built-in patterns, and the
-TSV/histogram reporting stage. The result retains `content-routing.jsonl`, the
-three-rows-per-input `engine-status.jsonl` terminal coverage ledger, and their
-hash/count summaries. It does not mount filesystems or carve embedded files from raw disk or
-memory images; mount or carve those images first when file-level FLOSS and OCR
-coverage is required.
+`--full` freezes input hashes and defaults native extraction on, routes
+applicable files to FLOSS/OCR, then performs language assessment, local
+translation, all 66 built-in patterns, and the TSV/histogram reporting stage.
+An explicit engine option still overrides its Full default. Specialist runs
+retain `content-routing.jsonl` and the three-rows-per-input
+`engine-status.jsonl` terminal coverage ledger with its hash/count summary,
+including engines explicitly disabled by the user. Full does not mount
+filesystems or carve embedded files from raw disk or memory images; mount or
+carve those images first when file-level FLOSS and OCR coverage is required.
 
 For an air-gapped workstation, copy the whole `bstrings-quality` directory and
 run `bundle verify` again before examining evidence.
+
+Runtime selection does not make the installed quality kit modular. It remains
+one atomic authenticated profile, and any missing, extra, or corrupt manifested
+file blocks every mode that selects that bundle, even when the damaged engine
+was not requested. Smaller physically isolated capability profiles are deferred
+under [ADR-0008](docs/architecture/adr-0008-independent-engine-execution.md).
 
 Detailed guidance: [terminal help and command reference](docs/command-reference.md),
 [download and installation](docs/download-and-install.md),
@@ -212,6 +254,9 @@ release policy are recorded in
 The single Q4 model, scoped Windows sm89 CUDA p2 path, pre-evidence CPU
 fallback, and release falsifiers are recorded in
 [ADR-0006](docs/architecture/adr-0006-q4-cuda-full-translation.md).
+Independent runtime engine selection and its unchanged atomic-bundle boundary
+are recorded in
+[ADR-0008](docs/architecture/adr-0008-independent-engine-execution.md).
 
 The project remains under its upstream terms in [LICENSE.md](LICENSE.md), with
 component attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

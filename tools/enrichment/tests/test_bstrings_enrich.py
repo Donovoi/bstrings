@@ -2089,6 +2089,128 @@ class EnrichmentTests(unittest.TestCase):
             self.assertIn("Progress: content triage: 0.0% (0/3 files)", stderr.getvalue())
             self.assertIn("Progress: content triage: 100.0% (3/3 files)", stderr.getvalue())
 
+            v2_output = root / "content-routing-v2.jsonl"
+            v2_exit_code = main(
+                [
+                    "--triage-only",
+                    "--disable-native",
+                    "--enable-floss",
+                    "--enable-ocr",
+                    "--paths-from",
+                    str(inventory),
+                    "--input-manifest",
+                    str(manifest),
+                    "--progress-total-files",
+                    "3",
+                    "-o",
+                    str(v2_output),
+                ]
+            )
+            self.assertEqual(0, v2_exit_code)
+            v2_records = [
+                json.loads(line) for line in v2_output.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertTrue(all(record["schemaVersion"] == 2 for record in v2_records))
+            self.assertTrue(
+                all(record["policyVersion"] == "content-routing-v2" for record in v2_records)
+            )
+            self.assertTrue(all("native" in record["eligibleRoutes"] for record in v2_records))
+            self.assertTrue(all("native" not in record["scheduledRoutes"] for record in v2_records))
+            self.assertEqual(["floss"], v2_records[0]["scheduledRoutes"])
+            self.assertEqual(["ocr"], v2_records[1]["scheduledRoutes"])
+            self.assertEqual([], v2_records[2]["scheduledRoutes"])
+
+    def test_routing_policy_pairs_bind_native_schedule_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "sample.bin"
+            source.write_bytes(b"sample")
+            identity = InputIdentity(
+                str(source.resolve()), source.stat().st_size, hashlib.sha256(b"sample").hexdigest()
+            )
+            item = RoutingInput(source.resolve(), identity)
+            default = _make_routing_record(
+                item,
+                self.unknown_magika(),
+                "1.1.0",
+                1,
+                enable_floss=False,
+                enable_ocr=False,
+                force_floss=False,
+            )
+            explicit_default = _make_routing_record(
+                item,
+                self.unknown_magika(),
+                "1.1.0",
+                1,
+                enable_floss=False,
+                enable_ocr=False,
+                force_floss=False,
+                disable_native=False,
+            )
+            self.assertEqual(default, explicit_default)
+            self.assertEqual(1, default["schemaVersion"])
+            self.assertEqual("content-routing-v1", default["policyVersion"])
+            self.assertEqual(["native"], default["scheduledRoutes"])
+
+            v2 = _make_routing_record(
+                item,
+                self.unknown_magika(),
+                "1.1.0",
+                1,
+                enable_floss=True,
+                enable_ocr=False,
+                force_floss=True,
+                disable_native=True,
+            )
+            self.assertEqual(2, v2["schemaVersion"])
+            self.assertEqual("content-routing-v2", v2["policyVersion"])
+            self.assertIn("native", v2["eligibleRoutes"])
+            self.assertEqual(["floss"], v2["scheduledRoutes"])
+
+            manifest = Path(directory) / "routing.jsonl"
+            manifest.write_text(json.dumps(v2) + "\n", encoding="utf-8")
+            self.assertEqual([v2], list(read_routing_manifest(manifest)))
+
+            invalid_rows = []
+            for updates in (
+                {"schemaVersion": 1},
+                {"policyVersion": "content-routing-v1"},
+                {"scheduledRoutes": ["floss", "native"]},
+                {"eligibleRoutes": ["floss"]},
+                {"eligibleRoutes": ["native", {}]},
+                {"scheduledRoutes": [{}]},
+            ):
+                invalid_rows.append({**v2, **updates})
+            for invalid in invalid_rows:
+                with self.subTest(invalid=invalid):
+                    manifest.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+                    with self.assertRaisesRegex(EnrichmentError, "required fields"):
+                        list(read_routing_manifest(manifest))
+
+    def test_disable_native_requires_triage_and_a_specialist(self) -> None:
+        ordinary = parse_arguments(["--disable-native", "-o", "output.jsonl", "input.bin"])
+        with self.assertRaisesRegex(EnrichmentError, "requires --triage-only"):
+            validate_arguments(ordinary)
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "input.jsonl"
+            manifest.write_text("", encoding="utf-8")
+            triage = parse_arguments(
+                [
+                    "--triage-only",
+                    "--disable-native",
+                    "--input-manifest",
+                    str(manifest),
+                    "--progress-total-files",
+                    "1",
+                    "-o",
+                    str(Path(directory) / "routing.jsonl"),
+                    "input.bin",
+                ]
+            )
+            with self.assertRaisesRegex(EnrichmentError, "requires --enable-floss"):
+                validate_arguments(triage)
+
     def test_raw_magika_pe_prediction_routes_floss_but_pe_extension_alone_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2160,6 +2282,7 @@ class EnrichmentTests(unittest.TestCase):
                 enable_floss=False,
                 enable_ocr=False,
                 force_floss=False,
+                disable_native=True,
             )
             route["decisionId"] = "sha256:" + "0" * 64
             manifest = root / "content-routing.jsonl"
@@ -2426,6 +2549,7 @@ class EnrichmentTests(unittest.TestCase):
                 enable_floss=True,
                 enable_ocr=False,
                 force_floss=False,
+                disable_native=True,
             )
             routing_manifest = root / "content-routing.jsonl"
             routing_manifest.write_text(json.dumps(route) + "\n", encoding="utf-8")
@@ -2443,6 +2567,7 @@ class EnrichmentTests(unittest.TestCase):
                         str(inventory),
                         "--routing-manifest",
                         str(routing_manifest),
+                        "--include-floss-static",
                         "--progress-total-files",
                         "1",
                         "-o",
@@ -2456,6 +2581,7 @@ class EnrichmentTests(unittest.TestCase):
             self.assertIn("Progress: FLOSS recovery: 100.0% (1/1 files)", stderr.getvalue())
             records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
             self.assertTrue(records)
+            self.assertIn("static", {record["origin"]["kind"] for record in records})
             self.assertEqual(
                 {route["decisionId"]},
                 {record["attributes"]["routeDecisionId"] for record in records},

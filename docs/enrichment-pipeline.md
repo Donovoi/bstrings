@@ -10,9 +10,7 @@ then applies one pattern catalog without losing where each string came from:
 
 ```text
 input inventory and SHA-256 identity
-  -> native string extraction
-  -> Magika routing and FLOSS executable recovery
-  -> PDF text extraction and OCR
+  -> selected source producers: native, FLOSS, and/or PDF/OCR
   -> language assessment
   -> selected local translation
   -> built-in and custom regex matching
@@ -43,11 +41,18 @@ when filesystem-level or embedded-executable/document coverage is required.
 The direct scanner can search raw image bytes, but FLOSS requires a complete
 supplied executable and OCR requires a supported image/PDF file.
 
+In current source after v1.9.17, Full defaults native extraction on and enables
+routed FLOSS/OCR plus automatic translation. Each producer remains
+independently selectable, and an explicit mode overrides its Full default. The
+published v1.9.17 binaries do not yet contain `--native-extraction`. Runtime
+selection does not split the installed quality bundle: that shared physical
+profile is still verified atomically.
+
 ## What each stage contributes
 
 | Stage | Contribution | Important boundary |
 | --- | --- | --- |
-| Native extractor | ASCII/Unicode strings with byte offsets, using the selected CPU/Rust/GPU path | It does not reconstruct runtime-decoded values |
+| Native extractor | ASCII/Unicode strings with byte offsets, using the selected CPU/Rust/GPU path | It is on by default but can be explicitly disabled; it does not reconstruct runtime-decoded values |
 | Magika | Probabilistically classifies supplied files and routes likely PE files to FLOSS | It samples file content; it is not complete-byte validation, carving, or malware detection |
 | FLOSS | Recovers stack, tight-loop, decoded, and selected language strings from supported PE files | Recovered addresses may be program/virtual locations, not file offsets |
 | PDF/OCR | Extracts born-digital PDF text and reads raster text from images/pages | OCR remains probabilistic and script/model dependent |
@@ -66,16 +71,27 @@ after all requested stages complete.
 # Everything, with automatic OCR and translation decisions
 .\bstrings.exe analyze -d D:\carved --full -o D:\results\full
 
-# Recover executable strings and match them, but do not translate
-.\bstrings.exe analyze -d D:\executables `
-  --recover-executable-strings auto --translation off --lr all `
-  -o D:\results\recovered
+# Native extraction only
+.\bstrings.exe analyze -f D:\evidence\memory.raw `
+  --native-extraction on --recover-executable-strings off `
+  --ocr off --translation off --lr all -o D:\results\native
 
-# OCR images/PDFs, assess language, translate selected records, then match
+# FLOSS only: include FLOSS static and derived categories, then match
+.\bstrings.exe analyze -d D:\executables `
+  --native-extraction off --recover-executable-strings force `
+  --ocr off --translation off --lr all -o D:\results\floss
+
+# OCR only
 .\bstrings.exe analyze -d D:\documents `
-  --ocr auto --ocr-provider auto `
-  --translation auto --translation-policy high-recall `
-  -o D:\results\documents
+  --native-extraction off --recover-executable-strings off `
+  --ocr force --ocr-provider auto --translation off `
+  -o D:\results\ocr
+
+# OCR source records, then language assessment and selected translation
+.\bstrings.exe analyze -d D:\documents `
+  --native-extraction off --recover-executable-strings off `
+  --ocr force --translation auto --translation-policy high-recall `
+  -o D:\results\ocr-translated
 
 # Inventory likely languages without running translation
 .\bstrings.exe analyze -d D:\carved `
@@ -88,6 +104,14 @@ after all requested stages complete.
 
 Directory analysis is recursive. Put the output outside the input tree.
 
+Native, FLOSS, and OCR are source producers. Translation is a transform over
+their canonical records, not a raw-byte extractor. `--translation auto`,
+`all`, and `detect-only` therefore require at least one selected producer; a
+producerless configuration fails before the bundle, output path, or evidence is
+opened. Pattern matching and reports remain mandatory in every `analyze` mode.
+A selected specialist that has no applicable input or emits zero records can
+still complete successfully with truthful terminal status.
+
 ## Executable recovery
 
 [Magika](https://github.com/google/magika) now runs once in bounded multi-file
@@ -95,9 +119,10 @@ batches immediately after the SHA-256 input manifest is frozen. Its raw and
 thresholded predictions are combined with deterministic PE/PDF/image signatures
 and conservative extension hints in `content-routing.jsonl`. The union of
 positive signals routes candidates to [FLOSS](https://github.com/mandiant/flare-floss)
-and OCR; it never removes an input from native byte extraction. A valid PE
-signature, either Magika PE prediction, or the explicit force override can
-schedule FLOSS. An executable extension by itself cannot.
+and OCR. Native remains eligible for coverage disclosure, but an explicit
+`--native-extraction off` leaves it unscheduled. A valid PE signature, either
+Magika PE prediction, or the explicit force override can schedule FLOSS. An
+executable extension by itself cannot.
 
 Unknown or failed classification remains auditable and fails open to the
 deterministic probes. Magika samples content, so routing does not prove that
@@ -110,9 +135,11 @@ The bstrings adapter consumes FLOSS JSON from a temporary disk file, validates
 its pinned result schema incrementally, normalizes supported categories, and
 keeps distinct evidence locations even when the text is identical.
 
-FLOSS static strings are omitted from enrichment by default because native
-bstrings already captures them. This avoids duplicate records while retaining
-FLOSS's genuinely derived strings. The output transaction fails closed on
+When native extraction is selected, FLOSS static strings are omitted because
+native bstrings already captures them. This avoids duplicate records while
+retaining FLOSS's genuinely derived strings. When native is off and FLOSS is a
+selected producer, the adapter includes FLOSS static strings so specialist-only
+coverage is not silently reduced. The output transaction fails closed on
 unknown categories, duplicate JSON keys, missing required fields, invalid
 addresses/encodings, overlong items, malformed UTF-8/JSON, timeout, or
 unexpected process failure.
@@ -134,9 +161,9 @@ recall or performance.
 
 OCR is integrated before language assessment so an examiner does not need to
 know in advance which image or scanned page contains important non-English
-text. PDF text-layer records and OCR records join native/FLOSS records in the
-same normalized stream; language triage and regex processing therefore operate
-on all of them.
+text. PDF text-layer and OCR records join the records from whichever other
+producers were selected in the same normalized stream; language triage and
+regex processing therefore operate on the exact selected-source union.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
@@ -404,10 +431,11 @@ version, device path, GPU-layer policy, slots/threads, and `execution.airgap`.
 
 ## Matching and lineage
 
-Native, recovered, OCR, PDF-text, and translated records are merged in a stable
-order before matching. Built-in `--lr` groups and custom `--fr` patterns use
-the same validation semantics on each normalized record. The matcher does not
-rewrite or discard parent records.
+Selected native, recovered, OCR, PDF-text, and translated records are merged in
+a stable order before matching. Disabled producer files remain atomically empty
+so positional accounting stays stable. Built-in `--lr` groups and custom
+`--fr` patterns use the same validation semantics on each normalized record.
+The matcher does not rewrite or discard parent records.
 
 Each record has a stable SHA-256-based ID. Derived records identify their
 parent, source file, location kind, extractor/model/runtime identity, and
@@ -428,8 +456,9 @@ The important result files are:
   `regex-matches.jsonl`;
 - `translation-work-stats.json`, with its validated projection in `run.json`
   and `summary.json`;
-- `content-routing.jsonl`, routed input projections, and
-  `engine-status.jsonl` terminal coverage;
+- specialist `content-routing.jsonl` and routed input projections, plus its
+  three-rows-per-input `engine-status.jsonl` terminal coverage ledger,
+  including `disabled-by-user` producers;
 - `findings.tsv`, `pattern-histogram.tsv`, `feature-histogram.tsv`, and
   `pattern-histogram.html`;
 - `input-manifest.jsonl`, `run.json`, and `summary.json`; and
@@ -442,6 +471,13 @@ for schema and interpretation detail.
 Use `bstrings.exe help analyze` for the installed option set, or see the
 [terminal help and command reference](command-reference.md) for a task-oriented
 workflow guide.
+
+The complete quality installation remains one exact trust profile. A missing,
+extra, or corrupt manifested file blocks any analysis that selects that bundle,
+even when the affected engine was disabled. Runtime optionality does not create
+slim or independently repairable component packs; physically isolated
+capability profiles are deferred by
+[ADR-0008](architecture/adr-0008-independent-engine-execution.md).
 
 ## Maintainer and regression entry points
 

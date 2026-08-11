@@ -53,6 +53,7 @@ internal static class EngineStatusCore
         string recoveredStringsPath,
         string ocrAssessmentsPath,
         string outputPath,
+        bool expectedNativeSelected,
         CancellationToken cancellationToken = default
     )
     {
@@ -62,6 +63,12 @@ internal static class EngineStatusCore
         }
 
         var native = await CountNativeRecordsAsync(nativeStringsPath, cancellationToken);
+        if (!expectedNativeSelected && native.Count != 0)
+        {
+            throw new InvalidDataException(
+                "Native extraction emitted records while native extraction was disabled."
+            );
+        }
         var recovered = await CountRecoveredRecordsAsync(
             recoveredStringsPath,
             cancellationToken
@@ -120,6 +127,24 @@ internal static class EngineStatusCore
 
                     using var document = JsonDocument.Parse(line);
                     var root = document.RootElement;
+                    var expectedRoutingSchemaVersion = expectedNativeSelected ? 1 : 2;
+                    var expectedRoutingPolicyVersion = expectedNativeSelected
+                        ? "content-routing-v1"
+                        : "content-routing-v2";
+                    if (
+                        RequireInt64(root, "schemaVersion", ordinal, "content route")
+                            != expectedRoutingSchemaVersion
+                        || !string.Equals(
+                            RequireText(root, "policyVersion", ordinal, "content route"),
+                            expectedRoutingPolicyVersion,
+                            StringComparison.Ordinal
+                        )
+                    )
+                    {
+                        throw new InvalidDataException(
+                            $"Content-routing line {ordinal:N0} does not match the expected native-selection policy."
+                        );
+                    }
                     var routeOrdinal = RequireInt64(root, "ordinal", ordinal, "content route");
                     if (routeOrdinal != ordinal)
                     {
@@ -142,6 +167,15 @@ internal static class EngineStatusCore
                     var nativeOutput = native.Remove(sourceFile, out var nativeValue)
                         ? nativeValue
                         : 0;
+                    var nativeEligible = eligible.Contains("native");
+                    var nativeSelected = scheduled.Contains("native");
+                    if (!nativeEligible || nativeSelected != expectedNativeSelected)
+                    {
+                        throw new InvalidDataException(
+                            $"Content-routing line {ordinal:N0} does not match the expected native selection."
+                        );
+                    }
+                    var nativeStatus = nativeSelected ? "succeeded" : "disabled-by-user";
                     await WriteStatusAsync(
                         writer,
                         ordinal,
@@ -150,13 +184,13 @@ internal static class EngineStatusCore
                         sourceSize,
                         sourceSha256,
                         "native",
-                        eligible: true,
-                        selected: true,
-                        status: "succeeded",
+                        nativeEligible,
+                        nativeSelected,
+                        nativeStatus,
                         nativeOutput,
                         cancellationToken
                     );
-                    nativeCounts.Add("succeeded", nativeOutput);
+                    nativeCounts.Add(nativeStatus, nativeOutput);
                     statusRecords++;
 
                     var recoveredKey = new RoutedOutputKey(sourceFile, decisionId);

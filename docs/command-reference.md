@@ -44,7 +44,8 @@ failed or cancelled run; retain it for diagnosis and choose a new output path.
 
 `--full` supplies these defaults:
 
-- native ASCII/Unicode extraction and all 66 built-in patterns;
+- `--native-extraction on` for native ASCII/Unicode extraction and all 66
+  built-in patterns;
 - one batched, fail-open Magika/signature routing pass;
 - automatic routed FLOSS recovery and PDF/image OCR;
 - fail-open shadow translation-worthiness routing, adaptive language detection,
@@ -74,6 +75,7 @@ FLOSS, OCR, and translation:
 .\bstrings.exe analyze `
   -f "D:\evidence\memory.raw" `
   --full `
+  --native-extraction on `
   --recover-executable-strings off `
   --ocr off `
   --translation off `
@@ -83,6 +85,58 @@ FLOSS, OCR, and translation:
 `--full` does not mount a filesystem or carve embedded files from a disk or
 memory image. Native extraction can scan the raw bytes; file-level FLOSS and
 OCR need carved or mounted executables, documents, and images.
+
+## Select source producers independently
+
+This interface is implemented in current source after v1.9.17; the published
+v1.9.17 binaries do not yet contain `--native-extraction`.
+
+`analyze` has three source-record producers and one downstream transform:
+
+| Control | Role | Modes |
+| --- | --- | --- |
+| `--native-extraction` | Native ASCII/Unicode source records | `on` or `off`; default `on`, including Full |
+| `--recover-executable-strings` | FLOSS source records | `off`, `auto`, or `force` |
+| `--ocr` | PDF text-layer and OCR source records | `off`, `auto`, or `force` |
+| `--translation` | Language assessment and/or translated children of selected source records | `off`, `auto`, `all`, or `detect-only` |
+
+Explicit choices override the corresponding Full defaults. At least one source
+producer must remain selected. Translation never silently enables one, so a
+producerless configuration fails before bundle lookup, output creation, or
+evidence access.
+
+```powershell
+# Native only
+.\bstrings.exe analyze -f D:\evidence\memory.raw `
+  --native-extraction on --recover-executable-strings off `
+  --ocr off --translation off -o D:\results\native
+
+# FLOSS only; include all FLOSS static and derived categories
+.\bstrings.exe analyze -d D:\evidence\executables `
+  --native-extraction off --recover-executable-strings force `
+  --ocr off --translation off -o D:\results\floss
+
+# OCR only
+.\bstrings.exe analyze -d D:\evidence\documents `
+  --native-extraction off --recover-executable-strings off `
+  --ocr force --translation off -o D:\results\ocr
+
+# Translate selected OCR records without native or FLOSS parents
+.\bstrings.exe analyze -d D:\evidence\documents `
+  --native-extraction off --recover-executable-strings off `
+  --ocr force --translation auto -o D:\results\ocr-translated
+```
+
+`auto` still routes conservatively; `force` means attempt every supplied input
+for that specialist. A selected specialist with no applicable input or zero
+records is a valid completed result. When native is off, FLOSS-only output
+includes FLOSS static strings. When native is on, those static FLOSS records
+remain omitted to avoid duplicating native coverage.
+
+Pattern matching and report projection are not engines in this contract. They
+remain mandatory finalization stages, so every successful specialist-only run
+still has the same reviewable JSONL, TSV, histogram, completion, and provenance
+surfaces.
 
 ## Patterns and reports
 
@@ -102,8 +156,9 @@ names, descriptions, and expressions.
 Every completed `analyze` run writes the authoritative JSONL evidence graph
 and these review surfaces:
 
-- `content-routing.jsonl` and `engine-status.jsonl`, which explain each route
-  and the terminal native/FLOSS/OCR coverage of every routed input;
+- specialist `engine-status.jsonl`, which records terminal native/FLOSS/OCR
+  coverage of every input, including engines explicitly disabled by the user,
+  plus `content-routing.jsonl` to explain each route;
 - `findings.tsv`, suitable for Timeline Explorer and spreadsheet filtering,
   including a dedicated `TranslationIntegrity` column;
 - `pattern-histogram.tsv`, including zero-count requested patterns;
@@ -189,6 +244,13 @@ pack options locally:
 `acquire` resumes verified downloads and assembles a new complete bundle.
 `assemble` uses already-cached packs without downloading. Both refuse to merge
 into an existing output directory.
+
+The quality bundle remains one atomic trust profile regardless of runtime
+selection. `bundle verify` and `analyze` do not ignore a corrupt unselected
+component in that shared directory. Runtime engine independence therefore does
+not promise smaller downloads, partial installation, or operation from a
+damaged complete kit. Physically separate capability profiles are deferred by
+[ADR-0008](architecture/adr-0008-independent-engine-execution.md).
 
 ## Legacy flat-output scanner
 

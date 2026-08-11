@@ -86,6 +86,7 @@ internal static class ContentRoutingCore
         string flossManifestPath,
         string ocrInventoryPath,
         string ocrManifestPath,
+        bool expectedNativeSelected,
         CancellationToken cancellationToken = default,
         string? expectedClassifierExecutable = null
     )
@@ -182,13 +183,28 @@ internal static class ContentRoutingCore
                     var root = document.RootElement;
                     RequireObject(root, "content-routing row", ordinal);
                     ValidateTopLevelProperties(root, ordinal);
-                    RequireInt32(root, "schemaVersion", ordinal, expected: 1);
+                    var expectedSchemaVersion = expectedNativeSelected ? 1 : 2;
+                    var expectedPolicyVersion = expectedNativeSelected
+                        ? "content-routing-v1"
+                        : "content-routing-v2";
+                    RequireInt32(
+                        root,
+                        "schemaVersion",
+                        ordinal,
+                        expected: expectedSchemaVersion
+                    );
                     RequireText(root, "recordType", ordinal, expected: "content-route");
                     var rowPolicy = RequireText(root, "policyVersion", ordinal);
-                    if (!string.Equals(rowPolicy, "content-routing-v1", StringComparison.Ordinal))
+                    if (
+                        !string.Equals(
+                            rowPolicy,
+                            expectedPolicyVersion,
+                            StringComparison.Ordinal
+                        )
+                    )
                     {
                         throw new InvalidDataException(
-                            $"Content-routing line {ordinal:N0} uses an unsupported policy version."
+                            $"Content-routing line {ordinal:N0} does not match the expected native-selection policy."
                         );
                     }
                     policyVersion ??= rowPolicy;
@@ -267,10 +283,14 @@ internal static class ContentRoutingCore
                         "scheduledRoutes",
                         ordinal
                     );
-                    if (!scheduledRoutes.Contains("native", StringComparer.Ordinal))
+                    var nativeSelected = scheduledRoutes.Contains(
+                        "native",
+                        StringComparer.Ordinal
+                    );
+                    if (nativeSelected != expectedNativeSelected)
                     {
                         throw new InvalidDataException(
-                            $"Content-routing line {ordinal:N0} attempts to suppress mandatory native extraction."
+                            $"Content-routing line {ordinal:N0} does not match the expected native selection."
                         );
                     }
                     ValidateRoutes(scheduledRoutes, "scheduledRoutes", ordinal);

@@ -458,6 +458,10 @@ internal static class EnrichmentRegexPipelineCore
         return compiled;
     }
 
+    internal static void ValidatePatterns(
+        IReadOnlyList<(string name, string pattern)> patterns
+    ) => _ = CompilePatterns(patterns);
+
     internal static void ValidateRecord(EnrichmentStringRecord record, long lineNumber)
     {
         if (record.SchemaVersion != CurrentSchemaVersion)

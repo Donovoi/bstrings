@@ -1374,6 +1374,7 @@ def _make_routing_record(
     enable_floss: bool,
     enable_ocr: bool,
     force_floss: bool,
+    disable_native: bool = False,
     magika_executable: str | None = None,
     magika_sha256: str | None = None,
     magika_runtime_path: str | None = None,
@@ -1412,7 +1413,7 @@ def _make_routing_record(
         for signal in signals
     )
     eligible_routes = {"native"}
-    scheduled_routes = {"native"}
+    scheduled_routes = set() if disable_native else {"native"}
     if floss_eligible:
         eligible_routes.add("floss")
         if enable_floss:
@@ -1443,9 +1444,9 @@ def _make_routing_record(
     if classification.error_code is not None:
         classifier["errorCode"] = classification.error_code
     record = {
-        "schemaVersion": SCHEMA_VERSION,
+        "schemaVersion": 2 if disable_native else SCHEMA_VERSION,
         "recordType": "content-route",
-        "policyVersion": "content-routing-v1",
+        "policyVersion": ("content-routing-v2" if disable_native else "content-routing-v1"),
         "ordinal": ordinal,
         "sourceFile": str(item.path),
         "sourceSize": item.identity.length,
@@ -2652,25 +2653,43 @@ def read_routing_manifest(path: Path) -> Iterable[dict[str, Any]]:
                     "scheduledRoutes",
                     "conflicts",
                 }
+                if not isinstance(record, dict):
+                    raise EnrichmentError(
+                        f"Content routing row {expected_ordinal} has invalid required fields"
+                    )
+                schema_version = record.get("schemaVersion")
+                policy_version = record.get("policyVersion")
+                eligible_value = record.get("eligibleRoutes")
+                scheduled_value = record.get("scheduledRoutes")
+                native_scheduled = isinstance(scheduled_value, list) and "native" in scheduled_value
+                valid_policy = type(schema_version) is int and (
+                    (
+                        schema_version == SCHEMA_VERSION
+                        and policy_version == "content-routing-v1"
+                        and native_scheduled
+                    )
+                    or (
+                        schema_version == 2
+                        and policy_version == "content-routing-v2"
+                        and not native_scheduled
+                    )
+                )
                 if (
-                    not isinstance(record, dict)
-                    or set(record) != required_properties
-                    or record.get("schemaVersion") != SCHEMA_VERSION
+                    set(record) != required_properties
+                    or not valid_policy
                     or record.get("recordType") != "content-route"
-                    or record.get("policyVersion") != "content-routing-v1"
                     or record.get("ordinal") != expected_ordinal
                     or not isinstance(record.get("sourceFile"), str)
                     or not isinstance(record.get("classifier"), dict)
-                    or not isinstance(record.get("eligibleRoutes"), list)
-                    or not isinstance(record.get("scheduledRoutes"), list)
-                    or "native" not in record["scheduledRoutes"]
-                    or any(
-                        route not in {"native", "floss", "ocr"}
-                        for route in record["eligibleRoutes"]
-                    )
-                    or any(
-                        route not in record["eligibleRoutes"] for route in record["scheduledRoutes"]
-                    )
+                    or not isinstance(eligible_value, list)
+                    or not isinstance(scheduled_value, list)
+                    or any(not isinstance(route, str) for route in eligible_value)
+                    or any(not isinstance(route, str) for route in scheduled_value)
+                    or eligible_value != sorted(set(eligible_value))
+                    or scheduled_value != sorted(set(scheduled_value))
+                    or "native" not in eligible_value
+                    or any(route not in {"native", "floss", "ocr"} for route in eligible_value)
+                    or any(route not in eligible_value for route in scheduled_value)
                 ):
                     raise EnrichmentError(
                         f"Content routing row {expected_ordinal} has invalid required fields"
@@ -3823,6 +3842,14 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Write an early content-routing manifest without invoking FLOSS or translation",
     )
     parser.add_argument(
+        "--disable-native",
+        action="store_true",
+        help=(
+            "Omit native from scheduled routes while retaining native eligibility; "
+            "valid only with --triage-only and at least one specialist route"
+        ),
+    )
+    parser.add_argument(
         "--input-manifest",
         type=Path,
         help="Trusted input identity manifest required by --triage-only",
@@ -4048,6 +4075,11 @@ def validate_arguments(args: argparse.Namespace) -> None:
             raise EnrichmentError("--input-manifest and --output must be different paths")
     elif args.input_manifest is not None:
         raise EnrichmentError("--input-manifest requires --triage-only")
+    if args.disable_native:
+        if not args.triage_only:
+            raise EnrichmentError("--disable-native requires --triage-only")
+        if not (args.enable_floss or args.enable_ocr):
+            raise EnrichmentError("--disable-native requires --enable-floss and/or --enable-ocr")
     if args.routing_manifest is not None:
         if args.input_jsonl is not None or args.translate:
             raise EnrichmentError("--routing-manifest is supported by recovery, not translation")
@@ -4293,6 +4325,7 @@ def run_content_triage(
                         enable_floss=args.enable_floss,
                         enable_ocr=args.enable_ocr,
                         force_floss=args.force_floss,
+                        disable_native=args.disable_native,
                         magika_executable=magika,
                         magika_sha256=magika_sha256,
                         magika_runtime_path=magika_runtime_path,

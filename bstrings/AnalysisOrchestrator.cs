@@ -252,6 +252,17 @@ internal static class AnalysisOrchestrator
     {
         ValidateOptions(options);
         ValidateInputSource(options);
+        var patterns = Program.ResolveAnalysisPatterns(
+            options.PatternSelection,
+            options.RegexFilePath
+        );
+        EnrichmentRegexPipelineCore.ValidatePatterns(patterns);
+        if (options.NativeExtractionMode == NativeExtractionMode.Off)
+        {
+            Console.Error.WriteLine(
+                "Warning: native extraction is disabled; this specialist run does not provide universal byte-string coverage."
+            );
+        }
         var outputDirectory = Path.GetFullPath(options.OutputDirectory);
         ValidateOutputLocation(options, outputDirectory);
 
@@ -472,6 +483,8 @@ internal static class AnalysisOrchestrator
                             flossManifestPath,
                             ocrInventoryPath,
                             ocrInputManifestPath,
+                            expectedNativeSelected:
+                                options.NativeExtractionMode == NativeExtractionMode.On,
                             cancellationToken,
                             expectedClassifierExecutable: toolchain!.MagikaExecutable
                         );
@@ -479,74 +492,81 @@ internal static class AnalysisOrchestrator
                 );
             }
 
-            FileStream? nativeInventoryLease = null;
-            FileStream? nativeManifestLease = null;
-            try
+            if (options.NativeExtractionMode == NativeExtractionMode.Off)
             {
+                await CreateEmptyFileAtomicAsync(nativePath, cancellationToken);
+            }
+            else
+            {
+                FileStream? nativeInventoryLease = null;
+                FileStream? nativeManifestLease = null;
+                try
+                {
+                    await RunStageAsync(
+                        "pre-native input inventory verification",
+                        stageSeconds,
+                        async () =>
+                        {
+                            nativeInventoryLease = await InputEvidenceManifest
+                                .AcquireVerifiedInventoryLeaseAsync(
+                                    inventoryPath,
+                                    inputManifest!,
+                                    cancellationToken
+                                );
+                            nativeManifestLease = await ContentRoutingCore
+                                .AcquireVerifiedFileLeaseAsync(
+                                    inputManifestPath,
+                                    inputManifest!.ManifestSha256,
+                                    "evidence content manifest",
+                                    cancellationToken
+                                );
+                        }
+                    );
+                    await RunStageAsync(
+                        "native extraction",
+                        stageSeconds,
+                        () =>
+                            RunNativeExtractionAsync(
+                                options,
+                                inventoryPath,
+                                inputManifestPath,
+                                nativePath,
+                                outputDirectory,
+                                logsDirectory,
+                                executingExecutablePath,
+                                cancellationToken
+                            )
+                    );
+                }
+                finally
+                {
+                    if (nativeInventoryLease is not null)
+                    {
+                        await nativeInventoryLease.DisposeAsync();
+                    }
+                    if (nativeManifestLease is not null)
+                    {
+                        await nativeManifestLease.DisposeAsync();
+                    }
+                }
                 await RunStageAsync(
-                    "pre-native input inventory verification",
+                    "post-native input verification",
                     stageSeconds,
                     async () =>
                     {
-                        nativeInventoryLease = await InputEvidenceManifest
-                            .AcquireVerifiedInventoryLeaseAsync(
-                                inventoryPath,
-                                inputManifest!,
-                                cancellationToken
-                            );
-                        nativeManifestLease = await ContentRoutingCore
-                            .AcquireVerifiedFileLeaseAsync(
-                                inputManifestPath,
-                                inputManifest!.ManifestSha256,
-                                "evidence content manifest",
-                                cancellationToken
-                            );
+                        await InputEvidenceManifest.VerifyInventoryAsync(
+                            inventoryPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
+                        await InputEvidenceManifest.VerifyAsync(
+                            inputManifestPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
                     }
                 );
-                await RunStageAsync(
-                    "native extraction",
-                    stageSeconds,
-                    () =>
-                        RunNativeExtractionAsync(
-                            options,
-                            inventoryPath,
-                            inputManifestPath,
-                            nativePath,
-                            outputDirectory,
-                            logsDirectory,
-                            executingExecutablePath,
-                            cancellationToken
-                        )
-                );
             }
-            finally
-            {
-                if (nativeInventoryLease is not null)
-                {
-                    await nativeInventoryLease.DisposeAsync();
-                }
-                if (nativeManifestLease is not null)
-                {
-                    await nativeManifestLease.DisposeAsync();
-                }
-            }
-            await RunStageAsync(
-                "post-native input verification",
-                stageSeconds,
-                async () =>
-                {
-                    await InputEvidenceManifest.VerifyInventoryAsync(
-                        inventoryPath,
-                        inputManifest!,
-                        cancellationToken
-                    );
-                    await InputEvidenceManifest.VerifyAsync(
-                        inputManifestPath,
-                        inputManifest!,
-                        cancellationToken
-                    );
-                }
-            );
 
             if (options.RecoveryMode == ExecutableRecoveryMode.Off)
             {
@@ -1039,10 +1059,6 @@ internal static class AnalysisOrchestrator
                     )
             );
 
-            var patterns = Program.ResolveAnalysisPatterns(
-                options.PatternSelection,
-                options.RegexFilePath
-            );
             EnrichmentPipelineStats matches = default;
             await RunStageAsync(
                 "pattern matching",
@@ -1091,7 +1107,9 @@ internal static class AnalysisOrchestrator
                             recoveredPath,
                             ocrAssessmentsPath,
                             engineStatusPath,
-                            cancellationToken
+                            expectedNativeSelected:
+                                options.NativeExtractionMode == NativeExtractionMode.On,
+                            cancellationToken: cancellationToken
                         )
                 );
             }
@@ -1356,31 +1374,14 @@ internal static class AnalysisOrchestrator
         CancellationToken cancellationToken
     )
     {
-        var arguments = PythonPrefix(toolchain);
-        arguments.Add("--airgap");
-        arguments.Add("--triage-only");
-        arguments.Add("--paths-from");
-        arguments.Add(inventoryPath);
-        arguments.Add("--input-manifest");
-        arguments.Add(inputManifestPath);
-        arguments.Add("-o");
-        arguments.Add(outputPath);
-        arguments.Add("--magika");
-        arguments.Add(toolchain.MagikaExecutable!);
-        arguments.Add("--progress-total-files");
-        arguments.Add(totalFiles.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        if (options.RecoveryMode != ExecutableRecoveryMode.Off)
-        {
-            arguments.Add("--enable-floss");
-        }
-        if (options.OcrMode != OcrWorkflowMode.Off)
-        {
-            arguments.Add("--enable-ocr");
-        }
-        if (options.RecoveryMode == ExecutableRecoveryMode.Force)
-        {
-            arguments.Add("--force-floss");
-        }
+        var arguments = BuildContentRoutingArguments(
+            options,
+            toolchain,
+            inventoryPath,
+            inputManifestPath,
+            outputPath,
+            totalFiles
+        );
         await ChildProcessRunner.RunAsync(
             toolchain.PythonExecutable,
             arguments,
@@ -1397,6 +1398,51 @@ internal static class AnalysisOrchestrator
                 "Content triage completed without its required routing manifest."
             );
         }
+    }
+
+    internal static List<string> BuildContentRoutingArguments(
+        AnalysisOptions options,
+        AnalysisToolchain toolchain,
+        string inventoryPath,
+        string inputManifestPath,
+        string outputPath,
+        long totalFiles
+    )
+    {
+        if (totalFiles < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(totalFiles));
+        }
+        var arguments = PythonPrefix(toolchain);
+        arguments.Add("--airgap");
+        arguments.Add("--triage-only");
+        arguments.Add("--paths-from");
+        arguments.Add(inventoryPath);
+        arguments.Add("--input-manifest");
+        arguments.Add(inputManifestPath);
+        arguments.Add("-o");
+        arguments.Add(outputPath);
+        arguments.Add("--magika");
+        arguments.Add(toolchain.MagikaExecutable!);
+        arguments.Add("--progress-total-files");
+        arguments.Add(totalFiles.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (options.NativeExtractionMode == NativeExtractionMode.Off)
+        {
+            arguments.Add("--disable-native");
+        }
+        if (options.RecoveryMode != ExecutableRecoveryMode.Off)
+        {
+            arguments.Add("--enable-floss");
+        }
+        if (options.OcrMode != OcrWorkflowMode.Off)
+        {
+            arguments.Add("--enable-ocr");
+        }
+        if (options.RecoveryMode == ExecutableRecoveryMode.Force)
+        {
+            arguments.Add("--force-floss");
+        }
+        return arguments;
     }
 
     private static Task RunFlossPreflightAsync(
@@ -1427,6 +1473,39 @@ internal static class AnalysisOrchestrator
         CancellationToken cancellationToken
     )
     {
+        var arguments = BuildRecoveryArguments(
+            options,
+            toolchain,
+            inventoryPath,
+            routingManifestPath,
+            outputPath,
+            totalFiles
+        );
+        await ChildProcessRunner.RunAsync(
+            toolchain.PythonExecutable,
+            arguments,
+            workingDirectory,
+            Path.Combine(logsDirectory, "recovery.stdout.log"),
+            Path.Combine(logsDirectory, "recovery.stderr.log"),
+            OfflineEnvironment(),
+            cancellationToken,
+            static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
+        );
+    }
+
+    internal static List<string> BuildRecoveryArguments(
+        AnalysisOptions options,
+        AnalysisToolchain toolchain,
+        string inventoryPath,
+        string routingManifestPath,
+        string outputPath,
+        long totalFiles
+    )
+    {
+        if (totalFiles < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(totalFiles));
+        }
         var arguments = PythonPrefix(toolchain);
         arguments.Add("--airgap");
         arguments.Add("--bounded-integrated-mode");
@@ -1446,16 +1525,11 @@ internal static class AnalysisOrchestrator
         {
             arguments.Add("--force-floss");
         }
-        await ChildProcessRunner.RunAsync(
-            toolchain.PythonExecutable,
-            arguments,
-            workingDirectory,
-            Path.Combine(logsDirectory, "recovery.stdout.log"),
-            Path.Combine(logsDirectory, "recovery.stderr.log"),
-            OfflineEnvironment(),
-            cancellationToken,
-            static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
-        );
+        if (options.NativeExtractionMode == NativeExtractionMode.Off)
+        {
+            arguments.Add("--include-floss-static");
+        }
+        return arguments;
     }
 
     private static async Task RunOcrAsync(
@@ -1975,9 +2049,35 @@ internal static class AnalysisOrchestrator
         {
             throw new ArgumentException("A results directory is required with -o.");
         }
-        if (!Enum.IsDefined(options.OcrMode) || !Enum.IsDefined(options.OcrProvider))
+        if (
+            !Enum.IsDefined(options.NativeExtractionMode)
+            || !Enum.IsDefined(options.OcrMode)
+            || !Enum.IsDefined(options.OcrProvider)
+            || !Enum.IsDefined(options.RecoveryMode)
+            || !Enum.IsDefined(options.TranslationMode)
+        )
         {
-            throw new ArgumentException("OCR mode or provider is invalid.");
+            throw new ArgumentException("An analysis engine mode or provider is invalid.");
+        }
+        if (
+            options.NativeExtractionMode == NativeExtractionMode.Off
+            && options.RecoveryMode == ExecutableRecoveryMode.Off
+            && options.OcrMode == OcrWorkflowMode.Off
+        )
+        {
+            throw new ArgumentException(
+                "Analysis requires at least one source producer: enable native extraction, FLOSS recovery, or OCR."
+            );
+        }
+        if (
+            !ProcessingBackendCore.TryParseMode(options.Processor, out _, out var processorError)
+        )
+        {
+            throw new ArgumentException(processorError);
+        }
+        if (!RustAsciiEngine.TryParseMode(options.CpuEngine, out _, out var cpuEngineError))
+        {
+            throw new ArgumentException(cpuEngineError);
         }
         OcrCompletionCore.ValidateRequestedThreads(options.OcrThreads);
         AnalysisCli.ValidateStringLengthBounds(
@@ -2320,7 +2420,7 @@ internal static class AnalysisOrchestrator
 
     internal static int CountPlannedStages(AnalysisOptions options, bool needsExternalToolchain)
     {
-        var count = 9;
+        var count = options.NativeExtractionMode == NativeExtractionMode.On ? 9 : 6;
         if (needsExternalToolchain)
         {
             count++;

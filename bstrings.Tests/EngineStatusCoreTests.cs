@@ -68,6 +68,7 @@ public sealed class EngineStatusCoreTests
             scope.PathFor("recovered-strings.jsonl"),
             scope.PathFor("ocr-assessments.jsonl"),
             scope.PathFor("engine-status.jsonl"),
+            expectedNativeSelected: true,
             cancellationToken
         );
 
@@ -144,6 +145,7 @@ public sealed class EngineStatusCoreTests
                 scope.PathFor("recovered-strings.jsonl"),
                 scope.PathFor("ocr-assessments.jsonl"),
                 output,
+                expectedNativeSelected: true,
                 cancellationToken
             )
         );
@@ -151,6 +153,193 @@ public sealed class EngineStatusCoreTests
         Assert.Contains("assessment is missing", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("preserved\n", await File.ReadAllTextAsync(output, cancellationToken));
         Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.partial.*"));
+    }
+
+    [Fact]
+    public async Task WriteAsync_EmitsDisabledNativeStatusForNativeOffPolicy()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var source = scope.Write("evidence.bin", "evidence");
+        var routingPath = scope.PathFor("content-routing.jsonl");
+        await WriteRoutingAsync(
+            routingPath,
+            [source],
+            [(["native"], Array.Empty<string>())],
+            cancellationToken,
+            schemaVersion: 2,
+            policyVersion: "content-routing-v2"
+        );
+        var routingSha256 = await HashFileAsync(routingPath, cancellationToken);
+        foreach (var name in new[]
+                 {
+                     "native-strings.jsonl",
+                     "recovered-strings.jsonl",
+                     "ocr-assessments.jsonl",
+                 })
+        {
+            await File.WriteAllTextAsync(scope.PathFor(name), string.Empty, cancellationToken);
+        }
+
+        var stats = await EngineStatusCore.WriteAsync(
+            routingPath,
+            routingSha256,
+            1,
+            scope.PathFor("native-strings.jsonl"),
+            scope.PathFor("recovered-strings.jsonl"),
+            scope.PathFor("ocr-assessments.jsonl"),
+            scope.PathFor("engine-status.jsonl"),
+            expectedNativeSelected: false,
+            cancellationToken
+        );
+
+        Assert.Equal(new EngineTerminalCounts(0, 0, 1, 0), stats.Native);
+        Assert.Equal(new EngineTerminalCounts(0, 1, 0, 0), stats.Floss);
+        Assert.Equal(new EngineTerminalCounts(0, 1, 0, 0), stats.Ocr);
+        using var native = JsonDocument.Parse(
+            (await File.ReadAllLinesAsync(scope.PathFor("engine-status.jsonl"), cancellationToken))[0]
+        );
+        Assert.True(native.RootElement.GetProperty("eligible").GetBoolean());
+        Assert.False(native.RootElement.GetProperty("selected").GetBoolean());
+        Assert.Equal("disabled-by-user", native.RootElement.GetProperty("status").GetString());
+        Assert.Equal(0, native.RootElement.GetProperty("outputRecords").GetInt64());
+    }
+
+    [Fact]
+    public async Task WriteAsync_RejectsNativeRecordsWhenNativeIsOff()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var source = scope.Write("evidence.bin", "evidence");
+        var routingPath = scope.PathFor("content-routing.jsonl");
+        await WriteRoutingAsync(
+            routingPath,
+            [source],
+            [(["native"], Array.Empty<string>())],
+            cancellationToken,
+            schemaVersion: 2,
+            policyVersion: "content-routing-v2"
+        );
+        var routingSha256 = await HashFileAsync(routingPath, cancellationToken);
+        await WriteNativeRecordsAsync(
+            scope.PathFor("native-strings.jsonl"),
+            source,
+            cancellationToken
+        );
+        await File.WriteAllTextAsync(
+            scope.PathFor("recovered-strings.jsonl"),
+            string.Empty,
+            cancellationToken
+        );
+        await File.WriteAllTextAsync(
+            scope.PathFor("ocr-assessments.jsonl"),
+            string.Empty,
+            cancellationToken
+        );
+        var output = scope.PathFor("engine-status.jsonl");
+        await File.WriteAllTextAsync(output, "preserved\n", cancellationToken);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EngineStatusCore.WriteAsync(
+                routingPath,
+                routingSha256,
+                1,
+                scope.PathFor("native-strings.jsonl"),
+                scope.PathFor("recovered-strings.jsonl"),
+                scope.PathFor("ocr-assessments.jsonl"),
+                output,
+                expectedNativeSelected: false,
+                cancellationToken
+            )
+        );
+
+        Assert.Contains("was disabled", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("preserved\n", await File.ReadAllTextAsync(output, cancellationToken));
+        Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.partial.*"));
+    }
+
+    [Fact]
+    public async Task WriteAsync_RejectsRoutingSelectionThatContradictsExpectedNativeOff()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var source = scope.Write("evidence.bin", "evidence");
+        var routingPath = scope.PathFor("content-routing.jsonl");
+        await WriteRoutingAsync(
+            routingPath,
+            [source],
+            [(["native"], ["native"])],
+            cancellationToken,
+            schemaVersion: 2,
+            policyVersion: "content-routing-v2"
+        );
+        var routingSha256 = await HashFileAsync(routingPath, cancellationToken);
+        foreach (var name in new[]
+                 {
+                     "native-strings.jsonl",
+                     "recovered-strings.jsonl",
+                     "ocr-assessments.jsonl",
+                 })
+        {
+            await File.WriteAllTextAsync(scope.PathFor(name), string.Empty, cancellationToken);
+        }
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EngineStatusCore.WriteAsync(
+                routingPath,
+                routingSha256,
+                1,
+                scope.PathFor("native-strings.jsonl"),
+                scope.PathFor("recovered-strings.jsonl"),
+                scope.PathFor("ocr-assessments.jsonl"),
+                scope.PathFor("engine-status.jsonl"),
+                expectedNativeSelected: false,
+                cancellationToken
+            )
+        );
+
+        Assert.Contains("expected native selection", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task WriteAsync_RejectsNativeOffWithV1RoutingPolicy()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var source = scope.Write("evidence.bin", "evidence");
+        var routingPath = scope.PathFor("content-routing.jsonl");
+        await WriteRoutingAsync(
+            routingPath,
+            [source],
+            [(["native"], Array.Empty<string>())],
+            cancellationToken
+        );
+        var routingSha256 = await HashFileAsync(routingPath, cancellationToken);
+        foreach (var name in new[]
+                 {
+                     "native-strings.jsonl",
+                     "recovered-strings.jsonl",
+                     "ocr-assessments.jsonl",
+                 })
+        {
+            await File.WriteAllTextAsync(scope.PathFor(name), string.Empty, cancellationToken);
+        }
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EngineStatusCore.WriteAsync(
+                routingPath,
+                routingSha256,
+                1,
+                scope.PathFor("native-strings.jsonl"),
+                scope.PathFor("recovered-strings.jsonl"),
+                scope.PathFor("ocr-assessments.jsonl"),
+                scope.PathFor("engine-status.jsonl"),
+                expectedNativeSelected: false,
+                cancellationToken
+            )
+        );
+
+        Assert.Contains("native-selection policy", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -180,7 +369,9 @@ public sealed class EngineStatusCoreTests
         string path,
         IReadOnlyList<string> sources,
         IReadOnlyList<(string[] Eligible, string[] Scheduled)> routeSets,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        int schemaVersion = 1,
+        string policyVersion = "content-routing-v1"
     )
     {
         var rows = new List<string>();
@@ -196,9 +387,9 @@ public sealed class EngineStatusCoreTests
             );
             var rowWithoutDecision = new
             {
-                schemaVersion = 1,
+                schemaVersion,
                 recordType = "content-route",
-                policyVersion = "content-routing-v1",
+                policyVersion,
                 ordinal = index + 1,
                 sourceFile = identity.SourceFile,
                 sourceSize = identity.SourceSize,
@@ -246,6 +437,29 @@ public sealed class EngineStatusCoreTests
         await File.WriteAllLinesAsync(path, rows, new UTF8Encoding(false), cancellationToken);
         return identities.ToArray();
     }
+
+    private static Task WriteNativeRecordsAsync(
+        string path,
+        string sourceFile,
+        CancellationToken cancellationToken
+    ) =>
+        File.WriteAllTextAsync(
+            path,
+            JsonSerializer.Serialize(
+                new
+                {
+                    schemaVersion = 1,
+                    recordType = "string",
+                    recordId = "native-1",
+                    text = "synthetic evidence",
+                    sourceFile = Path.GetFullPath(sourceFile),
+                    location = new { kind = "file_offset", value = "0x0" },
+                    origin = new { extractor = "bstrings", version = "test", kind = "ascii" },
+                }
+            ) + "\n",
+            new UTF8Encoding(false),
+            cancellationToken
+        );
 
     private static async Task<string> HashFileAsync(
         string path,

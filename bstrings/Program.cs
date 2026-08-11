@@ -72,7 +72,7 @@ public static partial class Program
         + "\r\n'analyze' writes a provenance-preserving result directory with TSV/JSONL reports and histograms."
         + "\r\nIts output directory must be new or empty; a failed run remains marked .incomplete."
         + "\r\nLong-running operations print measured percentage completion; percentages are work units, not an ETA."
-        + "\r\nFull analysis classifies each input in one early shared pass, records content-routing.jsonl and engine-status.jsonl, and always keeps native coverage."
+        + "\r\nFull analysis defaults native extraction on, classifies each input in one early shared pass, and records content-routing.jsonl plus engine-status.jsonl; use --native-extraction off only for an explicit FLOSS/OCR specialist run."
         + "\r\n--processor controls native extraction only. OCR and translation have separate hardware options."
         + "\r\n--use-rapids is a separate, optional regex prefilter for the legacy scanner."
         + "\r\n--enrich-jsonl processes provenance-preserving external string records without rescanning file bytes.";
@@ -932,6 +932,7 @@ public static partial class Program
         if (!ProcessingBackendCore.TryParseMode(processor, out var requestedMode, out var modeError))
         {
             Console.Error.WriteLine(modeError);
+            _actionFailed = true;
             return;
         }
 
@@ -944,6 +945,7 @@ public static partial class Program
         )
         {
             Console.Error.WriteLine(cpuEngineError);
+            _actionFailed = true;
             return;
         }
 
