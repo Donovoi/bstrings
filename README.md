@@ -22,6 +22,11 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 - Language triage reuses successful detections for exact duplicate text only
   within its bounded batch; reviewed 50%-duplicate workloads were 1.85-1.91x
   faster without changing ordered report bytes.
+- Each language assessment also records a compact, deterministic shadow routing
+  decision for records that appear to contain only validated structured data.
+  Shadow routing is diagnostic: it does not yet suppress language detection or
+  translation candidates, and uncertain, mixed, or failed decisions retain the
+  existing high-recall path.
 - Offline translation reuses an exact source/configuration result through a
   run-local SQLite cache while preserving one ordered child per parent. The
   cache is bounded in memory, never shared between cases, and removed after the

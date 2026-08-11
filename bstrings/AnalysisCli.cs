@@ -16,7 +16,7 @@ internal static class AnalysisCli
     internal const string TranslationPolicyHelp =
         "Automatic translation gate used by --translation auto: high-recall keeps uncertain detections; balanced uses the configured confidence and margin; high-precision applies floors of 0.65 confidence and 0.15 margin";
     internal const string FullProfileHelp =
-        "Run the single Full profile: hash inputs, classify each input in one early shared pass, always extract native strings, route applicable files to FLOSS/OCR, then language triage, pinned 7B Q4_K_M offline translation (validated sm89 CUDA p2 or pre-evidence CPU selection), all patterns, and reports; an explicit stage 'off' overrides its default";
+        "Run the single Full profile: hash inputs, classify each input in one early shared pass, always extract native strings, route applicable files to FLOSS/OCR, then fail-open shadow translation-worthiness routing and language triage, pinned 7B Q4_K_M offline translation (validated sm89 CUDA p2 or pre-evidence CPU selection), all patterns, and reports; shadow routing does not yet remove candidates, and an explicit stage 'off' overrides its default";
     internal const string TranslationDeviceHelp =
         "Translation hardware: auto, cpu, cuda, or hybrid; separate from native --processor (the quality kit promotes only validated compute capability 8.9 to full-offload CUDA p2, otherwise auto selects CPU before evidence inference; explicit cuda fails closed)";
 

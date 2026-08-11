@@ -177,6 +177,54 @@ conservative floor: 0.65 confidence and 0.15 target margin. It is an expert
 volume-control policy, not the Full default and not a calibrated accuracy
 claim.
 
+Before language detection, the triage stage computes a compact, versioned
+translation-worthiness observation. The first implementation is deliberately
+shadow-only: a `prospective-*` code means that a strict validator consumed the
+complete trimmed record, but the record still follows the same Lingua and
+high-recall candidate path. `shadow-*` records other validated machine-like
+signals that are not bypass-eligible, and `retain` covers natural, mixed,
+unsupported, or inconclusive records and every router failure. File-level
+Magika labels and extractor provenance may support retention but never suppress
+translation by themselves.
+
+The observation is stored in the record's existing
+`language-assessments.jsonl` row under `translationRouting`; it does not create
+a second copy of the evidence text or repeat existing detector/candidate
+fields. Each row contains one bounded routing code; `run.json` and
+`summary.json` bind the policy version and aggregate counts once per run. This
+shadow rollout measures classification quality and overhead without changing
+canonical parents, candidate order, or translated-child cardinality.
+Authoritative bypass remains disabled until the multilingual forensic recall
+and end-to-end performance gates in
+[ADR-0007](architecture/adr-0007-translation-worthiness-routing.md) pass.
+
+The current C# foundation also classifies a bounded set of origin flags for
+each pending triage record and publishes reconciled work counters for
+batch-unique routing evaluations, Lingua-eligible occurrences, actual Lingua
+executions, and same-batch Lingua reuse. The structured shadow router does not
+currently use origin to change its code; a future scorer may use origin only to
+strengthen retention. A second Robin review froze any
+future learned experiment as a binary `contains-any-human` versus
+`machine-only` shadow scorer with explicit abstention; mixed records count as
+human-positive, and an unvalidated origin/script/length cell retains. No learned
+scorer is active, no runtime or model-size choice has been made, and none of
+these observations currently avoids work.
+
+The translation worker atomically publishes privacy-safe schema-1 aggregates
+to `translation-work-stats.json` after publishing translated output. Managed
+C# hashes the physical stats file, validates its exact schema and candidate,
+decision, model-result, fallback, and child cardinalities, then projects it as
+`translationWork` in `run.json` and `summary.json`. A mismatch fails the run.
+
+`textDecisions` is the first exact-text decision within each translation
+window/call, not a globally distinct-text count. Exact text repeated in a later
+window creates another decision; `runCacheHits` reports the resulting cross-
+window reuse. `translatorRequests` counts translator batch dispatches and
+`translatorInputTexts` counts submitted texts, so neither candidate occurrences
+nor the console's `modelInputs` display should be substituted for a different
+work unit. The artifact contains counters only, but private case aggregates and
+its SHA-256 still must not be published.
+
 These normalized confidences are not universally calibrated probabilities.
 Short strings, names, mixed-language text, OCR errors, and transliteration are
 hard cases. Use `--translation detect-only` to review the distribution, or
@@ -188,8 +236,10 @@ effective thresholds, confidence values, decision, and source record ID.
 `effectiveMinimumConfidence`, and `effectiveMinimumTargetMargin` make an
 optional high-precision floor auditable. Policy decisions use the raw detector
 values. The five displayed score fields are serialized to 12 decimal places
-with round-to-even so parallel reductions cannot change report bytes in an
-insignificant final bit. `scoreDecimalPlaces`, `confidenceGatePassed`, and
+with round-to-even to bound insignificant parallel-reduction tails; a large
+independent-call scale run still observed a one-unit difference in the final
+published decimal, without any decision or candidate change.
+`scoreDecimalPlaces`, `confidenceGatePassed`, and
 `marginGatePassed` make that reporting policy and each raw gate outcome
 explicit. These are detector confidence scores, not calibrated probabilities.
 
@@ -376,6 +426,8 @@ The important result files are:
 - `ocr-assessments.jsonl` and `language-assessments.jsonl`;
 - `translated-strings.jsonl`, `enriched-strings.jsonl`, and
   `regex-matches.jsonl`;
+- `translation-work-stats.json`, with its validated projection in `run.json`
+  and `summary.json`;
 - `content-routing.jsonl`, routed input projections, and
   `engine-status.jsonl` terminal coverage;
 - `findings.tsv`, `pattern-histogram.tsv`, `feature-histogram.tsv`, and

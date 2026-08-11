@@ -30,6 +30,16 @@ public sealed class AnalysisCliTests
     {
         Assert.Contains("Q4_K_M", AnalysisCli.FullProfileHelp, StringComparison.Ordinal);
         Assert.DoesNotContain("Q8", AnalysisCli.FullProfileHelp, StringComparison.Ordinal);
+        Assert.Contains(
+            "shadow translation-worthiness routing",
+            AnalysisCli.FullProfileHelp,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "does not yet remove candidates",
+            AnalysisCli.FullProfileHelp,
+            StringComparison.Ordinal
+        );
         Assert.Contains("8.9", AnalysisCli.TranslationDeviceHelp, StringComparison.Ordinal);
         Assert.Contains("full-offload CUDA p2", AnalysisCli.TranslationDeviceHelp, StringComparison.Ordinal);
         Assert.Contains("before evidence inference", AnalysisCli.TranslationDeviceHelp, StringComparison.Ordinal);

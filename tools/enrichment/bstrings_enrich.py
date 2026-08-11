@@ -484,6 +484,69 @@ class TranslationIntegrityMonitor:
             )
 
 
+@dataclass
+class TranslationWorkStats:
+    """Aggregate translation work counters; deliberately retains no record identifiers."""
+
+    candidate_occurrences: int = 0
+    text_decisions: int = 0
+    protected_only_bypass_texts: int = 0
+    run_cache_hits: int = 0
+    translation_cache_hits: int = 0
+    translator_requests: int = 0
+    translator_input_texts: int = 0
+    model_results: int = 0
+    model_fallbacks: int = 0
+    translated_child_occurrences: int = 0
+    preservation_fallback_child_occurrences: int = 0
+
+    def payload(self) -> dict[str, int]:
+        counters = {
+            "candidateOccurrences": self.candidate_occurrences,
+            "textDecisions": self.text_decisions,
+            "protectedOnlyBypassTexts": self.protected_only_bypass_texts,
+            "runCacheHits": self.run_cache_hits,
+            "translationCacheHits": self.translation_cache_hits,
+            "translatorRequests": self.translator_requests,
+            "translatorInputTexts": self.translator_input_texts,
+            "modelResults": self.model_results,
+            "modelFallbacks": self.model_fallbacks,
+            "translatedChildOccurrences": self.translated_child_occurrences,
+            "preservationFallbackChildOccurrences": (self.preservation_fallback_child_occurrences),
+        }
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in counters.values()
+        ):
+            raise EnrichmentError("Translation work statistics contain an invalid counter")
+        if self.text_decisions != (
+            self.run_cache_hits
+            + self.protected_only_bypass_texts
+            + self.translation_cache_hits
+            + self.translator_input_texts
+        ):
+            raise EnrichmentError(
+                "Translation work statistics failed decision-cardinality validation"
+            )
+        if self.model_results != self.translator_input_texts:
+            raise EnrichmentError("Translation work statistics failed model-result validation")
+        if self.model_fallbacks > self.model_results:
+            raise EnrichmentError("Translation work statistics contain too many fallbacks")
+        if self.translator_requests > self.translator_input_texts:
+            raise EnrichmentError(
+                "Translation work statistics contain too many translator requests"
+            )
+        if self.candidate_occurrences < self.text_decisions:
+            raise EnrichmentError("Translation work statistics contain too many text decisions")
+        if self.translated_child_occurrences > self.candidate_occurrences:
+            raise EnrichmentError(
+                "Translation work statistics contain too many translated children"
+            )
+        if self.preservation_fallback_child_occurrences > self.translated_child_occurrences:
+            raise EnrichmentError("Translation work statistics contain too many fallback children")
+        return {"schemaVersion": 1, **counters}
+
+
 class RunLocalTranslationCache:
     """Run-scoped SQLite exact cache with a bounded in-memory hot set."""
 
@@ -2209,12 +2272,15 @@ def add_translations(
     cache: TranslationCache | None = None,
     run_cache: TranslationOutcomeCache | None = None,
     integrity_monitor: TranslationIntegrityMonitor | None = None,
+    work_stats: TranslationWorkStats | None = None,
 ) -> list[dict[str, Any]]:
     candidates = [
         record
         for record in records
         if should_translate(str(record["text"]), minimum_characters, maximum_characters)
     ]
+    if work_stats is not None:
+        work_stats.candidate_occurrences += len(candidates)
     translations_by_text: dict[str, TranslationOutcome] = {}
     missing_texts: list[str] = []
     missing_text_set: set[str] = set()
@@ -2222,12 +2288,18 @@ def add_translations(
         text = str(record["text"])
         if text in translations_by_text or text in missing_text_set:
             continue
+        if work_stats is not None:
+            work_stats.text_decisions += 1
         if run_cache is not None:
             cached_outcome = run_cache.get(text)
             if cached_outcome is not None:
+                if work_stats is not None:
+                    work_stats.run_cache_hits += 1
                 translations_by_text[text] = cached_outcome
                 continue
         if contains_only_protected_identifiers(text):
+            if work_stats is not None:
+                work_stats.protected_only_bypass_texts += 1
             outcome = TranslationOutcome(text, "verified")
             translations_by_text[text] = outcome
             if run_cache is not None:
@@ -2237,6 +2309,8 @@ def add_translations(
             continue
         found, translated_text = cache.get(target_language, text) if cache else (False, "")
         if found:
+            if work_stats is not None:
+                work_stats.translation_cache_hits += 1
             try:
                 validate_identifier_retention(text, translated_text)
             except EnrichmentError:
@@ -2260,6 +2334,9 @@ def add_translations(
     missing_texts.sort(key=lambda value: (len(value), value))
     for start in range(0, len(missing_texts), batch_size):
         batch = missing_texts[start : start + batch_size]
+        if work_stats is not None:
+            work_stats.translator_requests += 1
+            work_stats.translator_input_texts += len(batch)
         translate_attempts = getattr(translator, "translate_attempts", None)
         if callable(translate_attempts):
             attempts = translate_attempts(batch, target_language)
@@ -2272,6 +2349,8 @@ def add_translations(
             raise EnrichmentError(
                 f"Translation engine returned {len(attempts)} rows for a batch of {len(batch)}"
             )
+        if work_stats is not None:
+            work_stats.model_results += len(attempts)
         for source_text, attempt in zip(batch, attempts, strict=True):
             if not isinstance(attempt, TranslationAttempt):
                 raise EnrichmentError("Translation engine returned an invalid row attempt")
@@ -2285,6 +2364,8 @@ def add_translations(
                 )
                 if integrity_monitor is not None:
                     integrity_monitor.record(fallback=True)
+                if work_stats is not None:
+                    work_stats.model_fallbacks += 1
                 translations_by_text[source_text] = outcome
                 if run_cache is not None:
                     run_cache.put(source_text, outcome)
@@ -2312,6 +2393,8 @@ def add_translations(
                 )
             if integrity_monitor is not None:
                 integrity_monitor.record(fallback=outcome.integrity == "preservation-fallback")
+            if work_stats is not None and outcome.integrity == "preservation-fallback":
+                work_stats.model_fallbacks += 1
             translations_by_text[source_text] = outcome
             if run_cache is not None:
                 run_cache.put(source_text, outcome)
@@ -2696,6 +2779,7 @@ def translate_normalized_records(
     progress: Callable[[int], None] | None = None,
     run_cache: TranslationOutcomeCache | None = None,
     integrity_monitor: TranslationIntegrityMonitor | None = None,
+    work_stats: TranslationWorkStats | None = None,
 ) -> Iterable[dict[str, Any]]:
     pending: list[dict[str, Any]] = []
     effective_window_size = window_size or batch_size
@@ -2714,6 +2798,7 @@ def translate_normalized_records(
             cache,
             run_cache,
             integrity_monitor,
+            work_stats,
         )
         pending.clear()
         completed += pending_count
@@ -3859,6 +3944,14 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Use one llama.cpp slot and disable prompt-cache reuse for maximum repeatability",
     )
     parser.add_argument("--translation-target", default="en")
+    parser.add_argument(
+        "--translation-stats-output",
+        type=Path,
+        help=(
+            "Atomically write schema-1 aggregate translation work statistics after a "
+            "successful --input-jsonl translation"
+        ),
+    )
     parser.add_argument("--translation-min-characters", type=int, default=8)
     parser.add_argument("--translation-max-characters", type=int, default=2048)
     parser.add_argument("--translation-max-input-tokens", type=int, default=512)
@@ -3887,6 +3980,15 @@ def selected_translation_engine(args: argparse.Namespace) -> str:
     return "madlad"
 
 
+def paths_refer_to_same_file(left: Path, right: Path) -> bool:
+    if left.resolve() == right.resolve():
+        return True
+    try:
+        return left.exists() and right.exists() and os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
 def validate_arguments(args: argparse.Namespace) -> None:
     input_source_count = sum(
         (bool(args.paths), args.paths_from is not None, args.input_jsonl is not None)
@@ -3910,6 +4012,31 @@ def validate_arguments(args: argparse.Namespace) -> None:
             raise EnrichmentError("--input-jsonl requires --translate")
     elif args.translations_only:
         raise EnrichmentError("--translations-only requires --input-jsonl")
+    if args.translation_stats_output is not None:
+        if args.input_jsonl is None or not args.translate:
+            raise EnrichmentError(
+                "--translation-stats-output requires --input-jsonl and --translate"
+            )
+        protected_paths = [args.output, args.input_jsonl]
+        if args.translation_model_path is not None:
+            protected_paths.append(args.translation_model_path)
+        if any(
+            paths_refer_to_same_file(args.translation_stats_output, protected_path)
+            for protected_path in protected_paths
+        ):
+            raise EnrichmentError(
+                "--translation-stats-output must differ from input, output, and model paths"
+            )
+        if args.translation_stats_output.is_symlink():
+            raise EnrichmentError(
+                "--translation-stats-output must be a physical file when it already exists"
+            )
+        if args.translation_stats_output.exists():
+            details = os.lstat(args.translation_stats_output)
+            if not stat.S_ISREG(details.st_mode):
+                raise EnrichmentError(
+                    "--translation-stats-output must be a physical file when it already exists"
+                )
     if args.triage_only:
         if args.input_jsonl is not None or args.translate or args.translations_only:
             raise EnrichmentError("--triage-only cannot be combined with translation")
@@ -4068,6 +4195,33 @@ def write_jsonl_atomic(
     return count
 
 
+def write_translation_stats_atomic(output_path: Path, stats: TranslationWorkStats) -> None:
+    """Atomically publish aggregate counters without retaining translation inputs."""
+
+    output_path = output_path.resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary_name = tempfile.mkstemp(
+        prefix=output_path.name + ".partial.", dir=output_path.parent
+    )
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as output:
+            json.dump(
+                stats.payload(),
+                output,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_name, output_path)
+    except BaseException:
+        with suppress(FileNotFoundError):
+            os.unlink(temporary_name)
+        raise
+
+
 def verify_routing_input_identity(item: RoutingInput) -> None:
     try:
         length = item.path.stat().st_size
@@ -4170,6 +4324,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_translation_cache: RunLocalTranslationCache | None = None
     translation_outcome_cache: TranslationOutcomeCache | None = None
     integrity_monitor = TranslationIntegrityMonitor()
+    translation_work_stats = (
+        TranslationWorkStats() if args.translation_stats_output is not None else None
+    )
     translation_window_size = args.translation_batch_size
     try:
         if args.airgap:
@@ -4377,6 +4534,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     progress=report_translation_progress,
                     run_cache=translation_outcome_cache,
                     integrity_monitor=integrity_monitor,
+                    work_stats=translation_work_stats,
                 )
                 return
 
@@ -4458,6 +4616,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         cache=translation_cache,
                         run_cache=translation_outcome_cache,
                         integrity_monitor=integrity_monitor,
+                        work_stats=translation_work_stats,
                     )
                     yield from translated_records
                 processed += 1
@@ -4478,6 +4637,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             for record in published:
                 if (record.get("transform") or {}).get("kind") == "translation":
                     translated += 1
+                    if translation_work_stats is not None:
+                        translation_work_stats.translated_child_occurrences += 1
+                        if (record.get("attributes") or {}).get(
+                            "translationIntegrity"
+                        ) == "preservation-fallback":
+                            translation_work_stats.preservation_fallback_child_occurrences += 1
                 yield record
 
         def finalize_translation_cache_before_publish() -> None:
@@ -4499,6 +4664,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             count_unique_records(),
             before_publish=finalize_translation_cache_before_publish,
         )
+        if args.translation_stats_output is not None:
+            assert translation_work_stats is not None
+            write_translation_stats_atomic(args.translation_stats_output, translation_work_stats)
         if args.input_jsonl is not None:
             if args.progress_total_records > 0:
                 report_translation_progress(args.progress_total_records, force=True)

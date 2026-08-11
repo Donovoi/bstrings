@@ -1,0 +1,8 @@
+"corpus","records","duplicatePercent","rounds","wallRegressionPercent","sampledPeakWorkingSetRegressionPercent","resultByteRegressionPercent","routingRetained","routingProspective","routingUnknown","candidateAndLegacyAssessmentParity"
+"mixed",100000,50,7,0.217,1.846,3.730,71422,28578,0,true
+"natural",100000,50,7,-0.740,0.495,3.087,100000,0,0,true
+"machine",100000,0,7,-0.689,1.641,4.822,62500,37500,0,true
+"short",100000,50,7,3.323,1.234,4.153,75000,25000,0,true
+"max",100000,50,7,-2.002,0.401,1.940,100000,0,0,true
+"encoded",100000,50,7,2.536,1.584,4.835,75000,25000,0,true
+"provenance",100000,50,7,-0.391,1.101,4.347,75000,25000,0,true

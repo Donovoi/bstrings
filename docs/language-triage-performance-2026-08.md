@@ -20,6 +20,58 @@ These are language-triage-stage results on synthetic input, not a promise that
 every Full examination will improve by the same percentage. The saved share is
 governed by the exact eligible-text duplication inside each bounded batch.
 
+## Translation-worthiness shadow measurement
+
+The v1.9.17 translation-worthiness router is deliberately shadow-only. It adds
+one compact code to each language assessment and aggregate policy/codebook
+metadata to `run.json` and `summary.json`, but it does not skip Lingua, remove a
+candidate, or avoid a translation-model call. These measurements therefore
+validate bounded observation overhead and output parity; they are not a speedup
+claim.
+
+The measurements cover the deterministic structured shadow router, not a
+learned human-versus-machine model. The C# implementation now distinguishes
+batch-unique routing evaluations, Lingua-eligible occurrences, actual Lingua
+executions, and reuse hits, and classifies bounded origin flags that can only
+support future retention; the current router does not use them to change a
+code. This instrumentation is the required foundation for the next
+experiment. `translation-work-stats.json` now atomically records schema-1
+translation counters; managed C# verifies its SHA-256 and cardinalities and
+projects `translationWork` into `run.json` and `summary.json`. `textDecisions`
+is window-local exact-text decision work rather than global distinct text, and
+`runCacheHits` exposes cross-window reuse. The shadow benchmark still makes no
+learned-router saving claim.
+
+The second Robin review did not select Rust, managed C#, fixed-point inference,
+or a model-size ceiling. If a learned shadow prototype is built, the same
+features and frozen model must be measured in managed and Rust implementations
+at multiple model sizes before choosing a runtime.
+
+Seven alternating routing-disabled/routing-shadow pairs ran over 100,000
+privacy-safe synthetic records for each corpus. Candidate bytes and hashes were
+exact, assessment identity/order/decisions/gates/errors and non-score fields
+were exact, and the five diagnostic scores differed by no more than one unit in
+their final published 12-decimal place. Every corpus passed the preregistered
+5% wall-time, sampled peak-working-set, and total result-byte limits.
+
+| Corpus | Duplicate text | Wall regression | Sampled peak WS | Result bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Mixed | 50% | +0.217% | +1.846% | +3.730% |
+| Natural language | 50% | -0.740% | +0.495% | +3.087% |
+| All-unique machine/noise | 0% | -0.689% | +1.641% | +4.822% |
+| Short records | 50% | +3.323% | +1.234% | +4.153% |
+| Near-2,048-character | 50% | -2.002% | +0.401% | +1.940% |
+| Encoded containers | 50% | +2.536% | +1.584% | +4.835% |
+| Provenance-mixed | 50% | -0.391% | +1.101% | +4.347% |
+
+The highest observed wall regression was 3.323%, sampled peak-working-set
+regression was 1.846%, and result-byte regression was 4.835%. The working-set
+value is a 20 ms in-process sample, not an isolated OS peak. Machine-readable
+aggregate measurements are in
+[`benchmarks/results/language-triage-routing-shadow-2026-08.csv`](../benchmarks/results/language-triage-routing-shadow-2026-08.csv),
+and the promotion boundary is governed by
+[ADR-0007](architecture/adr-0007-translation-worthiness-routing.md).
+
 ## Forensic determinism
 
 The first real-Lingua comparison exposed a pre-existing last-bit difference in

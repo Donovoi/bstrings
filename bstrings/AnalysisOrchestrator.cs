@@ -44,6 +44,22 @@ internal sealed record OcrAnalysisSummary(
     long StringRecords
 );
 
+internal sealed record TranslationRoutingSummary(
+    string Mode,
+    string PolicyVersion,
+    string CodebookVersion,
+    IReadOnlyDictionary<string, string> Codebook,
+    string Assessments,
+    int AssessmentSchemaVersion,
+    long? Retained,
+    long? ProspectiveBypasses,
+    long? Unknown,
+    long? RoutingEvaluations,
+    long? DetectorEligibleRecords,
+    long? DetectorExecutions,
+    long? DetectorReuseHits
+);
+
 internal static class AnalysisOrchestrator
 {
     private const string TranslationCachePrefix = ".bstrings-translation-cache-";
@@ -334,6 +350,8 @@ internal static class AnalysisOrchestrator
         InputManifestInfo? inputManifest = null;
         ContentRoutingStats? routing = null;
         EngineStatusStats? engineStatuses = null;
+        LanguageTriageStats? triage = null;
+        TranslationWorkStats? translationWork = null;
         long completedMatchCount = 0;
         long completedStringCount = 0;
 
@@ -347,6 +365,10 @@ internal static class AnalysisOrchestrator
             var candidatesPath = Path.Combine(outputDirectory, "translation-candidates.jsonl");
             var assessmentsPath = Path.Combine(outputDirectory, "language-assessments.jsonl");
             var translationsPath = Path.Combine(outputDirectory, "translated-strings.jsonl");
+            var translationWorkStatsPath = Path.Combine(
+                outputDirectory,
+                "translation-work-stats.json"
+            );
             var enrichedPath = Path.Combine(outputDirectory, "enriched-strings.jsonl");
             var matchesPath = Path.Combine(outputDirectory, "regex-matches.jsonl");
             var findingsPath = Path.Combine(outputDirectory, "findings.tsv");
@@ -382,6 +404,8 @@ internal static class AnalysisOrchestrator
                 bundleIntegrity,
                 routing,
                 engineStatuses,
+                triage,
+                translationWork,
                 null,
                 null,
                 cancellationToken
@@ -852,7 +876,6 @@ internal static class AnalysisOrchestrator
                     )
             );
 
-            LanguageTriageStats? triage = null;
             long translationCandidateCount = 0;
             if (
                 options.TranslationMode
@@ -927,11 +950,12 @@ internal static class AnalysisOrchestrator
                     {
                         if (translationCandidateCount > 0)
                         {
-                            await RunTranslationAsync(
+                            translationWork = await RunTranslationAsync(
                                 options,
                                 toolchain!,
                                 candidatesPath,
                                 translationsPath,
+                                translationWorkStatsPath,
                                 translationCandidateCount,
                                 outputDirectory,
                                 logsDirectory,
@@ -945,6 +969,33 @@ internal static class AnalysisOrchestrator
                             );
                             await CreateEmptyFileAtomicAsync(
                                 translationsPath,
+                                cancellationToken
+                            );
+                            TranslationWorkStatsCore.ValidateAtomicDestination(
+                                translationWorkStatsPath
+                            );
+                            await WriteJsonAtomicAsync(
+                                translationWorkStatsPath,
+                                new
+                                {
+                                    schemaVersion = TranslationWorkStatsCore.SchemaVersion,
+                                    candidateOccurrences = 0,
+                                    textDecisions = 0,
+                                    protectedOnlyBypassTexts = 0,
+                                    runCacheHits = 0,
+                                    translationCacheHits = 0,
+                                    translatorRequests = 0,
+                                    translatorInputTexts = 0,
+                                    modelResults = 0,
+                                    modelFallbacks = 0,
+                                    translatedChildOccurrences = 0,
+                                    preservationFallbackChildOccurrences = 0,
+                                },
+                                cancellationToken
+                            );
+                            translationWork = await TranslationWorkStatsCore.ValidateAsync(
+                                translationWorkStatsPath,
+                                expectedCandidateOccurrences: 0,
                                 cancellationToken
                             );
                         }
@@ -1128,10 +1179,15 @@ internal static class AnalysisOrchestrator
                         ambiguousRecords = triage.Value.AmbiguousRecords,
                         nonLinguisticRecords = triage.Value.NonLinguisticRecords,
                         detectorFailures = triage.Value.DetectorFailures,
+                        translationRouting = CreateTranslationRoutingSummary(
+                            options.TranslationMode,
+                            triage
+                        ),
                     },
                 translatedStrings = enrichedMerge.InputRecords.Count > 1
                     ? enrichedMerge.InputRecords[1]
                     : 0,
+                translationWork,
                 enrichedStrings = enrichedMerge.OutputRecords,
                 regexPatterns = patterns.Count,
                 regexMatches = matches.MatchRecords,
@@ -1163,6 +1219,8 @@ internal static class AnalysisOrchestrator
                 bundleIntegrity,
                 routing,
                 engineStatuses,
+                triage,
+                translationWork,
                 matches,
                 null,
                 cancellationToken
@@ -1187,6 +1245,8 @@ internal static class AnalysisOrchestrator
                     bundleIntegrity,
                     routing,
                     engineStatuses,
+                    triage,
+                    translationWork,
                     null,
                     ex.Message,
                     CancellationToken.None
@@ -1443,11 +1503,12 @@ internal static class AnalysisOrchestrator
         }
     }
 
-    private static async Task RunTranslationAsync(
+    private static async Task<TranslationWorkStats> RunTranslationAsync(
         AnalysisOptions options,
         AnalysisToolchain toolchain,
         string inputPath,
         string outputPath,
+        string statsPath,
         long totalRecords,
         string workingDirectory,
         string logsDirectory,
@@ -1495,9 +1556,12 @@ internal static class AnalysisOrchestrator
         arguments.Add(options.TranslationMaximumCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture));
         arguments.Add("--progress-total-records");
         arguments.Add(totalRecords.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("--translation-stats-output");
+        arguments.Add(statsPath);
 
         await RunWithTranslationCacheCleanupAsync(
             outputPath,
+            statsPath,
             () =>
                 ChildProcessRunner.RunAsync(
                     toolchain.PythonExecutable,
@@ -1510,10 +1574,26 @@ internal static class AnalysisOrchestrator
                     static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
                 )
         );
+        return await TranslationWorkStatsCore.ValidateAsync(
+            statsPath,
+            totalRecords,
+            cancellationToken
+        );
     }
 
     internal static async Task RunWithTranslationCacheCleanupAsync(
         string translationOutputPath,
+        Func<Task> runChild
+    ) =>
+        await RunWithTranslationCacheCleanupAsync(
+            translationOutputPath,
+            translationStatsPath: null,
+            runChild
+        );
+
+    internal static async Task RunWithTranslationCacheCleanupAsync(
+        string translationOutputPath,
+        string? translationStatsPath,
         Func<Task> runChild
     )
     {
@@ -1525,6 +1605,10 @@ internal static class AnalysisOrchestrator
         finally
         {
             CleanupTranslationCacheArtifacts(translationOutputPath);
+            if (!string.IsNullOrWhiteSpace(translationStatsPath))
+            {
+                CleanupTranslationCacheArtifacts(translationStatsPath);
+            }
         }
     }
 
@@ -2275,6 +2359,8 @@ internal static class AnalysisOrchestrator
         BundleIntegrity? bundleIntegrity,
         ContentRoutingStats? routing,
         EngineStatusStats? engineStatuses,
+        LanguageTriageStats? triage,
+        TranslationWorkStats? translationWork,
         EnrichmentPipelineStats? enrichmentStats,
         string? error,
         CancellationToken cancellationToken
@@ -2311,11 +2397,96 @@ internal static class AnalysisOrchestrator
                     conflicts = routing.Value.Conflicts,
                 },
             engineStatuses = CreateEngineStatusSummary(engineStatuses),
+            translationRouting = CreateTranslationRoutingSummary(options.TranslationMode, triage),
+            translationWork,
             preservationFallbacks = enrichmentStats?.PreservationFallbackRecords,
             options,
             error,
         };
         await WriteJsonAtomicAsync(path, record, cancellationToken);
+    }
+
+    internal static TranslationRoutingSummary? CreateTranslationRoutingSummary(
+        TranslationWorkflowMode translationMode,
+        LanguageTriageStats? triage
+    )
+    {
+        if (
+            translationMode
+            is not TranslationWorkflowMode.Auto and not TranslationWorkflowMode.DetectOnly
+        )
+        {
+            return null;
+        }
+        if (
+            triage is { } completedTriage
+            && (
+                completedTriage.TranslationRoutingRetained < 0
+                || completedTriage.TranslationRoutingProspectiveBypasses < 0
+                || completedTriage.TranslationRoutingUnknown < 0
+                || completedTriage.InputRecords < 0
+                || completedTriage.TranslationRoutingRetained > completedTriage.InputRecords
+                || completedTriage.TranslationRoutingProspectiveBypasses
+                    > completedTriage.InputRecords
+                        - completedTriage.TranslationRoutingRetained
+                || completedTriage.TranslationRoutingUnknown
+                    != completedTriage.InputRecords
+                        - completedTriage.TranslationRoutingRetained
+                        - completedTriage.TranslationRoutingProspectiveBypasses
+            )
+        )
+        {
+            throw new InvalidDataException(
+                "Translation-routing aggregates do not match the language-triage input cardinality."
+            );
+        }
+        if (
+            triage is { } measuredTriage
+            && (
+                measuredTriage.TranslationRoutingEvaluations < 0
+                || measuredTriage.TranslationRoutingEvaluations > measuredTriage.InputRecords
+                || (
+                    measuredTriage.InputRecords > 0
+                    && measuredTriage.TranslationRoutingEvaluations == 0
+                )
+                || measuredTriage.DetectorEligibleRecords < 0
+                || measuredTriage.DetectorEligibleRecords > measuredTriage.InputRecords
+                || measuredTriage.DetectorExecutions < 0
+                || measuredTriage.DetectorReuseHits < 0
+                || measuredTriage.DetectorFailures < 0
+                || measuredTriage.DetectorExecutions > measuredTriage.DetectorEligibleRecords
+                || measuredTriage.DetectorReuseHits
+                    != measuredTriage.DetectorEligibleRecords
+                        - measuredTriage.DetectorExecutions
+                || measuredTriage.DetectorFailures > measuredTriage.DetectorExecutions
+                || !string.Equals(
+                    measuredTriage.TranslationRoutingPolicyVersion,
+                    TranslationWorthinessRouter.PolicyVersion,
+                    StringComparison.Ordinal
+                )
+            )
+        )
+        {
+            throw new InvalidDataException(
+                "Translation-routing work counters do not reconcile with language-triage cardinality."
+            );
+        }
+        return new TranslationRoutingSummary(
+            Mode: "shadow",
+            PolicyVersion: triage?.TranslationRoutingPolicyVersion
+                ?? TranslationWorthinessRouter.PolicyVersion,
+            CodebookVersion: TranslationWorthinessRouter.CodebookVersion,
+            Codebook: TranslationWorthinessRouter.Codebook,
+            Assessments: "language-assessments.jsonl",
+            AssessmentSchemaVersion: 1,
+            Retained: triage?.TranslationRoutingRetained,
+            ProspectiveBypasses: triage?.TranslationRoutingProspectiveBypasses,
+            Unknown: triage?.TranslationRoutingUnknown,
+            RoutingEvaluations: triage?.TranslationRoutingEvaluations,
+            DetectorEligibleRecords: triage?.DetectorEligibleRecords,
+            DetectorExecutions: triage?.DetectorExecutions,
+            DetectorReuseHits: triage?.DetectorReuseHits
+        );
     }
 
     private static object? CreateEngineStatusSummary(EngineStatusStats? stats)

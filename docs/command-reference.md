@@ -47,7 +47,8 @@ failed or cancelled run; retain it for diagnosis and choose a new output path.
 - native ASCII/Unicode extraction and all 66 built-in patterns;
 - one batched, fail-open Magika/signature routing pass;
 - automatic routed FLOSS recovery and PDF/image OCR;
-- adaptive language detection and high-recall translation selection; and
+- fail-open shadow translation-worthiness routing, adaptive language detection,
+  and high-recall translation selection; and
 - offline translation with the single installed Hy-MT2 7B Q4_K_M Full model.
 
 Full deliberately stays `high-recall`. Examiners who accept lower candidate
@@ -56,6 +57,14 @@ effective gates are the greater of the configured values and 0.65 confidence /
 0.15 target margin. The assessment records both configured and effective
 thresholds. High precision is a conservative operating gate, not a calibrated
 probability or an accuracy guarantee.
+
+The shadow router records whether a complete record is a prospective
+structured-only bypass, but it does not skip language detection or remove a
+translation candidate. Ambiguous, mixed, unsupported, and failed router
+decisions retain the existing Full path. This diagnostic rollout must pass the
+forensic recall and measured-overhead gates in
+[ADR-0007](architecture/adr-0007-translation-worthiness-routing.md) before any
+authoritative suppression is enabled.
 
 An explicit stage choice overrides the corresponding full default. For
 example, this keeps reporting and the complete pattern catalogue but disables
@@ -217,3 +226,5 @@ Magika/content-triage design and its fail-open acceptance gates are recorded in
 identifier semantics, isolated fallbacks, run-local exact deduplication, and the
 decision to keep Full high-recall are recorded in
 [ADR-0005](architecture/adr-0005-translation-integrity-and-run-dedup.md).
+The pre-Lingua shadow router and its promotion gates are recorded in
+[ADR-0007](architecture/adr-0007-translation-worthiness-routing.md).

@@ -35,6 +35,7 @@ from bstrings_enrich import (  # noqa: E402
     TranslationCache,
     TranslationIntegrityMonitor,
     TranslationOutcome,
+    TranslationWorkStats,
     _iter_magika_batches,
     _make_routing_record,
     _run_magika_batch,
@@ -64,6 +65,7 @@ from bstrings_enrich import (  # noqa: E402
     validate_identifier_retention,
     validate_transformers_version,
     write_jsonl_atomic,
+    write_translation_stats_atomic,
 )
 
 
@@ -612,6 +614,76 @@ class EnrichmentTests(unittest.TestCase):
         self.assertEqual([["language text"]], translator.calls)
         self.assertEqual(4, len(output))
         self.assertEqual([1, 2], progress)
+
+    def test_translation_work_stats_count_decisions_without_retaining_keys(self) -> None:
+        cached = make_string_record(
+            text="cached language text",
+            source_file="first.exe",
+            extractor_version="3.1.1",
+            kind="decoded",
+            location_kind="file-offset",
+            location_value=1,
+            attributes={},
+        )
+        protected = make_string_record(
+            text="SYNTH_TOKEN 12345-67890",
+            source_file="second.exe",
+            extractor_version="3.1.1",
+            kind="decoded",
+            location_kind="file-offset",
+            location_value=2,
+            attributes={},
+        )
+        fallback = make_string_record(
+            text="uncached language text",
+            source_file="third.exe",
+            extractor_version="3.1.1",
+            kind="decoded",
+            location_kind="file-offset",
+            location_value=3,
+            attributes={},
+        )
+
+        class FallbackTranslator(FakeTranslator):
+            def translate_attempts(
+                self, texts: list[str], target_language: str
+            ) -> list[TranslationAttempt]:
+                self.calls.append(list(texts))
+                return [TranslationAttempt(None, "synthetic-failure") for _ in texts]
+
+        cache = TranslationCache(4)
+        cache.put("en", cached["text"], "cached translated language text")
+        stats = TranslationWorkStats()
+
+        children = add_translations(
+            [cached, protected, fallback],
+            FallbackTranslator(),
+            "en",
+            8,
+            4,
+            200,
+            cache=cache,
+            work_stats=stats,
+        )
+
+        self.assertEqual(3, len(children))
+        self.assertEqual(
+            {
+                "schemaVersion": 1,
+                "candidateOccurrences": 3,
+                "textDecisions": 3,
+                "protectedOnlyBypassTexts": 1,
+                "runCacheHits": 0,
+                "translationCacheHits": 1,
+                "translatorRequests": 1,
+                "translatorInputTexts": 1,
+                "modelResults": 1,
+                "modelFallbacks": 1,
+                "translatedChildOccurrences": 0,
+                "preservationFallbackChildOccurrences": 0,
+            },
+            stats.payload(),
+        )
 
     def test_changed_structured_identifier_becomes_explicit_source_fallback(self) -> None:
         parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
@@ -1395,21 +1467,42 @@ class EnrichmentTests(unittest.TestCase):
     ) -> None:
         first = normalize_floss(self.payload, Path("first.exe"), self.classification, "3.1.1")[0]
         second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
-        translator = FakeTranslator()
+
+        class OneFallbackTranslator(FakeTranslator):
+            def translate_attempts(
+                self, texts: list[str], target_language: str
+            ) -> list[TranslationAttempt]:
+                self.calls.append(list(texts))
+                return [TranslationAttempt(None, "synthetic-failure") for _ in texts]
+
+        translator = OneFallbackTranslator()
         translator_type.return_value = translator
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             input_path = root / "candidates.jsonl"
             output_path = root / "translations.jsonl"
+            stats_path = root / "translation-stats.json"
             model_path = root / "model.gguf"
             model_path.write_bytes(b"model")
+            stats_path.write_text('{"preserved":true}\n', encoding="utf-8")
             input_path.write_text(
                 "\n".join(json.dumps(record) for record in (first, second)) + "\n",
                 encoding="utf-8",
             )
             stderr = io.StringIO()
+            output_at_stats_publish: list[str] = []
 
-            with redirect_stderr(stderr):
+            def publish_stats(path: Path, stats: TranslationWorkStats) -> None:
+                output_at_stats_publish.append(output_path.read_text(encoding="utf-8"))
+                write_translation_stats_atomic(path, stats)
+
+            with (
+                patch(
+                    "bstrings_enrich.write_translation_stats_atomic",
+                    side_effect=publish_stats,
+                ),
+                redirect_stderr(stderr),
+            ):
                 result = main(
                     [
                         "--input-jsonl",
@@ -1429,6 +1522,8 @@ class EnrichmentTests(unittest.TestCase):
                         "1",
                         "--translation-cache-size",
                         "1",
+                        "--translation-stats-output",
+                        str(stats_path),
                         "--translation-window-size",
                         "1",
                         "--progress-total-records",
@@ -1439,8 +1534,31 @@ class EnrichmentTests(unittest.TestCase):
                 )
 
             self.assertEqual(0, result)
+            self.assertEqual(1, len(output_at_stats_publish))
+            self.assertEqual(output_path.read_text(encoding="utf-8"), output_at_stats_publish[0])
             self.assertEqual(2, len(output_path.read_text(encoding="utf-8").splitlines()))
             self.assertEqual([["language text"]], translator.calls)
+            stats_text = stats_path.read_text(encoding="utf-8")
+            self.assertEqual(
+                {
+                    "schemaVersion": 1,
+                    "candidateOccurrences": 2,
+                    "textDecisions": 2,
+                    "protectedOnlyBypassTexts": 0,
+                    "runCacheHits": 1,
+                    "translationCacheHits": 0,
+                    "translatorRequests": 1,
+                    "translatorInputTexts": 1,
+                    "modelResults": 1,
+                    "modelFallbacks": 1,
+                    "translatedChildOccurrences": 2,
+                    "preservationFallbackChildOccurrences": 2,
+                },
+                json.loads(stats_text),
+            )
+            self.assertNotIn("language text", stats_text)
+            self.assertNotIn(translator.model_sha256, stats_text)
+            self.assertNotIn(first["recordId"], stats_text)
             log = stderr.getvalue()
             self.assertIn('"diskBacked":true', log)
             self.assertIn('"examinationLocal":true', log)
@@ -1468,6 +1586,60 @@ class EnrichmentTests(unittest.TestCase):
             "input-JSONL translation uses run-local exact disk deduplication", normalized_help
         )
         self.assertIn("recovery uses bounded in-memory translation deduplication", normalized_help)
+
+    @patch("bstrings_enrich.LlamaCppTranslator")
+    def test_translation_stats_are_not_published_when_evidence_output_fails(
+        self, translator_type
+    ) -> None:
+        translator = FakeTranslator()
+        translator_type.return_value = translator
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "candidates.jsonl"
+            output_path = root / "translations.jsonl"
+            stats_path = root / "translation-stats.json"
+            model_path = root / "model.gguf"
+            model_path.write_bytes(b"model")
+            parent = normalize_floss(
+                self.payload, Path("sample.exe"), self.classification, "3.1.1"
+            )[0]
+            input_path.write_text(json.dumps(parent) + "\n", encoding="utf-8")
+            output_path.write_text("preserved output\n", encoding="utf-8")
+            stats_path.write_text('{"preserved":true}\n', encoding="utf-8")
+
+            with (
+                patch(
+                    "bstrings_enrich.write_jsonl_atomic",
+                    side_effect=EnrichmentError("synthetic output failure"),
+                ),
+                patch("bstrings_enrich.write_translation_stats_atomic") as stats_writer,
+                redirect_stderr(io.StringIO()),
+            ):
+                result = main(
+                    [
+                        "--input-jsonl",
+                        str(input_path),
+                        "--translate",
+                        "--translations-only",
+                        "--bounded-integrated-mode",
+                        "--translation-model-path",
+                        str(model_path),
+                        "--translation-revision",
+                        translator.revision,
+                        "--translation-model-sha256",
+                        translator.model_sha256,
+                        "--translation-stats-output",
+                        str(stats_path),
+                        "-o",
+                        str(output_path),
+                    ]
+                )
+
+            self.assertEqual(2, result)
+            stats_writer.assert_not_called()
+            self.assertEqual("preserved output\n", output_path.read_text(encoding="utf-8"))
+            self.assertEqual('{"preserved":true}\n', stats_path.read_text(encoding="utf-8"))
+            self.assertEqual([], list(root.glob(".bstrings-translation-cache-*.sqlite3*")))
 
     def test_combined_recovery_translation_reuses_outcome_aware_fallback(self) -> None:
         class IdentifierBreakingTranslator(FakeTranslator):
@@ -1610,6 +1782,86 @@ class EnrichmentTests(unittest.TestCase):
 
             self.assertEqual("old", output.read_text(encoding="utf-8"))
             self.assertEqual([], list(Path(directory).glob("*.partial.*")))
+
+    def test_translation_stats_writer_preserves_prior_file_and_removes_partial_on_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "translation-stats.json"
+            output.write_text('{"preserved":true}\n', encoding="utf-8")
+            stats = TranslationWorkStats()
+
+            with (
+                patch("bstrings_enrich.os.replace", side_effect=PermissionError("synthetic lock")),
+                self.assertRaisesRegex(PermissionError, "synthetic lock"),
+            ):
+                write_translation_stats_atomic(output, stats)
+
+            self.assertEqual('{"preserved":true}\n', output.read_text(encoding="utf-8"))
+            self.assertEqual([], list(root.glob("translation-stats.json.partial.*")))
+
+    def test_translation_stats_are_strictly_limited_to_input_jsonl_translation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "input.jsonl"
+            input_path.write_text("{}\n", encoding="utf-8")
+            output_path = root / "output.jsonl"
+            model_path = root / "model.gguf"
+            model_path.write_bytes(b"model")
+            stats_path = root / "stats.json"
+            common = [
+                "--input-jsonl",
+                str(input_path),
+                "--translate",
+                "--translation-model-path",
+                str(model_path),
+                "--translation-revision",
+                "revision",
+                "--translation-model-sha256",
+                "a" * 64,
+                "-o",
+                str(output_path),
+            ]
+
+            with self.assertRaisesRegex(EnrichmentError, "requires --input-jsonl and --translate"):
+                validate_arguments(
+                    parse_arguments(
+                        [
+                            "sample.exe",
+                            "--translation-stats-output",
+                            str(stats_path),
+                            "-o",
+                            str(output_path),
+                        ]
+                    )
+                )
+
+            for alias in (input_path, output_path, model_path):
+                with (
+                    self.subTest(alias=alias),
+                    self.assertRaisesRegex(EnrichmentError, "must differ"),
+                ):
+                    validate_arguments(
+                        parse_arguments(common + ["--translation-stats-output", str(alias)])
+                    )
+
+            stats_path.mkdir()
+            with self.assertRaisesRegex(EnrichmentError, "physical file"):
+                validate_arguments(
+                    parse_arguments(common + ["--translation-stats-output", str(stats_path)])
+                )
+
+            hard_link = root / "input-hard-link.jsonl"
+            try:
+                os.link(input_path, hard_link)
+            except OSError:
+                hard_link = None
+            if hard_link is not None:
+                with self.assertRaisesRegex(EnrichmentError, "must differ"):
+                    validate_arguments(
+                        parse_arguments(common + ["--translation-stats-output", str(hard_link)])
+                    )
 
     def test_positional_extraction_paths_remain_supported(self) -> None:
         args = parse_arguments(["first.exe", "second.exe", "-o", "records.jsonl"])

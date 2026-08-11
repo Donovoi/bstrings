@@ -230,7 +230,9 @@ Full analysis can assess eligible text before translation. Each
   12-decimal report-score precision;
 - explicit raw `confidenceGatePassed` and `marginGatePassed` outcomes;
 - high-recall, balanced, or high-precision policy;
-- decision and whether the source became a translation candidate; and
+- decision and whether the source became a translation candidate;
+- a compact `translationRouting` shadow observation containing one bounded
+  routing code; and
 - any detector error.
 
 The assessment is useful even when a string is not translated: it explains why
@@ -241,11 +243,73 @@ The optional high-precision policy sets each effective threshold to the greater
 of the configured value and 0.65 confidence/0.15 target margin; these scores are
 not calibrated probabilities.
 
+Shadow translation routing never removes a candidate in this implementation.
+`prospective-*` is an auditable measurement, not an authoritative exclusion;
+`shadow-*`, `retain`, and all router errors follow the existing fail-open path.
+The routing object does not repeat source text,
+location, origin, or arbitrary attributes; the enclosing assessment row binds
+it to the canonical record. Existing assessment fields already state the
+detector outcome and candidate selection, while `run.json` and `summary.json`
+bind the routing codebook to its policy version and aggregate counts once per
+run. Candidate and canonical-parent cardinality remain unchanged until a
+separately accepted policy version enables a validated bypass.
+
+The run-level `translationRouting` summary additionally reports:
+
+- `routingEvaluations`: batch-unique records actually evaluated by the bounded
+  router;
+- `detectorEligibleRecords`: occurrence records that needed a Lingua result;
+- `detectorExecutions`: actual Lingua invocations; and
+- `detectorReuseHits`: eligible occurrences served by successful same-batch
+  reuse.
+
+`detectorExecutions + detectorReuseHits` must equal
+`detectorEligibleRecords`, and the router counters must reconcile with triage
+cardinality or publication fails. C# triage also classifies a bounded set of
+origin flags for each pending record: native static, FLOSS, FLOSS-decoded, OCR,
+PDF text, derived translation, or unknown. The structured shadow router does
+not currently use those flags to change its code; any future scorer may use
+them only to force retention, never suppression.
+
+The Python worker atomically publishes `translation-work-stats.json` after the
+translated output succeeds. Its privacy-safe schema 1 contains only aggregate
+counters:
+
+- `candidateOccurrences`: candidate parent occurrences;
+- `textDecisions`: first exact-text decisions within each translation
+  window/call, not globally distinct text;
+- `protectedOnlyBypassTexts`, `runCacheHits`, `translationCacheHits`, and
+  `translatorInputTexts`: the mutually exclusive outcomes of those decisions;
+- `translatorRequests`: translator batch dispatches;
+- `translatorInputTexts` and `modelResults`: texts dispatched and per-input
+  outcomes;
+- `modelFallbacks`: model outcomes rejected into preservation fallback;
+- `translatedChildOccurrences`: emitted child occurrences; and
+- `preservationFallbackChildOccurrences`: emitted fallback child occurrences,
+  including repeated/cache-served occurrences.
+
+Within-window duplicate occurrences do not add `textDecisions`. The first use
+of the same exact text in a later window does add a decision, after which
+`runCacheHits` exposes its cross-window reuse. Consequently `textDecisions` is
+not a global unique-text total, and `translatorRequests` is not an occurrence
+total or a claim about undocumented internal server retries.
+
+Managed C# requires a bounded physical non-reparse file, an exact schema-1
+property set, nonnegative integer counters, and a matching candidate/child,
+decision-bucket, translator-input/model-result, and fallback cardinality. It
+computes the artifact SHA-256 and projects the validated result under
+`translationWork` in both `run.json` and `summary.json`, with `file`, `sha256`,
+and every counter. Any missing file, schema/property error, hash/read failure,
+or cardinality mismatch leaves the run incomplete. The artifact contains no
+record identifiers or text; its case-derived counts and hash still remain
+private examination data.
+
 Classification and candidate membership use the detector's unrounded values.
 Only the five confidence/margin numbers written to JSON are rounded to the
-declared precision, preventing insignificant parallel floating-point tails
-from changing report hashes. The gate fields preserve the authoritative raw
-comparison when a displayed value lies next to a threshold.
+declared precision, bounding insignificant parallel floating-point tails. The
+gate fields preserve the authoritative raw comparison when a displayed value
+lies next to a threshold; independent detector calls may still differ by one
+unit in the final published decimal without changing that decision.
 
 ## Translation lineage
 
