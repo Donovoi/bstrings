@@ -35,6 +35,7 @@ from bstrings_ocr import (  # noqa: E402
     parse_arguments,
     provider_candidates,
     rapidocr_parameters,
+    read_routing_manifest,
     resolve_cpu_worker_layout,
     resolve_session_threads,
     run_pipeline,
@@ -280,15 +281,16 @@ class OcrWorkerTests(unittest.TestCase):
         *,
         ordinal: int,
         scheduled_routes: tuple[str, ...] = ("native", "ocr"),
+        schema_version: int = 1,
         length: int | None = None,
         sha256: str | None = None,
     ) -> dict[str, Any]:
         source_sha256 = sha256_file(path) if sha256 is None else sha256
         routes = sorted(scheduled_routes)
         row: dict[str, Any] = {
-            "schemaVersion": 1,
+            "schemaVersion": schema_version,
             "recordType": "content-route",
-            "policyVersion": "content-routing-v1",
+            "policyVersion": f"content-routing-v{schema_version}",
             "ordinal": ordinal,
             "sourceFile": str(path.resolve()),
             "sourceSize": path.stat().st_size if length is None else length,
@@ -326,8 +328,7 @@ class OcrWorkerTests(unittest.TestCase):
     def _write_routing_manifest_rows(self, *rows: dict[str, Any]) -> None:
         self.routing_manifest.write_text(
             "".join(
-                json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-                + "\n"
+                json.dumps(row, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n"
                 for row in rows
             ),
             encoding="utf-8",
@@ -604,15 +605,64 @@ class OcrWorkerTests(unittest.TestCase):
         self.assertEqual(decision_id, assessment["routeDecisionId"])
         identity_material = dict(record)
         del identity_material["recordId"]
-        expected_record_id = "sha256:" + hashlib.sha256(
-            json.dumps(
-                identity_material,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()
+        expected_record_id = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    identity_material,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+        )
         self.assertEqual(expected_record_id, record["recordId"])
+
+    def test_routed_ocr_accepts_v2_only_without_native_scheduling(self) -> None:
+        image = self._image()
+        self._write_inventory(image)
+        self._write_input_manifest_rows(self._input_manifest_row(image))
+        route = self._routing_manifest_row(
+            image,
+            ordinal=1,
+            scheduled_routes=("ocr",),
+            schema_version=2,
+        )
+        self._write_routing_manifest_rows(route)
+        runtime = FakeRuntime()
+        runtime.image_frames[image.name] = [FakeImage("image:1")]
+        runtime.ocr_results["image:1"] = {
+            "txts": ["routed-v2@example.test"],
+            "boxes": [[[1, 1], [160, 1], [160, 20], [1, 20]]],
+            "scores": [0.99],
+        }
+
+        run_pipeline(
+            replace(
+                self._config(),
+                input_manifest=self.input_manifest,
+                routing_manifest=self.routing_manifest,
+            ),
+            runtime,
+        )
+
+        self.assertEqual(
+            route["decisionId"],
+            read_jsonl(self.output)[0]["attributes"]["routeDecisionId"],
+        )
+        self.assertEqual(1, runtime.self_test_calls)
+
+        invalid_rows = (
+            {**route, "schemaVersion": 1},
+            {**route, "policyVersion": "content-routing-v1"},
+            {**route, "scheduledRoutes": ["native", "ocr"]},
+            {**route, "eligibleRoutes": ["ocr"]},
+        )
+        for invalid in invalid_rows:
+            with self.subTest(invalid=invalid):
+                self._write_routing_manifest_rows(invalid)
+                with self.assertRaises(OcrError):
+                    list(read_routing_manifest(self.routing_manifest))
 
     def test_routed_ocr_rejects_unbound_or_altered_decisions_atomically(self) -> None:
         image = self._image()
@@ -856,6 +906,38 @@ class OcrWorkerTests(unittest.TestCase):
         self.assertEqual(1, runtime.self_test_calls)
         self.assertFalse(self.output.exists())
         self.assertFalse(self.assessments.exists())
+
+    def test_normal_pipeline_self_tests_same_runtime_before_evidence_read(self) -> None:
+        source = self._image()
+        self._write_inventory(source)
+
+        class OrderedRuntime(FakeRuntime):
+            def iter_image_frames(self, path: Path, max_pages: int, max_pixels: int) -> Any:
+                self_test_case.assertEqual(1, self.self_test_calls)
+                yield from super().iter_image_frames(path, max_pages, max_pixels)
+
+        self_test_case = self
+        runtime = OrderedRuntime()
+        runtime.image_frames[source.name] = [FakeImage("ordered:1")]
+        run_pipeline(self._config(), runtime)
+        self.assertEqual(1, runtime.self_test_calls)
+
+    def test_normal_pipeline_self_test_failure_precedes_output_staging(self) -> None:
+        source = self._image()
+        self._write_inventory(source)
+        self.output.write_text("preserved strings\n", encoding="utf-8")
+        self.assessments.write_text("preserved assessments\n", encoding="utf-8")
+        runtime = FakeRuntime()
+        runtime.self_test_error = OcrError("synthetic self-test failure")
+
+        with self.assertRaisesRegex(OcrError, "synthetic self-test failure"):
+            run_pipeline(self._config(), runtime)
+
+        self.assertEqual("preserved strings\n", self.output.read_text(encoding="utf-8"))
+        self.assertEqual("preserved assessments\n", self.assessments.read_text(encoding="utf-8"))
+        self.assertEqual([], list(self.root.glob("*.partial.*")))
+        self.assertFalse(Path(str(self.output) + ".incomplete").exists())
+        self.assertFalse(Path(str(self.assessments) + ".incomplete").exists())
         self.assertTrue(runtime.closed)
 
     def test_hybrid_self_test_invokes_both_lanes_and_propagates_failure(self) -> None:

@@ -1,0 +1,120 @@
+{
+  "labelPolicy": "UNLABELED-dual-independent-review-only",
+  "manifestId": "translation-worthiness-public-sources-v1",
+  "networkAccess": "forbidden",
+  "promotionEligible": false,
+  "researchOnly": true,
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "assetProvenance": "upstream-repository-first-party-source-path",
+      "bytes": 1841,
+      "cacheRelativePath": "bat-assets-create/content.txt",
+      "license": {
+        "bytes": 1097,
+        "cacheRelativePath": "bat-assets-create/LICENSE",
+        "id": "MIT",
+        "sha256": "dccda9eb9533f5c65624a1106536c6cfde46008d58e60b3faf154e8b9fd5b46e",
+        "sourcePath": "LICENSE-MIT",
+        "sourceUrl": "https://raw.githubusercontent.com/sharkdp/bat/af59a3218303837421ce06bb2dc3c545525bba0f/LICENSE-MIT"
+      },
+      "licensingLimit": "bat is dual-licensed under Apache-2.0 or MIT; this snapshot selects the pinned MIT grant. Only the selected first-party build script enters the queue; generated assets and submodules do not, and no line is pre-labeled.",
+      "originFamily": "native-static",
+      "sha256": "f3aacabe57282744ff2a6093520966de395a50f5ae195f6019a6c534ee676934",
+      "sourceId": "bat-assets-create",
+      "sourceKind": "code",
+      "sourcePath": "assets/create.sh",
+      "sourceProject": "sharkdp/bat",
+      "sourceRevision": "af59a3218303837421ce06bb2dc3c545525bba0f",
+      "sourceUrl": "https://raw.githubusercontent.com/sharkdp/bat/af59a3218303837421ce06bb2dc3c545525bba0f/assets/create.sh"
+    },
+    {
+      "assetProvenance": "upstream-repository-first-party-example-path",
+      "bytes": 1597,
+      "cacheRelativePath": "fluent-bit-application-log/content.txt",
+      "license": {
+        "bytes": 10174,
+        "cacheRelativePath": "fluent-bit-application-log/LICENSE",
+        "id": "Apache-2.0",
+        "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+        "sourcePath": "LICENSE",
+        "sourceUrl": "https://raw.githubusercontent.com/fluent/fluent-bit/a1d6fb1ba85e84f160c3fcc948aff26157e3a6dc/LICENSE"
+      },
+      "licensingLimit": "The repository-level Apache-2.0 file covers the selected non-vendored example path; the fixture's original log generator and any third-party marks are not separately documented, so every excerpt remains unlabeled and research-only.",
+      "originFamily": "native-static",
+      "sha256": "2129ae55d0df1dc0406ee0ea5db09576f7c57adff346e23fa878066b484af4e0",
+      "sourceId": "fluent-bit-application-log",
+      "sourceKind": "log",
+      "sourcePath": "examples/windows/docker/logs/application.log",
+      "sourceProject": "fluent/fluent-bit",
+      "sourceRevision": "a1d6fb1ba85e84f160c3fcc948aff26157e3a6dc",
+      "sourceUrl": "https://raw.githubusercontent.com/fluent/fluent-bit/a1d6fb1ba85e84f160c3fcc948aff26157e3a6dc/examples/windows/docker/logs/application.log"
+    },
+    {
+      "assetProvenance": "upstream-repository-first-party-example-path",
+      "bytes": 1128,
+      "cacheRelativePath": "prometheus-example-config/content.txt",
+      "license": {
+        "bytes": 11357,
+        "cacheRelativePath": "prometheus-example-config/LICENSE",
+        "id": "Apache-2.0",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "sourcePath": "LICENSE",
+        "sourceUrl": "https://raw.githubusercontent.com/prometheus/prometheus/2b2c984026ab86d22d9396aafe35ad77a37b4b14/LICENSE"
+      },
+      "licensingLimit": "The repository-level Apache-2.0 file covers the selected non-vendored first-party example configuration. Embedded service names and marks retain their own rights, and no line is pre-labeled.",
+      "originFamily": "native-static",
+      "sha256": "aafcee2a237ad599327d07ed79e57ba1e57bdcf5a4bba6e3ba22eb09e25af479",
+      "sourceId": "prometheus-example-config",
+      "sourceKind": "config",
+      "sourcePath": "documentation/examples/prometheus.yml",
+      "sourceProject": "prometheus/prometheus",
+      "sourceRevision": "2b2c984026ab86d22d9396aafe35ad77a37b4b14",
+      "sourceUrl": "https://raw.githubusercontent.com/prometheus/prometheus/2b2c984026ab86d22d9396aafe35ad77a37b4b14/documentation/examples/prometheus.yml"
+    },
+    {
+      "assetProvenance": "upstream-repository-first-party-source-path",
+      "bytes": 2124,
+      "cacheRelativePath": "ripgrep-logger/content.txt",
+      "license": {
+        "bytes": 1081,
+        "cacheRelativePath": "ripgrep-logger/LICENSE",
+        "id": "MIT",
+        "sha256": "0f96a83840e146e43c0ec96a22ec1f392e0680e6c1226e6f3ba87e0740af850f",
+        "sourcePath": "LICENSE-MIT",
+        "sourceUrl": "https://raw.githubusercontent.com/BurntSushi/ripgrep/3fce3b5bb0236da2df6d99672afb8a719642eca7/LICENSE-MIT"
+      },
+      "licensingLimit": "ripgrep is dual-licensed under MIT or Unlicense; this snapshot selects the pinned MIT grant. Contributor and dependency provenance is not a machine-label authority.",
+      "originFamily": "native-static",
+      "sha256": "057c6449256af78acb88c4b267774e51d416fdee878d6f1bdf6600b5d6086119",
+      "sourceId": "ripgrep-logger",
+      "sourceKind": "code",
+      "sourcePath": "crates/core/logger.rs",
+      "sourceProject": "BurntSushi/ripgrep",
+      "sourceRevision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "sourceUrl": "https://raw.githubusercontent.com/BurntSushi/ripgrep/3fce3b5bb0236da2df6d99672afb8a719642eca7/crates/core/logger.rs"
+    },
+    {
+      "assetProvenance": "upstream-repository-first-party-source-path",
+      "bytes": 1069,
+      "cacheRelativePath": "windows-terminal-user-defaults/content.txt",
+      "license": {
+        "bytes": 1116,
+        "cacheRelativePath": "windows-terminal-user-defaults/LICENSE",
+        "id": "MIT",
+        "sha256": "5d177f23ecfeb0ea8e050b6a5a16355e1ae9a0b286436ca8f83ed08b3795be6b",
+        "sourcePath": "LICENSE",
+        "sourceUrl": "https://raw.githubusercontent.com/microsoft/terminal/b888cb7e4c3b0b21b7ed66c224bcdf7fa9ef6d9a/LICENSE"
+      },
+      "licensingLimit": "The repository-level MIT file covers the selected non-vendored configuration path. Embedded names or third-party marks, if any, retain their own rights and no line is pre-labeled.",
+      "originFamily": "native-static",
+      "sha256": "9843bf368941b73216458e987866e3237ba9ce4ee4f8254713b93fa47cb47f91",
+      "sourceId": "windows-terminal-user-defaults",
+      "sourceKind": "config",
+      "sourcePath": "src/cascadia/TerminalSettingsModel/userDefaults.json",
+      "sourceProject": "microsoft/terminal",
+      "sourceRevision": "b888cb7e4c3b0b21b7ed66c224bcdf7fa9ef6d9a",
+      "sourceUrl": "https://raw.githubusercontent.com/microsoft/terminal/b888cb7e4c3b0b21b7ed66c224bcdf7fa9ef6d9a/src/cascadia/TerminalSettingsModel/userDefaults.json"
+    }
+  ]
+}

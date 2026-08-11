@@ -85,6 +85,7 @@ public sealed class AnalysisPathSafetyTests
     {
         var directory = CreateTemporaryDirectory("bstrings-translation-cancel-tests");
         var output = Path.Combine(directory, "translated-strings.jsonl");
+        var stats = Path.Combine(directory, "translation-work-stats.json");
         var database = Path.Combine(
             directory,
             ".bstrings-translation-cache-cancelled.sqlite3"
@@ -93,6 +94,11 @@ public sealed class AnalysisPathSafetyTests
         {
             output + ".partial.cancelled",
             output + ".partial.second",
+        };
+        var stagedStats = new[]
+        {
+            stats + ".partial.cancelled",
+            stats + ".partial.second",
         };
         var unrelated = new[]
         {
@@ -103,13 +109,17 @@ public sealed class AnalysisPathSafetyTests
             output + ".partial",
             output + ".partial.",
             Path.Combine(directory, "other-output.jsonl.partial.cancelled"),
+            stats + ".partial",
+            stats + ".partial.",
         };
         File.WriteAllText(output, "previous translated output");
+        File.WriteAllText(stats, "previous translation stats");
         try
         {
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 AnalysisOrchestrator.RunWithTranslationCacheCleanupAsync(
                     output,
+                    stats,
                     () =>
                     {
                         foreach (var artifact in new[]
@@ -126,6 +136,10 @@ public sealed class AnalysisPathSafetyTests
                         {
                             File.WriteAllText(path, "unpublished derived text");
                         }
+                        foreach (var path in stagedStats)
+                        {
+                            File.WriteAllText(path, "unpublished aggregate counters");
+                        }
                         foreach (var path in unrelated)
                         {
                             File.WriteAllText(path, "unrelated");
@@ -136,11 +150,13 @@ public sealed class AnalysisPathSafetyTests
             );
 
             Assert.Equal("previous translated output", File.ReadAllText(output));
+            Assert.Equal("previous translation stats", File.ReadAllText(stats));
             Assert.False(File.Exists(database));
             Assert.False(File.Exists(database + "-wal"));
             Assert.False(File.Exists(database + "-shm"));
             Assert.False(File.Exists(database + "-journal"));
             Assert.All(stagedOutputs, path => Assert.False(File.Exists(path)));
+            Assert.All(stagedStats, path => Assert.False(File.Exists(path)));
             Assert.All(unrelated, path => Assert.True(File.Exists(path)));
         }
         finally

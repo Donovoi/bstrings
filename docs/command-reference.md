@@ -44,11 +44,13 @@ failed or cancelled run; retain it for diagnosis and choose a new output path.
 
 `--full` supplies these defaults:
 
-- native ASCII/Unicode extraction and all 66 built-in patterns;
+- `--native-extraction on` for native ASCII/Unicode extraction and all 66
+  built-in patterns;
 - one batched, fail-open Magika/signature routing pass;
 - automatic routed FLOSS recovery and PDF/image OCR;
-- adaptive language detection and high-recall translation selection; and
-- offline translation with the single installed 7B Q8_0 quality profile.
+- fail-open shadow translation-worthiness routing, adaptive language detection,
+  and high-recall translation selection; and
+- offline translation with the single installed Hy-MT2 7B Q4_K_M Full model.
 
 Full deliberately stays `high-recall`. Examiners who accept lower candidate
 volume can explicitly select `--translation-policy high-precision`; its
@@ -56,6 +58,14 @@ effective gates are the greater of the configured values and 0.65 confidence /
 0.15 target margin. The assessment records both configured and effective
 thresholds. High precision is a conservative operating gate, not a calibrated
 probability or an accuracy guarantee.
+
+The shadow router records whether a complete record is a prospective
+structured-only bypass, but it does not skip language detection or remove a
+translation candidate. Ambiguous, mixed, unsupported, and failed router
+decisions retain the existing Full path. This diagnostic rollout must pass the
+forensic recall and measured-overhead gates in
+[ADR-0007](architecture/adr-0007-translation-worthiness-routing.md) before any
+authoritative suppression is enabled.
 
 An explicit stage choice overrides the corresponding full default. For
 example, this keeps reporting and the complete pattern catalogue but disables
@@ -65,6 +75,7 @@ FLOSS, OCR, and translation:
 .\bstrings.exe analyze `
   -f "D:\evidence\memory.raw" `
   --full `
+  --native-extraction on `
   --recover-executable-strings off `
   --ocr off `
   --translation off `
@@ -74,6 +85,58 @@ FLOSS, OCR, and translation:
 `--full` does not mount a filesystem or carve embedded files from a disk or
 memory image. Native extraction can scan the raw bytes; file-level FLOSS and
 OCR need carved or mounted executables, documents, and images.
+
+## Select source producers independently
+
+This interface is implemented in current source after v1.9.17; the published
+v1.9.17 binaries do not yet contain `--native-extraction`.
+
+`analyze` has three source-record producers and one downstream transform:
+
+| Control | Role | Modes |
+| --- | --- | --- |
+| `--native-extraction` | Native ASCII/Unicode source records | `on` or `off`; default `on`, including Full |
+| `--recover-executable-strings` | FLOSS source records | `off`, `auto`, or `force` |
+| `--ocr` | PDF text-layer and OCR source records | `off`, `auto`, or `force` |
+| `--translation` | Language assessment and/or translated children of selected source records | `off`, `auto`, `all`, or `detect-only` |
+
+Explicit choices override the corresponding Full defaults. At least one source
+producer must remain selected. Translation never silently enables one, so a
+producerless configuration fails before bundle lookup, output creation, or
+evidence access.
+
+```powershell
+# Native only
+.\bstrings.exe analyze -f D:\evidence\memory.raw `
+  --native-extraction on --recover-executable-strings off `
+  --ocr off --translation off -o D:\results\native
+
+# FLOSS only; include all FLOSS static and derived categories
+.\bstrings.exe analyze -d D:\evidence\executables `
+  --native-extraction off --recover-executable-strings force `
+  --ocr off --translation off -o D:\results\floss
+
+# OCR only
+.\bstrings.exe analyze -d D:\evidence\documents `
+  --native-extraction off --recover-executable-strings off `
+  --ocr force --translation off -o D:\results\ocr
+
+# Translate selected OCR records without native or FLOSS parents
+.\bstrings.exe analyze -d D:\evidence\documents `
+  --native-extraction off --recover-executable-strings off `
+  --ocr force --translation auto -o D:\results\ocr-translated
+```
+
+`auto` still routes conservatively; `force` means attempt every supplied input
+for that specialist. A selected specialist with no applicable input or zero
+records is a valid completed result. When native is off, FLOSS-only output
+includes FLOSS static strings. When native is on, those static FLOSS records
+remain omitted to avoid duplicating native coverage.
+
+Pattern matching and report projection are not engines in this contract. They
+remain mandatory finalization stages, so every successful specialist-only run
+still has the same reviewable JSONL, TSV, histogram, completion, and provenance
+surfaces.
 
 ## Patterns and reports
 
@@ -93,8 +156,9 @@ names, descriptions, and expressions.
 Every completed `analyze` run writes the authoritative JSONL evidence graph
 and these review surfaces:
 
-- `content-routing.jsonl` and `engine-status.jsonl`, which explain each route
-  and the terminal native/FLOSS/OCR coverage of every routed input;
+- specialist `engine-status.jsonl`, which records terminal native/FLOSS/OCR
+  coverage of every input, including engines explicitly disabled by the user,
+  plus `content-routing.jsonl` to explain each route;
 - `findings.tsv`, suitable for Timeline Explorer and spreadsheet filtering,
   including a dedicated `TranslationIntegrity` column;
 - `pattern-histogram.tsv`, including zero-count requested patterns;
@@ -109,7 +173,7 @@ The three hardware selectors control different work:
 | --- | --- | --- |
 | `--processor` | Native byte-string extraction | Leave `auto`; it avoids CUDA startup below the displayed host threshold and calibrates larger eligible inputs |
 | `--ocr-provider` | Raster/PDF OCR inference | Leave `auto`, or use `cpu`, `directml`, or `hybrid` when a specific accepted path is required |
-| `--translation-device` | Local llama.cpp translation | Leave `auto`; the standard quality kit uses its accepted CPU runtime |
+| `--translation-device` | Local llama.cpp translation | Leave `auto`; current Full source probes the accepted Windows sm89 CUDA p2 path and otherwise selects CPU before evidence work |
 
 High CPU/GPU utilization is not the objective. Storage reads, memory
 bandwidth, result transfer, and serialized output can be the limiting stage.
@@ -117,15 +181,24 @@ Use `--trace` on the legacy scanner to see native backend selection and final
 CPU/GPU chunk totals. Explicit `gpu` or `hybrid` is a diagnostic/forced choice,
 not a promise of lower wall time.
 
-For a custom accepted CUDA translation runtime, `cuda` requests full offload.
-`hybrid` additionally requires a positive, exact
-`--translation-gpu-layers`. `--translation-strict-determinism` forces one
-translation slot and disables prompt-cache reuse; do not combine it with
-`--translation-parallelism` above 1.
+Current Full `auto` treats CUDA as accepted only after the bundled backend has
+loaded the exact Q4 model, completed a synthetic request, and reported full
+33/33 layer offload at parallelism two. The reviewed placement also reported a
+410.69 MiB `CPU_Mapped` model buffer, so full layer offload is not described as
+zero CPU residency. If this transaction-free probe fails, CUDA is closed and
+CPU is started and tested before evidence inference, cache insertion, or
+translation output. Explicit `cuda` fails closed. The selected provider is
+frozen after the first evidence request; a later failure leaves the stage
+incomplete rather than switching providers.
 
-The standard release does not contain the custom CUDA translation closure, so
-`auto` resolves translation to CPU. Native extraction and OCR keep their own
-independent GPU policies.
+This CUDA acceptance is scoped to Windows and the reviewed RTX 4060
+Laptop/sm89 host. It is not a general NVIDIA compatibility claim. The automatic
+schedule is p2; p4 and `hybrid` remain expert/experimental boundaries and have
+not inherited Full acceptance. `--translation-strict-determinism` forces one
+translation slot and disables prompt-cache reuse; do not combine it with
+`--translation-parallelism` above 1. Native extraction and OCR keep their own
+independent GPU policies. See
+[ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
 
 ## Progress, cancellation, and completion
 
@@ -172,6 +245,13 @@ pack options locally:
 `assemble` uses already-cached packs without downloading. Both refuse to merge
 into an existing output directory.
 
+The quality bundle remains one atomic trust profile regardless of runtime
+selection. `bundle verify` and `analyze` do not ignore a corrupt unselected
+component in that shared directory. Runtime engine independence therefore does
+not promise smaller downloads, partial installation, or operation from a
+damaged complete kit. Physically separate capability profiles are deferred by
+[ADR-0008](architecture/adr-0008-independent-engine-execution.md).
+
 ## Legacy flat-output scanner
 
 Use the root options only when a single flat file is preferable to the
@@ -208,3 +288,5 @@ Magika/content-triage design and its fail-open acceptance gates are recorded in
 identifier semantics, isolated fallbacks, run-local exact deduplication, and the
 decision to keep Full high-recall are recorded in
 [ADR-0005](architecture/adr-0005-translation-integrity-and-run-dedup.md).
+The pre-Lingua shadow router and its promotion gates are recorded in
+[ADR-0007](architecture/adr-0007-translation-worthiness-routing.md).

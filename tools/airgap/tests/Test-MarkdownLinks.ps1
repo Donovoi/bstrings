@@ -74,7 +74,23 @@ try {
     }
     $bundleArchitectureDocs = Join-Path $bundleDocs 'architecture'
     [IO.Directory]::CreateDirectory($bundleArchitectureDocs) | Out-Null
-    foreach ($documentName in Get-LiteralArrayAssignment $builder 'bundleArchitectureDocumentNames') {
+    $architectureDocuments = @(
+        Get-LiteralArrayAssignment $builder 'bundleArchitectureDocumentNames'
+    )
+    $expectedArchitectureDocuments = @(
+        'adr-0001-early-fail-open-content-routing.md',
+        'adr-0003-persistent-verified-bytes-and-batched-releases.md',
+        'adr-0004-bounded-language-detection-reuse.md',
+        'adr-0005-translation-integrity-and-run-dedup.md',
+        'adr-0006-q4-cuda-full-translation.md',
+        'adr-0007-translation-worthiness-routing.md',
+        'adr-0008-independent-engine-execution.md',
+        'decision-review-policy.md'
+    )
+    if (($architectureDocuments -join '|') -cne ($expectedArchitectureDocuments -join '|')) {
+        throw 'The bundle architecture-document fixture differs from its exact reviewed inventory.'
+    }
+    foreach ($documentName in $architectureDocuments) {
         Copy-Item `
             -LiteralPath (Join-Path $repoRoot "docs\architecture\$documentName") `
             -Destination $bundleArchitectureDocs
@@ -96,11 +112,29 @@ try {
     }
     $bundleEnrichmentTools = Join-Path $builderBundle 'tools\enrichment'
     [IO.Directory]::CreateDirectory($bundleEnrichmentTools) | Out-Null
-    foreach ($toolName in Get-LiteralArrayAssignment $builder 'bundleEnrichmentToolNames') {
+    $enrichmentTools = @(
+        Get-LiteralArrayAssignment $builder 'bundleEnrichmentToolNames'
+    )
+    $expectedEnrichmentTools = @(
+        'bstrings_enrich.py',
+        'bstrings_ocr.py',
+        'benchmark_ocr.py',
+        'benchmark_translation_cache.py',
+        'benchmark_translation.py'
+    )
+    if (($enrichmentTools -join '|') -cne ($expectedEnrichmentTools -join '|')) {
+        throw 'The bundle enrichment-tool fixture differs from its exact reviewed inventory.'
+    }
+    foreach ($toolName in $enrichmentTools) {
         Copy-Item `
             -LiteralPath (Join-Path $repoRoot "tools\enrichment\$toolName") `
             -Destination $bundleEnrichmentTools
     }
+    $bundleAirgapTools = Join-Path $builderBundle 'tools\airgap'
+    [IO.Directory]::CreateDirectory($bundleAirgapTools) | Out-Null
+    Copy-Item `
+        -LiteralPath (Join-Path $repoRoot 'tools\airgap\offline-components.lock.json') `
+        -Destination $bundleAirgapTools
     Copy-Item -LiteralPath (Join-Path $repoRoot 'licenses') -Destination $builderBundle -Recurse
     Write-Utf8File `
         (Join-Path $builderBundle 'runtime\ocr-cpu\Privacy.md') `

@@ -87,6 +87,7 @@ $requiredNoticeFiles = @(
     'licenses/llama.cpp/SOURCE-ggml-cpu-ops.cpp',
     'licenses/llama.cpp/SOURCE-llama-vocab.cpp',
     'licenses/llama.cpp/NOTICE-SCOPE.md',
+    'licenses/NVIDIA-CUDA-12.4-EULA.pdf',
     'licenses/Hy-MT2-Apache-2.0.txt',
     'licenses/Hy-MT2-7B-Apache-2.0.txt',
     'ocr-components.lock.json',
@@ -216,6 +217,104 @@ $forbiddenLlamaFiles = @(
 if ($forbiddenLlamaFiles.Count -ne 0) {
     throw "Bundle contains a forbidden llama.cpp OpenMP/debug artifact: $($forbiddenLlamaFiles.FullName -join ', ')"
 }
+if (-not ($config.PSObject.Properties.Name -contains 'llamaCudaOverlay')) {
+    throw 'Bundle configuration is missing the authenticated llama.cpp CUDA overlay.'
+}
+$cudaLock = $offlineLock.llamaCudaOverlay
+$cudaConfig = $config.llamaCudaOverlay
+if (
+    $null -eq $cudaLock -or
+    [string]$cudaLock.sourceTag -ne [string]$llamaConfig.sourceTag -or
+    [string]$cudaLock.sourceCommit -ne [string]$llamaConfig.sourceCommit -or
+    [string]$cudaConfig.version -ne [string]$cudaLock.version -or
+    [string]$cudaConfig.sourceTag -ne [string]$cudaLock.sourceTag -or
+    [string]$cudaConfig.sourceCommit -ne [string]$cudaLock.sourceCommit -or
+    [string]$cudaConfig.platform -ne [string]$cudaLock.platform -or
+    [string]$cudaConfig.acceptanceComputeCapability -ne
+        [string]$cudaLock.acceptanceHardware.computeCapability -or
+    $cudaConfig.cpuFallback -ne $true
+) {
+    throw 'Bundle CUDA configuration does not match its reviewed lock or CPU runtime.'
+}
+$cudaProvenancePath = Resolve-BundlePath $cudaConfig.provenance
+$cudaProvenance = Get-Content -LiteralPath $cudaProvenancePath -Raw | ConvertFrom-Json
+if (
+    $cudaProvenance.schemaVersion -ne 1 -or
+    [string]$cudaProvenance.component -cne 'llama.cpp-cuda-overlay' -or
+    [string]$cudaProvenance.version -ne [string]$cudaLock.version -or
+    [string]$cudaProvenance.sourceTag -ne [string]$cudaLock.sourceTag -or
+    [string]$cudaProvenance.sourceCommit -ne [string]$cudaLock.sourceCommit -or
+    $cudaProvenance.cpuFallback.sourceBuiltRuntimeRetained -ne $true
+) {
+    throw 'Bundled llama.cpp CUDA overlay provenance is missing or inconsistent.'
+}
+$lockedCudaRuntimePaths = @($cudaLock.runtimeFiles | ForEach-Object {
+    "runtime/llama/$($_.path)"
+})
+if (
+    (@($cudaConfig.runtimeFiles | Sort-Object) -join '|') -cne
+    (@($lockedCudaRuntimePaths | Sort-Object) -join '|')
+) {
+    throw 'Bundle CUDA configuration does not name the exact reviewed runtime closure.'
+}
+foreach ($runtimeFile in @($cudaLock.runtimeFiles)) {
+    $runtimePath = Resolve-BundlePath "runtime/llama/$($runtimeFile.path)"
+    if (
+        (Get-Item -LiteralPath $runtimePath).Length -ne [long]$runtimeFile.bytes -or
+        (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash.ToLowerInvariant() -ne
+            [string]$runtimeFile.sha256
+    ) {
+        throw "Bundled CUDA runtime does not match its lock: $($runtimeFile.path)"
+    }
+    $provenanceRows = @($cudaProvenance.runtimeFiles | Where-Object {
+        [string]$_.path -ceq [string]$runtimeFile.path
+    })
+    $lockedImports = @($runtimeFile.imports | ForEach-Object {
+        ([string]$_).ToLowerInvariant()
+    } | Sort-Object)
+    $recordedImports = if ($provenanceRows.Count -eq 1) {
+        @($provenanceRows[0].imports | ForEach-Object {
+            ([string]$_).ToLowerInvariant()
+        } | Sort-Object)
+    }
+    else { @() }
+    if (
+        $provenanceRows.Count -ne 1 -or
+        [string]$provenanceRows[0].archive -ne [string]$runtimeFile.archive -or
+        [string]$provenanceRows[0].entry -ne [string]$runtimeFile.entry -or
+        [long]$provenanceRows[0].bytes -ne [long]$runtimeFile.bytes -or
+        [string]$provenanceRows[0].sha256 -ne [string]$runtimeFile.sha256 -or
+        ($recordedImports -join '|') -cne ($lockedImports -join '|')
+    ) {
+        throw "Bundled CUDA runtime provenance differs from its lock: $($runtimeFile.path)"
+    }
+}
+$cudaLicense = Resolve-BundlePath $cudaConfig.license
+if (
+    (Get-Item -LiteralPath $cudaLicense).Length -ne [long]$cudaLock.license.bytes -or
+    (Get-FileHash -LiteralPath $cudaLicense -Algorithm SHA256).Hash.ToLowerInvariant() -ne
+        [string]$cudaLock.license.sha256
+) {
+    throw 'Bundled NVIDIA CUDA 12.4 EULA does not match its lock.'
+}
+$expectedLlamaPeNames = @(
+    $llamaProvenance.runtimeFiles | ForEach-Object { [string]$_.name }
+) + @(
+    $offlineLock.runtimeDlls | ForEach-Object { [string]$_ }
+) + @(
+    $cudaLock.runtimeFiles | ForEach-Object { [string]$_.path }
+)
+$actualLlamaPeNames = @(
+    Get-ChildItem -LiteralPath $llamaDirectory -File | Where-Object {
+        $_.Extension -in @('.exe', '.dll')
+    } | ForEach-Object { $_.Name }
+)
+if (
+    (@($expectedLlamaPeNames | Sort-Object) -join '|') -cne
+    (@($actualLlamaPeNames | Sort-Object) -join '|')
+) {
+    throw 'Bundled llama.cpp directory contains a missing or unreviewed PE runtime file.'
+}
 
 if (-not $SkipExecutableProbes) {
     $probes = @(
@@ -241,6 +340,10 @@ if (-not $SkipExecutableProbes) {
         $llamaVersion.IndexOf([string]$llamaConfig.sourceCommit, [StringComparison]::Ordinal) -lt 0
     ) {
         throw 'Bundled llama.cpp runtime version does not match its pinned source commit.'
+    }
+    $deviceProbe = (& $llamaServer --list-devices 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Bundled llama.cpp CUDA/CPU device probe failed: $deviceProbe"
     }
     & $bstrings analyze --help | Out-Host
     if ($LASTEXITCODE -ne 0) {

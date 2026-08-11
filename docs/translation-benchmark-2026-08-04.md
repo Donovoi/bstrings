@@ -1,4 +1,4 @@
-# Offline translation selection gate — 2026-08-04, updated 2026-08-06
+# Offline translation selection gate — 2026-08-04, updated 2026-08-10
 
 Distribution status: the accepted translation profiles are published through
 the complete v1.9.9 quality channel. They are not included in the standalone
@@ -12,26 +12,61 @@ they do not need to invoke Python or the benchmark runner. A raw image must be
 mounted or carved first when filesystem or embedded-executable coverage is
 required; bstrings does not imply that coverage from `--full`.
 
-## Current decision — 2026-08-05
+## Current decision — 2026-08-10
 
-Use [Hy-MT2-7B Q8_0](https://huggingface.co/tencent/Hy-MT2-7B-GGUF)
-through llama.cpp as the `quality` profile and default complete bundle. It
-cleared the final strict gate with the strongest measured
-translation quality while preserving every protected identifier and expected
-regex result. Keep Hy-MT2-1.8B Q8_0 as `balanced` and Hy-MT2-1.8B Q4_K_M as
-`compact`; they are substantially smaller and faster operational choices.
+Current source uses one
+[Hy-MT2-7B Q4_K_M](https://huggingface.co/tencent/Hy-MT2-7B-GGUF/blob/ab8472660ac61fac25f1af43fac2599d52a8a775/Hy-MT2-7B-Q4_K_M.gguf)
+model for Full. It is 4,624,648,896 bytes, revision
+`ab8472660ac61fac25f1af43fac2599d52a8a775`, SHA-256
+`9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b`.
+The source-built llama.cpp b10248 CPU server remains the no-GPU path. A
+separately authenticated official b10248 CUDA 12.4 overlay is accepted only for
+the measured Windows RTX 4060 Laptop/sm89 closure. This supersedes the model and
+hardware portions of the 2026-08-05 Q8 decision below; see
+[ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
 
-| Profile | Exact model | Bytes | WMT24++ chrF++ | Forensic chrF++ | Protected identifiers | Pattern precision/recall | Strings/s |
+| Q4 gate | WMT24++ chrF++ | Forensic chrF++ | Protected identifiers | Expected patterns | Strings/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| CPU strict | 62.4386 | 93.6923 | 22/22 | 10/10 | 0.1086 |
+| Source-built CPU server + official CUDA overlay, p2 | 62.6129 | 93.6923 | 22/22 | 10/10 | 1.3085 |
+| Earlier standalone strict CUDA | 62.6525 | 93.6923 | 22/22 | 10/10 | — |
+
+Full `auto` uses p2 and requires real model load, a synthetic request, and
+observed full 33/33 layer offload before evidence work. The accepted runtime
+still reported a 410.69 MiB `CPU_Mapped` model buffer; full transformer-layer
+offload is not zero host residency. A failed automatic CUDA probe closes CUDA
+and self-tests CPU before evidence inference, cache insertion, or output.
+Explicit CUDA fails closed, and no provider changes after the first evidence
+request. Hybrid and p4 remain deferred rather than inheriting this acceptance.
+
+A small positional distinct-string sample from the reviewed private examination
+showed a material p2 gain and one audited preservation fallback. It covered
+substantially less than one percent of the distinct population and was neither
+random nor stratified, so it proves neither the projected duration nor the
+population fallback rate. Promotion therefore remains blocked until the exact
+Full run produces one ordered child per candidate, model calls equal the exact
+distinct cache-key count, cache hits reconcile every repeated row, terminal
+metadata is complete, `.incomplete` is absent, progress/ETA are monotonic,
+reports validate, and the process exits zero. Private exact totals remain
+outside the repository. The predeclared reviewed-host target is 48 hours.
+
+## Superseded Q8 selection evidence — 2026-08-05
+
+The published v1.9.16 Full profile uses Hy-MT2-7B Q8_0 through CPU llama.cpp.
+The following table preserves the dated choice and retired smaller candidates;
+it is not the current-source model plan.
+
+| Historical profile | Exact model | Bytes | WMT24++ chrF++ | Forensic chrF++ | Protected identifiers | Pattern precision/recall | Strings/s |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `quality` (default) | Hy-MT2-7B Q8_0 | 7,981,928,896 | **62.6786** | **92.8310** | 22/22 | 1.0 / 1.0 (10/10) | 0.2793 |
-| `balanced` | Hy-MT2-1.8B Q8_0 | 1,908,528,192 | 58.6211 | 87.5297 | 22/22 | 1.0 / 1.0 (10/10) | 1.8870 |
-| `compact` | Hy-MT2-1.8B Q4_K_M | 1,133,080,448 | 58.1829 | 85.6382 | 22/22 | 1.0 / 1.0 (10/10) | 2.7055 |
+| `quality` | Hy-MT2-7B Q8_0 | 7,981,928,896 | **62.6786** | **92.8310** | 22/22 | 1.0 / 1.0 (10/10) | 0.2793 |
+| retired `balanced` | Hy-MT2-1.8B Q8_0 | 1,908,528,192 | 58.6211 | 87.5297 | 22/22 | 1.0 / 1.0 (10/10) | 1.8870 |
+| retired `compact` | Hy-MT2-1.8B Q4_K_M | 1,133,080,448 | 58.1829 | 85.6382 | 22/22 | 1.0 / 1.0 (10/10) | 2.7055 |
 
-The final quality run used strict corpus SHA-256
+That quality run used strict corpus SHA-256
 `9b3ace5991ab616a9dab570b80eb1d6741e41f67c8272817861d6176ae27d213`,
 took 257.7479 seconds for 72 strings, and reported no identifier omission,
 addition, or duplication, plus zero pattern false positives or false negatives.
-The exact promoted model file is `HY-MT2-7B-Q8_0.gguf`, revision
+The exact historical model was `HY-MT2-7B-Q8_0.gguf`, revision
 `707464294cf5b2a5a69982855020858ed58cf1d1`, SHA-256
 `58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0`.
 
@@ -326,11 +361,11 @@ hf download google/wmt24pp `
 & $benchPython tools\enrichment\benchmark_translation.py `
   --engine llama-cpp `
   --llama-server C:\Tools\bstrings-quality\runtime\llama\llama-server.exe `
-  --model-path C:\Tools\bstrings-quality\models\hy-mt2\HY-MT2-7B-Q8_0.gguf `
+  --model-path C:\Tools\bstrings-quality\models\hy-mt2\Hy-MT2-7B-Q4_K_M.gguf `
   --model-id tencent/Hy-MT2-7B-GGUF `
-  --model-revision 707464294cf5b2a5a69982855020858ed58cf1d1 `
-  --model-sha256 58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0 `
-  --runtime "llama.cpp b10248; CPU; Q8_0" `
+  --model-revision ab8472660ac61fac25f1af43fac2599d52a8a775 `
+  --model-sha256 9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b `
+  --runtime "llama.cpp b10248; CPU; Q4_K_M" `
   --device cpu `
   --parallelism 1 `
   --strict-determinism `

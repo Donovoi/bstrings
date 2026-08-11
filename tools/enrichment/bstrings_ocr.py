@@ -2528,18 +2528,14 @@ def _reject_duplicate_routing_json_members(pairs: list[tuple[str, Any]]) -> dict
     return document
 
 
-def _routing_string_array(
-    document: dict[str, Any], name: str, ordinal: int
-) -> tuple[str, ...]:
+def _routing_string_array(document: dict[str, Any], name: str, ordinal: int) -> tuple[str, ...]:
     value = document[name]
     if (
         not isinstance(value, list)
         or any(not isinstance(item, str) or not item for item in value)
         or value != sorted(set(value))
     ):
-        raise OcrError(
-            f"OCR routing row {ordinal} contains an invalid sorted {name} array"
-        )
+        raise OcrError(f"OCR routing row {ordinal} contains an invalid sorted {name} array")
     return tuple(value)
 
 
@@ -2570,11 +2566,16 @@ def _parse_routing_manifest_entry(value: str, expected_ordinal: int) -> RoutingM
     )
     if not isinstance(document, dict) or frozenset(document) != required:
         raise OcrError(f"OCR routing row {expected_ordinal} has unsupported fields")
+    schema_version = document["schemaVersion"]
+    policy_version = document["policyVersion"]
+    valid_policy = type(schema_version) is int and (
+        (schema_version == SCHEMA_VERSION and policy_version == "content-routing-v1")
+        or (schema_version == 2 and policy_version == "content-routing-v2")
+    )
     if (
         type(document["schemaVersion"]) is not int
-        or document["schemaVersion"] != SCHEMA_VERSION
+        or not valid_policy
         or document["recordType"] != "content-route"
-        or document["policyVersion"] != "content-routing-v1"
         or type(document["ordinal"]) is not int
         or document["ordinal"] != expected_ordinal
     ):
@@ -2622,9 +2623,11 @@ def _parse_routing_manifest_entry(value: str, expected_ordinal: int) -> RoutingM
     conflicts = _routing_string_array(document, "conflicts", expected_ordinal)
     del signals, conflicts
     allowed_routes = {"native", "floss", "ocr"}
+    native_scheduled = "native" in scheduled_routes
     if (
         "native" not in eligible_routes
-        or "native" not in scheduled_routes
+        or (schema_version == SCHEMA_VERSION and not native_scheduled)
+        or (schema_version == 2 and native_scheduled)
         or not set(eligible_routes).issubset(allowed_routes)
         or not set(scheduled_routes).issubset(eligible_routes)
     ):
@@ -2633,8 +2636,7 @@ def _parse_routing_manifest_entry(value: str, expected_ordinal: int) -> RoutingM
     decision_material = dict(document)
     del decision_material["decisionId"]
     expected_decision_id = (
-        "sha256:"
-        + hashlib.sha256(canonical_json(decision_material).encode("utf-8")).hexdigest()
+        "sha256:" + hashlib.sha256(canonical_json(decision_material).encode("utf-8")).hexdigest()
     )
     if not hmac.compare_digest(decision_id, expected_decision_id):
         raise OcrError(f"OCR routing row {expected_ordinal} has an altered decision identity")
@@ -2731,9 +2733,7 @@ def read_routed_input_pairs(
             if identity.length != route.length or not hmac.compare_digest(
                 identity.sha256, route.sha256
             ):
-                raise OcrError(
-                    "An OCR candidate does not match its routed source identity"
-                )
+                raise OcrError("An OCR candidate does not match its routed source identity")
             if "ocr" not in route.scheduled_routes:
                 raise OcrError("An OCR candidate was not scheduled by content routing")
             yield source_file, identity, route.decision_id
@@ -3087,8 +3087,8 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
             raise OcrError("The active OCR runtime version does not match the verified identity")
         _validate_resolved_provider(config.provider, runtime.resolved_provider)
         _validate_runtime_threads(config, runtime)
+        runtime.run_inference_self_test()
         if config.self_test:
-            runtime.run_inference_self_test()
             return {
                 "inputFiles": 0,
                 "processedFiles": 0,
@@ -3137,8 +3137,7 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
             ):
                 return
             print(
-                f"Progress: offline OCR: {percent:.1f}% "
-                f"({bounded:,}/{total:,} files)",
+                f"Progress: offline OCR: {percent:.1f}% ({bounded:,}/{total:,} files)",
                 file=sys.stderr,
                 flush=True,
             )
@@ -3195,9 +3194,7 @@ def run_pipeline(config: OcrConfig, runtime: OcrRuntime | None = None) -> dict[s
                     resolved_thread_counts=runtime.resolved_thread_counts,
                     resolved_worker_counts=runtime.resolved_worker_counts,
                 )
-                _verify_source_hash_after_use(
-                    pending.source.path, pending.source.source_sha256
-                )
+                _verify_source_hash_after_use(pending.source.path, pending.source.source_sha256)
                 publish_source(result, outputs)
             except BaseException:
                 if selected is not None:

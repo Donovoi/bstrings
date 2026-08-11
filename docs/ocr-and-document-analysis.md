@@ -1,6 +1,6 @@
 # OCR and document analysis
 
-OCR is distributed in the complete v1.9.16 quality kit. The commands in this
+OCR is distributed in the complete v1.9.17 quality kit. The commands in this
 guide require a verified, version-matched quality bundle. See
 [download and installation](download-and-install.md); do not copy OCR assets
 manually into a core-only directory.
@@ -12,16 +12,20 @@ provider. They then enter the same language-detection, optional translation,
 and regex-matching pipeline as native and FLOSS-recovered strings.
 
 OCR hardware selection is independent of translation hardware. The quality kit
-can use DirectML for OCR, but its standard llama.cpp translation runtime remains
-CPU-only. OCR finishes before translation, so their device policies and progress
-counters are not simultaneous utilization targets.
+can use DirectML for OCR. Full translation separately probes the accepted
+Windows sm89 CUDA p2 closure and falls back to tested CPU only before evidence
+work. Explicit
+CUDA fails closed and cannot switch provider mid-run. OCR still finishes before
+translation, so their device policies and progress counters are not simultaneous
+utilization targets. See
+[ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
 
 Examiners use `bstrings.exe`; the Python worker documented here is an internal,
 manifest-covered component and is not a separate user command.
 
 ## Use it
 
-In the v1.9.16 quality kit, `--full` enables OCR in automatic mode and asks the
+In the v1.9.17 quality kit, `--full` enables OCR in automatic mode and asks the
 verified bundle to select a provider:
 
 ```powershell
@@ -48,7 +52,7 @@ OCR can also be requested without the other optional stages:
 ```
 
 `--ocr` accepts `off`, `auto`, or `force`. `--ocr-provider` accepts `auto`,
-`cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.16 source profile
+`cpu`, `directml`, `hybrid`, or `cuda`; however, the v1.9.17 source profile
 `windows-x64-ocr-cpu-directml-v1` contains and claims only CPU, DirectML, and
 DirectML+CPU hybrid. CUDA requires a separately built and validated custom
 runtime profile.
@@ -88,7 +92,7 @@ provider—not a 1 GiB threshold.
 
 ## Bundled engine and immutable model pack
 
-The v1.9.16 source profile uses
+The v1.9.17 source profile uses
 [RapidOCR 3.9.2](https://github.com/RapidAI/RapidOCR/releases/tag/v3.9.2)
 as the local orchestration engine, immutable
 [PP-OCRv6 medium](https://www.paddleocr.ai/latest/en/version3.x/algorithm/PP-OCRv6/PP-OCRv6.html)

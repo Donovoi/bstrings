@@ -5,14 +5,14 @@
   "defaultTranslationProfile": "quality",
   "translationProfiles": {
     "quality": {
-      "version": "Q8_0",
+      "version": "Q4_K_M",
       "archiveType": "file",
-      "fileName": "HY-MT2-7B-Q8_0.gguf",
-      "url": "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/707464294cf5b2a5a69982855020858ed58cf1d1/HY-MT2-7B-Q8_0.gguf?download=true",
-      "bytes": 7981928896,
-      "sha256": "58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0",
+      "fileName": "Hy-MT2-7B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/Hy-MT2-7B-Q4_K_M.gguf?download=true",
+      "bytes": 4624648896,
+      "sha256": "9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b",
       "modelId": "tencent/Hy-MT2-7B-GGUF",
-      "revision": "707464294cf5b2a5a69982855020858ed58cf1d1",
+      "revision": "ab8472660ac61fac25f1af43fac2599d52a8a775",
       "license": {
         "source": "download",
         "fileName": "LICENSE-Hy-MT2-7B.txt",
@@ -32,6 +32,126 @@
     "source": "Licensed Visual Studio Build Tools x64 Microsoft.VC14x.CRT redist directory",
     "deployment": "app-local",
     "discovery": "vswhere latest installation with Microsoft.VisualStudio.Component.VC.Redist.14.Latest"
+  },
+  "llamaCudaOverlay": {
+    "version": "b10248-cuda-12.4",
+    "sourceTag": "b10248",
+    "sourceCommit": "e8e06f78e253a98a739b8ae4c6b661b357249ce4",
+    "platform": "windows-x64",
+    "distribution": "official llama.cpp GitHub release assets",
+    "acceptanceHardware": {
+      "vendor": "NVIDIA",
+      "computeCapability": "8.9",
+      "architecture": "Ada",
+      "reviewScope": "RTX 4060 Laptop GPU; unsupported or unavailable GPUs retain the source-built CPU path"
+    },
+    "archives": [
+      {
+        "id": "llama-cuda-backend",
+        "fileName": "llama-b10248-bin-win-cuda-12.4-x64.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10248/llama-b10248-bin-win-cuda-12.4-x64.zip",
+        "bytes": 250492730,
+        "sha256": "a08ea218ea705c8961e82473044933b50ab4f82818fe974c556925fb5c150785",
+        "entries": 52,
+        "expandedBytes": 584451936
+      },
+      {
+        "id": "cuda-runtime",
+        "fileName": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10248/cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "bytes": 391443627,
+        "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+        "entries": 3,
+        "expandedBytes": 574138880
+      }
+    ],
+    "runtimeFiles": [
+      {
+        "archive": "llama-cuda-backend",
+        "entry": "ggml-cuda.dll",
+        "path": "ggml-cuda.dll",
+        "bytes": 537381888,
+        "sha256": "c28eda49064a36325018fd976fe119ea4362a428ee4d168f0aea043da35ee1fe",
+        "role": "cuda-backend",
+        "imports": [
+          "api-ms-win-crt-convert-l1-1-0.dll",
+          "api-ms-win-crt-environment-l1-1-0.dll",
+          "api-ms-win-crt-heap-l1-1-0.dll",
+          "api-ms-win-crt-math-l1-1-0.dll",
+          "api-ms-win-crt-runtime-l1-1-0.dll",
+          "api-ms-win-crt-stdio-l1-1-0.dll",
+          "api-ms-win-crt-string-l1-1-0.dll",
+          "cublas64_12.dll",
+          "cudart64_12.dll",
+          "ggml-base.dll",
+          "KERNEL32.dll",
+          "MSVCP140.dll",
+          "nvcuda.dll",
+          "VCRUNTIME140_1.dll",
+          "VCRUNTIME140.dll"
+        ]
+      },
+      {
+        "archive": "cuda-runtime",
+        "entry": "cublas64_12.dll",
+        "path": "cublas64_12.dll",
+        "bytes": 100033536,
+        "sha256": "e40202fe4223c1cd2d2dce7beec59e1ed61c7801bd827309183be9b50e358f4c",
+        "role": "cuda-runtime",
+        "imports": [
+          "cublasLt64_12.dll",
+          "KERNEL32.dll"
+        ]
+      },
+      {
+        "archive": "cuda-runtime",
+        "entry": "cublasLt64_12.dll",
+        "path": "cublasLt64_12.dll",
+        "bytes": 473551360,
+        "sha256": "2a896460bef60ed57ef32b0875812f355a6984e671d638bb632f5e8c1d7a831f",
+        "role": "cuda-runtime",
+        "imports": [
+          "KERNEL32.dll"
+        ]
+      },
+      {
+        "archive": "cuda-runtime",
+        "entry": "cudart64_12.dll",
+        "path": "cudart64_12.dll",
+        "bytes": 553984,
+        "sha256": "d28e42265da7462162a54da6b7a99ea4fa2caf8139d862bb500db875d0b32dfc",
+        "role": "cuda-runtime",
+        "imports": [
+          "api-ms-win-core-console-l1-1-0.dll",
+          "api-ms-win-core-debug-l1-1-0.dll",
+          "api-ms-win-core-errorhandling-l1-1-0.dll",
+          "api-ms-win-core-file-l1-1-0.dll",
+          "api-ms-win-core-handle-l1-1-0.dll",
+          "api-ms-win-core-heap-l1-1-0.dll",
+          "api-ms-win-core-interlocked-l1-1-0.dll",
+          "api-ms-win-core-libraryloader-l1-2-0.dll",
+          "api-ms-win-core-localization-l1-2-0.dll",
+          "api-ms-win-core-processenvironment-l1-1-0.dll",
+          "api-ms-win-core-processthreads-l1-1-0.dll",
+          "api-ms-win-core-processthreads-l1-1-1.dll",
+          "api-ms-win-core-profile-l1-1-0.dll",
+          "api-ms-win-core-rtlsupport-l1-1-0.dll",
+          "api-ms-win-core-string-l1-1-0.dll",
+          "api-ms-win-core-synch-l1-1-0.dll",
+          "api-ms-win-core-sysinfo-l1-1-0.dll",
+          "api-ms-win-security-systemfunctions-l1-1-0.dll"
+        ]
+      }
+    ],
+    "license": {
+      "source": "download",
+      "fileName": "NVIDIA-CUDA-12.4-EULA.pdf",
+      "url": "https://docs.nvidia.com/cuda/archive/12.4.1/pdf/EULA.pdf",
+      "bytes": 221872,
+      "sha256": "6ada441ae5a45a4a3d51ade8850fa2229fc6dd95de0c9da6e2cdd7a46701b844",
+      "path": "notices/nvidia-cuda/NVIDIA-CUDA-12.4-EULA.pdf"
+    },
+    "provenancePath": "llama-cuda-overlay-provenance.json"
   },
   "components": {
     "python": {
@@ -226,14 +346,14 @@
       ]
     },
     "translationModel": {
-      "version": "Q8_0",
+      "version": "Q4_K_M",
       "archiveType": "file",
-      "fileName": "HY-MT2-7B-Q8_0.gguf",
-      "url": "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/707464294cf5b2a5a69982855020858ed58cf1d1/HY-MT2-7B-Q8_0.gguf?download=true",
-      "bytes": 7981928896,
-      "sha256": "58b3ad55dd6f6fa08c695cddc34fb5f8f708a844f78ae10508071914b0ed67c0",
+      "fileName": "Hy-MT2-7B-Q4_K_M.gguf",
+      "url": "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/Hy-MT2-7B-Q4_K_M.gguf?download=true",
+      "bytes": 4624648896,
+      "sha256": "9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b",
       "modelId": "tencent/Hy-MT2-7B-GGUF",
-      "revision": "707464294cf5b2a5a69982855020858ed58cf1d1",
+      "revision": "ab8472660ac61fac25f1af43fac2599d52a8a775",
       "license": {
         "source": "download",
         "fileName": "LICENSE-Hy-MT2-7B.txt",

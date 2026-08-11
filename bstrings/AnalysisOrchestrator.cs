@@ -44,6 +44,22 @@ internal sealed record OcrAnalysisSummary(
     long StringRecords
 );
 
+internal sealed record TranslationRoutingSummary(
+    string Mode,
+    string PolicyVersion,
+    string CodebookVersion,
+    IReadOnlyDictionary<string, string> Codebook,
+    string Assessments,
+    int AssessmentSchemaVersion,
+    long? Retained,
+    long? ProspectiveBypasses,
+    long? Unknown,
+    long? RoutingEvaluations,
+    long? DetectorEligibleRecords,
+    long? DetectorExecutions,
+    long? DetectorReuseHits
+);
+
 internal static class AnalysisOrchestrator
 {
     private const string TranslationCachePrefix = ".bstrings-translation-cache-";
@@ -236,6 +252,17 @@ internal static class AnalysisOrchestrator
     {
         ValidateOptions(options);
         ValidateInputSource(options);
+        var patterns = Program.ResolveAnalysisPatterns(
+            options.PatternSelection,
+            options.RegexFilePath
+        );
+        EnrichmentRegexPipelineCore.ValidatePatterns(patterns);
+        if (options.NativeExtractionMode == NativeExtractionMode.Off)
+        {
+            Console.Error.WriteLine(
+                "Warning: native extraction is disabled; this specialist run does not provide universal byte-string coverage."
+            );
+        }
         var outputDirectory = Path.GetFullPath(options.OutputDirectory);
         ValidateOutputLocation(options, outputDirectory);
 
@@ -334,6 +361,8 @@ internal static class AnalysisOrchestrator
         InputManifestInfo? inputManifest = null;
         ContentRoutingStats? routing = null;
         EngineStatusStats? engineStatuses = null;
+        LanguageTriageStats? triage = null;
+        TranslationWorkStats? translationWork = null;
         long completedMatchCount = 0;
         long completedStringCount = 0;
 
@@ -347,6 +376,10 @@ internal static class AnalysisOrchestrator
             var candidatesPath = Path.Combine(outputDirectory, "translation-candidates.jsonl");
             var assessmentsPath = Path.Combine(outputDirectory, "language-assessments.jsonl");
             var translationsPath = Path.Combine(outputDirectory, "translated-strings.jsonl");
+            var translationWorkStatsPath = Path.Combine(
+                outputDirectory,
+                "translation-work-stats.json"
+            );
             var enrichedPath = Path.Combine(outputDirectory, "enriched-strings.jsonl");
             var matchesPath = Path.Combine(outputDirectory, "regex-matches.jsonl");
             var findingsPath = Path.Combine(outputDirectory, "findings.tsv");
@@ -382,6 +415,8 @@ internal static class AnalysisOrchestrator
                 bundleIntegrity,
                 routing,
                 engineStatuses,
+                triage,
+                translationWork,
                 null,
                 null,
                 cancellationToken
@@ -448,6 +483,8 @@ internal static class AnalysisOrchestrator
                             flossManifestPath,
                             ocrInventoryPath,
                             ocrInputManifestPath,
+                            expectedNativeSelected:
+                                options.NativeExtractionMode == NativeExtractionMode.On,
                             cancellationToken,
                             expectedClassifierExecutable: toolchain!.MagikaExecutable
                         );
@@ -455,74 +492,81 @@ internal static class AnalysisOrchestrator
                 );
             }
 
-            FileStream? nativeInventoryLease = null;
-            FileStream? nativeManifestLease = null;
-            try
+            if (options.NativeExtractionMode == NativeExtractionMode.Off)
             {
+                await CreateEmptyFileAtomicAsync(nativePath, cancellationToken);
+            }
+            else
+            {
+                FileStream? nativeInventoryLease = null;
+                FileStream? nativeManifestLease = null;
+                try
+                {
+                    await RunStageAsync(
+                        "pre-native input inventory verification",
+                        stageSeconds,
+                        async () =>
+                        {
+                            nativeInventoryLease = await InputEvidenceManifest
+                                .AcquireVerifiedInventoryLeaseAsync(
+                                    inventoryPath,
+                                    inputManifest!,
+                                    cancellationToken
+                                );
+                            nativeManifestLease = await ContentRoutingCore
+                                .AcquireVerifiedFileLeaseAsync(
+                                    inputManifestPath,
+                                    inputManifest!.ManifestSha256,
+                                    "evidence content manifest",
+                                    cancellationToken
+                                );
+                        }
+                    );
+                    await RunStageAsync(
+                        "native extraction",
+                        stageSeconds,
+                        () =>
+                            RunNativeExtractionAsync(
+                                options,
+                                inventoryPath,
+                                inputManifestPath,
+                                nativePath,
+                                outputDirectory,
+                                logsDirectory,
+                                executingExecutablePath,
+                                cancellationToken
+                            )
+                    );
+                }
+                finally
+                {
+                    if (nativeInventoryLease is not null)
+                    {
+                        await nativeInventoryLease.DisposeAsync();
+                    }
+                    if (nativeManifestLease is not null)
+                    {
+                        await nativeManifestLease.DisposeAsync();
+                    }
+                }
                 await RunStageAsync(
-                    "pre-native input inventory verification",
+                    "post-native input verification",
                     stageSeconds,
                     async () =>
                     {
-                        nativeInventoryLease = await InputEvidenceManifest
-                            .AcquireVerifiedInventoryLeaseAsync(
-                                inventoryPath,
-                                inputManifest!,
-                                cancellationToken
-                            );
-                        nativeManifestLease = await ContentRoutingCore
-                            .AcquireVerifiedFileLeaseAsync(
-                                inputManifestPath,
-                                inputManifest!.ManifestSha256,
-                                "evidence content manifest",
-                                cancellationToken
-                            );
+                        await InputEvidenceManifest.VerifyInventoryAsync(
+                            inventoryPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
+                        await InputEvidenceManifest.VerifyAsync(
+                            inputManifestPath,
+                            inputManifest!,
+                            cancellationToken
+                        );
                     }
                 );
-                await RunStageAsync(
-                    "native extraction",
-                    stageSeconds,
-                    () =>
-                        RunNativeExtractionAsync(
-                            options,
-                            inventoryPath,
-                            inputManifestPath,
-                            nativePath,
-                            outputDirectory,
-                            logsDirectory,
-                            executingExecutablePath,
-                            cancellationToken
-                        )
-                );
             }
-            finally
-            {
-                if (nativeInventoryLease is not null)
-                {
-                    await nativeInventoryLease.DisposeAsync();
-                }
-                if (nativeManifestLease is not null)
-                {
-                    await nativeManifestLease.DisposeAsync();
-                }
-            }
-            await RunStageAsync(
-                "post-native input verification",
-                stageSeconds,
-                async () =>
-                {
-                    await InputEvidenceManifest.VerifyInventoryAsync(
-                        inventoryPath,
-                        inputManifest!,
-                        cancellationToken
-                    );
-                    await InputEvidenceManifest.VerifyAsync(
-                        inputManifestPath,
-                        inputManifest!,
-                        cancellationToken
-                    );
-                }
-            );
 
             if (options.RecoveryMode == ExecutableRecoveryMode.Off)
             {
@@ -852,7 +896,6 @@ internal static class AnalysisOrchestrator
                     )
             );
 
-            LanguageTriageStats? triage = null;
             long translationCandidateCount = 0;
             if (
                 options.TranslationMode
@@ -927,11 +970,12 @@ internal static class AnalysisOrchestrator
                     {
                         if (translationCandidateCount > 0)
                         {
-                            await RunTranslationAsync(
+                            translationWork = await RunTranslationAsync(
                                 options,
                                 toolchain!,
                                 candidatesPath,
                                 translationsPath,
+                                translationWorkStatsPath,
                                 translationCandidateCount,
                                 outputDirectory,
                                 logsDirectory,
@@ -945,6 +989,33 @@ internal static class AnalysisOrchestrator
                             );
                             await CreateEmptyFileAtomicAsync(
                                 translationsPath,
+                                cancellationToken
+                            );
+                            TranslationWorkStatsCore.ValidateAtomicDestination(
+                                translationWorkStatsPath
+                            );
+                            await WriteJsonAtomicAsync(
+                                translationWorkStatsPath,
+                                new
+                                {
+                                    schemaVersion = TranslationWorkStatsCore.SchemaVersion,
+                                    candidateOccurrences = 0,
+                                    textDecisions = 0,
+                                    protectedOnlyBypassTexts = 0,
+                                    runCacheHits = 0,
+                                    translationCacheHits = 0,
+                                    translatorRequests = 0,
+                                    translatorInputTexts = 0,
+                                    modelResults = 0,
+                                    modelFallbacks = 0,
+                                    translatedChildOccurrences = 0,
+                                    preservationFallbackChildOccurrences = 0,
+                                },
+                                cancellationToken
+                            );
+                            translationWork = await TranslationWorkStatsCore.ValidateAsync(
+                                translationWorkStatsPath,
+                                expectedCandidateOccurrences: 0,
                                 cancellationToken
                             );
                         }
@@ -988,10 +1059,6 @@ internal static class AnalysisOrchestrator
                     )
             );
 
-            var patterns = Program.ResolveAnalysisPatterns(
-                options.PatternSelection,
-                options.RegexFilePath
-            );
             EnrichmentPipelineStats matches = default;
             await RunStageAsync(
                 "pattern matching",
@@ -1040,7 +1107,9 @@ internal static class AnalysisOrchestrator
                             recoveredPath,
                             ocrAssessmentsPath,
                             engineStatusPath,
-                            cancellationToken
+                            expectedNativeSelected:
+                                options.NativeExtractionMode == NativeExtractionMode.On,
+                            cancellationToken: cancellationToken
                         )
                 );
             }
@@ -1128,10 +1197,15 @@ internal static class AnalysisOrchestrator
                         ambiguousRecords = triage.Value.AmbiguousRecords,
                         nonLinguisticRecords = triage.Value.NonLinguisticRecords,
                         detectorFailures = triage.Value.DetectorFailures,
+                        translationRouting = CreateTranslationRoutingSummary(
+                            options.TranslationMode,
+                            triage
+                        ),
                     },
                 translatedStrings = enrichedMerge.InputRecords.Count > 1
                     ? enrichedMerge.InputRecords[1]
                     : 0,
+                translationWork,
                 enrichedStrings = enrichedMerge.OutputRecords,
                 regexPatterns = patterns.Count,
                 regexMatches = matches.MatchRecords,
@@ -1163,6 +1237,8 @@ internal static class AnalysisOrchestrator
                 bundleIntegrity,
                 routing,
                 engineStatuses,
+                triage,
+                translationWork,
                 matches,
                 null,
                 cancellationToken
@@ -1187,6 +1263,8 @@ internal static class AnalysisOrchestrator
                     bundleIntegrity,
                     routing,
                     engineStatuses,
+                    triage,
+                    translationWork,
                     null,
                     ex.Message,
                     CancellationToken.None
@@ -1296,31 +1374,14 @@ internal static class AnalysisOrchestrator
         CancellationToken cancellationToken
     )
     {
-        var arguments = PythonPrefix(toolchain);
-        arguments.Add("--airgap");
-        arguments.Add("--triage-only");
-        arguments.Add("--paths-from");
-        arguments.Add(inventoryPath);
-        arguments.Add("--input-manifest");
-        arguments.Add(inputManifestPath);
-        arguments.Add("-o");
-        arguments.Add(outputPath);
-        arguments.Add("--magika");
-        arguments.Add(toolchain.MagikaExecutable!);
-        arguments.Add("--progress-total-files");
-        arguments.Add(totalFiles.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        if (options.RecoveryMode != ExecutableRecoveryMode.Off)
-        {
-            arguments.Add("--enable-floss");
-        }
-        if (options.OcrMode != OcrWorkflowMode.Off)
-        {
-            arguments.Add("--enable-ocr");
-        }
-        if (options.RecoveryMode == ExecutableRecoveryMode.Force)
-        {
-            arguments.Add("--force-floss");
-        }
+        var arguments = BuildContentRoutingArguments(
+            options,
+            toolchain,
+            inventoryPath,
+            inputManifestPath,
+            outputPath,
+            totalFiles
+        );
         await ChildProcessRunner.RunAsync(
             toolchain.PythonExecutable,
             arguments,
@@ -1337,6 +1398,51 @@ internal static class AnalysisOrchestrator
                 "Content triage completed without its required routing manifest."
             );
         }
+    }
+
+    internal static List<string> BuildContentRoutingArguments(
+        AnalysisOptions options,
+        AnalysisToolchain toolchain,
+        string inventoryPath,
+        string inputManifestPath,
+        string outputPath,
+        long totalFiles
+    )
+    {
+        if (totalFiles < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(totalFiles));
+        }
+        var arguments = PythonPrefix(toolchain);
+        arguments.Add("--airgap");
+        arguments.Add("--triage-only");
+        arguments.Add("--paths-from");
+        arguments.Add(inventoryPath);
+        arguments.Add("--input-manifest");
+        arguments.Add(inputManifestPath);
+        arguments.Add("-o");
+        arguments.Add(outputPath);
+        arguments.Add("--magika");
+        arguments.Add(toolchain.MagikaExecutable!);
+        arguments.Add("--progress-total-files");
+        arguments.Add(totalFiles.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (options.NativeExtractionMode == NativeExtractionMode.Off)
+        {
+            arguments.Add("--disable-native");
+        }
+        if (options.RecoveryMode != ExecutableRecoveryMode.Off)
+        {
+            arguments.Add("--enable-floss");
+        }
+        if (options.OcrMode != OcrWorkflowMode.Off)
+        {
+            arguments.Add("--enable-ocr");
+        }
+        if (options.RecoveryMode == ExecutableRecoveryMode.Force)
+        {
+            arguments.Add("--force-floss");
+        }
+        return arguments;
     }
 
     private static Task RunFlossPreflightAsync(
@@ -1367,6 +1473,39 @@ internal static class AnalysisOrchestrator
         CancellationToken cancellationToken
     )
     {
+        var arguments = BuildRecoveryArguments(
+            options,
+            toolchain,
+            inventoryPath,
+            routingManifestPath,
+            outputPath,
+            totalFiles
+        );
+        await ChildProcessRunner.RunAsync(
+            toolchain.PythonExecutable,
+            arguments,
+            workingDirectory,
+            Path.Combine(logsDirectory, "recovery.stdout.log"),
+            Path.Combine(logsDirectory, "recovery.stderr.log"),
+            OfflineEnvironment(),
+            cancellationToken,
+            static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
+        );
+    }
+
+    internal static List<string> BuildRecoveryArguments(
+        AnalysisOptions options,
+        AnalysisToolchain toolchain,
+        string inventoryPath,
+        string routingManifestPath,
+        string outputPath,
+        long totalFiles
+    )
+    {
+        if (totalFiles < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(totalFiles));
+        }
         var arguments = PythonPrefix(toolchain);
         arguments.Add("--airgap");
         arguments.Add("--bounded-integrated-mode");
@@ -1386,16 +1525,11 @@ internal static class AnalysisOrchestrator
         {
             arguments.Add("--force-floss");
         }
-        await ChildProcessRunner.RunAsync(
-            toolchain.PythonExecutable,
-            arguments,
-            workingDirectory,
-            Path.Combine(logsDirectory, "recovery.stdout.log"),
-            Path.Combine(logsDirectory, "recovery.stderr.log"),
-            OfflineEnvironment(),
-            cancellationToken,
-            static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
-        );
+        if (options.NativeExtractionMode == NativeExtractionMode.Off)
+        {
+            arguments.Add("--include-floss-static");
+        }
+        return arguments;
     }
 
     private static async Task RunOcrAsync(
@@ -1443,11 +1577,12 @@ internal static class AnalysisOrchestrator
         }
     }
 
-    private static async Task RunTranslationAsync(
+    private static async Task<TranslationWorkStats> RunTranslationAsync(
         AnalysisOptions options,
         AnalysisToolchain toolchain,
         string inputPath,
         string outputPath,
+        string statsPath,
         long totalRecords,
         string workingDirectory,
         string logsDirectory,
@@ -1495,9 +1630,12 @@ internal static class AnalysisOrchestrator
         arguments.Add(options.TranslationMaximumCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture));
         arguments.Add("--progress-total-records");
         arguments.Add(totalRecords.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        arguments.Add("--translation-stats-output");
+        arguments.Add(statsPath);
 
         await RunWithTranslationCacheCleanupAsync(
             outputPath,
+            statsPath,
             () =>
                 ChildProcessRunner.RunAsync(
                     toolchain.PythonExecutable,
@@ -1510,10 +1648,26 @@ internal static class AnalysisOrchestrator
                     static line => ActiveAnalysisProgress.Value?.ReportChildLine(line)
                 )
         );
+        return await TranslationWorkStatsCore.ValidateAsync(
+            statsPath,
+            totalRecords,
+            cancellationToken
+        );
     }
 
     internal static async Task RunWithTranslationCacheCleanupAsync(
         string translationOutputPath,
+        Func<Task> runChild
+    ) =>
+        await RunWithTranslationCacheCleanupAsync(
+            translationOutputPath,
+            translationStatsPath: null,
+            runChild
+        );
+
+    internal static async Task RunWithTranslationCacheCleanupAsync(
+        string translationOutputPath,
+        string? translationStatsPath,
         Func<Task> runChild
     )
     {
@@ -1525,6 +1679,10 @@ internal static class AnalysisOrchestrator
         finally
         {
             CleanupTranslationCacheArtifacts(translationOutputPath);
+            if (!string.IsNullOrWhiteSpace(translationStatsPath))
+            {
+                CleanupTranslationCacheArtifacts(translationStatsPath);
+            }
         }
     }
 
@@ -1891,9 +2049,35 @@ internal static class AnalysisOrchestrator
         {
             throw new ArgumentException("A results directory is required with -o.");
         }
-        if (!Enum.IsDefined(options.OcrMode) || !Enum.IsDefined(options.OcrProvider))
+        if (
+            !Enum.IsDefined(options.NativeExtractionMode)
+            || !Enum.IsDefined(options.OcrMode)
+            || !Enum.IsDefined(options.OcrProvider)
+            || !Enum.IsDefined(options.RecoveryMode)
+            || !Enum.IsDefined(options.TranslationMode)
+        )
         {
-            throw new ArgumentException("OCR mode or provider is invalid.");
+            throw new ArgumentException("An analysis engine mode or provider is invalid.");
+        }
+        if (
+            options.NativeExtractionMode == NativeExtractionMode.Off
+            && options.RecoveryMode == ExecutableRecoveryMode.Off
+            && options.OcrMode == OcrWorkflowMode.Off
+        )
+        {
+            throw new ArgumentException(
+                "Analysis requires at least one source producer: enable native extraction, FLOSS recovery, or OCR."
+            );
+        }
+        if (
+            !ProcessingBackendCore.TryParseMode(options.Processor, out _, out var processorError)
+        )
+        {
+            throw new ArgumentException(processorError);
+        }
+        if (!RustAsciiEngine.TryParseMode(options.CpuEngine, out _, out var cpuEngineError))
+        {
+            throw new ArgumentException(cpuEngineError);
         }
         OcrCompletionCore.ValidateRequestedThreads(options.OcrThreads);
         AnalysisCli.ValidateStringLengthBounds(
@@ -2236,7 +2420,7 @@ internal static class AnalysisOrchestrator
 
     internal static int CountPlannedStages(AnalysisOptions options, bool needsExternalToolchain)
     {
-        var count = 9;
+        var count = options.NativeExtractionMode == NativeExtractionMode.On ? 9 : 6;
         if (needsExternalToolchain)
         {
             count++;
@@ -2275,6 +2459,8 @@ internal static class AnalysisOrchestrator
         BundleIntegrity? bundleIntegrity,
         ContentRoutingStats? routing,
         EngineStatusStats? engineStatuses,
+        LanguageTriageStats? triage,
+        TranslationWorkStats? translationWork,
         EnrichmentPipelineStats? enrichmentStats,
         string? error,
         CancellationToken cancellationToken
@@ -2311,11 +2497,96 @@ internal static class AnalysisOrchestrator
                     conflicts = routing.Value.Conflicts,
                 },
             engineStatuses = CreateEngineStatusSummary(engineStatuses),
+            translationRouting = CreateTranslationRoutingSummary(options.TranslationMode, triage),
+            translationWork,
             preservationFallbacks = enrichmentStats?.PreservationFallbackRecords,
             options,
             error,
         };
         await WriteJsonAtomicAsync(path, record, cancellationToken);
+    }
+
+    internal static TranslationRoutingSummary? CreateTranslationRoutingSummary(
+        TranslationWorkflowMode translationMode,
+        LanguageTriageStats? triage
+    )
+    {
+        if (
+            translationMode
+            is not TranslationWorkflowMode.Auto and not TranslationWorkflowMode.DetectOnly
+        )
+        {
+            return null;
+        }
+        if (
+            triage is { } completedTriage
+            && (
+                completedTriage.TranslationRoutingRetained < 0
+                || completedTriage.TranslationRoutingProspectiveBypasses < 0
+                || completedTriage.TranslationRoutingUnknown < 0
+                || completedTriage.InputRecords < 0
+                || completedTriage.TranslationRoutingRetained > completedTriage.InputRecords
+                || completedTriage.TranslationRoutingProspectiveBypasses
+                    > completedTriage.InputRecords
+                        - completedTriage.TranslationRoutingRetained
+                || completedTriage.TranslationRoutingUnknown
+                    != completedTriage.InputRecords
+                        - completedTriage.TranslationRoutingRetained
+                        - completedTriage.TranslationRoutingProspectiveBypasses
+            )
+        )
+        {
+            throw new InvalidDataException(
+                "Translation-routing aggregates do not match the language-triage input cardinality."
+            );
+        }
+        if (
+            triage is { } measuredTriage
+            && (
+                measuredTriage.TranslationRoutingEvaluations < 0
+                || measuredTriage.TranslationRoutingEvaluations > measuredTriage.InputRecords
+                || (
+                    measuredTriage.InputRecords > 0
+                    && measuredTriage.TranslationRoutingEvaluations == 0
+                )
+                || measuredTriage.DetectorEligibleRecords < 0
+                || measuredTriage.DetectorEligibleRecords > measuredTriage.InputRecords
+                || measuredTriage.DetectorExecutions < 0
+                || measuredTriage.DetectorReuseHits < 0
+                || measuredTriage.DetectorFailures < 0
+                || measuredTriage.DetectorExecutions > measuredTriage.DetectorEligibleRecords
+                || measuredTriage.DetectorReuseHits
+                    != measuredTriage.DetectorEligibleRecords
+                        - measuredTriage.DetectorExecutions
+                || measuredTriage.DetectorFailures > measuredTriage.DetectorExecutions
+                || !string.Equals(
+                    measuredTriage.TranslationRoutingPolicyVersion,
+                    TranslationWorthinessRouter.PolicyVersion,
+                    StringComparison.Ordinal
+                )
+            )
+        )
+        {
+            throw new InvalidDataException(
+                "Translation-routing work counters do not reconcile with language-triage cardinality."
+            );
+        }
+        return new TranslationRoutingSummary(
+            Mode: "shadow",
+            PolicyVersion: triage?.TranslationRoutingPolicyVersion
+                ?? TranslationWorthinessRouter.PolicyVersion,
+            CodebookVersion: TranslationWorthinessRouter.CodebookVersion,
+            Codebook: TranslationWorthinessRouter.Codebook,
+            Assessments: "language-assessments.jsonl",
+            AssessmentSchemaVersion: 1,
+            Retained: triage?.TranslationRoutingRetained,
+            ProspectiveBypasses: triage?.TranslationRoutingProspectiveBypasses,
+            Unknown: triage?.TranslationRoutingUnknown,
+            RoutingEvaluations: triage?.TranslationRoutingEvaluations,
+            DetectorEligibleRecords: triage?.DetectorEligibleRecords,
+            DetectorExecutions: triage?.DetectorExecutions,
+            DetectorReuseHits: triage?.DetectorReuseHits
+        );
     }
 
     private static object? CreateEngineStatusSummary(EngineStatusStats? stats)

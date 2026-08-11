@@ -113,7 +113,7 @@ def measure_exact(rows: int, distinct_keys: int, cache_size: int, workload: str)
         cache.close(commit=True, strict=True)
     return Measurement(
         workload,
-        "v1.9.16-run-local-exact",
+        "v1.9.17-run-local-exact",
         rows,
         distinct_keys,
         model_inputs,

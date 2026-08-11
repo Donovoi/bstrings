@@ -18,6 +18,12 @@ internal enum OcrWorkflowMode
     Force,
 }
 
+internal enum NativeExtractionMode
+{
+    On,
+    Off,
+}
+
 internal enum OcrProvider
 {
     [JsonStringEnumMemberName("auto")]
@@ -70,5 +76,6 @@ internal sealed record AnalysisOptions(
     int TranslationMinimumCharacters,
     int TranslationMaximumCharacters,
     string? BundleRoot,
-    bool Airgap
+    bool Airgap,
+    NativeExtractionMode NativeExtractionMode = NativeExtractionMode.On
 );

@@ -1,7 +1,7 @@
 # Enrichment pipeline
 
 This document describes the integrated workflow in current source and the
-complete v1.9.16 quality release. See
+complete v1.9.17 quality release. See
 [download and installation](download-and-install.md) before choosing a command,
 and never combine assets from different versions.
 
@@ -10,9 +10,7 @@ then applies one pattern catalog without losing where each string came from:
 
 ```text
 input inventory and SHA-256 identity
-  -> native string extraction
-  -> Magika routing and FLOSS executable recovery
-  -> PDF text extraction and OCR
+  -> selected source producers: native, FLOSS, and/or PDF/OCR
   -> language assessment
   -> selected local translation
   -> built-in and custom regex matching
@@ -27,7 +25,7 @@ interface is one command:
 .\bstrings.exe analyze -d D:\evidence\carved --full -o D:\results\case-01
 ```
 
-The complete v1.9.16 bundle contains every worker, runtime, model, and dependency
+The complete v1.9.17 bundle contains every worker, runtime, model, and dependency
 published for that version. It does not ask the user to install or invoke
 Python, [Magika](https://github.com/google/magika),
 [FLOSS](https://github.com/mandiant/flare-floss),
@@ -43,11 +41,18 @@ when filesystem-level or embedded-executable/document coverage is required.
 The direct scanner can search raw image bytes, but FLOSS requires a complete
 supplied executable and OCR requires a supported image/PDF file.
 
+In current source after v1.9.17, Full defaults native extraction on and enables
+routed FLOSS/OCR plus automatic translation. Each producer remains
+independently selectable, and an explicit mode overrides its Full default. The
+published v1.9.17 binaries do not yet contain `--native-extraction`. Runtime
+selection does not split the installed quality bundle: that shared physical
+profile is still verified atomically.
+
 ## What each stage contributes
 
 | Stage | Contribution | Important boundary |
 | --- | --- | --- |
-| Native extractor | ASCII/Unicode strings with byte offsets, using the selected CPU/Rust/GPU path | It does not reconstruct runtime-decoded values |
+| Native extractor | ASCII/Unicode strings with byte offsets, using the selected CPU/Rust/GPU path | It is on by default but can be explicitly disabled; it does not reconstruct runtime-decoded values |
 | Magika | Probabilistically classifies supplied files and routes likely PE files to FLOSS | It samples file content; it is not complete-byte validation, carving, or malware detection |
 | FLOSS | Recovers stack, tight-loop, decoded, and selected language strings from supported PE files | Recovered addresses may be program/virtual locations, not file offsets |
 | PDF/OCR | Extracts born-digital PDF text and reads raster text from images/pages | OCR remains probabilistic and script/model dependent |
@@ -66,16 +71,27 @@ after all requested stages complete.
 # Everything, with automatic OCR and translation decisions
 .\bstrings.exe analyze -d D:\carved --full -o D:\results\full
 
-# Recover executable strings and match them, but do not translate
-.\bstrings.exe analyze -d D:\executables `
-  --recover-executable-strings auto --translation off --lr all `
-  -o D:\results\recovered
+# Native extraction only
+.\bstrings.exe analyze -f D:\evidence\memory.raw `
+  --native-extraction on --recover-executable-strings off `
+  --ocr off --translation off --lr all -o D:\results\native
 
-# OCR images/PDFs, assess language, translate selected records, then match
+# FLOSS only: include FLOSS static and derived categories, then match
+.\bstrings.exe analyze -d D:\executables `
+  --native-extraction off --recover-executable-strings force `
+  --ocr off --translation off --lr all -o D:\results\floss
+
+# OCR only
 .\bstrings.exe analyze -d D:\documents `
-  --ocr auto --ocr-provider auto `
-  --translation auto --translation-policy high-recall `
-  -o D:\results\documents
+  --native-extraction off --recover-executable-strings off `
+  --ocr force --ocr-provider auto --translation off `
+  -o D:\results\ocr
+
+# OCR source records, then language assessment and selected translation
+.\bstrings.exe analyze -d D:\documents `
+  --native-extraction off --recover-executable-strings off `
+  --ocr force --translation auto --translation-policy high-recall `
+  -o D:\results\ocr-translated
 
 # Inventory likely languages without running translation
 .\bstrings.exe analyze -d D:\carved `
@@ -88,6 +104,14 @@ after all requested stages complete.
 
 Directory analysis is recursive. Put the output outside the input tree.
 
+Native, FLOSS, and OCR are source producers. Translation is a transform over
+their canonical records, not a raw-byte extractor. `--translation auto`,
+`all`, and `detect-only` therefore require at least one selected producer; a
+producerless configuration fails before the bundle, output path, or evidence is
+opened. Pattern matching and reports remain mandatory in every `analyze` mode.
+A selected specialist that has no applicable input or emits zero records can
+still complete successfully with truthful terminal status.
+
 ## Executable recovery
 
 [Magika](https://github.com/google/magika) now runs once in bounded multi-file
@@ -95,9 +119,10 @@ batches immediately after the SHA-256 input manifest is frozen. Its raw and
 thresholded predictions are combined with deterministic PE/PDF/image signatures
 and conservative extension hints in `content-routing.jsonl`. The union of
 positive signals routes candidates to [FLOSS](https://github.com/mandiant/flare-floss)
-and OCR; it never removes an input from native byte extraction. A valid PE
-signature, either Magika PE prediction, or the explicit force override can
-schedule FLOSS. An executable extension by itself cannot.
+and OCR. Native remains eligible for coverage disclosure, but an explicit
+`--native-extraction off` leaves it unscheduled. A valid PE signature, either
+Magika PE prediction, or the explicit force override can schedule FLOSS. An
+executable extension by itself cannot.
 
 Unknown or failed classification remains auditable and fails open to the
 deterministic probes. Magika samples content, so routing does not prove that
@@ -110,9 +135,11 @@ The bstrings adapter consumes FLOSS JSON from a temporary disk file, validates
 its pinned result schema incrementally, normalizes supported categories, and
 keeps distinct evidence locations even when the text is identical.
 
-FLOSS static strings are omitted from enrichment by default because native
-bstrings already captures them. This avoids duplicate records while retaining
-FLOSS's genuinely derived strings. The output transaction fails closed on
+When native extraction is selected, FLOSS static strings are omitted because
+native bstrings already captures them. This avoids duplicate records while
+retaining FLOSS's genuinely derived strings. When native is off and FLOSS is a
+selected producer, the adapter includes FLOSS static strings so specialist-only
+coverage is not silently reduced. The output transaction fails closed on
 unknown categories, duplicate JSON keys, missing required fields, invalid
 addresses/encodings, overlong items, malformed UTF-8/JSON, timeout, or
 unexpected process failure.
@@ -134,13 +161,13 @@ recall or performance.
 
 OCR is integrated before language assessment so an examiner does not need to
 know in advance which image or scanned page contains important non-English
-text. PDF text-layer records and OCR records join native/FLOSS records in the
-same normalized stream; language triage and regex processing therefore operate
-on all of them.
+text. PDF text-layer and OCR records join the records from whichever other
+producers were selected in the same normalized stream; language triage and
+regex processing therefore operate on the exact selected-source union.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.16 profile
+page. Images are always OCR inputs when the stage is enabled. The v1.9.17 profile
 defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
 per-path inference smoke test. Those smokes do not establish cross-provider
 parity or corpus-level quality. CUDA OCR is not part of the profile. See
@@ -177,6 +204,54 @@ conservative floor: 0.65 confidence and 0.15 target margin. It is an expert
 volume-control policy, not the Full default and not a calibrated accuracy
 claim.
 
+Before language detection, the triage stage computes a compact, versioned
+translation-worthiness observation. The first implementation is deliberately
+shadow-only: a `prospective-*` code means that a strict validator consumed the
+complete trimmed record, but the record still follows the same Lingua and
+high-recall candidate path. `shadow-*` records other validated machine-like
+signals that are not bypass-eligible, and `retain` covers natural, mixed,
+unsupported, or inconclusive records and every router failure. File-level
+Magika labels and extractor provenance may support retention but never suppress
+translation by themselves.
+
+The observation is stored in the record's existing
+`language-assessments.jsonl` row under `translationRouting`; it does not create
+a second copy of the evidence text or repeat existing detector/candidate
+fields. Each row contains one bounded routing code; `run.json` and
+`summary.json` bind the policy version and aggregate counts once per run. This
+shadow rollout measures classification quality and overhead without changing
+canonical parents, candidate order, or translated-child cardinality.
+Authoritative bypass remains disabled until the multilingual forensic recall
+and end-to-end performance gates in
+[ADR-0007](architecture/adr-0007-translation-worthiness-routing.md) pass.
+
+The current C# foundation also classifies a bounded set of origin flags for
+each pending triage record and publishes reconciled work counters for
+batch-unique routing evaluations, Lingua-eligible occurrences, actual Lingua
+executions, and same-batch Lingua reuse. The structured shadow router does not
+currently use origin to change its code; a future scorer may use origin only to
+strengthen retention. A second Robin review froze any
+future learned experiment as a binary `contains-any-human` versus
+`machine-only` shadow scorer with explicit abstention; mixed records count as
+human-positive, and an unvalidated origin/script/length cell retains. No learned
+scorer is active, no runtime or model-size choice has been made, and none of
+these observations currently avoids work.
+
+The translation worker atomically publishes privacy-safe schema-1 aggregates
+to `translation-work-stats.json` after publishing translated output. Managed
+C# hashes the physical stats file, validates its exact schema and candidate,
+decision, model-result, fallback, and child cardinalities, then projects it as
+`translationWork` in `run.json` and `summary.json`. A mismatch fails the run.
+
+`textDecisions` is the first exact-text decision within each translation
+window/call, not a globally distinct-text count. Exact text repeated in a later
+window creates another decision; `runCacheHits` reports the resulting cross-
+window reuse. `translatorRequests` counts translator batch dispatches and
+`translatorInputTexts` counts submitted texts, so neither candidate occurrences
+nor the console's `modelInputs` display should be substituted for a different
+work unit. The artifact contains counters only, but private case aggregates and
+its SHA-256 still must not be published.
+
 These normalized confidences are not universally calibrated probabilities.
 Short strings, names, mixed-language text, OCR errors, and transliteration are
 hard cases. Use `--translation detect-only` to review the distribution, or
@@ -188,8 +263,10 @@ effective thresholds, confidence values, decision, and source record ID.
 `effectiveMinimumConfidence`, and `effectiveMinimumTargetMargin` make an
 optional high-precision floor auditable. Policy decisions use the raw detector
 values. The five displayed score fields are serialized to 12 decimal places
-with round-to-even so parallel reductions cannot change report bytes in an
-insignificant final bit. `scoreDecimalPlaces`, `confidenceGatePassed`, and
+with round-to-even to bound insignificant parallel-reduction tails; a large
+independent-call scale run still observed a one-unit difference in the final
+published decimal, without any decision or candidate change.
+`scoreDecimalPlaces`, `confidenceGatePassed`, and
 `marginGatePassed` make that reporting policy and each raw gate outcome
 explicit. These are detector confidence scores, not calibrated probabilities.
 
@@ -209,14 +286,17 @@ through a private local llama.cpp server. Current source publishes one profile:
 
 | Profile | Model | Bytes | WMT24++ chrF++ | Forensic chrF++ | Identifiers | Strings/s |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `quality` | Hy-MT2-7B Q8_0 | 7,981,928,896 | **62.6786** | **92.8310** | 22/22 | 0.2793 |
+| `quality` | Hy-MT2-7B Q4_K_M | 4,624,648,896 | **62.4386 CPU / 62.6129 CUDA p2** | **93.6923** | 22/22 | 0.1086 CPU / 1.3085 CUDA p2 |
 
-The strict synthetic/attribution-safe gate is described in the historical
-[translation report](translation-benchmark-2026-08-04.md), which also records
-the retired smaller candidates. The 7B Q8_0 model remains because it produced
-the strongest measured scores; it is not claimed to be fastest or best for
-every language/domain. `balanced` still names a language-triage policy above—it
-is not an install or model profile.
+The strict synthetic/attribution-safe gates are described in the
+[translation report](translation-benchmark-2026-08-04.md). CPU Q4 and the
+mixed source-built CPU server plus official CUDA overlay both retained 22/22
+identifiers and 10/10 downstream patterns. These small-corpus results are a
+bounded acceptance result, not a universal quality or hardware claim. The
+model/runtime choice, exact bytes, failure policy, and release falsifiers are
+recorded in [ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
+`balanced` still names a language-triage policy above—it is not an install or
+model profile.
 
 TranslateGemma remains a research challenger, not the production one-executable
 engine. After gated access was accepted, the official BF16 4B model completed
@@ -237,17 +317,25 @@ integrated examiner CLI.
 
 `--translation-device` accepts `auto`, `cpu`, `cuda`, or `hybrid`:
 
-The standard split-pack bundle contains the reviewed CPU llama.cpp runtime, so
-its normal resolved path is CPU. The remaining choices describe supported
-custom runtime profiles; they require a separately built/accepted CUDA-capable
-llama.cpp closure and a compatible host driver.
+The current Full split-pack design contains the reviewed CPU llama.cpp server
+plus a separately authenticated official CUDA overlay. CUDA validation is
+scoped to Windows RTX 4060 Laptop/sm89 rather than all NVIDIA hardware.
 
-- `auto` uses adaptive GPU offload when the bundled runtime sees compatible
-  CUDA support; otherwise it uses CPU;
+- `auto` tries full Q4 model load, one synthetic request, and observed 33/33
+  layer offload at p2. Any failure closes CUDA and self-tests CPU before the
+  first evidence inference, cache insertion, or output;
 - `cpu` forces zero GPU layers and needs no graphics hardware;
-- `cuda` requires a validated CUDA runtime/driver and full model offload; and
+- `cuda` requires the validated CUDA runtime/driver and full model offload and
+  fails closed rather than selecting CPU; and
 - `hybrid` requires an explicit positive `--translation-gpu-layers` count so
-  the CPU/GPU split is auditable.
+  the CPU/GPU split is auditable, but hybrid and p4 remain unaccepted
+  expert/experimental boundaries.
+
+After the first evidence request, device, provider, placement, and parallelism
+are frozen. A later device/server failure leaves the translation transaction
+incomplete. Full observed offload is reported as 33/33 layers together with
+the real runtime buffers: the accepted command retained a 410.69 MiB
+`CPU_Mapped` model buffer and therefore does not claim zero host residency.
 
 `--translation-parallelism 0` selects conservative slots from hardware and
 model size. The adapter processes bounded windows, groups similar lengths, and
@@ -269,8 +357,8 @@ ordered concurrent requests.
 
 This exact deduplication can remove many redundant model calls without reducing
 Full's candidate recall. It does not make every noisy or mostly unique workload
-fast: the standard translation runtime is CPU-only and large high-recall runs
-can still take a long time. Translation progress therefore reports completed
+fast: CPU fallback and large high-recall runs can still take a long time.
+Translation progress therefore reports completed
 record percentage, rate, ETA, cache hits, distinct model inputs, and preservation
 fallbacks rather than promising a fixed completion time.
 
@@ -343,10 +431,11 @@ version, device path, GPU-layer policy, slots/threads, and `execution.airgap`.
 
 ## Matching and lineage
 
-Native, recovered, OCR, PDF-text, and translated records are merged in a stable
-order before matching. Built-in `--lr` groups and custom `--fr` patterns use
-the same validation semantics on each normalized record. The matcher does not
-rewrite or discard parent records.
+Selected native, recovered, OCR, PDF-text, and translated records are merged in
+a stable order before matching. Disabled producer files remain atomically empty
+so positional accounting stays stable. Built-in `--lr` groups and custom
+`--fr` patterns use the same validation semantics on each normalized record.
+The matcher does not rewrite or discard parent records.
 
 Each record has a stable SHA-256-based ID. Derived records identify their
 parent, source file, location kind, extractor/model/runtime identity, and
@@ -365,8 +454,11 @@ The important result files are:
 - `ocr-assessments.jsonl` and `language-assessments.jsonl`;
 - `translated-strings.jsonl`, `enriched-strings.jsonl`, and
   `regex-matches.jsonl`;
-- `content-routing.jsonl`, routed input projections, and
-  `engine-status.jsonl` terminal coverage;
+- `translation-work-stats.json`, with its validated projection in `run.json`
+  and `summary.json`;
+- specialist `content-routing.jsonl` and routed input projections, plus its
+  three-rows-per-input `engine-status.jsonl` terminal coverage ledger,
+  including `disabled-by-user` producers;
 - `findings.tsv`, `pattern-histogram.tsv`, `feature-histogram.tsv`, and
   `pattern-histogram.html`;
 - `input-manifest.jsonl`, `run.json`, and `summary.json`; and
@@ -379,6 +471,13 @@ for schema and interpretation detail.
 Use `bstrings.exe help analyze` for the installed option set, or see the
 [terminal help and command reference](command-reference.md) for a task-oriented
 workflow guide.
+
+The complete quality installation remains one exact trust profile. A missing,
+extra, or corrupt manifested file blocks any analysis that selects that bundle,
+even when the affected engine was disabled. Runtime optionality does not create
+slim or independently repairable component packs; physically isolated
+capability profiles are deferred by
+[ADR-0008](architecture/adr-0008-independent-engine-execution.md).
 
 ## Maintainer and regression entry points
 

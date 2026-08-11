@@ -87,6 +87,7 @@ jobs:
           [IO.Directory]::CreateDirectory($packCache) | Out-Null
           $cacheInputs = [ordered]@{
             'bstrings-win-x64-offline-base.zip' = 'base.zip'
+            'bstrings-win-x64-offline-cuda.zip' = 'cuda-runtime.zip'
             'airgap-config-quality.json' = 'configuration.file'
             'Hy-MT2-Apache-2.0-quality.txt' = 'translation-license.file'
             'airgap-manifest-quality.json' = 'airgap-manifest.file'

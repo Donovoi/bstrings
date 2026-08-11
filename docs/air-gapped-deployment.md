@@ -1,6 +1,6 @@
 # Air-gapped deployment
 
-The complete Windows x64 v1.9.16 quality kit is prepared on a connected staging
+The complete Windows x64 v1.9.17 quality kit is prepared on a connected staging
 machine, verified, then copied as a directory to the
 disconnected workstation. During an examination, the user runs only the root
 `bstrings.exe`: no package manager, Python command, model hub, service
@@ -8,7 +8,7 @@ installation, or network access is needed.
 PowerShell is only the shell displaying the examples below; normal users do not
 run a Python script or package-manager command.
 
-The same v1.9.16 installation contains the current backend, reporting, pattern,
+The same v1.9.17 installation contains the current backend, reporting, pattern,
 FLOSS, OCR, language, and translation features. See
 [download and installation](download-and-install.md), and do not mix files or
 manifests between versions.
@@ -25,8 +25,8 @@ On a connected staging machine, start in the directory where you want
 at least 30 GiB free on the volume holding its install and cache. It installs
 the complete quality profile.
 
-Use the [pinned, checksum-verified v1.9.16
-bootstrap](https://github.com/Donovoi/bstrings/blob/v1.9.16/README.md#get-started)
+Use the [pinned, checksum-verified v1.9.17
+bootstrap](https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started)
 for `Install-BstringsQuality.ps1`. The installer handles the downloads,
 resumable cache, assembly, and final strict verification. It requires the exact
 published release to report immutable state. The default shared cache survives
@@ -83,7 +83,9 @@ The `windows-x64-offline-v2` base carries:
   dependency;
 - standalone [FLOSS](https://github.com/mandiant/flare-floss);
 - a CPU [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime built from
-  lock-pinned source with network-fetched build inputs disabled;
+  lock-pinned source with network-fetched build inputs disabled, plus a
+  separately authenticated official CUDA 12.4 overlay for the accepted Windows
+  sm89 path;
 - CPU and DirectML OCR runtimes using
   [RapidOCR](https://github.com/RapidAI/RapidOCR),
   [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR),
@@ -94,7 +96,7 @@ The `windows-x64-offline-v2` base carries:
   licenses; and
 - application-local Visual C++ runtime DLLs and a strict file manifest.
 
-The installer adds the quality Hy-MT2-7B Q8_0 model and its canonical licence.
+The installer adds the quality Hy-MT2-7B Q4_K_M model and its canonical licence.
 Exact URLs, lengths, hashes, revisions, runtime inventories, and
 license inputs are frozen in `offline-components.lock.json` and
 `ocr-components.lock.json` inside the bundle.
@@ -105,7 +107,14 @@ model variables are forced, the adapters reject non-loopback network use, and
 the OCR worker performs no network request. Application-local payloads are not
 system prerequisites.
 
-The bundled llama.cpp translation runtime is CPU-only. Full remains
+Current Full `auto` probes the authenticated Windows sm89 CUDA closure by
+loading the exact Q4 model, running one synthetic request, and observing 33/33
+layers offloaded at p2 before evidence work. The accepted command still reports
+a 410.69 MiB `CPU_Mapped` model buffer. If the probe fails, CUDA is closed and
+CPU is tested before evidence inference, cache insertion, or output. Explicit
+CUDA fails closed, the provider cannot change mid-run, and hybrid/p4 remain
+deferred. This is not a universal CUDA claim; see
+[ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md). Full remains
 high-recall, so large mostly unique candidate sets can remain long-running even
 after exact deduplication. During translation, a randomly named SQLite cache is
 created only inside the selected examination output, keeps a bounded in-memory
@@ -116,7 +125,7 @@ fallbacks so offline operators can judge the remaining work.
 
 ## OCR hardware choices
 
-The v1.9.16 OCR profile defines two runtime environments:
+The v1.9.17 OCR profile defines two runtime environments:
 
 - a CPU-only ONNX Runtime environment, verified separately as a fallback; and
 - the active DirectML ONNX Runtime environment, which exposes both DirectML and
@@ -201,10 +210,11 @@ should accept their actual workstation image under their own controls.
   organization's normal trusted process.
 - A driver is host and operating-system software. It cannot be made a truthful
   application-local dependency. CPU remains the no-GPU path.
-- The standard complete profile's llama.cpp translation runtime is CPU-only.
-  Translation CUDA/hybrid requires a separately reviewed runtime profile and
-  compatible host driver; selecting the option does not manufacture that
-  dependency.
+- Current source includes the separately reviewed CUDA translation overlay only
+  for its Windows sm89 acceptance scope. A compatible host driver remains an
+  external prerequisite; selecting `cuda` does not manufacture it. Unsupported
+  `auto` hosts use CPU only after the pre-evidence probe, while explicit CUDA
+  fails closed.
 - Endpoint security, WDAC, AppLocker, or organizational policy may block a
   bundled upstream executable even when its hash matches. Approve exact hashes
   through the local process.

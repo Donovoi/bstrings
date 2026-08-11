@@ -31,9 +31,11 @@ from bstrings_enrich import (  # noqa: E402
     MagikaClassification,
     RoutingInput,
     RunLocalTranslationCache,
+    TranslationAttempt,
     TranslationCache,
     TranslationIntegrityMonitor,
     TranslationOutcome,
+    TranslationWorkStats,
     _iter_magika_batches,
     _make_routing_record,
     _run_magika_batch,
@@ -63,6 +65,7 @@ from bstrings_enrich import (  # noqa: E402
     validate_identifier_retention,
     validate_transformers_version,
     write_jsonl_atomic,
+    write_translation_stats_atomic,
 )
 
 
@@ -612,6 +615,76 @@ class EnrichmentTests(unittest.TestCase):
         self.assertEqual(4, len(output))
         self.assertEqual([1, 2], progress)
 
+    def test_translation_work_stats_count_decisions_without_retaining_keys(self) -> None:
+        cached = make_string_record(
+            text="cached language text",
+            source_file="first.exe",
+            extractor_version="3.1.1",
+            kind="decoded",
+            location_kind="file-offset",
+            location_value=1,
+            attributes={},
+        )
+        protected = make_string_record(
+            text="SYNTH_TOKEN 12345-67890",
+            source_file="second.exe",
+            extractor_version="3.1.1",
+            kind="decoded",
+            location_kind="file-offset",
+            location_value=2,
+            attributes={},
+        )
+        fallback = make_string_record(
+            text="uncached language text",
+            source_file="third.exe",
+            extractor_version="3.1.1",
+            kind="decoded",
+            location_kind="file-offset",
+            location_value=3,
+            attributes={},
+        )
+
+        class FallbackTranslator(FakeTranslator):
+            def translate_attempts(
+                self, texts: list[str], target_language: str
+            ) -> list[TranslationAttempt]:
+                self.calls.append(list(texts))
+                return [TranslationAttempt(None, "synthetic-failure") for _ in texts]
+
+        cache = TranslationCache(4)
+        cache.put("en", cached["text"], "cached translated language text")
+        stats = TranslationWorkStats()
+
+        children = add_translations(
+            [cached, protected, fallback],
+            FallbackTranslator(),
+            "en",
+            8,
+            4,
+            200,
+            cache=cache,
+            work_stats=stats,
+        )
+
+        self.assertEqual(3, len(children))
+        self.assertEqual(
+            {
+                "schemaVersion": 1,
+                "candidateOccurrences": 3,
+                "textDecisions": 3,
+                "protectedOnlyBypassTexts": 1,
+                "runCacheHits": 0,
+                "translationCacheHits": 1,
+                "translatorRequests": 1,
+                "translatorInputTexts": 1,
+                "modelResults": 1,
+                "modelFallbacks": 1,
+                "translatedChildOccurrences": 0,
+                "preservationFallbackChildOccurrences": 0,
+            },
+            stats.payload(),
+        )
+
     def test_changed_structured_identifier_becomes_explicit_source_fallback(self) -> None:
         parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
         parent = {**parent, "text": "cuenta analyst@example.com"}
@@ -694,6 +767,31 @@ class EnrichmentTests(unittest.TestCase):
             ("17-jährig", "server-01"),
             tuple(value for _, _, value in advisory_identifier_spans("17-jährig server-01")),
         )
+
+    def test_numeric_hyphen_sequences_are_not_advisory_language_tokens(self) -> None:
+        for text in ("12345-67890", "12345‐67890", "12345‑67890", "１２３４５－６７８９０"):
+            with self.subTest(text=text):
+                self.assertEqual((), advisory_identifier_spans(text))
+
+    def test_identifier_only_bypass_with_numeric_hyphen_uses_a_consistent_run_cache(self) -> None:
+        parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
+        source = "SYNTH_TOKEN 12345-67890"
+        parent = {**parent, "text": source}
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache = RunLocalTranslationCache(Path(directory), "identity", 4)
+            translator = FakeTranslator()
+            try:
+                first = add_translations([parent], translator, "en", 4, 4, 200, run_cache=cache)[0]
+                second = add_translations([parent], translator, "en", 4, 4, 200, run_cache=cache)[0]
+
+                self.assertEqual([], translator.calls)
+                self.assertEqual(source, first["text"])
+                self.assertEqual("verified", first["attributes"]["translationIntegrity"])
+                self.assertEqual(first, second)
+                self.assertEqual(1, cache.hits)
+            finally:
+                cache.close(commit=False)
 
     def test_advisory_subspan_is_suppressed_inside_hard_hostname(self) -> None:
         text = "server-alpha.example"
@@ -854,6 +952,66 @@ class EnrichmentTests(unittest.TestCase):
         )
         self.assertEqual(2, monitor.model_inputs)
         self.assertEqual(1, monitor.fallbacks)
+
+    def test_generation_failure_retains_exact_source_without_publishing_rejected_text(self) -> None:
+        first = normalize_floss(self.payload, Path("first.exe"), self.classification, "3.1.1")[0]
+        second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
+        first = {**first, "text": "synthetic source that reaches a generation bound"}
+        second = {**second, "text": "hola mundo"}
+
+        class AttemptTranslator(FakeTranslator):
+            def translate_attempts(
+                self, texts: list[str], target_language: str
+            ) -> list[TranslationAttempt]:
+                self.calls.append(list(texts))
+                return [
+                    (
+                        TranslationAttempt(None, "generation-limit-reached")
+                        if "generation bound" in text
+                        else TranslationAttempt("hello world")
+                    )
+                    for text in texts
+                ]
+
+        monitor = TranslationIntegrityMonitor()
+        cache = BoundedTranslationOutcomeCache(4)
+        children = add_translations(
+            [first, second],
+            AttemptTranslator(),
+            "en",
+            8,
+            4,
+            200,
+            run_cache=cache,
+            integrity_monitor=monitor,
+        )
+
+        self.assertEqual(first["text"], children[0]["text"])
+        self.assertEqual("unchanged", children[0]["transform"]["outcome"])
+        self.assertEqual(
+            "preservation-fallback",
+            children[0]["attributes"]["translationIntegrity"],
+        )
+        self.assertEqual(
+            "generation-limit-reached",
+            children[0]["attributes"]["translationIntegrityReason"],
+        )
+        self.assertEqual("hello world", children[1]["text"])
+        self.assertEqual((2, 1), (monitor.model_inputs, monitor.fallbacks))
+        cached = cache.get(first["text"])
+        self.assertEqual(first["text"], cached.text if cached is not None else None)
+
+    def test_failed_translation_attempt_cannot_carry_rejected_model_text(self) -> None:
+        parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
+
+        class InvalidAttemptTranslator(FakeTranslator):
+            def translate_attempts(
+                self, texts: list[str], target_language: str
+            ) -> list[TranslationAttempt]:
+                return [TranslationAttempt("truncated output", "generation-limit-reached")]
+
+        with self.assertRaisesRegex(EnrichmentError, "invalid failed row"):
+            add_translations([parent], InvalidAttemptTranslator(), "en", 1, 4, 200)
 
     def test_successful_ambiguous_source_is_explicit_and_counted(self) -> None:
         parent = normalize_floss(self.payload, Path("sample.exe"), self.classification, "3.1.1")[0]
@@ -1309,21 +1467,42 @@ class EnrichmentTests(unittest.TestCase):
     ) -> None:
         first = normalize_floss(self.payload, Path("first.exe"), self.classification, "3.1.1")[0]
         second = normalize_floss(self.payload, Path("second.exe"), self.classification, "3.1.1")[0]
-        translator = FakeTranslator()
+
+        class OneFallbackTranslator(FakeTranslator):
+            def translate_attempts(
+                self, texts: list[str], target_language: str
+            ) -> list[TranslationAttempt]:
+                self.calls.append(list(texts))
+                return [TranslationAttempt(None, "synthetic-failure") for _ in texts]
+
+        translator = OneFallbackTranslator()
         translator_type.return_value = translator
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             input_path = root / "candidates.jsonl"
             output_path = root / "translations.jsonl"
+            stats_path = root / "translation-stats.json"
             model_path = root / "model.gguf"
             model_path.write_bytes(b"model")
+            stats_path.write_text('{"preserved":true}\n', encoding="utf-8")
             input_path.write_text(
                 "\n".join(json.dumps(record) for record in (first, second)) + "\n",
                 encoding="utf-8",
             )
             stderr = io.StringIO()
+            output_at_stats_publish: list[str] = []
 
-            with redirect_stderr(stderr):
+            def publish_stats(path: Path, stats: TranslationWorkStats) -> None:
+                output_at_stats_publish.append(output_path.read_text(encoding="utf-8"))
+                write_translation_stats_atomic(path, stats)
+
+            with (
+                patch(
+                    "bstrings_enrich.write_translation_stats_atomic",
+                    side_effect=publish_stats,
+                ),
+                redirect_stderr(stderr),
+            ):
                 result = main(
                     [
                         "--input-jsonl",
@@ -1343,6 +1522,8 @@ class EnrichmentTests(unittest.TestCase):
                         "1",
                         "--translation-cache-size",
                         "1",
+                        "--translation-stats-output",
+                        str(stats_path),
                         "--translation-window-size",
                         "1",
                         "--progress-total-records",
@@ -1353,8 +1534,31 @@ class EnrichmentTests(unittest.TestCase):
                 )
 
             self.assertEqual(0, result)
+            self.assertEqual(1, len(output_at_stats_publish))
+            self.assertEqual(output_path.read_text(encoding="utf-8"), output_at_stats_publish[0])
             self.assertEqual(2, len(output_path.read_text(encoding="utf-8").splitlines()))
             self.assertEqual([["language text"]], translator.calls)
+            stats_text = stats_path.read_text(encoding="utf-8")
+            self.assertEqual(
+                {
+                    "schemaVersion": 1,
+                    "candidateOccurrences": 2,
+                    "textDecisions": 2,
+                    "protectedOnlyBypassTexts": 0,
+                    "runCacheHits": 1,
+                    "translationCacheHits": 0,
+                    "translatorRequests": 1,
+                    "translatorInputTexts": 1,
+                    "modelResults": 1,
+                    "modelFallbacks": 1,
+                    "translatedChildOccurrences": 2,
+                    "preservationFallbackChildOccurrences": 2,
+                },
+                json.loads(stats_text),
+            )
+            self.assertNotIn("language text", stats_text)
+            self.assertNotIn(translator.model_sha256, stats_text)
+            self.assertNotIn(first["recordId"], stats_text)
             log = stderr.getvalue()
             self.assertIn('"diskBacked":true', log)
             self.assertIn('"examinationLocal":true', log)
@@ -1382,6 +1586,60 @@ class EnrichmentTests(unittest.TestCase):
             "input-JSONL translation uses run-local exact disk deduplication", normalized_help
         )
         self.assertIn("recovery uses bounded in-memory translation deduplication", normalized_help)
+
+    @patch("bstrings_enrich.LlamaCppTranslator")
+    def test_translation_stats_are_not_published_when_evidence_output_fails(
+        self, translator_type
+    ) -> None:
+        translator = FakeTranslator()
+        translator_type.return_value = translator
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "candidates.jsonl"
+            output_path = root / "translations.jsonl"
+            stats_path = root / "translation-stats.json"
+            model_path = root / "model.gguf"
+            model_path.write_bytes(b"model")
+            parent = normalize_floss(
+                self.payload, Path("sample.exe"), self.classification, "3.1.1"
+            )[0]
+            input_path.write_text(json.dumps(parent) + "\n", encoding="utf-8")
+            output_path.write_text("preserved output\n", encoding="utf-8")
+            stats_path.write_text('{"preserved":true}\n', encoding="utf-8")
+
+            with (
+                patch(
+                    "bstrings_enrich.write_jsonl_atomic",
+                    side_effect=EnrichmentError("synthetic output failure"),
+                ),
+                patch("bstrings_enrich.write_translation_stats_atomic") as stats_writer,
+                redirect_stderr(io.StringIO()),
+            ):
+                result = main(
+                    [
+                        "--input-jsonl",
+                        str(input_path),
+                        "--translate",
+                        "--translations-only",
+                        "--bounded-integrated-mode",
+                        "--translation-model-path",
+                        str(model_path),
+                        "--translation-revision",
+                        translator.revision,
+                        "--translation-model-sha256",
+                        translator.model_sha256,
+                        "--translation-stats-output",
+                        str(stats_path),
+                        "-o",
+                        str(output_path),
+                    ]
+                )
+
+            self.assertEqual(2, result)
+            stats_writer.assert_not_called()
+            self.assertEqual("preserved output\n", output_path.read_text(encoding="utf-8"))
+            self.assertEqual('{"preserved":true}\n', stats_path.read_text(encoding="utf-8"))
+            self.assertEqual([], list(root.glob(".bstrings-translation-cache-*.sqlite3*")))
 
     def test_combined_recovery_translation_reuses_outcome_aware_fallback(self) -> None:
         class IdentifierBreakingTranslator(FakeTranslator):
@@ -1524,6 +1782,86 @@ class EnrichmentTests(unittest.TestCase):
 
             self.assertEqual("old", output.read_text(encoding="utf-8"))
             self.assertEqual([], list(Path(directory).glob("*.partial.*")))
+
+    def test_translation_stats_writer_preserves_prior_file_and_removes_partial_on_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "translation-stats.json"
+            output.write_text('{"preserved":true}\n', encoding="utf-8")
+            stats = TranslationWorkStats()
+
+            with (
+                patch("bstrings_enrich.os.replace", side_effect=PermissionError("synthetic lock")),
+                self.assertRaisesRegex(PermissionError, "synthetic lock"),
+            ):
+                write_translation_stats_atomic(output, stats)
+
+            self.assertEqual('{"preserved":true}\n', output.read_text(encoding="utf-8"))
+            self.assertEqual([], list(root.glob("translation-stats.json.partial.*")))
+
+    def test_translation_stats_are_strictly_limited_to_input_jsonl_translation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "input.jsonl"
+            input_path.write_text("{}\n", encoding="utf-8")
+            output_path = root / "output.jsonl"
+            model_path = root / "model.gguf"
+            model_path.write_bytes(b"model")
+            stats_path = root / "stats.json"
+            common = [
+                "--input-jsonl",
+                str(input_path),
+                "--translate",
+                "--translation-model-path",
+                str(model_path),
+                "--translation-revision",
+                "revision",
+                "--translation-model-sha256",
+                "a" * 64,
+                "-o",
+                str(output_path),
+            ]
+
+            with self.assertRaisesRegex(EnrichmentError, "requires --input-jsonl and --translate"):
+                validate_arguments(
+                    parse_arguments(
+                        [
+                            "sample.exe",
+                            "--translation-stats-output",
+                            str(stats_path),
+                            "-o",
+                            str(output_path),
+                        ]
+                    )
+                )
+
+            for alias in (input_path, output_path, model_path):
+                with (
+                    self.subTest(alias=alias),
+                    self.assertRaisesRegex(EnrichmentError, "must differ"),
+                ):
+                    validate_arguments(
+                        parse_arguments(common + ["--translation-stats-output", str(alias)])
+                    )
+
+            stats_path.mkdir()
+            with self.assertRaisesRegex(EnrichmentError, "physical file"):
+                validate_arguments(
+                    parse_arguments(common + ["--translation-stats-output", str(stats_path)])
+                )
+
+            hard_link = root / "input-hard-link.jsonl"
+            try:
+                os.link(input_path, hard_link)
+            except OSError:
+                hard_link = None
+            if hard_link is not None:
+                with self.assertRaisesRegex(EnrichmentError, "must differ"):
+                    validate_arguments(
+                        parse_arguments(common + ["--translation-stats-output", str(hard_link)])
+                    )
 
     def test_positional_extraction_paths_remain_supported(self) -> None:
         args = parse_arguments(["first.exe", "second.exe", "-o", "records.jsonl"])
@@ -1751,6 +2089,128 @@ class EnrichmentTests(unittest.TestCase):
             self.assertIn("Progress: content triage: 0.0% (0/3 files)", stderr.getvalue())
             self.assertIn("Progress: content triage: 100.0% (3/3 files)", stderr.getvalue())
 
+            v2_output = root / "content-routing-v2.jsonl"
+            v2_exit_code = main(
+                [
+                    "--triage-only",
+                    "--disable-native",
+                    "--enable-floss",
+                    "--enable-ocr",
+                    "--paths-from",
+                    str(inventory),
+                    "--input-manifest",
+                    str(manifest),
+                    "--progress-total-files",
+                    "3",
+                    "-o",
+                    str(v2_output),
+                ]
+            )
+            self.assertEqual(0, v2_exit_code)
+            v2_records = [
+                json.loads(line) for line in v2_output.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertTrue(all(record["schemaVersion"] == 2 for record in v2_records))
+            self.assertTrue(
+                all(record["policyVersion"] == "content-routing-v2" for record in v2_records)
+            )
+            self.assertTrue(all("native" in record["eligibleRoutes"] for record in v2_records))
+            self.assertTrue(all("native" not in record["scheduledRoutes"] for record in v2_records))
+            self.assertEqual(["floss"], v2_records[0]["scheduledRoutes"])
+            self.assertEqual(["ocr"], v2_records[1]["scheduledRoutes"])
+            self.assertEqual([], v2_records[2]["scheduledRoutes"])
+
+    def test_routing_policy_pairs_bind_native_schedule_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "sample.bin"
+            source.write_bytes(b"sample")
+            identity = InputIdentity(
+                str(source.resolve()), source.stat().st_size, hashlib.sha256(b"sample").hexdigest()
+            )
+            item = RoutingInput(source.resolve(), identity)
+            default = _make_routing_record(
+                item,
+                self.unknown_magika(),
+                "1.1.0",
+                1,
+                enable_floss=False,
+                enable_ocr=False,
+                force_floss=False,
+            )
+            explicit_default = _make_routing_record(
+                item,
+                self.unknown_magika(),
+                "1.1.0",
+                1,
+                enable_floss=False,
+                enable_ocr=False,
+                force_floss=False,
+                disable_native=False,
+            )
+            self.assertEqual(default, explicit_default)
+            self.assertEqual(1, default["schemaVersion"])
+            self.assertEqual("content-routing-v1", default["policyVersion"])
+            self.assertEqual(["native"], default["scheduledRoutes"])
+
+            v2 = _make_routing_record(
+                item,
+                self.unknown_magika(),
+                "1.1.0",
+                1,
+                enable_floss=True,
+                enable_ocr=False,
+                force_floss=True,
+                disable_native=True,
+            )
+            self.assertEqual(2, v2["schemaVersion"])
+            self.assertEqual("content-routing-v2", v2["policyVersion"])
+            self.assertIn("native", v2["eligibleRoutes"])
+            self.assertEqual(["floss"], v2["scheduledRoutes"])
+
+            manifest = Path(directory) / "routing.jsonl"
+            manifest.write_text(json.dumps(v2) + "\n", encoding="utf-8")
+            self.assertEqual([v2], list(read_routing_manifest(manifest)))
+
+            invalid_rows = []
+            for updates in (
+                {"schemaVersion": 1},
+                {"policyVersion": "content-routing-v1"},
+                {"scheduledRoutes": ["floss", "native"]},
+                {"eligibleRoutes": ["floss"]},
+                {"eligibleRoutes": ["native", {}]},
+                {"scheduledRoutes": [{}]},
+            ):
+                invalid_rows.append({**v2, **updates})
+            for invalid in invalid_rows:
+                with self.subTest(invalid=invalid):
+                    manifest.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+                    with self.assertRaisesRegex(EnrichmentError, "required fields"):
+                        list(read_routing_manifest(manifest))
+
+    def test_disable_native_requires_triage_and_a_specialist(self) -> None:
+        ordinary = parse_arguments(["--disable-native", "-o", "output.jsonl", "input.bin"])
+        with self.assertRaisesRegex(EnrichmentError, "requires --triage-only"):
+            validate_arguments(ordinary)
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "input.jsonl"
+            manifest.write_text("", encoding="utf-8")
+            triage = parse_arguments(
+                [
+                    "--triage-only",
+                    "--disable-native",
+                    "--input-manifest",
+                    str(manifest),
+                    "--progress-total-files",
+                    "1",
+                    "-o",
+                    str(Path(directory) / "routing.jsonl"),
+                    "input.bin",
+                ]
+            )
+            with self.assertRaisesRegex(EnrichmentError, "requires --enable-floss"):
+                validate_arguments(triage)
+
     def test_raw_magika_pe_prediction_routes_floss_but_pe_extension_alone_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1822,6 +2282,7 @@ class EnrichmentTests(unittest.TestCase):
                 enable_floss=False,
                 enable_ocr=False,
                 force_floss=False,
+                disable_native=True,
             )
             route["decisionId"] = "sha256:" + "0" * 64
             manifest = root / "content-routing.jsonl"
@@ -2088,6 +2549,7 @@ class EnrichmentTests(unittest.TestCase):
                 enable_floss=True,
                 enable_ocr=False,
                 force_floss=False,
+                disable_native=True,
             )
             routing_manifest = root / "content-routing.jsonl"
             routing_manifest.write_text(json.dumps(route) + "\n", encoding="utf-8")
@@ -2105,6 +2567,7 @@ class EnrichmentTests(unittest.TestCase):
                         str(inventory),
                         "--routing-manifest",
                         str(routing_manifest),
+                        "--include-floss-static",
                         "--progress-total-files",
                         "1",
                         "-o",
@@ -2118,6 +2581,7 @@ class EnrichmentTests(unittest.TestCase):
             self.assertIn("Progress: FLOSS recovery: 100.0% (1/1 files)", stderr.getvalue())
             records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
             self.assertTrue(records)
+            self.assertIn("static", {record["origin"]["kind"] for record in records})
             self.assertEqual(
                 {route["decisionId"]},
                 {record["attributes"]["routeDecisionId"] for record in records},
@@ -2215,6 +2679,8 @@ class EnrichmentTests(unittest.TestCase):
             translator._strict_determinism = True
             translator._request_timeout_seconds = 5
             translator._thread_state = SimpleNamespace(opener=opener)
+            translator._evidence_inference_started = False
+            translator.parallelism = 1
             return translator, opener
 
         for finish_reason in (None, "length", "content_filter", "tool_calls"):
@@ -2278,6 +2744,34 @@ class EnrichmentTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(EnrichmentError, "complete prompt acceptance"):
             translator._translate_one("source", "en")
+
+        translator, _ = translator_for(
+            {
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {"content": "rejected partial output"},
+                    }
+                ]
+            }
+        )
+        attempts = translator.translate_attempts(["synthetic source"], "en")
+        self.assertEqual(
+            [TranslationAttempt(None, "generation-limit-reached")],
+            attempts,
+        )
+
+        class TimeoutOpener:
+            def open(self, request, timeout):
+                raise TimeoutError("synthetic timeout")
+
+        translator, _ = translator_for({})
+        translator._thread_state = SimpleNamespace(opener=TimeoutOpener())
+        attempts = translator.translate_attempts(["synthetic source"], "en")
+        self.assertEqual(
+            [TranslationAttempt(None, "translation-request-failure")],
+            attempts,
+        )
 
     def test_madlad_translation_requires_eos_and_nonempty_output(self) -> None:
         class Encoded(dict):
@@ -2450,7 +2944,353 @@ class EnrichmentTests(unittest.TestCase):
         self.assertEqual("auto", command[command.index("-ngl") + 1])
         self.assertIn("-cb", command)
         self.assertIn("--offline", command)
+        self.assertEqual("4", command[command.index("-lv") + 1])
         self.assertEqual("16", command[command.index("--threads") + 1])
+
+    def test_cuda_log_validation_requires_and_records_complete_layer_offload(self) -> None:
+        log = """
+load_tensors: offloaded 33/33 layers to GPU
+load_tensors: CPU_Mapped model buffer size = 410.69 MiB
+load_tensors: CUDA0 model buffer size = 4403.24 MiB
+llama_kv_cache: CUDA0 KV buffer size = 512.00 MiB
+sched_reserve: CUDA0 compute buffer size = 110.01 MiB
+sched_reserve: CUDA_Host compute buffer size = 18.01 MiB
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            translator = object.__new__(LlamaCppTranslator)
+            translator._stderr_path = Path(directory) / "stderr.log"
+            translator._stderr_path.write_text(log, encoding="utf-8")
+            translator._stderr_handle = None
+
+            metadata = translator._runtime_placement_metadata(require_full_cuda=True)
+
+        self.assertTrue(metadata["fullLayerOffloadValidated"])
+        self.assertFalse(metadata["cudaAllocationFallbackObserved"])
+        self.assertEqual(33, metadata["observedGpuLayers"])
+        self.assertEqual(33, metadata["observedTotalLayers"])
+        self.assertEqual(410.69, metadata["hostModelBufferMiB"])
+        self.assertEqual(4403.24, metadata["gpuModelBufferMiB"])
+
+    def test_cuda_log_validation_rejects_partial_or_allocation_fallback(self) -> None:
+        cases = (
+            "load_tensors: offloaded 28/33 layers to GPU\n",
+            (
+                "load_tensors: offloaded 33/33 layers to GPU\n"
+                "ggml_cuda: failed to allocate device memory\n"
+            ),
+        )
+        for log in cases:
+            with self.subTest(log=log), tempfile.TemporaryDirectory() as directory:
+                translator = object.__new__(LlamaCppTranslator)
+                translator._stderr_path = Path(directory) / "stderr.log"
+                translator._stderr_path.write_text(log, encoding="utf-8")
+                translator._stderr_handle = None
+                with self.assertRaisesRegex(EnrichmentError, "complete model-layer offload"):
+                    translator._runtime_placement_metadata(require_full_cuda=True)
+
+    def test_cuda_device_description_excludes_volatile_free_memory(self) -> None:
+        devices = "CUDA0: Synthetic GPU (8187 MiB, 7109 MiB free)\n"
+
+        self.assertEqual(
+            "Synthetic GPU (8187 MiB)",
+            LlamaCppTranslator._cuda_device_description(devices, "CUDA0"),
+        )
+
+    @patch("bstrings_enrich.run_checked")
+    @patch("bstrings_enrich.shutil.which", return_value="C:/driver/nvidia-smi.exe")
+    def test_cuda_provenance_includes_available_driver_and_compute_capability(
+        self, _which_mock, run_checked_mock
+    ) -> None:
+        run_checked_mock.return_value = subprocess.CompletedProcess(
+            [],
+            0,
+            "0, 610.62, 8.9, 8187, 7109\n1, 610.62, 8.6, 8192, 7000\n",
+            "",
+        )
+
+        metadata = LlamaCppTranslator._nvidia_device_metadata("CUDA0")
+
+        self.assertEqual("610.62", metadata["gpuDriverVersion"])
+        self.assertEqual("8.9", metadata["gpuComputeCapability"])
+        self.assertEqual(8187, metadata["gpuMemoryTotalMiB"])
+        self.assertEqual(7109, metadata["gpuMemoryFreePreflightMiB"])
+
+        run_checked_mock.return_value = subprocess.CompletedProcess(
+            [],
+            0,
+            "0, 610.62, 8.9, malformed, 7109\n",
+            "",
+        )
+        malformed = LlamaCppTranslator._nvidia_device_metadata("CUDA0")
+        self.assertEqual("8.9", malformed["gpuComputeCapability"])
+        self.assertNotIn("gpuMemoryTotalMiB", malformed)
+        self.assertNotIn("gpuMemoryFreePreflightMiB", malformed)
+
+    @patch(
+        "bstrings_enrich.LlamaCppTranslator._nvidia_device_metadata",
+        return_value={
+            "gpuDriverVersion": "610.62",
+            "gpuComputeCapability": "8.9",
+            "gpuMemoryTotalMiB": 8187,
+            "gpuMemoryFreePreflightMiB": 7109,
+        },
+    )
+    @patch("bstrings_enrich.LlamaCppTranslator._start_preflighted_runtime")
+    @patch("bstrings_enrich.run_checked")
+    @patch("bstrings_enrich.executable_path", return_value="C:/runtime/llama-server.exe")
+    @patch("bstrings_enrich.sha256_file", return_value="a" * 64)
+    def test_auto_cuda_preflight_falls_back_to_cpu_before_evidence(
+        self,
+        _sha256_mock,
+        _executable_mock,
+        run_checked_mock,
+        start_runtime_mock,
+        _device_metadata_mock,
+    ) -> None:
+        run_checked_mock.side_effect = (
+            subprocess.CompletedProcess([], 0, "version b10248", ""),
+            subprocess.CompletedProcess(
+                [],
+                0,
+                "CUDA0: Synthetic GPU (8187 MiB, 7109 MiB free)",
+                "",
+            ),
+        )
+        start_runtime_mock.side_effect = (
+            EnrichmentError("complete model-layer offload was not proven"),
+            None,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "model.gguf"
+            model.write_bytes(b"synthetic model")
+            translator = LlamaCppTranslator(
+                "llama-server",
+                model,
+                "synthetic/model",
+                "revision",
+                "a" * 64,
+                "auto",
+                16,
+                16,
+                30,
+                30,
+            )
+            translator.close()
+
+        self.assertEqual(2, start_runtime_mock.call_count)
+        self.assertEqual("cuda", start_runtime_mock.call_args_list[0].kwargs["actual_device"])
+        self.assertEqual("all", start_runtime_mock.call_args_list[0].kwargs["gpu_layers"])
+        self.assertTrue(start_runtime_mock.call_args_list[0].kwargs["require_full_cuda"])
+        self.assertEqual("cpu", start_runtime_mock.call_args_list[1].kwargs["actual_device"])
+        self.assertEqual("0", start_runtime_mock.call_args_list[1].kwargs["gpu_layers"])
+        self.assertFalse(start_runtime_mock.call_args_list[1].kwargs["require_full_cuda"])
+
+    @patch(
+        "bstrings_enrich.LlamaCppTranslator._nvidia_device_metadata",
+        return_value={
+            "gpuDriverVersion": "610.62",
+            "gpuComputeCapability": "8.9",
+            "gpuMemoryTotalMiB": 8187,
+            "gpuMemoryFreePreflightMiB": 7109,
+        },
+    )
+    @patch("bstrings_enrich.LlamaCppTranslator._start_preflighted_runtime")
+    @patch("bstrings_enrich.run_checked")
+    @patch("bstrings_enrich.executable_path", return_value="C:/runtime/llama-server.exe")
+    @patch("bstrings_enrich.sha256_file", return_value="a" * 64)
+    def test_explicit_cuda_preflight_failure_is_closed_without_cpu_retry(
+        self,
+        _sha256_mock,
+        _executable_mock,
+        run_checked_mock,
+        start_runtime_mock,
+        _device_metadata_mock,
+    ) -> None:
+        run_checked_mock.side_effect = (
+            subprocess.CompletedProcess([], 0, "version b10248", ""),
+            subprocess.CompletedProcess([], 0, "CUDA0: Synthetic GPU", ""),
+        )
+        start_runtime_mock.side_effect = EnrichmentError("synthetic CUDA startup failure")
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "model.gguf"
+            model.write_bytes(b"synthetic model")
+            with self.assertRaisesRegex(EnrichmentError, "synthetic CUDA startup failure"):
+                LlamaCppTranslator(
+                    "llama-server",
+                    model,
+                    "synthetic/model",
+                    "revision",
+                    "a" * 64,
+                    "cuda",
+                    16,
+                    16,
+                    30,
+                    30,
+                )
+
+        start_runtime_mock.assert_called_once()
+        self.assertEqual("cuda", start_runtime_mock.call_args.kwargs["actual_device"])
+
+    def test_cuda_compute_capability_policy_routes_before_runtime_start(self) -> None:
+        def construct(
+            device: str, metadata: dict[str, object]
+        ) -> tuple[list, BaseException | None]:
+            with tempfile.TemporaryDirectory() as directory:
+                model = Path(directory) / "model.gguf"
+                model.write_bytes(b"synthetic model")
+                with (
+                    patch("bstrings_enrich.sha256_file", return_value="a" * 64),
+                    patch(
+                        "bstrings_enrich.executable_path",
+                        return_value="C:/runtime/llama-server.exe",
+                    ),
+                    patch("bstrings_enrich.run_checked") as run_checked_mock,
+                    patch(
+                        "bstrings_enrich.LlamaCppTranslator._nvidia_device_metadata",
+                        return_value=metadata,
+                    ),
+                    patch(
+                        "bstrings_enrich.LlamaCppTranslator._start_preflighted_runtime"
+                    ) as start_runtime_mock,
+                    redirect_stderr(io.StringIO()),
+                ):
+                    run_checked_mock.side_effect = (
+                        subprocess.CompletedProcess([], 0, "version b10248", ""),
+                        subprocess.CompletedProcess([], 0, "CUDA0: Synthetic GPU", ""),
+                    )
+                    error: BaseException | None = None
+                    try:
+                        translator = LlamaCppTranslator(
+                            "llama-server",
+                            model,
+                            "synthetic/model",
+                            "revision",
+                            "a" * 64,
+                            device,
+                            16,
+                            16,
+                            30,
+                            30,
+                        )
+                    except BaseException as exc:
+                        error = exc
+                    else:
+                        translator.close()
+                    return list(start_runtime_mock.call_args_list), error
+
+        auto_cases = (
+            (
+                "accepted-sm89",
+                {
+                    "gpuDriverVersion": "610.62",
+                    "gpuComputeCapability": "8.9",
+                    "gpuMemoryTotalMiB": 8187,
+                    "gpuMemoryFreePreflightMiB": 7109,
+                },
+                "cuda",
+                None,
+            ),
+            (
+                "accepted-free-memory-boundary",
+                {
+                    "gpuDriverVersion": "610.62",
+                    "gpuComputeCapability": "8.9",
+                    "gpuMemoryTotalMiB": 8187,
+                    "gpuMemoryFreePreflightMiB": 7000,
+                },
+                "cuda",
+                None,
+            ),
+            (
+                "rejected-below-free-memory-boundary",
+                {
+                    "gpuDriverVersion": "610.62",
+                    "gpuComputeCapability": "8.9",
+                    "gpuMemoryTotalMiB": 8187,
+                    "gpuMemoryFreePreflightMiB": 6999,
+                },
+                "cpu",
+                "cuda-insufficient-free-memory",
+            ),
+            (
+                "malformed-free-memory",
+                {
+                    "gpuDriverVersion": "610.62",
+                    "gpuComputeCapability": "8.9",
+                    "gpuMemoryTotalMiB": 8187,
+                    "gpuMemoryFreePreflightMiB": "unknown",
+                },
+                "cpu",
+                "cuda-free-memory-unavailable",
+            ),
+            (
+                "unaccepted-sm86",
+                {
+                    "gpuDriverVersion": "610.62",
+                    "gpuComputeCapability": "8.6",
+                    "gpuMemoryTotalMiB": 8192,
+                    "gpuMemoryFreePreflightMiB": 7000,
+                },
+                "cpu",
+                "cuda-compute-capability-not-accepted",
+            ),
+            (
+                "unknown-capability",
+                {},
+                "cpu",
+                "cuda-compute-capability-unavailable",
+            ),
+        )
+        for label, metadata, expected_device, expected_fallback in auto_cases:
+            with self.subTest(label=label):
+                calls, error = construct("auto", metadata)
+                self.assertIsNone(error)
+                self.assertEqual(1, len(calls))
+                self.assertEqual(expected_device, calls[0].kwargs["actual_device"])
+                self.assertEqual(expected_fallback, calls[0].kwargs.get("auto_cuda_failure"))
+                self.assertEqual(
+                    7000,
+                    calls[0].kwargs["cuda_device_metadata"]["gpuMinimumFreeMemoryMiB"],
+                )
+
+        calls, error = construct(
+            "cuda",
+            {"gpuDriverVersion": "610.62", "gpuComputeCapability": "8.6"},
+        )
+        self.assertEqual([], calls)
+        self.assertIsInstance(error, EnrichmentError)
+        self.assertRegex(str(error), "accepted compute capability.*8.6")
+
+        calls, error = construct("cuda", {})
+        self.assertEqual([], calls)
+        self.assertIsInstance(error, EnrichmentError)
+        self.assertRegex(str(error), "accepted compute capability.*unavailable")
+
+        calls, error = construct(
+            "cuda",
+            {
+                "gpuDriverVersion": "610.62",
+                "gpuComputeCapability": "8.9",
+                "gpuMemoryTotalMiB": 8187,
+                "gpuMemoryFreePreflightMiB": 6999,
+            },
+        )
+        self.assertEqual([], calls)
+        self.assertIsInstance(error, EnrichmentError)
+        self.assertRegex(str(error), "at least 7000 MiB.*6999 MiB")
+
+        calls, error = construct(
+            "cuda",
+            {
+                "gpuDriverVersion": "610.62",
+                "gpuComputeCapability": "8.9",
+                "gpuMemoryTotalMiB": 8187,
+                "gpuMemoryFreePreflightMiB": "unknown",
+            },
+        )
+        self.assertEqual([], calls)
+        self.assertIsInstance(error, EnrichmentError)
+        self.assertRegex(str(error), "at least 7000 MiB.*unknown MiB")
 
     def test_airgap_mode_blocks_external_network_and_allows_loopback(self) -> None:
         enrichment_root = Path(__file__).resolve().parents[1]

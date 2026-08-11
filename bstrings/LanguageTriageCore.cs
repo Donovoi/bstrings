@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -38,8 +39,29 @@ internal readonly record struct LanguageTriageStats(
     long AmbiguousRecords,
     long NonLinguisticRecords,
     long DetectorFailures,
-    LanguageDetectionMode EffectiveMode
+    LanguageDetectionMode EffectiveMode,
+    string TranslationRoutingPolicyVersion,
+    long TranslationRoutingRetained,
+    long TranslationRoutingProspectiveBypasses,
+    long TranslationRoutingUnknown,
+    long TranslationRoutingEvaluations = 0,
+    long DetectorEligibleRecords = 0,
+    long DetectorExecutions = 0,
+    long DetectorReuseHits = 0
 );
+
+[Flags]
+internal enum TranslationRoutingProvenance
+{
+    None = 0,
+    NativeStatic = 1 << 0,
+    Floss = 1 << 1,
+    FlossDecoded = 1 << 2,
+    Ocr = 1 << 3,
+    PdfText = 1 << 4,
+    DerivedTranslation = 1 << 5,
+    Unknown = 1 << 6,
+}
 
 internal delegate bool LanguageDetectionHandler(
     string text,
@@ -60,6 +82,8 @@ internal static class LanguageTriageCore
     private const int AdaptiveSampleSize = 512;
     private const int FastModeMinimumCharacters = 120;
     private static readonly object OutputCommitLock = new();
+    private static readonly JsonSerializerOptions AssessmentJsonOptions =
+        new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private sealed record PendingRecord(
         string OriginalLine,
@@ -67,14 +91,56 @@ internal static class LanguageTriageCore
         string Text,
         string SourceFile,
         JsonElement Location,
-        bool IsDerived
+        bool IsDerived,
+        TranslationRoutingProvenance RoutingProvenance
     );
 
     private sealed record AssessedRecord(
         string AssessmentJson,
         bool IsCandidate,
-        string Decision
+        string Decision,
+        TranslationRoutingAssessment? Routing,
+        bool DetectorExecuted,
+        bool DetectorReused
     );
+
+    private sealed class LanguageAssessmentPayload
+    {
+        public int SchemaVersion { get; init; }
+        public string RecordType { get; init; } = string.Empty;
+        public string SourceRecordId { get; init; } = string.Empty;
+        public string SourceFile { get; init; } = string.Empty;
+        public JsonElement Location { get; init; }
+        public string Detector { get; init; } = string.Empty;
+        public string DetectorVersion { get; init; } = string.Empty;
+        public string Profile { get; init; } = string.Empty;
+        public string TargetLanguage { get; init; } = string.Empty;
+        public string? DetectorTargetLanguage { get; init; }
+        public string? Language { get; init; }
+        public double? Confidence { get; init; }
+        public double? TargetConfidence { get; init; }
+        public double? SecondConfidence { get; init; }
+        public double? TopLanguageMargin { get; init; }
+        public double? TargetMargin { get; init; }
+        public int ScoreDecimalPlaces { get; init; }
+        public double ConfiguredMinimumConfidence { get; init; }
+        public double ConfiguredMinimumTargetMargin { get; init; }
+        public double EffectiveMinimumConfidence { get; init; }
+        public double EffectiveMinimumTargetMargin { get; init; }
+        public double MinimumConfidence { get; init; }
+        public double MinimumTargetMargin { get; init; }
+        public bool? ConfidenceGatePassed { get; init; }
+        public bool? MarginGatePassed { get; init; }
+        public string Policy { get; init; } = string.Empty;
+        public string Decision { get; init; } = string.Empty;
+        public bool TranslationCandidate { get; init; }
+        public string? Error { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public TranslationRoutingProjection? TranslationRouting { get; init; }
+    }
+
+    private readonly record struct TranslationRoutingProjection(string Code);
 
     internal static bool TryParsePolicy(
         string? value,
@@ -116,7 +182,8 @@ internal static class LanguageTriageCore
         CancellationToken cancellationToken = default,
         LanguageDetectionHandler? detector = null,
         Action<long, long>? progress = null,
-        bool? reuseSuccessfulDetections = null
+        bool? reuseSuccessfulDetections = null,
+        bool includeTranslationRouting = true
     )
     {
         ValidateOptions(options);
@@ -167,6 +234,13 @@ internal static class LanguageTriageCore
         long ambiguous = 0;
         long nonLinguistic = 0;
         long failures = 0;
+        long routingRetained = 0;
+        long routingProspectiveBypasses = 0;
+        long routingUnknown = 0;
+        long routingEvaluations = 0;
+        long detectorEligibleRecords = 0;
+        long detectorExecutions = 0;
+        long detectorReuseHits = 0;
         var pending = new List<PendingRecord>(options.BatchSize);
         long pendingUtf8Bytes = 0;
 
@@ -200,14 +274,39 @@ internal static class LanguageTriageCore
                     MaxDegreeOfParallelism = options.MaxDegreeOfParallelism,
                     CancellationToken = cancellationToken,
                 };
-                if (reuseDetections)
+                IGrouping<string, int>[]? textGroups = null;
+                if (includeTranslationRouting || reuseDetections)
                 {
-                    var groups = Enumerable
+                    textGroups = Enumerable
                         .Range(0, pending.Count)
                         .GroupBy(index => pending[index].Text, StringComparer.Ordinal)
                         .ToArray();
+                }
+                TranslationRoutingAssessment?[]? routingByIndex = null;
+                if (includeTranslationRouting)
+                {
+                    routingByIndex = new TranslationRoutingAssessment?[pending.Count];
                     Parallel.ForEach(
-                        groups,
+                        textGroups!,
+                        parallelOptions,
+                        group =>
+                        {
+                            var firstIndex = group.First();
+                            var routing = TranslationWorthinessRouter.Assess(
+                                pending[firstIndex].Text
+                            );
+                            foreach (var index in group)
+                            {
+                                routingByIndex[index] = routing;
+                            }
+                        }
+                    );
+                    routingEvaluations += textGroups!.Length;
+                }
+                if (reuseDetections)
+                {
+                    Parallel.ForEach(
+                        textGroups!,
                         parallelOptions,
                         group =>
                         {
@@ -222,7 +321,8 @@ internal static class LanguageTriageCore
                                     detectorTargetLanguage,
                                     detector,
                                     successfulDetection,
-                                    out var currentSuccessfulDetection
+                                    out var currentSuccessfulDetection,
+                                    routingByIndex?[index]
                                 );
                                 successfulDetection ??= currentSuccessfulDetection;
                             }
@@ -241,7 +341,8 @@ internal static class LanguageTriageCore
                                 options,
                                 effectiveMode,
                                 detectorTargetLanguage,
-                                detector
+                                detector,
+                                routingByIndex?[index]
                             )
                     );
                 }
@@ -249,6 +350,18 @@ internal static class LanguageTriageCore
                 for (var index = 0; index < pending.Count; index++)
                 {
                     var result = assessed[index];
+                    if (result.DetectorExecuted || result.DetectorReused)
+                    {
+                        detectorEligibleRecords++;
+                    }
+                    if (result.DetectorExecuted)
+                    {
+                        detectorExecutions++;
+                    }
+                    if (result.DetectorReused)
+                    {
+                        detectorReuseHits++;
+                    }
                     await assessmentWriter.WriteLineAsync(
                         result.AssessmentJson.AsMemory(),
                         cancellationToken
@@ -270,6 +383,28 @@ internal static class LanguageTriageCore
                         case "detector-failed":
                             failures++;
                             break;
+                    }
+                    if (result.Routing is { } routing)
+                    {
+                        var routingCode = RoutingCode(routing);
+                        if (!TranslationWorthinessRouter.Codebook.TryGetValue(routingCode, out var category))
+                        {
+                            throw new InvalidDataException(
+                                $"Translation routing emitted unregistered code '{routingCode}'."
+                            );
+                        }
+                        if (category == "unknown")
+                        {
+                            routingUnknown++;
+                        }
+                        else if (category == "prospective")
+                        {
+                            routingProspectiveBypasses++;
+                        }
+                        else
+                        {
+                            routingRetained++;
+                        }
                     }
                     if (result.IsCandidate)
                     {
@@ -354,7 +489,15 @@ internal static class LanguageTriageCore
             ambiguous,
             nonLinguistic,
             failures,
-            effectiveMode
+            effectiveMode,
+            includeTranslationRouting ? TranslationWorthinessRouter.PolicyVersion : "disabled",
+            routingRetained,
+            routingProspectiveBypasses,
+            routingUnknown,
+            routingEvaluations,
+            detectorEligibleRecords,
+            detectorExecutions,
+            detectorReuseHits
         );
     }
 
@@ -363,7 +506,8 @@ internal static class LanguageTriageCore
         LanguageTriageOptions options,
         LanguageDetectionMode effectiveMode,
         string detectorTargetLanguage,
-        LanguageDetectionHandler detector
+        LanguageDetectionHandler detector,
+        TranslationRoutingAssessment? routing
     ) =>
         Assess(
             record,
@@ -372,7 +516,8 @@ internal static class LanguageTriageCore
             detectorTargetLanguage,
             detector,
             reusedDetection: null,
-            out _
+            out _,
+            routing
         );
 
     private static AssessedRecord Assess(
@@ -382,7 +527,8 @@ internal static class LanguageTriageCore
         string detectorTargetLanguage,
         LanguageDetectionHandler detector,
         LanguageDetectionResult? reusedDetection,
-        out LanguageDetectionResult? successfulDetection
+        out LanguageDetectionResult? successfulDetection,
+        TranslationRoutingAssessment? routing
     )
     {
         successfulDetection = null;
@@ -398,7 +544,8 @@ internal static class LanguageTriageCore
                 false,
                 null,
                 null,
-                detectorTargetLanguage
+                detectorTargetLanguage,
+                routing
             );
         }
         if (
@@ -417,7 +564,8 @@ internal static class LanguageTriageCore
                 false,
                 null,
                 null,
-                detectorTargetLanguage
+                detectorTargetLanguage,
+                routing
             );
         }
         LanguageDetectionResult detection;
@@ -426,27 +574,30 @@ internal static class LanguageTriageCore
         {
             detection = cachedDetection;
         }
-        else if (
-            !detector(
+        else
+        {
+            if (!detector(
                 record.Text,
                 effectiveMode,
                 detectorTargetLanguage,
                 out detection,
                 out detectorError
-            )
-        )
-        {
-            var translate = options.Policy == LanguageTriagePolicy.HighRecall;
-            return Assessment(
-                record,
-                options,
-                effectiveMode,
-                "detector-failed",
-                translate,
-                null,
-                detectorError,
-                detectorTargetLanguage
-            );
+            ))
+            {
+                var translate = options.Policy == LanguageTriagePolicy.HighRecall;
+                return Assessment(
+                    record,
+                    options,
+                    effectiveMode,
+                    "detector-failed",
+                    translate,
+                    null,
+                    detectorError,
+                    detectorTargetLanguage,
+                    routing,
+                    detectorExecuted: true
+                );
+            }
         }
         successfulDetection = detection;
 
@@ -468,7 +619,10 @@ internal static class LanguageTriageCore
                 !confidentTarget && options.Policy == LanguageTriagePolicy.HighRecall,
                 detection,
                 null,
-                detectorTargetLanguage
+                detectorTargetLanguage,
+                routing,
+                detectorExecuted: reusedDetection is null,
+                detectorReused: reusedDetection is not null
             );
         }
 
@@ -485,7 +639,10 @@ internal static class LanguageTriageCore
                 true,
                 detection,
                 null,
-                detectorTargetLanguage
+                detectorTargetLanguage,
+                routing,
+                detectorExecuted: reusedDetection is null,
+                detectorReused: reusedDetection is not null
             );
         }
         return Assessment(
@@ -496,7 +653,10 @@ internal static class LanguageTriageCore
             false,
             detection,
             null,
-            detectorTargetLanguage
+            detectorTargetLanguage,
+            routing,
+            detectorExecuted: reusedDetection is null,
+            detectorReused: reusedDetection is not null
         );
     }
 
@@ -508,7 +668,10 @@ internal static class LanguageTriageCore
         bool candidate,
         LanguageDetectionResult? detection,
         string? error,
-        string? detectorTargetLanguage = null
+        string? detectorTargetLanguage,
+        TranslationRoutingAssessment? routing,
+        bool detectorExecuted = false,
+        bool detectorReused = false
     )
     {
         var (effectiveMinimumConfidence, effectiveMinimumTargetMargin) =
@@ -527,41 +690,96 @@ internal static class LanguageTriageCore
                 )
                     ? detection.Value.TopLanguageMargin >= effectiveMinimumTargetMargin
                     : detection.Value.TargetMargin >= effectiveMinimumTargetMargin;
-        var assessment = new
+        TranslationRoutingProjection? routingProjection = routing is not { } routingValue
+            ? null
+            : new TranslationRoutingProjection(RoutingCode(routingValue));
+        var assessment = new LanguageAssessmentPayload
         {
-            schemaVersion = 1,
-            recordType = "language-assessment",
-            sourceRecordId = record.RecordId,
-            sourceFile = record.SourceFile,
-            location = record.Location,
-            detector = DetectorName,
-            detectorVersion = DetectorVersion,
-            profile = mode.ToString().ToLowerInvariant(),
-            targetLanguage = options.TargetLanguage,
-            detectorTargetLanguage,
-            language = detection?.Language,
-            confidence = NormalizeAssessmentMetric(detection?.Confidence),
-            targetConfidence = NormalizeAssessmentMetric(detection?.TargetConfidence),
-            secondConfidence = NormalizeAssessmentMetric(detection?.SecondConfidence),
-            topLanguageMargin = NormalizeAssessmentMetric(detection?.TopLanguageMargin),
-            targetMargin = NormalizeAssessmentMetric(detection?.TargetMargin),
-            scoreDecimalPlaces = AssessmentScoreDecimalPlaces,
-            configuredMinimumConfidence = options.MinimumConfidence,
-            configuredMinimumTargetMargin = options.MinimumTargetMargin,
-            effectiveMinimumConfidence,
-            effectiveMinimumTargetMargin,
+            SchemaVersion = 1,
+            RecordType = "language-assessment",
+            SourceRecordId = record.RecordId,
+            SourceFile = record.SourceFile,
+            Location = record.Location,
+            Detector = DetectorName,
+            DetectorVersion = DetectorVersion,
+            Profile = mode.ToString().ToLowerInvariant(),
+            TargetLanguage = options.TargetLanguage,
+            DetectorTargetLanguage = detectorTargetLanguage,
+            Language = detection?.Language,
+            Confidence = NormalizeAssessmentMetric(detection?.Confidence),
+            TargetConfidence = NormalizeAssessmentMetric(detection?.TargetConfidence),
+            SecondConfidence = NormalizeAssessmentMetric(detection?.SecondConfidence),
+            TopLanguageMargin = NormalizeAssessmentMetric(detection?.TopLanguageMargin),
+            TargetMargin = NormalizeAssessmentMetric(detection?.TargetMargin),
+            ScoreDecimalPlaces = AssessmentScoreDecimalPlaces,
+            ConfiguredMinimumConfidence = options.MinimumConfidence,
+            ConfiguredMinimumTargetMargin = options.MinimumTargetMargin,
+            EffectiveMinimumConfidence = effectiveMinimumConfidence,
+            EffectiveMinimumTargetMargin = effectiveMinimumTargetMargin,
             // Retain the schema-1 field names as aliases for the thresholds that
             // actually drove the recorded gate booleans and decision.
-            minimumConfidence = effectiveMinimumConfidence,
-            minimumTargetMargin = effectiveMinimumTargetMargin,
-            confidenceGatePassed,
-            marginGatePassed,
-            policy = PolicyName(options.Policy),
-            decision,
-            translationCandidate = candidate,
-            error,
+            MinimumConfidence = effectiveMinimumConfidence,
+            MinimumTargetMargin = effectiveMinimumTargetMargin,
+            ConfidenceGatePassed = confidenceGatePassed,
+            MarginGatePassed = marginGatePassed,
+            Policy = PolicyName(options.Policy),
+            Decision = decision,
+            TranslationCandidate = candidate,
+            Error = error,
+            TranslationRouting = routingProjection,
         };
-        return new AssessedRecord(JsonSerializer.Serialize(assessment), candidate, decision);
+        return new AssessedRecord(
+            JsonSerializer.Serialize(assessment, AssessmentJsonOptions),
+            candidate,
+            decision,
+            routing,
+            detectorExecuted,
+            detectorReused
+        );
+    }
+
+    private static string RoutingCode(TranslationRoutingAssessment routing)
+    {
+        if (routing.IsUnknown)
+        {
+            return routing.Reason switch
+            {
+                "unsupported-length" => "unknown-length",
+                "unsupported-control-character" => "unknown-control",
+                _ => "unknown-validation",
+            };
+        }
+        if (
+            routing.Outcome == TranslationRoutingOutcome.StructuredOnlyProspectiveBypass
+            && routing.StructuredClasses is [var validator]
+        )
+        {
+            return validator switch
+            {
+                "guid" => "prospective-guid",
+                "cryptographic-hash" => "prospective-digest",
+                "ip-address" => "prospective-ip",
+                "ip-network" => "prospective-network",
+                "network-endpoint" => "prospective-endpoint",
+                _ => "unknown-validation",
+            };
+        }
+        if (routing.Reason == "machine-like-signal-not-bypass-eligible")
+        {
+            return routing.StructuredClasses is [var signal]
+                ? signal switch
+                {
+                    "jwt" => "shadow-jwt",
+                    "hex-blob" => "shadow-hex",
+                    "absolute-uri" => "shadow-uri",
+                    "registry-path" => "shadow-registry",
+                    "absolute-file-path" => "shadow-path",
+                    "base64-blob" => "shadow-base64",
+                    _ => "retain",
+                }
+                : "retain";
+        }
+        return "retain";
     }
 
     private static (double MinimumConfidence, double MinimumTargetMargin)
@@ -616,8 +834,8 @@ internal static class LanguageTriageCore
                 || !TryGetRequiredString(location, "value", out _)
                 || !root.TryGetProperty("origin", out var origin)
                 || origin.ValueKind != JsonValueKind.Object
-                || !TryGetRequiredString(origin, "extractor", out _)
-                || !TryGetRequiredString(origin, "kind", out _)
+                || !TryGetRequiredString(origin, "extractor", out var originExtractor)
+                || !TryGetRequiredString(origin, "kind", out var originKind)
             )
             {
                 throw new InvalidDataException(
@@ -668,7 +886,8 @@ internal static class LanguageTriageCore
                 text,
                 sourceFile,
                 location.Clone(),
-                isDerived
+                isDerived,
+                ClassifyRoutingProvenance(originExtractor, originKind, isDerived)
             );
         }
         catch (JsonException ex)
@@ -678,6 +897,48 @@ internal static class LanguageTriageCore
                 ex
             );
         }
+    }
+
+    internal static TranslationRoutingProvenance ClassifyRoutingProvenance(
+        string extractor,
+        string kind,
+        bool isDerived
+    )
+    {
+        var provenance = isDerived
+            ? TranslationRoutingProvenance.DerivedTranslation
+            : TranslationRoutingProvenance.None;
+        if (
+            string.Equals(extractor, "bstrings", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(kind, "static", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return provenance | TranslationRoutingProvenance.NativeStatic;
+        }
+        if (string.Equals(extractor, "floss", StringComparison.OrdinalIgnoreCase))
+        {
+            provenance |= TranslationRoutingProvenance.Floss;
+            if (string.Equals(kind, "decoded", StringComparison.OrdinalIgnoreCase))
+            {
+                provenance |= TranslationRoutingProvenance.FlossDecoded;
+            }
+            return provenance;
+        }
+        if (
+            string.Equals(extractor, "rapidocr", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(kind, "ocr", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return provenance | TranslationRoutingProvenance.Ocr;
+        }
+        if (
+            string.Equals(extractor, "rapidocr", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(kind, "pdf-text", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return provenance | TranslationRoutingProvenance.PdfText;
+        }
+        return provenance | TranslationRoutingProvenance.Unknown;
     }
 
     private static bool TryGetRequiredString(

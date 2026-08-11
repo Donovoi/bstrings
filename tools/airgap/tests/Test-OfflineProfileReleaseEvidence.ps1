@@ -144,6 +144,7 @@ try {
 
     Write-Utf8 (Join-Path $assetRoot 'bstrings-win-x64.zip') 'synthetic core archive'
     Write-Utf8 (Join-Path $assetRoot 'bstrings-win-x64-offline-base.zip') 'synthetic base archive'
+    Write-Utf8 (Join-Path $assetRoot 'bstrings-win-x64-offline-cuda.zip') 'synthetic CUDA archive'
     $profileEvidenceRows = [Collections.Generic.List[object]]::new()
     foreach ($profile in $profiles) {
         $model = $modelSpecs[$profile]
@@ -195,6 +196,9 @@ try {
         $baseIdentity = Get-Identity `
             (Join-Path $assetRoot 'bstrings-win-x64-offline-base.zip') `
             'bstrings-win-x64-offline-base.zip'
+        $cudaIdentity = Get-Identity `
+            (Join-Path $assetRoot 'bstrings-win-x64-offline-cuda.zip') `
+            'bstrings-win-x64-offline-cuda.zip'
         $bundleIdentity = "synthetic-$profile-$($manifestIdentity.sha256.Substring(0, 24))"
         $assetBaseUrl = "$serverUrl/$repository/releases/download/$tag"
         $trust = [ordered]@{
@@ -208,6 +212,12 @@ try {
                     url = "$assetBaseUrl/bstrings-win-x64-offline-base.zip"
                     bytes = $baseIdentity.bytes
                     sha256 = $baseIdentity.sha256
+                }
+                [ordered]@{
+                    id = 'cuda-runtime'
+                    url = "$assetBaseUrl/bstrings-win-x64-offline-cuda.zip"
+                    bytes = $cudaIdentity.bytes
+                    sha256 = $cudaIdentity.sha256
                 }
                 [ordered]@{
                     id = 'configuration'
@@ -269,6 +279,7 @@ try {
 
     $packAssetNames = [Collections.Generic.List[string]]::new()
     $packAssetNames.Add('bstrings-win-x64-offline-base.zip')
+    $packAssetNames.Add('bstrings-win-x64-offline-cuda.zip')
     Write-Utf8 (Join-Path $assetRoot 'Install-BstringsQuality.ps1') "# synthetic installer`n"
     $packAssetNames.Add('Install-BstringsQuality.ps1')
     foreach ($profile in $profiles) {

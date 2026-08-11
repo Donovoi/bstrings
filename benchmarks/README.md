@@ -8,7 +8,7 @@ version-matched quality bundle, the full enrichment workflow is:
 bstrings.exe analyze -f evidence.raw --full -o results
 ```
 
-The current complete quality bundle is v1.9.16. See
+The current complete quality bundle is v1.9.17. See
 [download and installation](../docs/download-and-install.md) before treating
 this example as a distribution command.
 
@@ -53,9 +53,93 @@ determinism pairs. See the
 [machine-readable summary](results/language-triage-reuse-2026-08.csv), and the
 [decision record](../docs/architecture/adr-0004-bounded-language-detection-reuse.md).
 
+### Translation-routing shadow overhead
+
+`--experiment routing-shadow` is a separate, unmeasured A/B harness for the
+shadow-only translation-worthiness metadata described by
+[ADR-0007](../docs/architecture/adr-0007-translation-worthiness-routing.md).
+Both variants enable the existing bounded detection reuse. Alternating variants
+differ only in the optional `includeTranslationRouting` argument: one omits the
+metadata and one embeds a single bounded routing `code` in each existing
+language-assessment row.
+
+```powershell
+dotnet run --project .\benchmarks\LanguageTriageBenchmark -c Release -- `
+  --experiment routing-shadow `
+  --routing-corpus mixed `
+  --records 100000 `
+  --duplicate-percent 50 `
+  --rounds 7 `
+  --mode accurate `
+  --output C:\bench\language-triage-routing-shadow.csv
+```
+
+`--routing-corpus` defaults to `mixed`. Its deterministic, synthetic options
+are `natural` (multilingual prose), `machine` (valid and near-miss structured
+tokens, code, and noise), `short` (short prose and machine fragments), `max`
+(near the 2,048-character record limit), `encoded` (Base64, JWT, and hex
+containers), and `provenance` (bounded synthetic origin kinds and attributes).
+The all-unique `machine` corpus requires `--duplicate-percent 0`. The legacy
+`reuse` experiment rejects `--routing-corpus` so its historical behavior and
+CSV remain unambiguous. The routing-shadow CSV and summary identify the corpus
+used for every measurement.
+
+The harness refuses a timing unless candidate bytes and SHA-256 are identical,
+pre-existing assessment fields are equal in order and value, and logical triage
+statistics are unchanged. Lingua can vary its five diagnostic floating-point
+scores by one unit at the published 12-decimal precision between independent
+calls, so the paired comparison permits only that final-decimal quantum for
+those score fields; identity, decisions, gates, errors, and all other fields
+remain exact. The CSV retains both projected hashes so any such native score
+jitter remains visible. It independently requires routing
+metadata on every enabled assessment and none on the disabled variant. The CSV
+reports both projection lengths and hashes, assessment-byte delta, managed
+allocation, working set before/after and
+at a 20 ms sampled peak, wall/CPU time, and retained/prospective/unknown routing
+counts. It reports paired median wall-time, sampled-peak working-set, and total
+candidate-plus-assessment byte regressions. The 20 ms working-set peak is an
+approximate in-process sample: paired variants share the process heap, so it is
+useful as a low-overhead regression signal rather than an exact isolated OS
+peak. Runs with at least 100,000 records and seven rounds return nonzero if any
+median exceeds ADR-0007's 5% shadow cap; smaller smoke runs exercise parity and
+schema only so normal timing noise cannot fail them. This does not activate
+bypass, call the translation model, or establish a performance win. Do not
+check in local measurements without a separately reviewed, privacy-safe result
+update.
+
+Run the focused one-round synthetic smoke with:
+
+```powershell
+.\benchmarks\LanguageTriageBenchmark\Test-RoutingShadowBenchmark.ps1
+```
+
+Use `--help` to list both experiments and arguments. The default remains
+`--experiment reuse`, with its historical CSV columns and assessment/candidate
+byte-parity behavior.
+
+### Translation-worthiness managed reference
+
+`TranslationWorthinessBenchmark` is an offline, research-only C# reference for
+the frozen sparse-linear model format in ADR-0007. It verifies the model and
+manifest identities, reproduces the Python feature contract, and writes atomic
+predictions. It is not part of `bstrings.exe`, does not change candidate
+selection, and cannot authorize translation suppression.
+
+Run the deterministic cross-language parity and path-safety smoke with:
+
+```powershell
+.\benchmarks\TranslationWorthinessBenchmark\Test-ManagedReference.ps1
+```
+
+The smoke trains only the project-authored synthetic seed, compares every C#
+score and decision with the Python contract oracle, and rejects an output path
+that aliases an input. The seed is a schema and reproducibility fixture, not an
+accuracy corpus; every manifest and report remains `researchOnly: true` and
+`promotionEligible: false`.
+
 ## Run-local translation deduplication
 
-The v1.9.16 translation adapter combines a bounded in-memory hot set with an
+The v1.9.17 translation adapter combines a bounded in-memory hot set with an
 exact run-local SQLite cache. A correct performance probe must include exact
 duplicates separated by more than 4,096 other entries, prove one model call per
 distinct complete source/configuration key, and still compare the emitted child

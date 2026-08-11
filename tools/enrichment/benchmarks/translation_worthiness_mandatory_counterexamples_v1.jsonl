@@ -1,0 +1,20 @@
+{"schemaVersion":1,"id":"counter-bidi-01","text":"تنبيه مهم‏​","label":"human-worthy","family":"bidi-zero-width","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-boundary-01","text":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA Bitte prüfen BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","label":"mixed","family":"chunk-boundary-human","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-comment-01","text":"// Mensaje sintético: vuelve a intentarlo mañana","label":"mixed","family":"code-comment","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-docstring-01","text":"\"\"\"नमूना सेवा शुरू नहीं हुई; कृपया जाँच करें।\"\"\"","label":"mixed","family":"code-docstring","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-config-01","text":"notice=\"La configuración necesita revisión\"","label":"mixed","family":"config-human-value","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-decoded-01","text":"payload-child: お知らせを確認してください","label":"mixed","family":"encoded-decoded-child","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-floss-01","text":"decoded_status=\"Échec de connexion\"","label":"mixed","family":"floss-decoded-human","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-format-01","text":"raise Error($\"Пользователь {user} не найден\")","label":"mixed","family":"format-string","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-url-01","text":"https://example.invalid/ayuda/restablecer-contrasena","label":"mixed","family":"localized-url-path","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-machine-01","text":"01234567-89ab-cdef-0123-456789abcdef","label":"machine","family":"machine-control","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-middle-01","text":"mov rax rbp xor rcx | कृपया फिर प्रयास करें | 00ff00ff00ff00ff","label":"mixed","family":"machine-wrapper-middle","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-prefix-01","text":"Bitte prüfen | 00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff","label":"mixed","family":"machine-wrapper-prefix","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-suffix-01","text":"00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff | 请检查设置","label":"mixed","family":"machine-wrapper-suffix","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-normalization-01","text":"Revisión necesaria","label":"human-worthy","family":"normalization-variant","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-ocr-01","text":"M3nsaje: contraseiia caduc6; reintente","label":"human-worthy","family":"ocr-damage","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-registry-01","text":"HKCU\\Software\\Example\\Notice=再起動してください","label":"mixed","family":"registry-human-value","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-arabic-01","text":"أعد المحاولة","label":"human-worthy","family":"short-arabic","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-cyrillic-01","text":"Повторите","label":"human-worthy","family":"short-cyrillic","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-han-01","text":"请重试","label":"human-worthy","family":"short-han","license":"project-synthetic"}
+{"schemaVersion":1,"id":"counter-ambiguous-01","text":"A7??通知","label":"ambiguous","family":"unsupported-ambiguous","license":"project-synthetic"}

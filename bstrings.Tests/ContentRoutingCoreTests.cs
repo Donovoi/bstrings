@@ -96,7 +96,70 @@ public sealed class ContentRoutingCoreTests
             ValidateAsync(scope, fixture.Info, fixture.Manifest, fixture.Routing, cancellationToken)
         );
 
-        Assert.Contains("mandatory native", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("expected native selection", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ValidateAndProjectAsync_AcceptsNativeOffPolicyAndProjectsSpecialists()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var evidence = scope.PathFor("evidence.bin");
+        await File.WriteAllTextAsync(evidence, "evidence", cancellationToken);
+        var fixture = await CreateFixtureAsync(
+            scope,
+            [evidence],
+            [["ocr"]],
+            cancellationToken,
+            schemaVersion: 2,
+            policyVersion: "content-routing-v2"
+        );
+
+        var stats = await ValidateAsync(
+            scope,
+            fixture.Info,
+            fixture.Manifest,
+            fixture.Routing,
+            cancellationToken,
+            expectedNativeSelected: false
+        );
+
+        Assert.Equal("content-routing-v2", stats.PolicyVersion);
+        Assert.Equal(0, stats.FlossCandidates);
+        Assert.Equal(1, stats.OcrCandidates);
+    }
+
+    [Theory]
+    [InlineData(1, "content-routing-v2")]
+    [InlineData(2, "content-routing-v1")]
+    public async Task ValidateAndProjectAsync_RejectsMismatchedNativeOffSchemaPolicyPair(
+        int schemaVersion,
+        string policyVersion
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var evidence = scope.PathFor("evidence.bin");
+        await File.WriteAllTextAsync(evidence, "evidence", cancellationToken);
+        var fixture = await CreateFixtureAsync(
+            scope,
+            [evidence],
+            [["ocr"]],
+            cancellationToken,
+            schemaVersion: schemaVersion,
+            policyVersion: policyVersion
+        );
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            ValidateAsync(
+                scope,
+                fixture.Info,
+                fixture.Manifest,
+                fixture.Routing,
+                cancellationToken,
+                expectedNativeSelected: false
+            )
+        );
     }
 
     [Fact]
@@ -230,7 +293,8 @@ public sealed class ContentRoutingCoreTests
                 scope.PathFor("floss-input-manifest.jsonl"),
                 scope.PathFor("ocr-input-files.txt"),
                 scope.PathFor("ocr-input-manifest.jsonl"),
-                cancellationToken,
+                expectedNativeSelected: true,
+                cancellationToken: cancellationToken,
                 expectedClassifierExecutable: verifiedClassifier
             )
         );
@@ -243,7 +307,8 @@ public sealed class ContentRoutingCoreTests
         InputManifestInfo info,
         string manifest,
         string routing,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool expectedNativeSelected = true
     ) =>
         ContentRoutingCore.ValidateAndProjectAsync(
             manifest,
@@ -253,6 +318,7 @@ public sealed class ContentRoutingCoreTests
             scope.PathFor("floss-input-manifest.jsonl"),
             scope.PathFor("ocr-input-files.txt"),
             scope.PathFor("ocr-input-manifest.jsonl"),
+            expectedNativeSelected,
             cancellationToken
         );
 
@@ -261,7 +327,9 @@ public sealed class ContentRoutingCoreTests
         IReadOnlyList<string> files,
         IReadOnlyList<string[]> scheduledRoutes,
         CancellationToken cancellationToken,
-        string? sourceSha256Override = null
+        string? sourceSha256Override = null,
+        int schemaVersion = 1,
+        string policyVersion = "content-routing-v1"
     )
     {
         var inventory = scope.PathFor("input-files.txt");
@@ -286,9 +354,9 @@ public sealed class ContentRoutingCoreTests
                 var eligibleRoutes = routes.Append("native").Distinct().Order(StringComparer.Ordinal).ToArray();
                 var rowWithoutDecisionId = new
                 {
-                    schemaVersion = 1,
+                    schemaVersion,
                     recordType = "content-route",
-                    policyVersion = "content-routing-v1",
+                    policyVersion,
                     ordinal = index + 1,
                     sourceFile = identity.GetProperty("path").GetString(),
                     sourceSize = identity.GetProperty("length").GetInt64(),

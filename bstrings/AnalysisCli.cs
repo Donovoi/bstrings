@@ -15,6 +15,10 @@ internal static class AnalysisCli
     internal const string DefaultTranslationPolicy = "high-recall";
     internal const string TranslationPolicyHelp =
         "Automatic translation gate used by --translation auto: high-recall keeps uncertain detections; balanced uses the configured confidence and margin; high-precision applies floors of 0.65 confidence and 0.15 margin";
+    internal const string FullProfileHelp =
+        "Run the single Full profile: hash inputs, classify each input in one early shared pass, extract native strings, route applicable files to FLOSS/OCR, then fail-open shadow translation-worthiness routing and language triage, pinned 7B Q4_K_M offline translation (validated sm89 CUDA p2 or pre-evidence CPU selection), all patterns, and reports; shadow routing does not yet remove candidates, and an explicit engine option overrides its default";
+    internal const string TranslationDeviceHelp =
+        "Translation hardware: auto, cpu, cuda, or hybrid; separate from native --processor (the quality kit promotes only validated compute capability 8.9 to full-offload CUDA p2, otherwise auto selects CPU before evidence inference; explicit cuda fails closed)";
 
     internal static async Task<int> RunAsync(string[] args)
     {
@@ -37,8 +41,11 @@ internal static class AnalysisCli
         };
         var fullOption = new Option<bool>("--full")
         {
-            Description =
-                "Run the single Full profile: hash inputs, classify each input in one early shared pass, always extract native strings, route applicable files to FLOSS/OCR, then language triage, 7B-Q8 offline translation, all patterns, and reports; an explicit stage 'off' overrides its default",
+            Description = FullProfileHelp,
+        };
+        var nativeExtractionOption = new Option<string?>("--native-extraction")
+        {
+            Description = "Native byte-string extraction: on (default) or off; disabling it requires FLOSS or OCR",
         };
         var ocrOption = new Option<string?>("--ocr")
         {
@@ -89,7 +96,7 @@ internal static class AnalysisCli
         };
         var translationDeviceOption = new Option<string>("--translation-device")
         {
-            Description = "Translation hardware: auto, cpu, cuda, or hybrid; separate from native --processor (the standard kit resolves auto to its accepted CPU runtime)",
+            Description = TranslationDeviceHelp,
             DefaultValueFactory = _ => "auto",
         };
         var translationParallelismOption = new Option<int>("--translation-parallelism")
@@ -172,6 +179,7 @@ internal static class AnalysisCli
             outputOption,
             maskOption,
             fullOption,
+            nativeExtractionOption,
             ocrOption,
             ocrProviderOption,
             ocrThreadsOption,
@@ -205,7 +213,7 @@ internal static class AnalysisCli
             + "  bstrings.exe analyze -f C:\\evidence\\memory.raw --ocr off --translation off --lr all -o C:\\results\\memory\n\n"
             + "The results directory must be new or empty. Failures retain .incomplete and diagnostic logs. "
             + "Long-running stages print measured percentage completion; percentages are work units, not an ETA. "
-            + "content-routing.jsonl records every routing signal and decision; engine-status.jsonl records terminal per-input engine coverage; native extraction always covers every input.";
+            + "Specialist runs record every routing signal and terminal per-input engine state. Native extraction is on by default and may be explicitly disabled for a specialist-only run.";
 
         var actionExitCode = 0;
         command.SetAction(
@@ -214,6 +222,9 @@ internal static class AnalysisCli
                 try
                 {
                     var full = result.GetValue(fullOption);
+                    var nativeExtractionMode = ResolveNativeExtractionMode(
+                        result.GetValue(nativeExtractionOption)
+                    );
                     var ocrMode = ResolveOcrMode(result.GetValue(ocrOption), full);
                     var ocrProvider = ResolveOcrProvider(
                         result.GetValue(ocrProviderOption),
@@ -287,7 +298,8 @@ internal static class AnalysisCli
                         result.GetValue(translationMinimumOption),
                         result.GetValue(translationMaximumOption),
                         result.GetValue(bundleRootOption),
-                        result.GetValue(airgapOption)
+                        result.GetValue(airgapOption),
+                        nativeExtractionMode
                     );
 
                     using var cancellation = new CancellationTokenSource();
@@ -388,6 +400,19 @@ internal static class AnalysisCli
             return mode;
         }
         throw new ArgumentException(error);
+    }
+
+    internal static NativeExtractionMode ResolveNativeExtractionMode(string? value)
+    {
+        switch ((value ?? "on").Trim().ToLowerInvariant())
+        {
+            case "on":
+                return NativeExtractionMode.On;
+            case "off":
+                return NativeExtractionMode.Off;
+            default:
+                throw new ArgumentException("Native extraction must be on or off.");
+        }
     }
 
     internal static OcrProvider ResolveOcrProvider(string? value, bool full)

@@ -1,8 +1,15 @@
 # Output, completion, and provenance
 
-The complete v1.9.16 quality kit produces native, FLOSS, OCR, language, and
+The complete v1.9.17 quality kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
+
+Current source after v1.9.17 lets an examiner select native extraction, FLOSS,
+or OCR as the sole source producer; the already-published v1.9.17 binaries do
+not contain `--native-extraction`. Translation remains a transform over records
+emitted by at least one selected producer. Matching, reports, input
+verification, and completion records remain part of every `analyze` result
+regardless of engine selection.
 
 With a complete version-matched quality bundle, the full enrichment workflow
 writes a result set from one command:
@@ -44,18 +51,24 @@ The workflow writes `input-files.txt` and `input-manifest.jsonl` once, before
 extraction. The manifest records each canonical path, byte length, and SHA-256;
 `run.json` and `summary.json` record the manifest filename, its own SHA-256, and
 the content-hash algorithm instead of embedding a potentially huge path array.
-Native extraction consumes that complete fixed inventory and manifest. It
+When native extraction is selected, it consumes that complete fixed inventory,
 hashes, calibrates, rewinds, and scans the same write-denying source handle,
-rechecks it after scanning, and publishes native JSONL atomically. Early content triage
-writes `content-routing.jsonl`, exactly one identity-bound row per input, then
-projects ordered `floss-input-*` and `ocr-input-*` inventory/manifest pairs.
-Specialists consume only those proven subsets, so a recursive directory is not
-independently re-enumerated and a zero-candidate stage does not load its runtime.
-`run.json` and `summary.json` record the routing policy, manifest SHA-256,
-candidate counts, classifier errors, and conflicts. They also bind
-`engine-status.jsonl` by SHA-256. That terminal ledger has three rows per routed
-input, one each for native extraction, FLOSS, and OCR, keyed by the routing
-decision and source identity.
+rechecks it after scanning, and publishes native JSONL atomically. When native
+is disabled, `native-strings.jsonl` is atomically empty and no native scan or
+native pre/post stage runs.
+
+When FLOSS or OCR is selected, content routing writes `content-routing.jsonl`,
+exactly one identity-bound row per input, then projects ordered `floss-input-*`
+and `ocr-input-*` inventory/manifest pairs. Specialist modes bind the Magika
+classifier identity. A native-only run does not start Magika and retains the
+verified input manifest plus native records without fabricating a classifier or
+specialist ledger. Specialists consume only proven subsets, so a
+recursive directory is not independently re-enumerated and a zero-candidate
+stage does not load its runtime. `run.json` and `summary.json` record the
+routing policy, manifest SHA-256, candidate counts, classifier errors, and
+conflicts when routing ran. Specialist runs also bind `engine-status.jsonl` by SHA-256. That terminal ledger
+has three rows per input, one each for native extraction, FLOSS, and OCR, keyed
+by the routing decision and source identity.
 
 When analysis uses the complete offline bundle, `run.json` and `summary.json`
 also contain the same `bundleIntegrity` object. It records the bundle manifest
@@ -67,6 +80,14 @@ missing, extra, linked, resized, hash-mismatched, or executable-mismatched files
 stop the run.
 This proves which manifest governed the toolchain used for the examination. It
 is an integrity record, not publisher authentication or code signing.
+
+The complete quality bundle is an atomic trust profile. Disabling an engine at
+runtime does not exclude its bytes from whole-manifest verification: corruption
+of an unselected component still blocks the run. This prevents unverified DLLs,
+Python packages, or models in the same loadable tree from being mistaken for a
+partially trusted installation. Independently installable physical capability
+profiles are not part of v1.9.17 and remain deferred by
+[ADR-0008](architecture/adr-0008-independent-engine-execution.md).
 
 Input content is hashed while the manifest is created and verified around and
 after requested external stages. OCR also compares applicable input length and
@@ -100,7 +121,7 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-In current source and v1.9.16, every completed integrated `analyze` run
+In current source and v1.9.17, every completed integrated `analyze` run
 also projects these review files:
 
 - `findings.tsv`: one physical row per regex match with pattern metadata,
@@ -130,7 +151,8 @@ report set for the same native-only examination, use a result directory:
 ```powershell
 .\bstrings.exe analyze -f D:\evidence\memory.raw `
   -o D:\results\memory-strings `
-  --recover-executable-strings off --ocr off --translation off --lr all
+  --native-extraction on --recover-executable-strings off `
+  --ocr off --translation off --lr all
 ```
 
 `analyze` records native byte offsets automatically; its structured stage log
@@ -189,10 +211,12 @@ their page/parent and surrounding source evidence.
 its terminal `succeeded`, `not-applicable`, or `disabled-by-user` state, and its
 output-record count. Selected engines remain present when they succeed with
 zero records, so an empty FLOSS or OCR result cannot be confused with an engine
-that was never attempted. The file is written atomically only after source
-identity, route lineage, OCR assessments, and specialist output coverage agree.
-The `engineStatuses` objects in `run.json` and `summary.json` record its filename,
-SHA-256, row count, per-engine terminal counts, and output-record totals.
+that was never attempted. Native-off produces one `disabled-by-user`, selected
+`false`, zero-output native row for every input. The file is written atomically
+only after source identity, route lineage, OCR assessments, and specialist
+output coverage agree. The `engineStatuses` objects in `run.json` and
+`summary.json` record its filename, SHA-256, row count, per-engine terminal
+counts, and output-record totals.
 
 ## OCR records and assessments
 
@@ -230,7 +254,9 @@ Full analysis can assess eligible text before translation. Each
   12-decimal report-score precision;
 - explicit raw `confidenceGatePassed` and `marginGatePassed` outcomes;
 - high-recall, balanced, or high-precision policy;
-- decision and whether the source became a translation candidate; and
+- decision and whether the source became a translation candidate;
+- a compact `translationRouting` shadow observation containing one bounded
+  routing code; and
 - any detector error.
 
 The assessment is useful even when a string is not translated: it explains why
@@ -241,11 +267,73 @@ The optional high-precision policy sets each effective threshold to the greater
 of the configured value and 0.65 confidence/0.15 target margin; these scores are
 not calibrated probabilities.
 
+Shadow translation routing never removes a candidate in this implementation.
+`prospective-*` is an auditable measurement, not an authoritative exclusion;
+`shadow-*`, `retain`, and all router errors follow the existing fail-open path.
+The routing object does not repeat source text,
+location, origin, or arbitrary attributes; the enclosing assessment row binds
+it to the canonical record. Existing assessment fields already state the
+detector outcome and candidate selection, while `run.json` and `summary.json`
+bind the routing codebook to its policy version and aggregate counts once per
+run. Candidate and canonical-parent cardinality remain unchanged until a
+separately accepted policy version enables a validated bypass.
+
+The run-level `translationRouting` summary additionally reports:
+
+- `routingEvaluations`: batch-unique records actually evaluated by the bounded
+  router;
+- `detectorEligibleRecords`: occurrence records that needed a Lingua result;
+- `detectorExecutions`: actual Lingua invocations; and
+- `detectorReuseHits`: eligible occurrences served by successful same-batch
+  reuse.
+
+`detectorExecutions + detectorReuseHits` must equal
+`detectorEligibleRecords`, and the router counters must reconcile with triage
+cardinality or publication fails. C# triage also classifies a bounded set of
+origin flags for each pending record: native static, FLOSS, FLOSS-decoded, OCR,
+PDF text, derived translation, or unknown. The structured shadow router does
+not currently use those flags to change its code; any future scorer may use
+them only to force retention, never suppression.
+
+The Python worker atomically publishes `translation-work-stats.json` after the
+translated output succeeds. Its privacy-safe schema 1 contains only aggregate
+counters:
+
+- `candidateOccurrences`: candidate parent occurrences;
+- `textDecisions`: first exact-text decisions within each translation
+  window/call, not globally distinct text;
+- `protectedOnlyBypassTexts`, `runCacheHits`, `translationCacheHits`, and
+  `translatorInputTexts`: the mutually exclusive outcomes of those decisions;
+- `translatorRequests`: translator batch dispatches;
+- `translatorInputTexts` and `modelResults`: texts dispatched and per-input
+  outcomes;
+- `modelFallbacks`: model outcomes rejected into preservation fallback;
+- `translatedChildOccurrences`: emitted child occurrences; and
+- `preservationFallbackChildOccurrences`: emitted fallback child occurrences,
+  including repeated/cache-served occurrences.
+
+Within-window duplicate occurrences do not add `textDecisions`. The first use
+of the same exact text in a later window does add a decision, after which
+`runCacheHits` exposes its cross-window reuse. Consequently `textDecisions` is
+not a global unique-text total, and `translatorRequests` is not an occurrence
+total or a claim about undocumented internal server retries.
+
+Managed C# requires a bounded physical non-reparse file, an exact schema-1
+property set, nonnegative integer counters, and a matching candidate/child,
+decision-bucket, translator-input/model-result, and fallback cardinality. It
+computes the artifact SHA-256 and projects the validated result under
+`translationWork` in both `run.json` and `summary.json`, with `file`, `sha256`,
+and every counter. Any missing file, schema/property error, hash/read failure,
+or cardinality mismatch leaves the run incomplete. The artifact contains no
+record identifiers or text; its case-derived counts and hash still remain
+private examination data.
+
 Classification and candidate membership use the detector's unrounded values.
 Only the five confidence/margin numbers written to JSON are rounded to the
-declared precision, preventing insignificant parallel floating-point tails
-from changing report hashes. The gate fields preserve the authoritative raw
-comparison when a displayed value lies next to a threshold.
+declared precision, bounding insignificant parallel floating-point tails. The
+gate fields preserve the authoritative raw comparison when a displayed value
+lies next to a threshold; independent detector calls may still differ by one
+unit in the final published decimal without changing that decision.
 
 ## Translation lineage
 
@@ -255,6 +343,17 @@ revision, verified model SHA-256, source-language mode, target language, and
 execution details such as CPU/CUDA policy and enforced air-gap state. It also
 records `outcome` as `translated` or `unchanged`; a successful identity result
 still gets a child instead of disappearing from the audit trail.
+
+Current Full execution provenance distinguishes the requested and resolved
+translation device, the pre-evidence self-test, runtime/backend hashes, device
+and available driver identity, requested and observed layer placement,
+parallelism, decoding, and reported host/GPU buffers. On the accepted Windows
+sm89 command, full offload is truthfully recorded as 33/33 layers plus a
+410.69 MiB `CPU_Mapped` model buffer. `auto` may record a CUDA preflight failure
+and resolved CPU only when that switch completed before evidence work. Explicit
+CUDA fails closed, and a later failure cannot rewrite the provider provenance
+by switching to CPU. Hybrid and p4 are not Full automatic plans. See
+[ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
 
 Each child also records `attributes.translationIntegrity`:
 
@@ -323,7 +422,7 @@ translation output directory; reparse ambiguity or cleanup failure fails the
 stage without replacing prior translated output. Console/log progress reports
 percentage, record rate, ETA, cache hits, distinct model inputs, and fallback
 count. Those statistics explain work avoided; they do not change record
-provenance or imply that a large high-recall CPU translation run will be short.
+provenance or imply that a large high-recall translation run will be short.
 
 ## Related guides
 
