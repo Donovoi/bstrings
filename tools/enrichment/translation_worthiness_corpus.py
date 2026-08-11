@@ -165,6 +165,8 @@ class CorpusRow:
 class ValidatedCorpus:
     rows: tuple[CorpusRow, ...]
     split_by_group: Mapping[str, str]
+    corpus_id: str = CORPUS_ID
+    license_id: str = PROJECT_LICENSE
 
     @property
     def row_by_id(self) -> Mapping[str, CorpusRow]:
@@ -266,7 +268,7 @@ def _allowlisted(value: Any, allowed: Sequence[str], *, field: str, ordinal: int
     return value
 
 
-def load_corpus(path: Path) -> tuple[CorpusRow, ...]:
+def load_corpus(path: Path, *, required_license: str = PROJECT_LICENSE) -> tuple[CorpusRow, ...]:
     parsed = _read_jsonl(path, name="translation-worthiness corpus")
     identifiers: set[str] = set()
     text_groups: dict[str, str] = {}
@@ -301,7 +303,7 @@ def load_corpus(path: Path) -> tuple[CorpusRow, ...]:
         )
         if declared_band != length_band(text):
             raise WorthinessCorpusError(f"Corpus row {ordinal} has a mismatched lengthBand")
-        if value["license"] != PROJECT_LICENSE:
+        if value["license"] != required_license:
             raise WorthinessCorpusError(f"Corpus row {ordinal} has an unapproved license")
         rows.append(
             CorpusRow(
@@ -335,7 +337,13 @@ def load_corpus(path: Path) -> tuple[CorpusRow, ...]:
     return tuple(rows)
 
 
-def load_split_manifest(path: Path, rows: Sequence[CorpusRow]) -> Mapping[str, str]:
+def load_split_manifest(
+    path: Path,
+    rows: Sequence[CorpusRow],
+    *,
+    required_corpus_id: str = CORPUS_ID,
+    required_license: str = PROJECT_LICENSE,
+) -> Mapping[str, str]:
     resolved = _physical_file(path, name="translation-worthiness split manifest")
     raw = resolved.read_bytes()
     if not raw or len(raw) > MAX_JSON_LINE_BYTES:
@@ -346,8 +354,8 @@ def load_split_manifest(path: Path, rows: Sequence[CorpusRow]) -> Mapping[str, s
     if (
         type(value["schemaVersion"]) is not int
         or value["schemaVersion"] != SCHEMA_VERSION
-        or value["corpusId"] != CORPUS_ID
-        or value["license"] != PROJECT_LICENSE
+        or value["corpusId"] != required_corpus_id
+        or value["license"] != required_license
     ):
         raise WorthinessCorpusError("Split manifest identity is unsupported")
     splits = value["splits"]
@@ -376,10 +384,26 @@ def load_split_manifest(path: Path, rows: Sequence[CorpusRow]) -> Mapping[str, s
     return split_by_group
 
 
-def validate_corpus(corpus_path: Path, split_path: Path) -> ValidatedCorpus:
-    rows = load_corpus(corpus_path)
-    split_by_group = load_split_manifest(split_path, rows)
-    return ValidatedCorpus(rows=rows, split_by_group=split_by_group)
+def validate_corpus(
+    corpus_path: Path,
+    split_path: Path,
+    *,
+    corpus_id: str = CORPUS_ID,
+    license_id: str = PROJECT_LICENSE,
+) -> ValidatedCorpus:
+    rows = load_corpus(corpus_path, required_license=license_id)
+    split_by_group = load_split_manifest(
+        split_path,
+        rows,
+        required_corpus_id=corpus_id,
+        required_license=license_id,
+    )
+    return ValidatedCorpus(
+        rows=rows,
+        split_by_group=split_by_group,
+        corpus_id=corpus_id,
+        license_id=license_id,
+    )
 
 
 def _complete_counts(values: Iterable[str], allowed: Sequence[str]) -> dict[str, int]:
@@ -393,8 +417,8 @@ def validation_report(corpus: ValidatedCorpus) -> dict[str, Any]:
     return {
         "schemaVersion": SCHEMA_VERSION,
         "reportType": "translation-worthiness-corpus-validation",
-        "corpusId": CORPUS_ID,
-        "license": PROJECT_LICENSE,
+        "corpusId": corpus.corpus_id,
+        "license": corpus.license_id,
         "researchOnly": True,
         "promotionEligible": False,
         "status": "valid",
@@ -459,6 +483,8 @@ def load_model_manifest(
     model_path: Path,
     predictions_path: Path,
     expected_feature_contract_sha256: str,
+    expected_corpus_id: str = CORPUS_ID,
+    expected_license: str = PROJECT_LICENSE,
 ) -> ModelManifest:
     resolved = _physical_file(path, name="translation-worthiness model manifest")
     raw = resolved.read_bytes()
@@ -472,8 +498,8 @@ def load_model_manifest(
         or value["artifactType"] != "translation-worthiness-model-manifest"
         or value["researchOnly"] is not True
         or value["promotionEligible"] is not False
-        or value["corpusId"] != CORPUS_ID
-        or value["license"] != PROJECT_LICENSE
+        or value["corpusId"] != expected_corpus_id
+        or value["license"] != expected_license
         or value["scoreOrientation"] != SCORE_ORIENTATION
     ):
         raise WorthinessCorpusError("Model manifest identity is unsupported")
@@ -665,8 +691,8 @@ def evaluation_report(
     report = {
         "schemaVersion": SCHEMA_VERSION,
         "reportType": "translation-worthiness-evaluation",
-        "corpusId": CORPUS_ID,
-        "license": PROJECT_LICENSE,
+        "corpusId": corpus.corpus_id,
+        "license": corpus.license_id,
         "researchOnly": True,
         "promotionEligible": False,
         "evaluationPhase": phase,
@@ -749,6 +775,8 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     for command in (validate, evaluate):
         command.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
         command.add_argument("--splits", type=Path, default=DEFAULT_SPLITS)
+        command.add_argument("--corpus-id", default=CORPUS_ID)
+        command.add_argument("--license-id", default=PROJECT_LICENSE)
         command.add_argument("--output", type=Path)
     evaluate.add_argument("--predictions", type=Path, required=True)
     evaluate.add_argument("--model-manifest", type=Path, required=True)
@@ -761,7 +789,12 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
 def main(arguments: Sequence[str] | None = None) -> int:
     try:
         options = parse_arguments(arguments)
-        corpus = validate_corpus(options.corpus, options.splits)
+        corpus = validate_corpus(
+            options.corpus,
+            options.splits,
+            corpus_id=options.corpus_id,
+            license_id=options.license_id,
+        )
         if options.command == "validate":
             report = validation_report(corpus)
             inputs = [options.corpus, options.splits]
@@ -779,6 +812,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 model_path=options.model,
                 predictions_path=options.predictions,
                 expected_feature_contract_sha256=feature_contract_sha256(),
+                expected_corpus_id=corpus.corpus_id,
+                expected_license=corpus.license_id,
             )
             if manifest.ablation != "exact-only":
                 validate_model_manifest_identity(

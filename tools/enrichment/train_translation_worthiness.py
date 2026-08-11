@@ -117,8 +117,15 @@ def build_artifacts(
     epochs: int,
     learning_rate: float,
     trainer_path: Path,
+    corpus_id: str = CORPUS_ID,
+    license_id: str = PROJECT_LICENSE,
 ) -> tuple[bytes, bytes, bytes]:
-    corpus = validate_corpus(corpus_path, split_path)
+    corpus = validate_corpus(
+        corpus_path,
+        split_path,
+        corpus_id=corpus_id,
+        license_id=license_id,
+    )
     train_rows = tuple(row for row in corpus.rows if corpus.split_by_group[row.group_id] == "train")
     calibration_rows = tuple(
         row for row in corpus.rows if corpus.split_by_group[row.group_id] == "calibration"
@@ -140,8 +147,8 @@ def build_artifacts(
         "artifactType": "translation-worthiness-model-manifest",
         "researchOnly": True,
         "promotionEligible": False,
-        "corpusId": CORPUS_ID,
-        "license": PROJECT_LICENSE,
+        "corpusId": corpus_id,
+        "license": license_id,
         "experimentId": experiment_id,
         "ablation": ablation,
         "scoreOrientation": SCORE_ORIENTATION,
@@ -179,6 +186,8 @@ def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespac
     parser.add_argument("--splits", type=Path, default=DEFAULT_SPLITS)
     parser.add_argument("--ablation", choices=tuple(ABLATION_CODES), default="combined")
     parser.add_argument("--experiment-id", default=DEFAULT_EXPERIMENT_ID)
+    parser.add_argument("--corpus-id", default=CORPUS_ID)
+    parser.add_argument("--license-id", default=PROJECT_LICENSE)
     parser.add_argument("--bucket-count", type=int, default=DEFAULT_BUCKET_COUNT)
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
@@ -201,6 +210,21 @@ def main(arguments: Sequence[str] | None = None) -> int:
             )
         ):
             raise WorthinessCorpusError("Experiment ID is invalid")
+        for field, value in (
+            ("corpus ID", options.corpus_id),
+            ("license ID", options.license_id),
+        ):
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) > 64
+                or any(
+                    character
+                    not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-+"
+                    for character in value
+                )
+            ):
+                raise WorthinessCorpusError(f"{field} is invalid")
         if not math.isfinite(options.learning_rate):
             raise WorthinessCorpusError("Learning rate is invalid")
         corpus_path = _physical_input(options.corpus, name="translation-worthiness corpus")
@@ -223,6 +247,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
             epochs=options.epochs,
             learning_rate=options.learning_rate,
             trainer_path=trainer_path,
+            corpus_id=options.corpus_id,
+            license_id=options.license_id,
         )
         _publish_artifacts(
             destinations[0],
