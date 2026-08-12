@@ -88,9 +88,7 @@ EXPECTED_REPAIR_IDENTITY = {
     ),
     "sourceRegionCount": 19_386,
 }
-EXPECTED_REPAIR_IDENTITY_SHA256 = (
-    "8a2c74537cd0e42d5a671ea52d7b902ccc29a5b389513867c2bd3f1b132357d4"
-)
+EXPECTED_REPAIR_IDENTITY_SHA256 = "8a2c74537cd0e42d5a671ea52d7b902ccc29a5b389513867c2bd3f1b132357d4"
 PINNED_GIT_EXE_SHA256 = "7b7971dd13f0c3a284e538601f2f9770b3a87dfaccb5fb52d68141c67ed22364"
 GIT_TIMEOUT_SECONDS = 30.0
 MAX_GIT_OUTPUT_BYTES = 64 * 1024
@@ -126,9 +124,7 @@ def _bootstrap_temporary_directory(
             ):
                 raise RuntimeError("The bootstrap temporary root is unsafe")
             parent_ids.append((parent, (value.st_dev, value.st_ino)))
-        temporary = tempfile.TemporaryDirectory(
-            prefix="bstrings-sroie-posthoc-", dir=str(root)
-        )
+        temporary = tempfile.TemporaryDirectory(prefix="bstrings-sroie-posthoc-", dir=str(root))
         controlled = Path(temporary.name).resolve()
         value = os.lstat(controlled)
         if (
@@ -178,6 +174,7 @@ def _sanitize_bootstrap_environment() -> None:
         if length <= 0 or length >= len(buffer):
             raise RuntimeError("The canonical Windows directory is unavailable")
         windows_directory = Path(buffer.value).resolve()
+
         class _Guid(ctypes.Structure):
             _fields_ = (
                 ("data1", ctypes.c_uint32),
@@ -650,8 +647,7 @@ def _load_consumed_attempt(terminal_result: Path) -> ConsumedAttempt:
         or terminal.get("independentHoldoutConsumed") is not True
         or terminal.get("integrityPassed") is not False
         or not isinstance(terminal_ledger, Mapping)
-        or terminal_ledger
-        != {"sha256": ledger_sha256, "status": "quarantined"}
+        or terminal_ledger != {"sha256": ledger_sha256, "status": "quarantined"}
         or terminal.get("policySha256") != ledger["policySha256"]
         or not isinstance(terminal_witness, Mapping)
         or terminal_witness
@@ -1047,12 +1043,9 @@ def _capture_posthoc_artifacts(
             artifacts[artifact].get("sha256") != expected_sha256
             for artifact, expected_sha256 in view_bindings.items()
         )
-        or artifacts["posthocTestSnapshot"].get("bytes")
-        != acceptance.sroie_policy.TEST_BYTES
+        or artifacts["posthocTestSnapshot"].get("bytes") != acceptance.sroie_policy.TEST_BYTES
     ):
-        raise _error(
-            "The post-hoc artifact bytes do not bind the scored corpus", stage="artifact"
-        )
+        raise _error("The post-hoc artifact bytes do not bind the scored corpus", stage="artifact")
     return artifacts
 
 
@@ -1090,9 +1083,7 @@ def _posthoc_backend_result_paths(phase_root: Path) -> dict[str, Path]:
         provider_root = phase_root / "results" / provider
         run_roots = [provider_root / "quality-all-100"]
         run_roots.extend(
-            provider_root
-            / "determinism-rows-0000-0009"
-            / f"run-{index:02d}"
+            provider_root / "determinism-rows-0000-0009" / f"run-{index:02d}"
             for index in range(1, acceptance.DETERMINISM_REPETITIONS + 1)
         )
         for run_root in run_roots:
@@ -1123,9 +1114,7 @@ def _capture_raw_output_pair_bindings(
     try:
         for provider, backend in zip(providers, runs, strict=True):
             determinism = backend.get("determinism") if isinstance(backend, Mapping) else None
-            repetitions = (
-                determinism.get("runs") if isinstance(determinism, Mapping) else None
-            )
+            repetitions = determinism.get("runs") if isinstance(determinism, Mapping) else None
             quality = backend.get("qualityRun") if isinstance(backend, Mapping) else None
             if (
                 not isinstance(quality, Mapping)
@@ -1148,10 +1137,7 @@ def _capture_raw_output_pair_bindings(
                     root / "assessments.jsonl",
                 )
                 raw_hashes = run.get("rawOutputHashes")
-                if (
-                    not isinstance(raw_hashes, Mapping)
-                    or raw_hashes.get("pairSha256") != actual
-                ):
+                if not isinstance(raw_hashes, Mapping) or raw_hashes.get("pairSha256") != actual:
                     raise _error(
                         "A post-hoc raw-output pair claim is invalid",
                         stage="artifact",
@@ -1209,9 +1195,7 @@ def _capture_backend_raw_observations(
                 raise _error("A post-hoc backend observation is invalid", stage="artifact")
             quality = backend.get("qualityRun")
             determinism = backend.get("determinism")
-            repetitions = (
-                determinism.get("runs") if isinstance(determinism, Mapping) else None
-            )
+            repetitions = determinism.get("runs") if isinstance(determinism, Mapping) else None
             if (
                 not isinstance(quality, Mapping)
                 or not isinstance(repetitions, list)
@@ -1279,19 +1263,13 @@ def _capture_backend_raw_observations(
                     acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION,
                 )
                 expected_strict_bytes = acceptance._per_document_bytes(strict_metrics)
-                strict_metrics_sha256 = acceptance.sroie_policy.sha256_canonical(
-                    strict_metrics
-                )
-                strict_per_document_sha256 = acceptance._sha256_bytes(
-                    expected_strict_bytes
-                )
+                strict_metrics_sha256 = acceptance.sroie_policy.sha256_canonical(strict_metrics)
+                strict_per_document_sha256 = acceptance._sha256_bytes(expected_strict_bytes)
                 primary_metrics["caseSensitiveDiagnostics"] = {
                     "metrics": strict_metrics,
                     "metricsSha256": strict_metrics_sha256,
                     "perDocumentMetricsSha256": strict_per_document_sha256,
-                    "textNormalization": (
-                        acceptance.sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION
-                    ),
+                    "textNormalization": (acceptance.sroie.SROIE_DIAGNOSTIC_TEXT_NORMALIZATION),
                 }
                 expected_primary_bytes = acceptance._per_document_bytes(primary_metrics)
                 if (
@@ -1351,25 +1329,19 @@ def _capture_backend_raw_observations(
                 execution_provider_counts = dict(sorted(execution_provider_counts.items()))
                 cpu_lane_records = execution_provider_counts.get("cpu", 0)
                 non_cpu_lane_records = sum(
-                    count
-                    for name, count in execution_provider_counts.items()
-                    if name != "cpu"
+                    count for name, count in execution_provider_counts.items() if name != "cpu"
                 )
                 both_lanes = cpu_lane_records > 0 and non_cpu_lane_records > 0
                 raw_output_hashes = {
                     "assessmentsSha256": acceptance._sha256_bytes(assessments_bytes),
-                    "pairSha256": _raw_output_pair_sha256_bytes(
-                        strings_bytes, assessments_bytes
-                    ),
+                    "pairSha256": _raw_output_pair_sha256_bytes(strings_bytes, assessments_bytes),
                     "stringsSha256": acceptance._sha256_bytes(strings_bytes),
                 }
                 elapsed_seconds = run.get("elapsedSeconds")
                 documents_per_second = run.get("documentsPerSecond")
                 expected_claims = {
                     "canonicalEvidenceSha256": (
-                        acceptance.benchmark_core.canonical_evidence_sha256(
-                            records, assessments
-                        )
+                        acceptance.benchmark_core.canonical_evidence_sha256(records, assessments)
                     ),
                     "criticalEvidenceSha256": acceptance.cord.critical_evidence_sha256(
                         records, assessments
@@ -1381,12 +1353,8 @@ def _capture_backend_raw_observations(
                         "nonCpuLaneRecords": non_cpu_lane_records,
                     },
                     "metrics": primary_metrics,
-                    "metricsSha256": acceptance.sroie_policy.sha256_canonical(
-                        primary_metrics
-                    ),
-                    "perDocumentMetricsSha256": acceptance._sha256_bytes(
-                        expected_primary_bytes
-                    ),
+                    "metricsSha256": acceptance.sroie_policy.sha256_canonical(primary_metrics),
+                    "perDocumentMetricsSha256": acceptance._sha256_bytes(expected_primary_bytes),
                     "provenanceErrors": list(provenance_errors),
                     "provenancePassed": provenance_passed,
                     "qualityGatePassed": None,
@@ -1453,9 +1421,7 @@ def _capture_backend_raw_observations(
 def _public_json_run(run: Mapping[str, Any]) -> dict[str, Any]:
     """Freeze a backend result in the JSON-native shape that will be published."""
 
-    value = json.loads(
-        acceptance.sroie_policy.canonical_json(acceptance._public_run(run))
-    )
+    value = json.loads(acceptance.sroie_policy.canonical_json(acceptance._public_run(run)))
     if not isinstance(value, dict):
         raise _error("A public post-hoc backend run is invalid", stage="report")
     return value
@@ -1497,15 +1463,11 @@ def _validate_backend_result_bindings(
             raw_hashes = run.get("rawOutputHashes")
             metrics = run.get("metrics")
             diagnostics = (
-                metrics.get("caseSensitiveDiagnostics")
-                if isinstance(metrics, Mapping)
-                else None
+                metrics.get("caseSensitiveDiagnostics") if isinstance(metrics, Mapping) else None
             )
             expected_hashes = {
                 "assessments.jsonl": (
-                    raw_hashes.get("assessmentsSha256")
-                    if isinstance(raw_hashes, Mapping)
-                    else None
+                    raw_hashes.get("assessmentsSha256") if isinstance(raw_hashes, Mapping) else None
                 ),
                 "metrics-per-document-case-sensitive.jsonl": (
                     diagnostics.get("perDocumentMetricsSha256")
@@ -1514,9 +1476,7 @@ def _validate_backend_result_bindings(
                 ),
                 "metrics-per-document.jsonl": run.get("perDocumentMetricsSha256"),
                 "strings.jsonl": (
-                    raw_hashes.get("stringsSha256")
-                    if isinstance(raw_hashes, Mapping)
-                    else None
+                    raw_hashes.get("stringsSha256") if isinstance(raw_hashes, Mapping) else None
                 ),
             }
             for file_name, expected_sha256 in expected_hashes.items():
@@ -1829,9 +1789,7 @@ def _public_evaluation_binding(
             ),
             "overlapRecords": [dict(record) for record in overlap_records],
             "perceptualSimilarityClaimed": False,
-            "testRawImageDigestsSha256": full_corpus_identity[
-                "sourceImageDigestsSha256"
-            ],
+            "testRawImageDigestsSha256": full_corpus_identity["sourceImageDigestsSha256"],
             "testRawImages": len(full_corpus.documents),
         },
         "determinismView": {
@@ -2125,12 +2083,8 @@ _POSTHOC_RUNTIME_KEYS = frozenset(
         "schemaVersion",
     }
 )
-_POSTHOC_RAW_OUTPUT_KEYS = frozenset(
-    {"assessmentsSha256", "pairSha256", "stringsSha256"}
-)
-_POSTHOC_LANE_KEYS = frozenset(
-    {"bothLanesProducedRecords", "cpuLaneRecords", "nonCpuLaneRecords"}
-)
+_POSTHOC_RAW_OUTPUT_KEYS = frozenset({"assessmentsSha256", "pairSha256", "stringsSha256"})
+_POSTHOC_LANE_KEYS = frozenset({"bothLanesProducedRecords", "cpuLaneRecords", "nonCpuLaneRecords"})
 
 
 def _finite_nonnegative(value: Any, *, positive: bool = False) -> bool:
@@ -2209,16 +2163,10 @@ def _validate_public_backend_runs(
             or sum(execution_counts.values()) != string_records
             or lane.get("cpuLaneRecords") != execution_counts.get("cpu", 0)
             or lane.get("nonCpuLaneRecords")
-            != sum(
-                count for name, count in execution_counts.items() if name != "cpu"
-            )
-            or lane.get("cpuLaneRecords") + lane.get("nonCpuLaneRecords")
-            != string_records
+            != sum(count for name, count in execution_counts.items() if name != "cpu")
+            or lane.get("cpuLaneRecords") + lane.get("nonCpuLaneRecords") != string_records
             or lane.get("bothLanesProducedRecords")
-            is not (
-                lane.get("cpuLaneRecords") > 0
-                and lane.get("nonCpuLaneRecords") > 0
-            )
+            is not (lane.get("cpuLaneRecords") > 0 and lane.get("nonCpuLaneRecords") > 0)
             or run.get("throughputComparable")
             is not (provider != "hybrid" or lane.get("bothLanesProducedRecords") is True)
             or run.get("requestedProvider") != provider
@@ -2241,13 +2189,11 @@ def _validate_public_backend_runs(
             or not isinstance(run.get("provenanceErrors"), list)
             or any(not isinstance(error, str) or not error for error in run["provenanceErrors"])
             or run.get("provenancePassed") is not (not run.get("provenanceErrors"))
-            or run.get("textNormalization")
-            != acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
+            or run.get("textNormalization") != acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
             or not _is_sha256(run.get("canonicalEvidenceSha256"))
             or not _is_sha256(run.get("criticalEvidenceSha256"))
             or not isinstance(metrics, Mapping)
-            or run.get("metricsSha256")
-            != acceptance.sroie_policy.sha256_canonical(metrics)
+            or run.get("metricsSha256") != acceptance.sroie_policy.sha256_canonical(metrics)
             or run.get("perDocumentMetricsSha256")
             != acceptance._sha256_bytes(acceptance._per_document_bytes(metrics))
         ):
@@ -2264,9 +2210,7 @@ def _validate_public_backend_runs(
                 stage="report",
             ) from exc
 
-    for provider, resolved, backend in zip(
-        provider_names, resolved_names, backends, strict=True
-    ):
+    for provider, resolved, backend in zip(provider_names, resolved_names, backends, strict=True):
         if not isinstance(backend, Mapping) or set(backend) != _POSTHOC_BACKEND_KEYS:
             raise _error("A post-hoc backend schema changed", stage="report")
         quality_run = backend.get("qualityRun")
@@ -2281,8 +2225,7 @@ def _validate_public_backend_runs(
             or not isinstance(runtime, Mapping)
             or set(runtime) != _POSTHOC_RUNTIME_KEYS
             or runtime.get("schemaVersion") != 1
-            or runtime.get("requestedProvider")
-            != ("cpu" if provider == "cpu" else "directml")
+            or runtime.get("requestedProvider") != ("cpu" if provider == "cpu" else "directml")
             or any(
                 not _is_sha256(runtime.get(key))
                 for key in _POSTHOC_RUNTIME_KEYS
@@ -2312,8 +2255,7 @@ def _validate_public_backend_runs(
                 worker_sha256=backend["workerSha256"],
                 identities=determinism_identities,
                 expected_pair_sha256=raw_output_pair_bindings.get(
-                    "results/"
-                    f"{provider}/determinism-rows-0000-0009/run-{repetition_index:02d}"
+                    f"results/{provider}/determinism-rows-0000-0009/run-{repetition_index:02d}"
                 ),
             )
 
@@ -2327,18 +2269,15 @@ def _validate_public_backend_runs(
             for run in repetitions
         }
         thread_counts = {
-            acceptance.sroie_policy.canonical_json(run["resolvedThreadCounts"])
-            for run in all_runs
+            acceptance.sroie_policy.canonical_json(run["resolvedThreadCounts"]) for run in all_runs
         }
         worker_counts = {
-            acceptance.sroie_policy.canonical_json(run["resolvedWorkerCounts"])
-            for run in all_runs
+            acceptance.sroie_policy.canonical_json(run["resolvedWorkerCounts"]) for run in all_runs
         }
         resolved_providers = {run["resolvedProvider"] for run in all_runs}
         runtime_hashes = {run["runtimeSha256"] for run in all_runs}
         stable_text = all(
-            run["textNormalization"]
-            == acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
+            run["textNormalization"] == acceptance.sroie.SROIE_PRIMARY_TEXT_NORMALIZATION
             for run in all_runs
         )
         expected_checks = {
@@ -2346,25 +2285,19 @@ def _validate_public_backend_runs(
             "canonicalEvidenceDeterministic": (
                 backend.get("canonicalEvidenceDeterministic") is True
             ),
-            "criticalEvidenceDeterministic": (
-                backend.get("criticalEvidenceDeterministic") is True
-            ),
-            "executionProviderCountsStable": (
-                backend.get("executionProviderCountsStable") is True
-            ),
+            "criticalEvidenceDeterministic": (backend.get("criticalEvidenceDeterministic") is True),
+            "executionProviderCountsStable": (backend.get("executionProviderCountsStable") is True),
             "metricsDeterministic": backend.get("metricsDeterministic") is True,
             "provenancePassed": backend.get("provenancePassed") is True,
             "repetitionCountExact": (
-                backend.get("determinismRepetitions")
-                == acceptance.DETERMINISM_REPETITIONS
+                backend.get("determinismRepetitions") == acceptance.DETERMINISM_REPETITIONS
             ),
             "rowIdentitiesExact": (
                 determinism.get("rowIndices") == determinism_view.get("rowIndices")
                 and backend.get("determinismRows") == acceptance.DETERMINISM_DOCUMENTS
             ),
             "selectionIdentityExact": (
-                determinism.get("selectionSha256")
-                == determinism_view.get("selectionSha256")
+                determinism.get("selectionSha256") == determinism_view.get("selectionSha256")
             ),
             "stableProvider": backend.get("stableResolvedProvider") is True,
             "stableRuntime": backend.get("stableRuntime") is True,
@@ -2384,59 +2317,43 @@ def _validate_public_backend_runs(
             or backend.get("requestedThreads") != 0
             or backend.get("qualityRows") != len(quality_identities)
             or backend.get("determinismRows") != len(determinism_identities)
-            or backend.get("determinismRepetitions")
-            != acceptance.DETERMINISM_REPETITIONS
+            or backend.get("determinismRepetitions") != acceptance.DETERMINISM_REPETITIONS
             or backend.get("byteDeterminismEvaluated") is not True
             or backend.get("byteDeterministic") is not (len(pair_hashes) == 1)
-            or backend.get("canonicalEvidenceDeterministic")
-            is not (len(canonical_hashes) == 1)
-            or backend.get("criticalEvidenceDeterministic")
-            is not (len(critical_hashes) == 1)
+            or backend.get("canonicalEvidenceDeterministic") is not (len(canonical_hashes) == 1)
+            or backend.get("criticalEvidenceDeterministic") is not (len(critical_hashes) == 1)
             or backend.get("metricsDeterministic") is not (len(metric_hashes) == 1)
-            or backend.get("executionProviderCountsStable")
-            is not (len(provider_counts) == 1)
-            or backend.get("stableResolvedThreadCounts")
-            is not (len(thread_counts) == 1)
-            or backend.get("stableResolvedWorkerCounts")
-            is not (len(worker_counts) == 1)
-            or backend.get("stableResolvedProvider")
-            is not (len(resolved_providers) == 1)
+            or backend.get("executionProviderCountsStable") is not (len(provider_counts) == 1)
+            or backend.get("stableResolvedThreadCounts") is not (len(thread_counts) == 1)
+            or backend.get("stableResolvedWorkerCounts") is not (len(worker_counts) == 1)
+            or backend.get("stableResolvedProvider") is not (len(resolved_providers) == 1)
             or backend.get("stableRuntime") is not (len(runtime_hashes) == 1)
             or backend.get("stableTextNormalization") is not stable_text
             or backend.get("provenancePassed")
             is not all(run.get("provenancePassed") is True for run in all_runs)
-            or backend.get("canonicalEvidenceSha256")
-            != quality_run.get("canonicalEvidenceSha256")
-            or backend.get("criticalEvidenceSha256")
-            != quality_run.get("criticalEvidenceSha256")
+            or backend.get("canonicalEvidenceSha256") != quality_run.get("canonicalEvidenceSha256")
+            or backend.get("criticalEvidenceSha256") != quality_run.get("criticalEvidenceSha256")
             or backend.get("metricsSha256") != quality_run.get("metricsSha256")
             or acceptance.sroie_policy.canonical_json(backend.get("metrics"))
             != acceptance.sroie_policy.canonical_json(quality_run.get("metrics"))
             or backend.get("qualityGatePassed") is not None
             or backend.get("qualityElapsedSeconds") != quality_run.get("elapsedSeconds")
-            or backend.get("qualityDocumentsPerSecond")
-            != quality_run.get("documentsPerSecond")
+            or backend.get("qualityDocumentsPerSecond") != quality_run.get("documentsPerSecond")
             or backend.get("executionProviderRecordCounts")
             != quality_run.get("executionProviderRecordCounts")
             or backend.get("hybridLaneRecordCoverage")
             != quality_run.get("hybridLaneRecordCoverage")
-            or backend.get("throughputComparable")
-            is not quality_run.get("throughputComparable")
-            or backend.get("resolvedThreadCounts")
-            != quality_run.get("resolvedThreadCounts")
-            or backend.get("resolvedWorkerCounts")
-            != quality_run.get("resolvedWorkerCounts")
-            or determinism.get("byteDeterministic")
-            is not backend.get("byteDeterministic")
+            or backend.get("throughputComparable") is not quality_run.get("throughputComparable")
+            or backend.get("resolvedThreadCounts") != quality_run.get("resolvedThreadCounts")
+            or backend.get("resolvedWorkerCounts") != quality_run.get("resolvedWorkerCounts")
+            or determinism.get("byteDeterministic") is not backend.get("byteDeterministic")
             or determinism.get("canonicalEvidenceDeterministic")
             is not backend.get("canonicalEvidenceDeterministic")
             or determinism.get("criticalEvidenceDeterministic")
             is not backend.get("criticalEvidenceDeterministic")
-            or determinism.get("metricsDeterministic")
-            is not backend.get("metricsDeterministic")
+            or determinism.get("metricsDeterministic") is not backend.get("metricsDeterministic")
             or determinism.get("rowIndices") != determinism_view.get("rowIndices")
-            or determinism.get("selectionSha256")
-            != determinism_view.get("selectionSha256")
+            or determinism.get("selectionSha256") != determinism_view.get("selectionSha256")
         ):
             raise _error("A post-hoc backend aggregate claim is invalid", stage="report")
         recomputed_checks[provider] = expected_checks
@@ -2558,9 +2475,7 @@ def _validate_public_evaluation_binding(
     ]
     excluded_rows = [test_row for test_row, _ in EXPECTED_CALIBRATION_OVERLAP_RECORDS]
     selected_rows = [
-        row
-        for row in range(acceptance.sroie_policy.RAW_TEST_ROWS)
-        if row not in set(excluded_rows)
+        row for row in range(acceptance.sroie_policy.RAW_TEST_ROWS) if row not in set(excluded_rows)
     ]
     expected_rows = [item.get("rowIndex") for item in expected_identity_rows]
     expected_determinism = [dict(item) for item in expected_identity_rows][
@@ -2569,10 +2484,8 @@ def _validate_public_evaluation_binding(
     corpus_identity = {key: repaired.get(key) for key in _CORPUS_IDENTITY_KEYS}
     if (
         overlap.get("algorithm") != OVERLAP_ALGORITHM
-        or overlap.get("calibrationRawImages")
-        != acceptance.sroie_policy.RAW_TRAIN_ROWS
-        or overlap.get("calibrationSelectedDocuments")
-        != EXPECTED_CALIBRATION_SELECTED_DOCUMENTS
+        or overlap.get("calibrationRawImages") != acceptance.sroie_policy.RAW_TRAIN_ROWS
+        or overlap.get("calibrationSelectedDocuments") != EXPECTED_CALIBRATION_SELECTED_DOCUMENTS
         or overlap.get("testRawImages") != acceptance.sroie_policy.RAW_TEST_ROWS
         or overlap.get("overlapDocuments") != len(EXPECTED_CALIBRATION_OVERLAP_RECORDS)
         or overlap.get("perceptualSimilarityClaimed") is not False
@@ -2583,15 +2496,13 @@ def _validate_public_evaluation_binding(
                 "calibrationSelectedImageIdentitiesSha256",
             )
         )
-        or overlap.get("testRawImageDigestsSha256")
-        != repaired.get("sourceImageDigestsSha256")
+        or overlap.get("testRawImageDigestsSha256") != repaired.get("sourceImageDigestsSha256")
         or record_pairs != expected_pairs
         or acceptance.sroie_policy.sha256_canonical(record_pairs)
         != EXPECTED_CALIBRATION_OVERLAP_PAIRS_SHA256
         or acceptance.sroie_policy.sha256_canonical(records)
         != EXPECTED_CALIBRATION_OVERLAP_IDENTITY_SHA256
-        or overlap.get("overlapIdentitySha256")
-        != EXPECTED_CALIBRATION_OVERLAP_IDENTITY_SHA256
+        or overlap.get("overlapIdentitySha256") != EXPECTED_CALIBRATION_OVERLAP_IDENTITY_SHA256
         or len({record["imageSha256"] for record in records}) != len(records)
         or scoring.get("documents") != EXPECTED_UNCONTAMINATED_TEST_DOCUMENTS
         or scoring.get("excludedDocuments") != len(excluded_rows)
@@ -2609,19 +2520,15 @@ def _validate_public_evaluation_binding(
             for item in expected_identity_rows
         )
         or scoring.get("imageIdentitiesSha256")
-        != acceptance.sroie_policy.sha256_canonical(
-            [dict(item) for item in expected_identity_rows]
-        )
+        != acceptance.sroie_policy.sha256_canonical([dict(item) for item in expected_identity_rows])
         or scoring.get("selectionSha256") != scoring.get("imageIdentitiesSha256")
         or scoring.get("parentCorpusIdentitySha256")
         != acceptance.sroie_policy.sha256_canonical(corpus_identity)
         or determinism.get("documents") != acceptance.DETERMINISM_DOCUMENTS
-        or determinism.get("rowIndices")
-        != selected_rows[: acceptance.DETERMINISM_DOCUMENTS]
+        or determinism.get("rowIndices") != selected_rows[: acceptance.DETERMINISM_DOCUMENTS]
         or determinism.get("imageIdentitiesSha256")
         != acceptance.sroie_policy.sha256_canonical(expected_determinism)
-        or determinism.get("selectionSha256")
-        != determinism.get("imageIdentitiesSha256")
+        or determinism.get("selectionSha256") != determinism.get("imageIdentitiesSha256")
     ):
         raise _error("The post-hoc evaluation corpus identity changed", stage="report")
 
@@ -2634,29 +2541,22 @@ def _validate_public_evaluation_binding(
         "posthocDeterminismWorkerManifest": determinism.get("workerManifestSha256"),
     }
     if any(
-        not _is_sha256(expected_sha256)
-        or artifacts.get(name, {}).get("sha256") != expected_sha256
+        not _is_sha256(expected_sha256) or artifacts.get(name, {}).get("sha256") != expected_sha256
         for name, expected_sha256 in artifact_bindings.items()
     ):
         raise _error("A post-hoc evaluation input artifact changed", stage="report")
 
 
-def _validate_posthoc_report(
-    report: Mapping[str, Any], seal_context: PosthocSealContext
-) -> None:
+def _validate_posthoc_report(report: Mapping[str, Any], seal_context: PosthocSealContext) -> None:
     acceptance._validate_public_report_privacy(report)
     try:
         expected_identity_rows = json.loads(seal_context.expected_identities_json)
-        raw_output_pair_bindings = json.loads(
-            seal_context.raw_output_pair_bindings_json
-        )
+        raw_output_pair_bindings = json.loads(seal_context.raw_output_pair_bindings_json)
         observed_backends = json.loads(seal_context.observed_backends_json)
         observed_backend_result_artifacts = json.loads(
             seal_context.observed_backend_result_artifacts_json
         )
-        observed_confidence_parity = json.loads(
-            seal_context.observed_confidence_parity_json
-        )
+        observed_confidence_parity = json.loads(seal_context.observed_confidence_parity_json)
     except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise _error("The post-hoc identity anchor is invalid", stage="report") from exc
     if (
@@ -2672,12 +2572,9 @@ def _validate_posthoc_report(
         or acceptance.sroie_policy.canonical_json(expected_identity_rows)
         != seal_context.expected_identities_json
         or not isinstance(raw_output_pair_bindings, Mapping)
-        or len(raw_output_pair_bindings)
-        != 3 * (1 + acceptance.DETERMINISM_REPETITIONS)
+        or len(raw_output_pair_bindings) != 3 * (1 + acceptance.DETERMINISM_REPETITIONS)
         or any(
-            not isinstance(name, str)
-            or not name
-            or not _is_sha256(value)
+            not isinstance(name, str) or not name or not _is_sha256(value)
             for name, value in raw_output_pair_bindings.items()
         )
         or acceptance.sroie_policy.canonical_json(raw_output_pair_bindings)
@@ -2711,8 +2608,7 @@ def _validate_posthoc_report(
         )
         or type(seal_context.observed_integrity_passed) is not bool
         or type(seal_context.observed_threshold_comparison_passed) is not bool
-        or acceptance.sroie_policy.sha256_canonical(report)
-        != seal_context.report_sha256
+        or acceptance.sroie_policy.sha256_canonical(report) != seal_context.report_sha256
     ):
         raise _error("The post-hoc sealing context changed", stage="report")
     identity = report.get("identity")
@@ -2849,8 +2745,7 @@ def _validate_posthoc_report(
             "repairedHoldout",
             "v3Calibration",
         }
-        or acceptance.sroie_policy.canonical_json(backends)
-        != seal_context.observed_backends_json
+        or acceptance.sroie_policy.canonical_json(backends) != seal_context.observed_backends_json
         or acceptance.sroie_policy.canonical_json(backend_result_artifacts)
         != seal_context.observed_backend_result_artifacts_json
         or acceptance.sroie_policy.canonical_json(confidence)
@@ -2873,8 +2768,7 @@ def _validate_posthoc_report(
         or consumed.get("finalDisposition") != "failed"
         or not _is_sha256(consumed.get("claimSha256"))
         or consumed.get("ledgerSha256") != ORIGINAL_LEDGER_SHA256
-        or consumed.get("quarantineMarkerSha256")
-        != ORIGINAL_QUARANTINE_MARKER_SHA256
+        or consumed.get("quarantineMarkerSha256") != ORIGINAL_QUARANTINE_MARKER_SHA256
         or consumed.get("originalCandidateCommit") != ORIGINAL_CANDIDATE_COMMIT
         or consumed.get("originalTerminalReleaseTag") != ORIGINAL_TERMINAL_RELEASE_TAG
         or consumed.get("originalTerminalResultAsset") != ORIGINAL_TERMINAL_RESULT_ASSET
@@ -2891,8 +2785,7 @@ def _validate_posthoc_report(
         }
         or calibration.get("policyId") != acceptance.sroie_policy.POLICY_ID
         or not _is_sha256(calibration.get("reportSha256"))
-        or calibration.get("policySha256")
-        != seal_context.validated_policy.file_sha256
+        or calibration.get("policySha256") != seal_context.validated_policy.file_sha256
         or calibration.get("candidateIdentitySha256") != report.get("identitySha256")
         or not isinstance(candidate, Mapping)
         or set(candidate)
@@ -2920,14 +2813,8 @@ def _validate_posthoc_report(
         or not isinstance(backend_result_artifacts, Mapping)
         or set(backend_result_artifacts)
         != set(_posthoc_backend_result_paths(Path("posthoc-evidence-root")))
-        or any(
-            not _valid_public_artifact(value)
-            for value in backend_result_artifacts.values()
-        )
-        or any(
-            value.get("path") != name
-            for name, value in backend_result_artifacts.items()
-        )
+        or any(not _valid_public_artifact(value) for value in backend_result_artifacts.values())
+        or any(value.get("path") != name for name, value in backend_result_artifacts.items())
         or not isinstance(backends, list)
         or len(backends) != 3
         or any(not isinstance(run, Mapping) for run in backends)
@@ -2965,8 +2852,7 @@ def _validate_posthoc_report(
             or confidence[name] < 0
             for name in ("maximumAbsoluteDelta", "meanAbsoluteDelta", "threshold")
         )
-        or confidence.get("threshold")
-        != acceptance.cord.CONFIDENCE_PARITY_MAX_ABS_DELTA
+        or confidence.get("threshold") != acceptance.cord.CONFIDENCE_PARITY_MAX_ABS_DELTA
         or confidence.get("passed")
         is not (
             confidence.get("structurallyAligned") is True
@@ -3022,31 +2908,23 @@ def _validate_posthoc_report(
         or set(repaired) != _REPAIRED_HOLDOUT_KEYS
         or repaired.get("repairPolicy") != acceptance.sroie.SROIE_BBOX_REPAIR_POLICY
         or repaired.get("repairedRegionCount") != EXPECTED_REPAIRED_TEST_REGIONS
-        or repaired.get("expectedRepairIdentitySha256")
-        != EXPECTED_REPAIR_IDENTITY_SHA256
+        or repaired.get("expectedRepairIdentitySha256") != EXPECTED_REPAIR_IDENTITY_SHA256
         or repaired.get("repairIdentity") != EXPECTED_REPAIR_IDENTITY
         or repaired.get("repairIdentitySha256") != EXPECTED_REPAIR_IDENTITY_SHA256
         or repaired.get("parquetSha256") != acceptance.sroie_policy.TEST_SHA256
-        or any(
-            repaired.get(key) != value for key, value in EXPECTED_REPAIR_IDENTITY.items()
-        )
+        or any(repaired.get(key) != value for key, value in EXPECTED_REPAIR_IDENTITY.items())
         or repaired.get("repairAppliedOnlyToDerivedScoringGeometry") is not True
         or repaired.get("sourceArtifactReadOnlyAndReverified") is not True
         or repaired.get("selectedDocuments") != acceptance.sroie_policy.RAW_TEST_ROWS
         or repaired.get("sourceRows") != acceptance.sroie_policy.RAW_TEST_ROWS
         or repaired.get("excludedRows") != 0
-        or artifacts["posthocTestSnapshot"].get("bytes")
-        != acceptance.sroie_policy.TEST_BYTES
-        or artifacts["posthocTestSnapshot"].get("sha256")
-        != repaired.get("parquetSha256")
+        or artifacts["posthocTestSnapshot"].get("bytes") != acceptance.sroie_policy.TEST_BYTES
+        or artifacts["posthocTestSnapshot"].get("sha256") != repaired.get("parquetSha256")
         or artifacts["posthocBboxRepairAudit"].get("sha256")
         != repaired.get("bboxRepairAuditSha256")
-        or artifacts["posthocCorpusManifest"].get("sha256")
-        != repaired.get("corpusManifestSha256")
-        or artifacts["posthocDuplicateAudit"].get("sha256")
-        != repaired.get("duplicateAuditSha256")
-        or artifacts["posthocWorkerManifest"].get("sha256")
-        != repaired.get("workerManifestSha256")
+        or artifacts["posthocCorpusManifest"].get("sha256") != repaired.get("corpusManifestSha256")
+        or artifacts["posthocDuplicateAudit"].get("sha256") != repaired.get("duplicateAuditSha256")
+        or artifacts["posthocWorkerManifest"].get("sha256") != repaired.get("workerManifestSha256")
     ):
         raise _error("The post-hoc evidence binding changed", stage="report")
 
@@ -3099,12 +2977,10 @@ def _validate_posthoc_report(
             candidate_metrics = backend.get("metrics")
             if not isinstance(candidate_metrics, Mapping):
                 raise _error("A post-hoc backend has no metrics", stage="report")
-            recomputed_evaluations[provider_name] = (
-                acceptance.sroie_policy.evaluate_confirmatory(
-                    seal_context.validated_policy,
-                    candidate_metrics,
-                    expected_identities=expected_identity_rows,
-                )
+            recomputed_evaluations[provider_name] = acceptance.sroie_policy.evaluate_confirmatory(
+                seal_context.validated_policy,
+                candidate_metrics,
+                expected_identities=expected_identity_rows,
             )
             backend_metrics.append(candidate_metrics)
     except acceptance.sroie_policy.PolicyError as exc:
@@ -3120,8 +2996,7 @@ def _validate_posthoc_report(
         evaluation.get("passed") is True for evaluation in recomputed_evaluations.values()
     )
     determinism_passed = all(
-        all(value is True for value in checks.values())
-        for checks in determinism_checks.values()
+        all(value is True for value in checks.values()) for checks in determinism_checks.values()
     )
     runtime_profiles = identity.get("runtimeProfiles")
     cpu_profile = runtime_profiles.get("cpu") if isinstance(runtime_profiles, Mapping) else None
@@ -3132,15 +3007,12 @@ def _validate_posthoc_report(
     runtime_hashes_exact = (
         isinstance(cpu_profile, Mapping)
         and isinstance(directml_profile, Mapping)
-        and cpu_profile.get("executableSha256")
-        == seal_context.expected_cpu_runtime_sha256
+        and cpu_profile.get("executableSha256") == seal_context.expected_cpu_runtime_sha256
         and directml_profile.get("executableSha256")
         == seal_context.expected_directml_runtime_sha256
-        and backends[0].get("runtimeSha256")
-        == seal_context.expected_cpu_runtime_sha256
+        and backends[0].get("runtimeSha256") == seal_context.expected_cpu_runtime_sha256
         and all(
-            backend.get("runtimeSha256")
-            == seal_context.expected_directml_runtime_sha256
+            backend.get("runtimeSha256") == seal_context.expected_directml_runtime_sha256
             for backend in backends[1:]
         )
     )
@@ -3156,14 +3028,11 @@ def _validate_posthoc_report(
         report.get("expectedIdentitiesSha256")
         != acceptance.sroie_policy.sha256_canonical(expected_identity_rows)
         or report.get("metricsSha256") != seal_context.metrics_sha256
-        or acceptance.sroie_policy.sha256_canonical(backends)
-        != seal_context.backends_sha256
+        or acceptance.sroie_policy.sha256_canonical(backends) != seal_context.backends_sha256
         or acceptance.sroie_policy.sha256_canonical(cross_backend)
         != seal_context.cross_backend_integrity_sha256
-        or acceptance.sroie_policy.sha256_canonical(determinism)
-        != seal_context.determinism_sha256
-        or acceptance.sroie_policy.sha256_canonical(evaluations)
-        != seal_context.evaluations_sha256
+        or acceptance.sroie_policy.sha256_canonical(determinism) != seal_context.determinism_sha256
+        or acceptance.sroie_policy.sha256_canonical(evaluations) != seal_context.evaluations_sha256
         or acceptance.sroie_policy.canonical_json(evaluations)
         != acceptance.sroie_policy.canonical_json(recomputed_evaluations)
         or any(
@@ -3174,8 +3043,7 @@ def _validate_posthoc_report(
             or not isinstance(backend.get("qualityRun"), Mapping)
             or backend["qualityRun"].get("metricsSha256")
             != acceptance.sroie_policy.sha256_canonical(backend_metrics[index])
-            or backend["qualityRun"].get("perDocumentMetricsSha256")
-            != per_document_sha256[index]
+            or backend["qualityRun"].get("perDocumentMetricsSha256") != per_document_sha256[index]
             or acceptance.sroie_policy.canonical_json(backend["qualityRun"].get("metrics"))
             != acceptance.sroie_policy.canonical_json(backend_metrics[index])
             for index, backend in enumerate(backends)
@@ -3194,8 +3062,7 @@ def _validate_posthoc_report(
         is not acceptance._meaningful_hybrid_lane_coverage(backends[2])
         or cross_checks.get("metricsEqual")
         is not (len({backend.get("metricsSha256") for backend in backends}) == 1)
-        or cross_checks.get("perDocumentMetricsEqual")
-        is not (len(set(per_document_sha256)) == 1)
+        or cross_checks.get("perDocumentMetricsEqual") is not (len(set(per_document_sha256)) == 1)
         or cross_checks.get("requestedProvidersExact") is not True
         or cross_checks.get("resolvedProvidersExact") is not True
         or cross_checks.get("runtimeHashesExact") is not runtime_hashes_exact
@@ -3402,9 +3269,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             != full_corpus.source_image_sha256s
         ):
             raise _error("The repaired holdout duplicate audit changed", stage="duplicate-audit")
-        corpus_identity = acceptance._corpus_identity(
-            full_corpus, parquet_sha256=parquet_sha256
-        )
+        corpus_identity = acceptance._corpus_identity(full_corpus, parquet_sha256=parquet_sha256)
         repaired_row_indices = _repaired_row_indices(full_corpus.bbox_repair_audit)
         overlap_records, included_rows = _uncontaminated_posthoc_rows(
             context.source_image_sha256s,
@@ -3466,9 +3331,7 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
         )
         policy_value_sha256 = acceptance.sroie_policy.sha256_canonical(policy.value)
         expected_cpu_runtime_sha256 = frozen.runtimes["cpu"]["executableSha256"]
-        expected_directml_runtime_sha256 = frozen.runtimes["directml"][
-            "executableSha256"
-        ]
+        expected_directml_runtime_sha256 = frozen.runtimes["directml"]["executableSha256"]
         expected_worker_sha256 = frozen.worker_sha256
         pre_run_binding = _pre_run_binding(
             candidate_commit=candidate_commit,
@@ -3650,12 +3513,8 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
             cross_backend_integrity_sha256=acceptance.sroie_policy.sha256_canonical(
                 cross_backend_integrity
             ),
-            determinism_sha256=acceptance.sroie_policy.sha256_canonical(
-                determinism_evidence
-            ),
-            evaluations_sha256=acceptance.sroie_policy.sha256_canonical(
-                policy_comparisons
-            ),
+            determinism_sha256=acceptance.sroie_policy.sha256_canonical(determinism_evidence),
+            evaluations_sha256=acceptance.sroie_policy.sha256_canonical(policy_comparisons),
             metrics_sha256=acceptance.sroie_policy.sha256_canonical(runs[0]["metrics"]),
             raw_output_pair_bindings_json=acceptance.sroie_policy.canonical_json(
                 raw_output_pair_bindings

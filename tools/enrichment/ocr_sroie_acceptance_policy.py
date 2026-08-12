@@ -141,8 +141,7 @@ def _strict_json(
 
     def identity(value: os.stat_result) -> tuple[int | None, ...]:
         return tuple(
-            getattr(value, field, None)
-            for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+            getattr(value, field, None) for field in ("st_dev", "st_ino", "st_size", "st_mtime_ns")
         )
 
     def directory_id(value: os.stat_result) -> tuple[int | None, int | None]:
@@ -169,9 +168,7 @@ def _strict_json(
             raise PolicyError(f"The {name} is unavailable, unsafe, or too large")
         descriptor = os.open(
             lexical,
-            os.O_RDONLY
-            | getattr(os, "O_BINARY", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0),
         )
         try:
             before = os.fstat(descriptor)
@@ -645,10 +642,9 @@ def validate_policy(
     ):
         raise PolicyError("The policy calibration evidence changed")
     measurements = _mapping(calibration.get("measurements"), name="calibration measurements")
-    if (
-        calibration.get("measurementsSha256") != sha256_canonical(measurements)
-        or canonical_json(measurements) != canonical_json(report_measurements)
-    ):
+    if calibration.get("measurementsSha256") != sha256_canonical(measurements) or canonical_json(
+        measurements
+    ) != canonical_json(report_measurements):
         raise PolicyError("The policy calibration measurement digest changed")
     try:
         validated_measurements = generic_policy.validate_measurements(measurements)

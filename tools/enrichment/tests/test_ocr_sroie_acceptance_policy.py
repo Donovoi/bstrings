@@ -84,9 +84,7 @@ def metrics(identities: list[dict]) -> dict:
         "caseSensitiveDiagnostics": {
             "metrics": strict_metrics,
             "metricsSha256": policy.sha256_canonical(strict_metrics),
-            "perDocumentMetricsSha256": hashlib.sha256(
-                strict_per_document_bytes
-            ).hexdigest(),
+            "perDocumentMetricsSha256": hashlib.sha256(strict_per_document_bytes).hexdigest(),
             "textNormalization": policy.DIAGNOSTIC_TEXT_NORMALIZATION,
         },
         "macro": macro,
@@ -219,9 +217,7 @@ class SroiePolicyTests(unittest.TestCase):
                 with self.assertRaisesRegex(policy.PolicyError, "lowercase SHA-256"):
                     policy._validate_identity(wrong)
         for source_regions, repaired_regions in ((0, 0), (10, 11), (True, 0), (10, True), (10, -1)):
-            with self.subTest(
-                source_regions=source_regions, repaired_regions=repaired_regions
-            ):
+            with self.subTest(source_regions=source_regions, repaired_regions=repaired_regions):
                 wrong = copy.deepcopy(self.identity)
                 wrong["calibrationCorpus"]["sourceRegionCount"] = source_regions
                 wrong["calibrationCorpus"]["repairedRegionCount"] = repaired_regions

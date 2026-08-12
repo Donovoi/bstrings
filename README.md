@@ -14,8 +14,7 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 - Native extraction, FLOSS, and OCR are independently selectable source
   producers. Native stays on by default and in Full; an explicit
   `--native-extraction off` permits FLOSS-only or OCR-only analysis without
-  starting the native scanner. This option is in current source and is not part
-  of the already-published v1.9.17 assets.
+  starting the native scanner. The published v1.9.17 kit includes this option.
 - Completed analysis writes a filterable `findings.tsv`, exact pattern and
   feature histograms, and a self-contained HTML pattern visualization while
   retaining the authoritative JSONL evidence graph.
@@ -157,6 +156,8 @@ creates and verifies a fresh sibling replacement on every run.
 
 - Use `analyze --full` for the complete provenance-preserving workflow and
   filterable reports.
+- Use `--full --exclude-engine <name>` (or `-e`) to keep Full's defaults except
+  for explicitly named engines.
 - Use `analyze` with FLOSS, OCR, and translation set to `off` for a native-only
   report directory.
 - Use `--native-extraction off` with one or both specialist producers for a
@@ -191,6 +192,28 @@ reports remain mandatory finalization for every `analyze` run; “only” refers
 the selected source producer, not to removing integrity checks or reports.
 FLOSS-only output includes FLOSS static strings, while native-plus-FLOSS keeps
 the existing static-string deduplication.
+
+Full exclusions are strict shorthand for the existing explicit `off` modes:
+
+```powershell
+# Equivalent spellings: Full without OCR or translation
+.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved `
+  --full --exclude-engine ocr --exclude-engine translation `
+  -o D:\results\without-ocr-translation
+
+.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved `
+  --full -e ocr,translation -o D:\results\without-ocr-translation
+```
+
+`--exclude-engine`/`-e` requires `--full`. Each occurrence consumes one token,
+which may contain a comma-separated list of `native`, `floss`, `ocr`, and
+`translation`; repeat and comma forms may be combined. Names are
+case-insensitive and surrounding whitespace is trimmed, but empty, unknown,
+duplicate (including case-duplicate), or whitespace-separated values fail.
+Excluding an engine also conflicts with explicitly setting that engine's main
+selector, even to `off`. Tuning options for an excluded engine remain validated
+but cannot start it. The shorthand resolves to the same effective options as
+the explicit controls and adds no separate runtime or provenance path.
 
 Installer, bundle, direct extraction, and integrated-analysis commands print
 percentage completion. Integrated analysis combines stage progress with

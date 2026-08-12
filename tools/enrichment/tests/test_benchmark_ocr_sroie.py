@@ -171,9 +171,7 @@ class SroieAdapterTests(unittest.TestCase):
         self.assertEqual(sroie.SROIE_BBOX_REPAIR_POLICY, parsed.document["bboxRepairPolicy"])
         self.assertEqual((), parsed.bbox_repairs)
         self.assertEqual(
-            hashlib.sha256(
-                sroie.canonical_json(parsed.document).encode("utf-8")
-            ).hexdigest(),
+            hashlib.sha256(sroie.canonical_json(parsed.document).encode("utf-8")).hexdigest(),
             parsed.scoring_annotation_sha256,
         )
 
@@ -441,9 +439,7 @@ class SroieAdapterTests(unittest.TestCase):
         parquet_path = self.write_parquet(rows)
         config = self.config_for(parquet_path, len(rows))
         with patch.dict(sroie.SROIE_FILES, {"train": config}):
-            corpus = sroie.extract_sroie_corpus(
-                parquet_path, self.root / "repair-conflict"
-            )
+            corpus = sroie.extract_sroie_corpus(parquet_path, self.root / "repair-conflict")
         self.assertEqual((2,), tuple(item.row_index for item in corpus.documents))
         audit = json.loads(corpus.duplicate_audit.read_bytes())
         group = audit["duplicateGroupAudit"][0]
