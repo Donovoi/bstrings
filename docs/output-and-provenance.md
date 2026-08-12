@@ -10,11 +10,13 @@ Translation remains a transform over records emitted by at least one selected
 producer. Matching, reports, input verification, and completion records remain
 part of every `analyze` result regardless of engine selection.
 
-The Full-only `--exclude-engine`/`-e` shorthand adds no provenance field. It is
-resolved to the same effective `AnalysisOptions` as the equivalent explicit
-`off` selectors before orchestration. Those effective modes in `run.json`, plus
-the existing routing and engine-status records, remain authoritative; the raw
-invocation and exclusion spelling are not persisted.
+The current-source, post-v1.9.17 Full-only `--exclude-engine`/`-e` shorthand
+adds no provenance field. It is resolved to the same effective
+`AnalysisOptions` as the equivalent explicit `off` selectors before
+orchestration. Those effective modes in `run.json`, plus the existing routing
+and engine-status records, remain authoritative; the raw invocation and
+exclusion spelling are not persisted. Published v1.9.17 users select the same
+modes with the explicit controls.
 
 With a complete version-matched quality bundle, the full enrichment workflow
 writes a result set from one command:

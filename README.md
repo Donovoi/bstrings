@@ -52,6 +52,20 @@ Users do not choose among quality/size tiers.
 Requirements: Windows 11 x64, a connected staging machine, and at least
 **30 GiB free**. Administrator rights are not required.
 
+Your first run has three steps:
+
+1. install the authenticated quality kit;
+2. verify the installed bundle; and
+3. analyze one file or directory into a new results directory.
+
+The commands in these three steps work with the published v1.9.17 release.
+`-e`/`--exclude-engine` was added to current source after v1.9.17 and is not in
+the public v1.9.17 binary. Stable-release users can make the same selection with
+the explicit `--ocr off`, `--translation off`,
+`--recover-executable-strings off`, and `--native-extraction off` controls.
+
+### 1. Install the quality kit
+
 Open PowerShell in the directory where you want `bstrings-quality`, then run
 this pinned, checksum-verified installer bootstrap:
 
@@ -122,13 +136,26 @@ this pinned, checksum-verified installer bootstrap:
 }
 ```
 
-The installer creates and verifies `.\bstrings-quality`. Run a complete
-analysis with:
+### 2. Verify the installation
 
 ```powershell
 .\bstrings-quality\bstrings.exe bundle verify
+```
+
+Do not analyze evidence unless verification exits with code 0.
+
+### 3. Run the first analysis
+
+Choose a results path that does not exist or is empty, then run:
+
+```powershell
 .\bstrings-quality\bstrings.exe analyze -d D:\evidence -o D:\results --full
 ```
+
+Replace `D:\evidence` and `D:\results` with your real input and output paths.
+Success requires exit code 0, `run.json` and `summary.json` to report
+`status: complete`, and no `.incomplete` marker. Preserve an incomplete result
+for diagnosis and use a different new or empty directory for a retry.
 
 The bootstrap always replaces an existing physical
 `Install-BstringsQuality.ps1`, but only after the release reports immutable
@@ -156,8 +183,10 @@ creates and verifies a fresh sibling replacement on every run.
 
 - Use `analyze --full` for the complete provenance-preserving workflow and
   filterable reports.
-- Use `--full --exclude-engine <name>` (or `-e`) to keep Full's defaults except
-  for explicitly named engines.
+- In current source only until a release containing it is published, use
+  `--full --exclude-engine <name>` (or `-e`) to keep Full's defaults except for
+  explicitly named engines. Published v1.9.17 users must use the equivalent
+  explicit `off` selectors.
 - Use `analyze` with FLOSS, OCR, and translation set to `off` for a native-only
   report directory.
 - Use `--native-extraction off` with one or both specialist producers for a
@@ -193,7 +222,8 @@ the selected source producer, not to removing integrity checks or reports.
 FLOSS-only output includes FLOSS static strings, while native-plus-FLOSS keeps
 the existing static-string deduplication.
 
-Full exclusions are strict shorthand for the existing explicit `off` modes:
+In current source after v1.9.17, Full exclusions are strict shorthand for the
+existing explicit `off` modes:
 
 ```powershell
 # Equivalent spellings: Full without OCR or translation
@@ -203,6 +233,11 @@ Full exclusions are strict shorthand for the existing explicit `off` modes:
 
 .\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved `
   --full -e ocr,translation -o D:\results\without-ocr-translation
+
+# Published v1.9.17 equivalent
+.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved `
+  --full --ocr off --translation off `
+  -o D:\results\without-ocr-translation
 ```
 
 `--exclude-engine`/`-e` requires `--full`. Each occurrence consumes one token,

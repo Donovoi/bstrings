@@ -187,9 +187,11 @@ providers.
 Model-call reduction is the primary metric; cache-hit percentage alone is not
 enough. Exact deduplication can materially help repetitive evidence while still
 leaving a long CPU run when Full/high-recall selects millions of mostly unique
-records. The standard release does not contain a CUDA translation runtime.
-Progress rate and ETA must therefore be checked for truthful monotonic behavior,
-not treated as a substitute for throughput measurement. See
+records. The v1.9.17 quality release includes the accepted authenticated Windows
+sm89 CUDA translation overlay and a pre-evidence CPU fallback; the standalone
+core ZIP does not include translation assets. Progress rate and ETA must
+therefore be checked for truthful monotonic behavior, not treated as a
+substitute for throughput measurement. See
 [ADR-0005](../docs/architecture/adr-0005-translation-integrity-and-run-dedup.md)
 for the frozen acceptance and privacy gates.
 
