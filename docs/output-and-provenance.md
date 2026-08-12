@@ -4,12 +4,17 @@ The complete v1.9.17 quality kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
 
-Current source after v1.9.17 lets an examiner select native extraction, FLOSS,
-or OCR as the sole source producer; the already-published v1.9.17 binaries do
-not contain `--native-extraction`. Translation remains a transform over records
-emitted by at least one selected producer. Matching, reports, input
-verification, and completion records remain part of every `analyze` result
-regardless of engine selection.
+The published v1.9.17 binaries let an examiner select native extraction, FLOSS,
+or OCR as the sole source producer and include `--native-extraction`.
+Translation remains a transform over records emitted by at least one selected
+producer. Matching, reports, input verification, and completion records remain
+part of every `analyze` result regardless of engine selection.
+
+The Full-only `--exclude-engine`/`-e` shorthand adds no provenance field. It is
+resolved to the same effective `AnalysisOptions` as the equivalent explicit
+`off` selectors before orchestration. Those effective modes in `run.json`, plus
+the existing routing and engine-status records, remain authoritative; the raw
+invocation and exclusion spelling are not persisted.
 
 With a complete version-matched quality bundle, the full enrichment workflow
 writes a result set from one command:
@@ -18,8 +23,9 @@ writes a result set from one command:
 bstrings.exe analyze -d carved-files --full -o results
 ```
 
-Treat the result directory as one examination artifact. It records the command,
-program version, per-input content hashes, optional-tool versions, model
+Treat the result directory as one examination artifact. It records effective
+analysis options, program version, per-input content hashes, optional-tool
+versions, model
 revision and hash, and completion status; preserve the directory together with
 the final process exit status.
 

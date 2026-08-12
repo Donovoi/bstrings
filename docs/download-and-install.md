@@ -110,6 +110,28 @@ Discover commands and current defaults without touching evidence:
 .\bstrings-quality\bstrings.exe help bundle verify
 ```
 
+The published v1.9.17 command includes `--native-extraction on|off`. Current
+source also provides `--exclude-engine`/`-e` as Full-only shorthand; confirm an
+installed build exposes it with `help analyze` before use. A release without
+that shorthand can express the same selection with the explicit controls.
+Where available, these are equivalent:
+
+```powershell
+.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved-files `
+  --full -e ocr,translation -o D:\results\without-ocr-translation
+
+.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved-files `
+  --full --ocr off --translation off `
+  -o D:\results\without-ocr-translation
+```
+
+The shorthand requires `--full`. It accepts repeated occurrences or one-token
+comma lists of `native`, `floss`, `ocr`, and `translation`. Missing, empty,
+unknown, duplicate/case-duplicate, whitespace-separated, and same-engine
+explicit-selector conflicts fail before output or evidence access. Tuning
+options for an excluded engine remain validated but cannot start it. Runtime
+selection does not narrow verification of the complete quality directory.
+
 See the [terminal help and command reference](command-reference.md) for the
 workflow chooser, pattern groups, hardware controls, completion rules, and
 legacy flat-output interface.

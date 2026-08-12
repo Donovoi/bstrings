@@ -2,6 +2,7 @@
 
 using System;
 using System.CommandLine;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -10,13 +11,30 @@ using System.Threading.Tasks;
 
 namespace bstrings;
 
+internal readonly record struct AnalysisEngineModes(
+    NativeExtractionMode Native,
+    ExecutableRecoveryMode Floss,
+    OcrWorkflowMode Ocr,
+    TranslationWorkflowMode Translation
+);
+
+internal readonly record struct AnalysisEngineExclusions(
+    bool Native,
+    bool Floss,
+    bool Ocr,
+    bool Translation
+)
+{
+    internal bool Any => Native || Floss || Ocr || Translation;
+}
+
 internal static class AnalysisCli
 {
     internal const string DefaultTranslationPolicy = "high-recall";
     internal const string TranslationPolicyHelp =
         "Automatic translation gate used by --translation auto: high-recall keeps uncertain detections; balanced uses the configured confidence and margin; high-precision applies floors of 0.65 confidence and 0.15 margin";
     internal const string FullProfileHelp =
-        "Run the single Full profile: hash inputs, classify each input in one early shared pass, extract native strings, route applicable files to FLOSS/OCR, then fail-open shadow translation-worthiness routing and language triage, pinned 7B Q4_K_M offline translation (validated sm89 CUDA p2 or pre-evidence CPU selection), all patterns, and reports; shadow routing does not yet remove candidates, and an explicit engine option overrides its default";
+        "Run the single Full profile: hash inputs, classify each input in one early shared pass, extract native strings, route applicable files to FLOSS/OCR, then fail-open shadow translation-worthiness routing and language triage, pinned 7B Q4_K_M offline translation (validated sm89 CUDA p2 or pre-evidence CPU selection), all patterns, and reports; shadow routing does not yet remove candidates. An explicit engine selector overrides its default; repeat -e/--exclude-engine to subtract named engines, but do not combine both controls for the same engine";
     internal const string TranslationDeviceHelp =
         "Translation hardware: auto, cpu, cuda, or hybrid; separate from native --processor (the quality kit promotes only validated compute capability 8.9 to full-offload CUDA p2, otherwise auto selects CPU before evidence inference; explicit cuda fails closed)";
 
@@ -47,6 +65,26 @@ internal static class AnalysisCli
         {
             Description = "Native byte-string extraction: on (default) or off; disabling it requires FLOSS or OCR",
         };
+        var excludeEngineOption = new Option<string[]>("--exclude-engine", "-e")
+        {
+            Description =
+                "Subtract native, floss, ocr, or translation from --full. Repeat the option or use a comma-separated value. Cannot be combined with that engine's direct selector; tuning options for an excluded engine are inert but still syntax-checked",
+            AllowMultipleArgumentsPerToken = false,
+            Arity = ArgumentArity.OneOrMore,
+        };
+        excludeEngineOption.Validators.Add(result =>
+        {
+            if (
+                !TryParseEngineExclusions(
+                    result.Tokens.Select(token => token.Value).ToArray(),
+                    out _,
+                    out var error
+                )
+            )
+            {
+                result.AddError(error!);
+            }
+        });
         var ocrOption = new Option<string?>("--ocr")
         {
             Description = "OCR/PDF workflow: off, auto (early fail-open routing, text layers, then needed OCR), or force (OCR every page)",
@@ -179,6 +217,7 @@ internal static class AnalysisCli
             outputOption,
             maskOption,
             fullOption,
+            excludeEngineOption,
             nativeExtractionOption,
             ocrOption,
             ocrProviderOption,
@@ -214,6 +253,36 @@ internal static class AnalysisCli
             + "The results directory must be new or empty. Failures retain .incomplete and diagnostic logs. "
             + "Long-running stages print measured percentage completion; percentages are work units, not an ETA. "
             + "Specialist runs record every routing signal and terminal per-input engine state. Native extraction is on by default and may be explicitly disabled for a specialist-only run.";
+        command.Validators.Add(result =>
+        {
+            var exclusionResult = result.GetResult(excludeEngineOption);
+            if (
+                exclusionResult is null
+                || !TryParseEngineExclusions(
+                    exclusionResult.Tokens.Select(token => token.Value).ToArray(),
+                    out var exclusions,
+                    out _
+                )
+            )
+            {
+                return;
+            }
+            try
+            {
+                ValidateEngineExclusionUse(
+                    result.GetValue(fullOption),
+                    exclusions,
+                    nativeSelectorSpecified: result.GetResult(nativeExtractionOption) is not null,
+                    flossSelectorSpecified: result.GetResult(recoveryOption) is not null,
+                    ocrSelectorSpecified: result.GetResult(ocrOption) is not null,
+                    translationSelectorSpecified: result.GetResult(translationOption) is not null
+                );
+            }
+            catch (ArgumentException ex)
+            {
+                result.AddError(ex.Message);
+            }
+        });
 
         var actionExitCode = 0;
         command.SetAction(
@@ -222,25 +291,23 @@ internal static class AnalysisCli
                 try
                 {
                     var full = result.GetValue(fullOption);
-                    var nativeExtractionMode = ResolveNativeExtractionMode(
-                        result.GetValue(nativeExtractionOption)
+                    var modes = ResolveEngineModes(
+                        full,
+                        result.GetValue(nativeExtractionOption),
+                        result.GetValue(recoveryOption),
+                        result.GetValue(ocrOption),
+                        result.GetValue(translationOption),
+                        result.GetValue(excludeEngineOption)
                     );
-                    var ocrMode = ResolveOcrMode(result.GetValue(ocrOption), full);
+                    var nativeExtractionMode = modes.Native;
+                    var ocrMode = modes.Ocr;
                     var ocrProvider = ResolveOcrProvider(
                         result.GetValue(ocrProviderOption),
                         full
                     );
-                    var recoveryText = result.GetValue(recoveryOption) ?? (full ? "auto" : "off");
-                    var translationText =
-                        result.GetValue(translationOption) ?? (full ? "auto" : "off");
-                    if (!TryParseRecoveryMode(recoveryText, out var recoveryMode, out var error))
-                    {
-                        throw new ArgumentException(error);
-                    }
-                    if (!TryParseTranslationMode(translationText, out var translationMode, out error))
-                    {
-                        throw new ArgumentException(error);
-                    }
+                    var recoveryMode = modes.Floss;
+                    var translationMode = modes.Translation;
+                    string? error;
                     if (
                         !LanguageDetectionCore.TryParseMode(
                             result.GetValue(detectionOption),
@@ -388,6 +455,201 @@ internal static class AnalysisCli
         {
             throw new ArgumentException(
                 "--translation-strict-determinism cannot be combined with --translation-parallelism above 1."
+            );
+        }
+    }
+
+    internal static AnalysisEngineModes ResolveEngineModes(
+        bool full,
+        string? nativeValue,
+        string? flossValue,
+        string? ocrValue,
+        string? translationValue,
+        IReadOnlyList<string>? rawExclusions
+    )
+    {
+        var exclusions = ParseEngineExclusions(rawExclusions);
+        ValidateEngineExclusionUse(
+            full,
+            exclusions,
+            nativeSelectorSpecified: nativeValue is not null,
+            flossSelectorSpecified: flossValue is not null,
+            ocrSelectorSpecified: ocrValue is not null,
+            translationSelectorSpecified: translationValue is not null
+        );
+
+        var native = exclusions.Native
+            ? NativeExtractionMode.Off
+            : ResolveNativeExtractionMode(nativeValue);
+        var flossText = flossValue ?? (full ? "auto" : "off");
+        if (!TryParseRecoveryMode(flossText, out var floss, out var error))
+        {
+            throw new ArgumentException(error);
+        }
+        if (exclusions.Floss)
+        {
+            floss = ExecutableRecoveryMode.Off;
+        }
+        var ocr = exclusions.Ocr ? OcrWorkflowMode.Off : ResolveOcrMode(ocrValue, full);
+        var translationText = translationValue ?? (full ? "auto" : "off");
+        if (!TryParseTranslationMode(translationText, out var translation, out error))
+        {
+            throw new ArgumentException(error);
+        }
+        if (exclusions.Translation)
+        {
+            translation = TranslationWorkflowMode.Off;
+        }
+        return new AnalysisEngineModes(native, floss, ocr, translation);
+    }
+
+    internal static AnalysisEngineExclusions ParseEngineExclusions(
+        IReadOnlyList<string>? rawValues
+    )
+    {
+        if (TryParseEngineExclusions(rawValues, out var exclusions, out var error))
+        {
+            return exclusions;
+        }
+        throw new ArgumentException(error);
+    }
+
+    private static bool TryParseEngineExclusions(
+        IReadOnlyList<string>? rawValues,
+        out AnalysisEngineExclusions exclusions,
+        out string? error
+    )
+    {
+        byte flags = 0;
+        if (rawValues is not null)
+        {
+            for (var index = 0; index < rawValues.Count; index++)
+            {
+                if (!TryAddEngineExclusions(rawValues[index], ref flags, out error))
+                {
+                    exclusions = default;
+                    return false;
+                }
+            }
+        }
+        exclusions = CreateEngineExclusions(flags);
+        error = null;
+        return true;
+    }
+
+    private static bool TryAddEngineExclusions(
+        string rawValue,
+        ref byte flags,
+        out string? error
+    )
+    {
+        var remaining = rawValue.AsSpan();
+        while (true)
+        {
+            var comma = remaining.IndexOf(',');
+            var name = (comma < 0 ? remaining : remaining[..comma]).Trim();
+            if (name.Length == 0)
+            {
+                error =
+                    "--exclude-engine contains an empty name; leading, trailing, and repeated commas are not allowed.";
+                return false;
+            }
+            byte flag = 0;
+            var ascii = !ContainsNonAscii(name);
+            if (ascii && name.Equals("native", StringComparison.OrdinalIgnoreCase))
+            {
+                flag = 1;
+            }
+            else if (ascii && name.Equals("floss", StringComparison.OrdinalIgnoreCase))
+            {
+                flag = 2;
+            }
+            else if (ascii && name.Equals("ocr", StringComparison.OrdinalIgnoreCase))
+            {
+                flag = 4;
+            }
+            else if (ascii && name.Equals("translation", StringComparison.OrdinalIgnoreCase))
+            {
+                flag = 8;
+            }
+            if (flag == 0)
+            {
+                error =
+                    $"Unknown excluded engine '{name.ToString()}'. Expected native, floss, ocr, or translation.";
+                return false;
+            }
+            if ((flags & flag) != 0)
+            {
+                error = $"Engine '{name.ToString()}' is excluded more than once.";
+                return false;
+            }
+            flags |= flag;
+            if (comma < 0)
+            {
+                error = null;
+                return true;
+            }
+            remaining = remaining[(comma + 1)..];
+        }
+    }
+
+    private static AnalysisEngineExclusions CreateEngineExclusions(byte flags) =>
+        new(
+            Native: (flags & 1) != 0,
+            Floss: (flags & 2) != 0,
+            Ocr: (flags & 4) != 0,
+            Translation: (flags & 8) != 0
+        );
+
+    private static bool ContainsNonAscii(ReadOnlySpan<char> value)
+    {
+        foreach (var character in value)
+        {
+            if (character > 0x7f)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void ValidateEngineExclusionUse(
+        bool full,
+        AnalysisEngineExclusions exclusions,
+        bool nativeSelectorSpecified,
+        bool flossSelectorSpecified,
+        bool ocrSelectorSpecified,
+        bool translationSelectorSpecified
+    )
+    {
+        if (!exclusions.Any)
+        {
+            return;
+        }
+        if (!full)
+        {
+            throw new ArgumentException("--exclude-engine requires --full.");
+        }
+        if (exclusions.Native && nativeSelectorSpecified)
+        {
+            throw new ArgumentException(
+                "--exclude-engine native cannot be combined with --native-extraction."
+            );
+        }
+        if (exclusions.Floss && flossSelectorSpecified)
+        {
+            throw new ArgumentException(
+                "--exclude-engine floss cannot be combined with --recover-executable-strings."
+            );
+        }
+        if (exclusions.Ocr && ocrSelectorSpecified)
+        {
+            throw new ArgumentException("--exclude-engine ocr cannot be combined with --ocr.");
+        }
+        if (exclusions.Translation && translationSelectorSpecified)
+        {
+            throw new ArgumentException(
+                "--exclude-engine translation cannot be combined with --translation."
             );
         }
     }

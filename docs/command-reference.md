@@ -86,10 +86,57 @@ FLOSS, OCR, and translation:
 memory image. Native extraction can scan the raw bytes; file-level FLOSS and
 OCR need carved or mounted executables, documents, and images.
 
+## Exclude named engines from Full
+
+`--exclude-engine` (short alias `-e`) is strict shorthand for starting from
+Full's defaults and setting named engines to their existing `off` modes. It
+requires an explicit `--full` and never enables Full by itself.
+
+```powershell
+# Repeat form
+.\bstrings.exe analyze -d D:\evidence\carved --full `
+  --exclude-engine ocr --exclude-engine translation `
+  -o D:\results\without-ocr-translation
+
+# Equivalent comma form
+.\bstrings.exe analyze -d D:\evidence\carved --full `
+  -e ocr,translation -o D:\results\without-ocr-translation
+```
+
+Each occurrence consumes exactly one value token. That token is split on
+commas, surrounding whitespace is trimmed, and every segment must be one of
+`native`, `floss`, `ocr`, or `translation` (case-insensitive). Repeating the
+option and using commas may be combined. Quote a token that contains spaces,
+for example `-e "ocr, translation"`.
+
+The command rejects a missing value, an empty segment such as `ocr,`, an
+unknown name, and any duplicate or case-duplicate across all occurrences. It
+does not accept whitespace-separated multi-arguments, so `-e native ocr` is an
+error. An exclusion also conflicts with explicitly supplying that engine's
+selector, including a matching `off` value:
+
+| Exclusion | Conflicting selector |
+| --- | --- |
+| `native` | `--native-extraction` |
+| `floss` | `--recover-executable-strings` |
+| `ocr` | `--ocr` |
+| `translation` | `--translation` |
+
+Selectors for other engines remain valid. Provider, device, scheduling,
+threshold, and other tuning options for an excluded engine are still parsed and
+validated, but they are inert and do not initialize that engine. All grammar,
+conflict, and no-producer errors fail before bundle lookup, result-directory
+creation, or evidence access.
+
+The shorthand resolves into the same effective analysis options as the
+equivalent explicit `off` command. It creates no new profile, orchestrator path,
+or provenance field; the effective modes in `run.json` and the existing routing
+and engine-status records remain authoritative. Whole-bundle trust verification
+is unchanged.
+
 ## Select source producers independently
 
-This interface is implemented in current source after v1.9.17; the published
-v1.9.17 binaries do not yet contain `--native-extraction`.
+The published v1.9.17 binaries already include `--native-extraction`.
 
 `analyze` has three source-record producers and one downstream transform:
 

@@ -30,6 +30,27 @@ suppression still retains one record ID for every unique normalized record from
 that file. Treat that set as the next memory-scaling target for unusually
 prolific binaries.
 
+## Full engine-exclusion resolver
+
+`EngineExclusionResolverBenchmark` checks the one-time `--full -e` mode
+resolver against equivalent explicit-off modes. Its fixed 21-case public matrix
+covers unchanged Full, single and combined exclusions, repeated/comma/case
+forms, and direct explicit-off controls. Every sample requires exact mode and
+checksum parity.
+
+```powershell
+dotnet run --project .\benchmarks\EngineExclusionResolverBenchmark -c Release -- `
+  .\benchmarks\results\engine-exclusion-resolver-2026-08.csv
+```
+
+The harness warms each variant, measures 5,000,000 resolutions per variant in
+15 fresh child processes with tiered compilation and ReadyToRun disabled, and
+requires candidate median time at most 250 ns/call, every sample at most 500
+ns/call, and zero resolver-loop allocations. Baseline timing is diagnostic;
+the resolver runs exactly once per analysis. See
+[ADR-0008](../docs/architecture/adr-0008-independent-engine-execution.md) for
+the preregistration correction, accepted result, and end-to-end parity gate.
+
 ## Bounded language-detection reuse
 
 `LanguageTriageBenchmark` generates synthetic attributed string records and

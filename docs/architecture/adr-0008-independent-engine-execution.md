@@ -44,6 +44,20 @@ availability issues: invalid regexes are compiled only after expensive work,
 invalid legacy processor selections can return success, and the integrated OCR
 path does not exercise its inference self-test before reading evidence.
 
+A later three-review round considered a convenience control for “Full minus
+named engines.” The external-practice review recommended an exclusion modifier
+that requires `--full`; the runtime review proposed a `--full-except` selector
+that would imply Full and record a new exclusion projection; and the detractor
+initially proposed a repeatable `--full-without` modifier because translation is
+a transform rather than a source producer. Rotated critiques challenged the second Full
+activator, bare collection-option arity, ambiguous precedence, token capture,
+and invocation-specific provenance. The synthesis keeps a strict exclusion
+modifier, does not add a second profile activator or provenance field, and
+retains the explicit controls as the canonical rollback path. A subsequent UX
+requirement accepted both repeat and comma forms under the exact grammar below;
+the strongest comma-list objection and its fail-closed resolution are recorded
+in this decision.
+
 ## Considered options
 
 1. **Keep native extraction mandatory.** Rejected for runtime execution. It
@@ -70,6 +84,19 @@ path does not exercise its inference self-test before reading evidence.
    physical profiles require exact transitive dependency manifests, collision
    and cycle rejection, license closure, atomic per-profile installation, and
    separate public release acceptance.
+8. **Add `--full-except` and make it imply Full.** Rejected. It creates a second
+   Full activator, makes a bare or malformed collection option dangerously close
+   to an expensive Full run, and complicates precedence with `--full`.
+9. **Add no convenience control.** Credible but not selected. Existing explicit
+   engine modes remain the clearest primitive and the complete rollback path,
+   but excluding several Full engines is verbose and easy to mistype.
+10. **Add `--full --exclude-engine <name>` as a repeatable modifier.** Accepted,
+    with comma-separated names also accepted inside one value token. The option
+    is reduced to the same effective modes as existing explicit controls before
+    orchestration; it does not create a profile or execution path.
+11. **Use `-x` as the short exclusion alias.** Rejected after collision audit:
+    legacy bstrings already uses `-x` for maximum string length. `-e` is accepted
+    as the non-colliding short alias.
 
 ## Decision
 
@@ -80,6 +107,49 @@ effective source producers are:
 - native extraction when `--native-extraction on`;
 - FLOSS when `--recover-executable-strings` is `auto` or `force`; and
 - OCR when `--ocr` is `auto` or `force`.
+
+Add `--exclude-engine <list>` with short alias `-e` as a convenience modifier
+that is valid only when `--full` is explicitly present. It never implies Full.
+Each occurrence consumes exactly one value token, and occurrences accumulate:
+
+```text
+--full --exclude-engine translation --exclude-engine ocr
+--full -e translation,ocr
+--full -e "translation, ocr"
+```
+
+The value grammar is `segment ("," segment)*`. The parser splits on literal
+commas, trims surrounding whitespace from each segment, compares names
+case-insensitively, and canonicalizes accepted names to lowercase. The exact
+names are `native`, `floss`, `ocr`, and `translation`. It does not accept whitespace-
+separated multi-arguments: `-e native ocr` is invalid. Missing values, empty
+segments (`ocr,`, `,ocr`, or `ocr,,floss`), unknown names, and duplicate or
+case-duplicate names across the entire command are errors. Thus
+`-e ocr --exclude-engine OCR` fails instead of silently deduplicating intent.
+
+Resolution starts from the unchanged Full defaults and maps exclusions to the
+existing effective modes:
+
+- `native` -> `--native-extraction off`;
+- `floss` -> `--recover-executable-strings off`;
+- `ocr` -> `--ocr off`; and
+- `translation` -> `--translation off`.
+
+An exclusion conflicts with any explicitly supplied selector for the same
+engine, including a selector that also says `off`; the command fails rather
+than depending on order or accepting two sources of intent. Explicit selectors
+for other engines remain valid. Provider, device, scheduling, threshold, and
+other tuning options for an excluded engine are inert at runtime but retain
+their deterministic validation, so malformed configuration still fails early
+and a valid tuning option never starts the excluded worker.
+
+The modifier is parser-level sugar only. It resolves into the existing
+`AnalysisOptions`, which remain authoritative in `run.json` together with the
+existing routing and engine-status records. No `excludedEngines`, raw command
+line, or other invocation-specific provenance field is added; the shorthand
+and its equivalent explicit-off command intentionally have the same semantic
+provenance. The orchestrator, output schemas, stage order, and failure policy do
+not branch on how the effective modes were requested.
 
 Translation remains an independent transform controlled by `--translation`.
 `auto`, `all`, and `detect-only` require at least one selected producer. More
@@ -163,6 +233,13 @@ engine set complete.
    bundle verification, or evidence processing.
 10. Private evidence strings, paths, hashes, and case-derived identifying totals
     never enter source, fixtures, docs, commits, or public CI output.
+11. Full without exclusions is unchanged, and exclusion resolution is
+    independent of command-line option order.
+12. The shorthand and the equivalent explicit-off selectors resolve to the same
+    `AnalysisOptions`; no orchestrator or provenance-schema branch depends on
+    the shorthand.
+13. An excluded engine's tuning options may be validated but cannot cause its
+    runtime, provider, model, or worker to be resolved or started.
 
 ## Acceptance gates
 
@@ -188,6 +265,16 @@ The release candidate must pass all of the following:
   or model is required.
 - No-producer configurations fail before output creation and never silently
   re-enable native.
+- `--exclude-engine` and `-e` require explicit `--full`; repeat and comma forms
+  resolve identically, while a missing value, empty segment, unknown name,
+  whitespace-separated extra value, duplicate/case-duplicate name, or
+  same-engine explicit selector fails before output creation.
+- Full-minus-native, FLOSS, OCR, or translation produces the same effective
+  `AnalysisOptions`, child-process plan, canonical evidence, reports, and
+  terminal engine states as the corresponding existing explicit-off command.
+- Valid tuning options for an excluded engine remain accepted and validated but
+  are inert; invalid values fail before evidence access and valid values do not
+  initialize the excluded runtime.
 - Native-on routing retains its existing policy/decision identity; native-off
   routing is accepted end-to-end by C#, FLOSS, OCR, and the engine ledger only
   when native-off was expected.
@@ -213,6 +300,27 @@ The release candidate must pass all of the following:
   20 ms coordinator-process sample measured peak working-set regression of
   -9.26%. Packaged FLOSS/OCR telemetry remains a release-candidate gate because
   the existing v1.9.17 bundle correctly refuses a mismatched executable.
+- Exclusion-alias no-regression measurement gate: the first exploratory
+  100,000-call/seven-pair protocol was rejected rather than relabeled as a
+  pass. Its approximately 38%-110% elapsed differences were real but divided
+  two tens-of-nanoseconds operations, and repeated trials exposed tiered-JIT
+  nonstationarity and an initially nonequivalent baseline. Before the accepted
+  run, the gate was revised to a fixed public 21-case matrix, exact per-case and
+  per-sample parity with equivalent explicit-off resolution, 1,000,000 warm-up
+  calls per variant, 5,000,000 measured calls per variant, and 15 independently
+  started child processes with tiering and ReadyToRun disabled. Candidate
+  median must be at most 250 ns/call, every sample at most 500 ns/call, and the
+  measured candidate loop must allocate exactly zero bytes. Baseline timing is
+  diagnostic only. The final acceptance run measured 72.206 ns/call median,
+  76.724 ns/call maximum, and zero allocated bytes, with identical checksums in
+  all 15 samples; the explicit-off diagnostic median was 37.990 ns/call. Static review
+  also requires exactly one production resolver invocation per command, so this
+  one-time cost cannot move into a file-, record-, route-, or candidate-level
+  loop. A bounded candidate-build native-only `-e` versus explicit-off smoke
+  must retain exact canonical native/raw/enriched/match identity-and-offset
+  sets, histograms/reports, effective modes, and child-process selections. Full
+  with no exclusion must retain the established packaged acceptance behavior;
+  the existing multi-gigabyte bundle need not be reverified once per alias form.
 - Air-gap, cancellation, input-mutation, cache/partial cleanup, and prior-output
   preservation tests remain green.
 - Full .NET, Python, PowerShell decision, Markdown-link, formatting, and privacy
@@ -238,6 +346,15 @@ directory is one authenticated loadable trust profile. Specialist execution is
 independent at runtime, while independently installable capability profiles are
 honestly deferred rather than simulated with unsafe partial verification.
 
+The strongest objection to the convenience syntax is that exclusions add no
+capability and comma lists are easy to mistype: an empty segment, duplicated
+name, or unquoted embedded space could otherwise produce an unintended Full
+selection. The exact one-token grammar, explicit `--full` requirement, strict
+duplicate/empty/unknown rejection, same-engine conflict rule, and pre-output
+validation make those mistakes failures rather than partial interpretations.
+The long explicit controls remain documented, supported, and sufficient if the
+shorthand proves confusing.
+
 ## Falsifiers and revisit triggers
 
 Revert the public native-off exposure while retaining safe validation fixes if:
@@ -251,7 +368,19 @@ Revert the public native-off exposure while retaining safe validation fixes if:
 - default or Full behavior regresses;
 - native-off can be enabled implicitly, or the coverage loss is not explicit;
 - selected-engine failure can publish status `complete`; or
-- existing whole-bundle verification is weakened.
+- existing whole-bundle verification is weakened;
+- bare or malformed `--exclude-engine` can start Full or reach evidence access;
+- exclusion parsing becomes order-dependent, silently ignores a segment, or
+  accepts duplicate/conflicting intent;
+- shorthand and explicit-off commands resolve to different effective options,
+  process plans, outputs, or provenance; or
+- an excluded runtime is resolved or started because one of its valid tuning
+  options was present.
+
+If an exclusion falsifier occurs, remove `--exclude-engine`/`-e` while retaining
+the independently selectable engine controls and early-validation fixes. No
+output migration or orchestrator rollback is required because the modifier has
+no runtime branch or provenance field.
 
 Revisit componentized installation profiles when measured full-manifest hashing,
 download size, or unrelated profile corruption materially blocks specialist
@@ -268,6 +397,11 @@ policy version, uniform engine-state handling, early validation, and additional
 mode-matrix tests. Native-off intentionally trades universal coverage for
 specialist speed and must be visibly recorded.
 
+Full users also gain a compact, fail-closed way to remove named engines while
+the resolved modes, evidence contract, and authoritative provenance remain the
+same as the existing explicit selectors. This adds parser/help/conflict tests,
+but does not add a profile, orchestrator path, output field, or bundle profile.
+
 The complete quality bundle remains large and atomically verified. This change
 does not reduce download size or make a damaged shared quality profile partly
 usable. Componentized physical profiles remain a separate, larger release and
@@ -276,6 +410,9 @@ supply-chain project.
 ## Primary references
 
 - [GNU strings manual](https://sourceware.org/binutils/docs/binutils/strings.html)
+- [System.CommandLine syntax and collection arity](https://learn.microsoft.com/en-us/dotnet/standard/commandline/syntax)
+- [GNU tar repeatable exclusion practice](https://www.gnu.org/software/tar/manual/html_node/exclude.html)
+- [Git repeatable exclusion practice](https://git-scm.com/docs/git-rev-parse)
 - [FLOSS v3.1.1 README](https://github.com/mandiant/flare-floss/blob/v3.1.1/README.md)
 - [RapidOCR](https://github.com/RapidAI/RapidOCR)
 - [RapidOCR CLI quickstart](https://rapidai.github.io/RapidOCRDocs/main/quickstart/)

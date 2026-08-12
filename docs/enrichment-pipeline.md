@@ -41,12 +41,11 @@ when filesystem-level or embedded-executable/document coverage is required.
 The direct scanner can search raw image bytes, but FLOSS requires a complete
 supplied executable and OCR requires a supported image/PDF file.
 
-In current source after v1.9.17, Full defaults native extraction on and enables
-routed FLOSS/OCR plus automatic translation. Each producer remains
-independently selectable, and an explicit mode overrides its Full default. The
-published v1.9.17 binaries do not yet contain `--native-extraction`. Runtime
-selection does not split the installed quality bundle: that shared physical
-profile is still verified atomically.
+Full defaults native extraction on and enables routed FLOSS/OCR plus automatic
+translation. Each producer remains independently selectable, and an explicit
+mode overrides its Full default. The published v1.9.17 binaries include
+`--native-extraction`. Runtime selection does not split the installed quality
+bundle: that shared physical profile is still verified atomically.
 
 ## What each stage contributes
 
@@ -70,6 +69,13 @@ after all requested stages complete.
 ```powershell
 # Everything, with automatic OCR and translation decisions
 .\bstrings.exe analyze -d D:\carved --full -o D:\results\full
+
+# Full without OCR or translation; repeat and comma forms are equivalent
+.\bstrings.exe analyze -d D:\carved --full `
+  --exclude-engine ocr --exclude-engine translation `
+  -o D:\results\without-ocr-translation
+.\bstrings.exe analyze -d D:\carved --full `
+  -e ocr,translation -o D:\results\without-ocr-translation
 
 # Native extraction only
 .\bstrings.exe analyze -f D:\evidence\memory.raw `
@@ -111,6 +117,17 @@ producerless configuration fails before the bundle, output path, or evidence is
 opened. Pattern matching and reports remain mandatory in every `analyze` mode.
 A selected specialist that has no applicable input or emits zero records can
 still complete successfully with truthful terminal status.
+
+`--exclude-engine`/`-e` is a Full-only convenience modifier, not another
+profile. Each occurrence consumes one token containing one or more
+comma-separated names from `native`, `floss`, `ocr`, and `translation`.
+Occurrences accumulate; surrounding whitespace is trimmed, but empty, unknown,
+duplicate/case-duplicate, and whitespace-separated extra values fail before
+output or evidence access. An exclusion conflicts with explicitly supplying
+the same engine's main selector. Valid tuning options for an excluded engine
+remain validated but are inert. Resolution produces the same `AnalysisOptions`
+as the equivalent explicit-off command, so no runtime or provenance branch is
+added and the complete bundle remains atomically verified when selected.
 
 ## Executable recovery
 

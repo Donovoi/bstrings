@@ -44,6 +44,155 @@ public sealed class AnalysisCliTests
         Assert.Contains("full-offload CUDA p2", AnalysisCli.TranslationDeviceHelp, StringComparison.Ordinal);
         Assert.Contains("before evidence inference", AnalysisCli.TranslationDeviceHelp, StringComparison.Ordinal);
         Assert.Contains("fails closed", AnalysisCli.TranslationDeviceHelp, StringComparison.Ordinal);
+        Assert.Contains("--exclude-engine", AnalysisCli.FullProfileHelp, StringComparison.Ordinal);
+        Assert.Contains("-e", AnalysisCli.FullProfileHelp, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParseEngineExclusions_AcceptsRepeatedCommaSeparatedAndAsciiCaseInsensitiveNames()
+    {
+        var exclusions = AnalysisCli.ParseEngineExclusions(
+            ["Native,FLOSS", "OCR", "translation"]
+        );
+
+        Assert.True(exclusions.Native);
+        Assert.True(exclusions.Floss);
+        Assert.True(exclusions.Ocr);
+        Assert.True(exclusions.Translation);
+    }
+
+    [Theory]
+    [InlineData("native,")]
+    [InlineData(",native")]
+    [InlineData("native,,ocr")]
+    [InlineData("native, NATIVE")]
+    [InlineData("recovery")]
+    [InlineData("floss-recovery")]
+    [InlineData("ＯＣＲ")]
+    public void ParseEngineExclusions_RejectsEmptyDuplicateUnknownAndAliasNames(string value)
+    {
+        Assert.Throws<ArgumentException>(() => AnalysisCli.ParseEngineExclusions([value]));
+    }
+
+    [Theory]
+    [InlineData("native", 1, 1, 1, 1)]
+    [InlineData("floss", 0, 0, 1, 1)]
+    [InlineData("ocr", 0, 1, 0, 1)]
+    [InlineData("translation", 0, 1, 1, 0)]
+    public void ResolveEngineModes_SubtractsOneEngineFromFullDefaults(
+        string excluded,
+        int native,
+        int floss,
+        int ocr,
+        int translation
+    )
+    {
+        var modes = AnalysisCli.ResolveEngineModes(
+            full: true,
+            nativeValue: null,
+            flossValue: null,
+            ocrValue: null,
+            translationValue: null,
+            rawExclusions: [excluded]
+        );
+
+        Assert.Equal((NativeExtractionMode)native, modes.Native);
+        Assert.Equal((ExecutableRecoveryMode)floss, modes.Floss);
+        Assert.Equal((OcrWorkflowMode)ocr, modes.Ocr);
+        Assert.Equal((TranslationWorkflowMode)translation, modes.Translation);
+    }
+
+    [Fact]
+    public void ResolveEngineModes_PreservesCanonicalFullDefaultsWithoutExclusions()
+    {
+        var modes = AnalysisCli.ResolveEngineModes(
+            full: true,
+            nativeValue: null,
+            flossValue: null,
+            ocrValue: null,
+            translationValue: null,
+            rawExclusions: []
+        );
+
+        Assert.Equal(NativeExtractionMode.On, modes.Native);
+        Assert.Equal(ExecutableRecoveryMode.Auto, modes.Floss);
+        Assert.Equal(OcrWorkflowMode.Auto, modes.Ocr);
+        Assert.Equal(TranslationWorkflowMode.Auto, modes.Translation);
+    }
+
+    [Fact]
+    public void ResolveEngineModes_PreservesExplicitSelectorsForNonExcludedEngines()
+    {
+        var modes = AnalysisCli.ResolveEngineModes(
+            full: true,
+            nativeValue: "off",
+            flossValue: "force",
+            ocrValue: "force",
+            translationValue: null,
+            rawExclusions: ["translation"]
+        );
+
+        Assert.Equal(NativeExtractionMode.Off, modes.Native);
+        Assert.Equal(ExecutableRecoveryMode.Force, modes.Floss);
+        Assert.Equal(OcrWorkflowMode.Force, modes.Ocr);
+        Assert.Equal(TranslationWorkflowMode.Off, modes.Translation);
+    }
+
+    [Fact]
+    public async Task ExcludeEngineParser_AcceptsShortLongRepeatedCommaAndCaseFormsBeforeProducerValidation()
+    {
+        using var scope = new AnalyzeCliFixture();
+
+        var exitCode = await AnalysisCli.RunAsync(
+            [
+                "-f",
+                scope.InputPath,
+                "-o",
+                scope.OutputPath,
+                "--full",
+                "-e",
+                "Native,FLOSS",
+                "--exclude-engine",
+                "OCR",
+            ]
+        );
+
+        Assert.Equal(2, exitCode);
+        Assert.False(Directory.Exists(scope.OutputPath));
+    }
+
+    public static TheoryData<string[]> InvalidExcludeEngineArguments =>
+        new()
+        {
+            new[] { "-e", "ocr" },
+            new[] { "--full", "-e" },
+            new[] { "--full", "-e", "ocr", "translation" },
+            new[] { "--full", "-e", "recovery" },
+            new[] { "--full", "-e", "ocr," },
+            new[] { "--full", "-e", ",ocr" },
+            new[] { "--full", "-e", "ocr,,translation" },
+            new[] { "--full", "-e", "ocr", "-e", "OCR" },
+            new[] { "--full", "-e", "native", "--native-extraction", "off" },
+            new[] { "--full", "-e", "floss", "--recover-executable-strings", "off" },
+            new[] { "--full", "-e", "ocr", "--ocr", "off" },
+            new[] { "--full", "-e", "translation", "--translation", "off" },
+        };
+
+    [Theory]
+    [MemberData(nameof(InvalidExcludeEngineArguments))]
+    public async Task ExcludeEngineParser_RejectsInvalidGrammarAndSameEngineSelectorsBeforeOutput(
+        string[] exclusionArguments
+    )
+    {
+        using var scope = new AnalyzeCliFixture();
+        var arguments = new[] { "-f", scope.InputPath, "-o", scope.OutputPath }
+            .Concat(exclusionArguments)
+            .ToArray();
+
+        var exitCode = await AnalysisCli.RunAsync(arguments);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.False(Directory.Exists(scope.OutputPath));
     }
 
     [Theory]
@@ -243,5 +392,35 @@ public sealed class AnalysisCliTests
         );
 
         Assert.Contains("parallelism above 1", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class AnalyzeCliFixture : IDisposable
+    {
+        internal AnalyzeCliFixture()
+        {
+            RootPath = Path.Combine(
+                Path.GetTempPath(),
+                "bstrings-analysis-cli-tests",
+                Guid.NewGuid().ToString("N")
+            );
+            Directory.CreateDirectory(RootPath);
+            InputPath = Path.Combine(RootPath, "input.bin");
+            File.WriteAllText(InputPath, "synthetic test material");
+            OutputPath = Path.Combine(RootPath, "output");
+        }
+
+        private string RootPath { get; }
+        internal string InputPath { get; }
+        internal string OutputPath { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(RootPath, recursive: true);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 }
