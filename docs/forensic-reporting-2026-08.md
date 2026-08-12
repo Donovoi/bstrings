@@ -93,7 +93,18 @@ counts/descriptions, not matched feature values.
 
 The `pii` group includes email, US and international phone candidates, SSN,
 checksum-valid labelled Canadian SIN, labelled/calendar-valid date of birth,
-payment card, MOD-97-valid IBAN, ZIP code, and VIN patterns.
+payment card, MOD-97-valid IBAN, ZIP code, VIN, labelled ITIN and UK National
+Insurance number candidates, and labelled/checksum-valid NPI values.
+
+The expanded catalogue also includes bounded CPE 2.3 product identifiers,
+exact TLP 2.0 markings, labelled RFC 5322 Message-ID values, checksum-valid LEI
+candidates, and labelled MD5, SHA-1, SHA-384, and SHA-512 correlation values.
+These are format and correlation leads. A checksum or documented shape does not
+prove allocation, activity, ownership, compromise, maliciousness, or sender
+authenticity. No built-in performs a provider, registry, revocation, or
+authentication network request. The research, rejected alternatives, drift
+boundaries, and rollback gates are recorded in
+[ADR-0009](architecture/adr-0009-bounded-forensic-pattern-expansion.md).
 
 The `credentials` and `browser` groups include structurally validated compact
 JWT candidates, credential assignments, URI userinfo, private-key boundaries,
@@ -163,7 +174,7 @@ state, so it is not an allocation profile for the report stage alone.
 The detailed measurements are in
 [`forensic-report-projection-2026-08.csv`](../benchmarks/results/forensic-report-projection-2026-08.csv).
 
-The expanded catalog was also exercised through the real Release direct CLI
+The v1.9.17 66-pattern catalog was exercised through the real Release direct CLI
 over generator-v5's 66 one-MiB files. Each run used CPU extraction, ASCII,
 `--lr all --ro --off`, quiet file-only output, and exact CSV validation of
 every expected `(source file, pattern, value)` pair. All three runs returned
@@ -173,3 +184,26 @@ the same 235 rows and all 66 expected pairs exactly twice. Elapsed times were
 a comparison to the prior 51-pattern catalog and not a large-image throughput
 claim. The rows are in
 [`forensic-pattern-catalog-2026-08.csv`](../benchmarks/results/forensic-pattern-catalog-2026-08.csv).
+
+That CSV remains an immutable v1.9.17 baseline rather than being relabelled as
+evidence for the later 77-pattern source catalogue. The generator-v6 acceptance
+run must publish a separately named result after it has reproduced every new
+value/offset witness, every legacy pair, and the ADR-0009 performance gates.
+
+The ADR-0009 candidate subsequently passed that separate acceptance run. ASCII
+adversarial and UTF-16LE sparse generator-v6 corpora reproduced the exact two
+boundary/EOF records for every one of the 77 patterns; 16 MiB dense and
+adversarial corpora for the eleven new classes also completed with exact output
+and no timeout. Seven alternating base/candidate runs scanned the same 264 MiB
+legacy corpus. Median elapsed time changed from 0.5101 to 0.5267 seconds
+(+3.26%), and median sampled peak working set changed from 81,661,952 to
+85,389,312 bytes (+4.56%). All fourteen measured runs produced the same 940-row
+legacy multiset. The raw measurements are in
+[`forensic-pattern-catalog-v6-2026-08.csv`](../benchmarks/results/forensic-pattern-catalog-v6-2026-08.csv).
+The measured scanner arguments were identical except for executable path:
+`-d <66-file-v5-corpus> --mask *.bin -a -u false -m 3 -b 16 --lr all
+--ro --off -s -o <fresh-output> -q --processor cpu`. The 4 MiB-per-pattern
+input was generated from base commit `88aec2e7e5de00971a5fd7a1269f2f2e13f107f9`
+with `--size-mib 4 --segment-mib 1 --encoding ascii --complexity sparse`.
+Each executable was warmed once; the seven measured pairs alternated order, and
+working set was sampled every 5 ms in addition to reading the process peak.

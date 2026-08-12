@@ -92,8 +92,248 @@ internal static class BuiltInSemanticValidator
             BuiltInValidationKind.Iban => IsValidIban(candidate),
             BuiltInValidationKind.CanadianSin => HasValidLuhnChecksum(candidate, 9, 9),
             BuiltInValidationKind.DateOfBirth => IsValidDateOfBirth(candidate),
+            BuiltInValidationKind.Cpe23 => IsValidCpe23(candidate),
+            BuiltInValidationKind.EmailMessageId => IsValidEmailMessageId(candidate),
+            BuiltInValidationKind.Lei => IsValidLei(candidate),
+            BuiltInValidationKind.Npi => IsValidNpi(candidate),
+            BuiltInValidationKind.Itin => IsValidItin(candidate),
+            BuiltInValidationKind.UkNino => IsValidUkNino(candidate),
             _ => false,
         };
+    }
+
+    private static bool IsValidCpe23(ReadOnlySpan<char> candidate)
+    {
+        const string prefix = "cpe:2.3:";
+        if (
+            candidate.Length is <= 8 or > 8192
+            || !candidate.StartsWith(prefix, StringComparison.Ordinal)
+        )
+        {
+            return false;
+        }
+
+        var componentCount = 0;
+        var componentLength = 0;
+        var escaped = false;
+        var firstComponent = '\0';
+        var firstComponentLength = 0;
+        for (var index = prefix.Length; index < candidate.Length; index++)
+        {
+            var character = candidate[index];
+            if (escaped)
+            {
+                if (character is '\r' or '\n' || char.IsControl(character))
+                {
+                    return false;
+                }
+                escaped = false;
+                componentLength += 2;
+                continue;
+            }
+
+            if (character == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+            if (character == ':')
+            {
+                if (componentLength is <= 0 or > 512)
+                {
+                    return false;
+                }
+                componentCount++;
+                componentLength = 0;
+                continue;
+            }
+            if (char.IsWhiteSpace(character) || char.IsControl(character))
+            {
+                return false;
+            }
+            if (componentCount == 0 && componentLength == 0)
+            {
+                firstComponent = character;
+            }
+            componentLength++;
+            if (componentCount == 0)
+            {
+                firstComponentLength++;
+            }
+        }
+
+        if (escaped || componentLength is <= 0 or > 512)
+        {
+            return false;
+        }
+        componentCount++;
+
+        return componentCount == 11
+            && firstComponentLength == 1
+            && firstComponent is 'a' or 'h' or 'o' or '*' or '-';
+    }
+
+    private static bool IsValidEmailMessageId(ReadOnlySpan<char> candidate)
+    {
+        if (candidate.Length is < 5 or > 320 || candidate[0] != '<' || candidate[^1] != '>')
+        {
+            return false;
+        }
+
+        var content = candidate[1..^1];
+        var at = content.IndexOf('@');
+        if (
+            at is < 1 or > 64
+            || at != content.LastIndexOf('@')
+            || content.Length - at - 1 is < 1 or > 253
+        )
+        {
+            return false;
+        }
+
+        var local = content[..at];
+        if (local[0] == '.' || local[^1] == '.' || local.IndexOf("..", StringComparison.Ordinal) >= 0)
+        {
+            return false;
+        }
+
+        var domain = content[(at + 1)..];
+        var labelLength = 0;
+        for (var index = 0; index < domain.Length; index++)
+        {
+            var character = domain[index];
+            if (character == '.')
+            {
+                if (labelLength == 0 || domain[index - 1] == '-')
+                {
+                    return false;
+                }
+                labelLength = 0;
+                continue;
+            }
+            if (
+                character is not (>= 'A' and <= 'Z')
+                    and not (>= 'a' and <= 'z')
+                    and not (>= '0' and <= '9')
+                    and not '-'
+                || (labelLength == 0 && character == '-')
+                || ++labelLength > 63
+            )
+            {
+                return false;
+            }
+        }
+        return labelLength > 0 && domain[^1] != '-';
+    }
+
+    private static bool IsValidLei(ReadOnlySpan<char> candidate)
+    {
+        if (
+            candidate.Length != 20
+            || candidate[4] != '0'
+            || candidate[5] != '0'
+            || candidate[^2] is < '0' or > '9'
+            || candidate[^1] is < '0' or > '9'
+        )
+        {
+            return false;
+        }
+
+        var remainder = 0;
+        foreach (var character in candidate)
+        {
+            if (character is >= '0' and <= '9')
+            {
+                remainder = ((remainder * 10) + character - '0') % 97;
+            }
+            else if (character is >= 'A' and <= 'Z')
+            {
+                remainder = ((remainder * 100) + character - 'A' + 10) % 97;
+            }
+            else
+            {
+                return false;
+            }
+        }
+        return remainder == 1;
+    }
+
+    private static bool IsValidNpi(ReadOnlySpan<char> candidate)
+    {
+        if (candidate.Length != 10 || candidate[0] is not ('1' or '2'))
+        {
+            return false;
+        }
+
+        Span<char> luhnInput = stackalloc char[15];
+        "80840".AsSpan().CopyTo(luhnInput);
+        candidate.CopyTo(luhnInput[5..]);
+        return HasValidLuhnChecksum(luhnInput, 15, 15);
+    }
+
+    private static bool IsValidItin(ReadOnlySpan<char> candidate)
+    {
+        Span<char> digits = stackalloc char[9];
+        var digitCount = 0;
+        foreach (var character in candidate)
+        {
+            if (character is ' ' or '-')
+            {
+                continue;
+            }
+            if (character is < '0' or > '9' || digitCount == digits.Length)
+            {
+                return false;
+            }
+            digits[digitCount++] = character;
+        }
+        if (digitCount != 9 || digits[0] != '9')
+        {
+            return false;
+        }
+
+        var group = ((digits[3] - '0') * 10) + digits[4] - '0';
+        return group is >= 50 and <= 65
+            or >= 70 and <= 88
+            or >= 90 and <= 92
+            or >= 94 and <= 99;
+    }
+
+    private static bool IsValidUkNino(ReadOnlySpan<char> candidate)
+    {
+        if (
+            candidate.Length != 9
+            || candidate[0] is < 'A' or > 'Z'
+            || candidate[1] is < 'A' or > 'Z'
+            || candidate[8] is < 'A' or > 'D'
+        )
+        {
+            return false;
+        }
+        for (var index = 2; index < 8; index++)
+        {
+            if (candidate[index] is < '0' or > '9')
+            {
+                return false;
+            }
+        }
+
+        const string invalidFirst = "DFIQUV";
+        const string invalidSecond = "DFIOQUV";
+        if (invalidFirst.Contains(candidate[0]) || invalidSecond.Contains(candidate[1]))
+        {
+            return false;
+        }
+
+        return !(
+            candidate[..2].SequenceEqual("BG")
+            || candidate[..2].SequenceEqual("GB")
+            || candidate[..2].SequenceEqual("KN")
+            || candidate[..2].SequenceEqual("NK")
+            || candidate[..2].SequenceEqual("NT")
+            || candidate[..2].SequenceEqual("TN")
+            || candidate[..2].SequenceEqual("ZZ")
+        );
     }
 
     private static bool IsValidAbsoluteUri(ReadOnlySpan<char> candidate)

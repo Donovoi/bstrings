@@ -828,8 +828,8 @@ public class SearchCoreTests
     [Fact]
     public void BuiltInPatternCatalog_ContainsExpectedInventory()
     {
-        Assert.Equal(66, BuiltInPatternCatalog.Descriptions.Count);
-        Assert.Equal(66, BuiltInPatternCatalog.Patterns.Count);
+        Assert.Equal(77, BuiltInPatternCatalog.Descriptions.Count);
+        Assert.Equal(77, BuiltInPatternCatalog.Patterns.Count);
         Assert.Equal(
             BuiltInPatternCatalog.Descriptions.Keys.OrderBy(key => key),
             BuiltInPatternCatalog.Patterns.Keys.OrderBy(key => key)

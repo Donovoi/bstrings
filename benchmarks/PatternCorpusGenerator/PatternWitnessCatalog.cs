@@ -264,6 +264,41 @@ internal static class PatternWitnessCatalog
                 "Sumoo72D2v7KEGvfPzGH5qC5VHGnLmafaAhoMooPwRALNwm2oSyK3myTaFefvyg5bviMbBXUFWN8McswTRowHNYXfo34VD9oWr1",
                 "Sumoo72D2v7KEGvfPzGH5qC5VHGnLmafaAhoMooPwRALNwm2oSyK3myTaFefvyg5bviMbBXUFWN8McswTRowHNYXfo34VD9oWr7"
             ),
+            ["cpe23"] = new(
+                "cpe:2.3:a:synthetic-vendor:synthetic-product:1.0:*:*:*:*:*:*:*",
+                "cpe:2.3:a:vendor:product:1:*:*:*:*:*:*",
+                "cpe:2.3:a:synthetic-vendor:synthetic-product:1.0:*:*:*:*:*:*:*"
+            ),
+            ["tlp_marking"] = new("TLP:AMBER+STRICT", "TLP:AMBER + STRICT", "TLP:AMBER+STRICT"),
+            ["email_message_id"] = new(
+                "Message-ID: <fixture.0001@example.invalid>",
+                "Subject: Message-ID: <fixture.0001@example.invalid>",
+                "<fixture.0001@example.invalid>"
+            ),
+            ["lei"] = new("TEST00ONLY0000000094", "TEST00ONLY0000000095", "TEST00ONLY0000000094"),
+            ["npi"] = new("NPI: 1999999984", "NPI: 1999999985", "1999999984"),
+            ["itin"] = new("ITIN: 900-70-1234", "ITIN: 900-69-1234", "900-70-1234"),
+            ["uk_nino"] = new("NINO: AA000000A", "NINO: BG000000A", "AA000000A"),
+            ["md5_labelled"] = new(
+                "MD5: " + new string('a', 32),
+                "MD5: " + new string('a', 31),
+                new string('a', 32)
+            ),
+            ["sha1_labelled"] = new(
+                "SHA-1: " + new string('a', 40),
+                "SHA-1: " + new string('a', 39),
+                new string('a', 40)
+            ),
+            ["sha384_labelled"] = new(
+                "SHA-384: " + new string('a', 96),
+                "SHA-384: " + new string('a', 95),
+                new string('a', 96)
+            ),
+            ["sha512_labelled"] = new(
+                "SHA-512: " + new string('a', 128),
+                "SHA-512: " + new string('a', 127),
+                new string('a', 128)
+            ),
             ["cve"] = new("CVE-2026-1234", "CVE-2026-123", "CVE-2026-1234"),
             ["pem_private_key"] = new(
                 "-----BEGIN PRIVATE KEY-----",

@@ -118,6 +118,19 @@ They do not replace a browser-database parser, DPAPI/key-store processing, or a
 binary Registry-hive parser. Their descriptions and report classifications
 preserve that boundary.
 
+## 13 August bounded-coverage follow-up
+
+A three-review standards, runtime, and adversarial round added eleven bounded
+classes: CPE 2.3, TLP 2.0, labelled Message-ID, LEI, labelled NPI, labelled ITIN,
+labelled UK National Insurance number, and labelled MD5/SHA-1/SHA-384/SHA-512.
+The same review rejected unlimited provider-token tails, generic entropy and
+attribution patterns, and bare private identifiers whose public validation or
+licensing was insufficient. It also closed named-capture path parity, mixed
+`--lr`/`--fr` resolution, and report expression-binding defects before accepting
+the expansion. See
+[ADR-0009](architecture/adr-0009-bounded-forensic-pattern-expansion.md) for the
+primary sources, strongest counterexamples, acceptance gates, and rollback.
+
 ## Patterns still deliberately left out
 
 Some shapes are useful as a first-pass hunt but too weak for a default

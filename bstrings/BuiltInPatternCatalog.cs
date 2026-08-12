@@ -40,6 +40,12 @@ internal enum BuiltInValidationKind
     Iban,
     CanadianSin,
     DateOfBirth,
+    Cpe23,
+    EmailMessageId,
+    Lei,
+    Npi,
+    Itin,
+    UkNino,
 }
 
 internal sealed record BuiltInPatternDefinition(
@@ -644,6 +650,108 @@ internal static class BuiltInPatternCatalog
             Validation: BuiltInValidationKind.CryptoNoteAddress
         ),
         new(
+            "cpe23",
+            "Finds bounded CPE 2.3 formatted-string product identifier candidates",
+            @"(?<![\p{L}\p{N}_])cpe:2[.]3:(?:\\[^\r\n]|[^:\\\s]){1,256}(?::(?:\\[^\r\n]|[^:\\\s]){1,256}){10}(?![:\\\p{L}\p{N}_])",
+            "https://nvlpubs.nist.gov/nistpubs/Legacy/IR/nistir7695.pdf",
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 8192,
+            Validation: BuiltInValidationKind.Cpe23
+        ),
+        new(
+            "tlp_marking",
+            "Finds exact FIRST Traffic Light Protocol 2.0 written marking candidates",
+            @"(?<![\p{L}\p{N}_])TLP:(?:RED|AMBER(?:[+]STRICT)?|GREEN|CLEAR)(?![ \t]*[+])(?![\p{L}\p{N}_])",
+            "https://www.first.org/tlp/",
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 32
+        ),
+        new(
+            "email_message_id",
+            "Finds labelled RFC 5322 message identifier candidates for email correlation",
+            @"(?m)^(?:Message-ID|In-Reply-To|References):[ \t]*(?:\r?\n[ \t]+)?(?<message_id><[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?>)(?![A-Za-z0-9])",
+            "https://www.rfc-editor.org/rfc/rfc5322.html#section-3.6.4",
+            UseNonBacktracking: false,
+            OutputGroup: "message_id",
+            BoundedRetryOverlap: 512,
+            Validation: BuiltInValidationKind.EmailMessageId
+        ),
+        new(
+            "lei",
+            "Finds 20-character Legal Entity Identifier candidates that pass MOD 97-10",
+            @"(?<![\p{L}\p{N}])[A-Z0-9]{18}[0-9]{2}(?![\p{L}\p{N}])",
+            "https://www.gleif.org/content/4_lei-data/1_access-and-use-lei-data/2_level-1-data-lei-cdf-3-1-format/lei-cdf_version_3.1-documentation.html",
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 32,
+            Validation: BuiltInValidationKind.Lei
+        ),
+        new(
+            "npi",
+            "Finds labelled US National Provider Identifier candidates with a valid check digit",
+            @"(?<![\p{L}\p{N}_])[Nn][Pp][Ii][ \t]*[:=][ \t]*(?<npi>[12][0-9]{9})(?![0-9])",
+            "https://www.cms.gov/Regulations-and-Guidance/Administrative-Simplification/NationalProvidentStand/Downloads/NPIcheckdigit.pdf",
+            UseNonBacktracking: false,
+            OutputGroup: "npi",
+            BoundedRetryOverlap: 64,
+            Validation: BuiltInValidationKind.Npi
+        ),
+        new(
+            "itin",
+            "Finds labelled US Individual Taxpayer Identification Number candidates in published ranges",
+            @"(?<![\p{L}\p{N}_])[Ii][Tt][Ii][Nn][ \t]*[:=][ \t]*(?<itin>9[0-9]{2}(?<itin_sep>[- ])[0-9]{2}\k<itin_sep>[0-9]{4})(?![0-9])",
+            "https://www.irs.gov/irm/part3/irm_03-013-005",
+            UseNonBacktracking: false,
+            OutputGroup: "itin",
+            BoundedRetryOverlap: 64,
+            Validation: BuiltInValidationKind.Itin
+        ),
+        new(
+            "uk_nino",
+            "Finds labelled UK National Insurance number candidates under HMRC syntax rules",
+            @"(?<![\p{L}\p{N}_])[Nn][Ii][Nn][Oo][ \t]*[:=][ \t]*(?<nino>[A-Z]{2}[0-9]{6}[A-D])(?![A-Za-z0-9])",
+            "https://www.gov.uk/hmrc-internal-manuals/national-insurance-manual/nim39110",
+            UseNonBacktracking: false,
+            OutputGroup: "nino",
+            BoundedRetryOverlap: 64,
+            Validation: BuiltInValidationKind.UkNino
+        ),
+        new(
+            "md5_labelled",
+            "Finds explicitly labelled 32-hex-character MD5 correlation values",
+            @"(?<![\p{L}\p{N}_])[Mm][Dd]5[ \t]*[:=][ \t]*(?<digest>[0-9A-Fa-f]{32})(?![\p{L}\p{N}])",
+            "https://www.rfc-editor.org/rfc/rfc1321.html",
+            UseNonBacktracking: false,
+            OutputGroup: "digest",
+            BoundedRetryOverlap: 64
+        ),
+        new(
+            "sha1_labelled",
+            "Finds explicitly labelled 40-hex-character SHA-1 correlation values",
+            @"(?<![\p{L}\p{N}_])[Ss][Hh][Aa]-1[ \t]*[:=][ \t]*(?<digest>[0-9A-Fa-f]{40})(?![\p{L}\p{N}])",
+            "https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
+            UseNonBacktracking: false,
+            OutputGroup: "digest",
+            BoundedRetryOverlap: 80
+        ),
+        new(
+            "sha384_labelled",
+            "Finds explicitly labelled 96-hex-character SHA-384 correlation values",
+            @"(?<![\p{L}\p{N}_])[Ss][Hh][Aa]-384[ \t]*[:=][ \t]*(?<digest>[0-9A-Fa-f]{96})(?![\p{L}\p{N}])",
+            "https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
+            UseNonBacktracking: false,
+            OutputGroup: "digest",
+            BoundedRetryOverlap: 160
+        ),
+        new(
+            "sha512_labelled",
+            "Finds explicitly labelled 128-hex-character SHA-512 correlation values",
+            @"(?<![\p{L}\p{N}_])[Ss][Hh][Aa]-512[ \t]*[:=][ \t]*(?<digest>[0-9A-Fa-f]{128})(?![\p{L}\p{N}])",
+            "https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
+            UseNonBacktracking: false,
+            OutputGroup: "digest",
+            BoundedRetryOverlap: 192
+        ),
+        new(
             "cve",
             "Finds CVE identifier candidates with 4-to-19-digit sequence numbers",
             @"(?<![A-Za-z0-9])[Cc][Vv][Ee]-[0-9]{4}-[0-9]{4,19}(?![A-Za-z0-9])",
@@ -730,7 +838,7 @@ internal static class BuiltInPatternCatalog
                 ["pii"] =
                 [
                     "email", "usPhone", "intlPhone", "ssn", "canadian_sin", "dob",
-                    "cc", "iban", "zip", "vin",
+                    "cc", "iban", "zip", "vin", "npi", "itin", "uk_nino",
                 ],
                 ["credentials"] =
                 [
