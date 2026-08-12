@@ -1,5 +1,10 @@
 # Terminal help and command reference
 
+This page documents current source. The latest published release is v1.9.17;
+its installed `help` output is authoritative for that binary. In particular,
+v1.9.17 includes `--native-extraction` but predates the
+`-e`/`--exclude-engine` shorthand described below.
+
 The normal examiner interface is `bstrings.exe`. It has three user-facing
 paths:
 
@@ -91,6 +96,10 @@ OCR need carved or mounted executables, documents, and images.
 `--exclude-engine` (short alias `-e`) is strict shorthand for starting from
 Full's defaults and setting named engines to their existing `off` modes. It
 requires an explicit `--full` and never enables Full by itself.
+
+This shorthand is available in current source after v1.9.17. With the published
+v1.9.17 binary, use the equivalent explicit selectors such as
+`--ocr off --translation off`.
 
 ```powershell
 # Repeat form

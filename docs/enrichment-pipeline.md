@@ -70,12 +70,16 @@ after all requested stages complete.
 # Everything, with automatic OCR and translation decisions
 .\bstrings.exe analyze -d D:\carved --full -o D:\results\full
 
-# Full without OCR or translation; repeat and comma forms are equivalent
+# Current source after v1.9.17: Full without OCR or translation
 .\bstrings.exe analyze -d D:\carved --full `
   --exclude-engine ocr --exclude-engine translation `
   -o D:\results\without-ocr-translation
 .\bstrings.exe analyze -d D:\carved --full `
   -e ocr,translation -o D:\results\without-ocr-translation
+
+# Published v1.9.17 equivalent
+.\bstrings.exe analyze -d D:\carved --full `
+  --ocr off --translation off -o D:\results\without-ocr-translation
 
 # Native extraction only
 .\bstrings.exe analyze -f D:\evidence\memory.raw `
@@ -118,9 +122,10 @@ opened. Pattern matching and reports remain mandatory in every `analyze` mode.
 A selected specialist that has no applicable input or emits zero records can
 still complete successfully with truthful terminal status.
 
-`--exclude-engine`/`-e` is a Full-only convenience modifier, not another
-profile. Each occurrence consumes one token containing one or more
-comma-separated names from `native`, `floss`, `ocr`, and `translation`.
+In current source after v1.9.17, `--exclude-engine`/`-e` is a Full-only
+convenience modifier, not another profile. Each occurrence consumes one token
+containing one or more comma-separated names from `native`, `floss`, `ocr`, and
+`translation`.
 Occurrences accumulate; surrounding whitespace is trimmed, but empty, unknown,
 duplicate/case-duplicate, and whitespace-separated extra values fail before
 output or evidence access. An exclusion conflicts with explicitly supplying
