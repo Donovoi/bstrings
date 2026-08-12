@@ -18,9 +18,10 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 - Completed analysis writes a filterable `findings.tsv`, exact pattern and
   feature histograms, and a self-contained HTML pattern visualization while
   retaining the authoritative JSONL evidence graph.
-- The 66-pattern catalogue includes PII, credentials, structurally validated
-  JWT candidates, browser artifacts, high-value Registry paths, and crypto
-  address families alongside the original forensic patterns.
+- The 77-pattern catalogue includes PII, credentials, structurally validated
+  JWT candidates, product and communication identifiers, TLP markings,
+  labelled digest families, browser artifacts, high-value Registry paths, and
+  crypto address families alongside the original forensic patterns.
 - Automatic extraction measures eligible CPU, GPU, and hybrid backends and
   selects an accelerator only when it projects a worthwhile win.
 - Language triage reuses successful detections for exact duplicate text only
@@ -157,6 +158,22 @@ Success requires exit code 0, `run.json` and `summary.json` to report
 `status: complete`, and no `.incomplete` marker. Preserve an incomplete result
 for diagnosis and use a different new or empty directory for a retry.
 
+`analyze` searches the complete built-in catalogue by default. Narrow it with
+comma-separated names or one of the `pii`, `credentials`, `browser`, `registry`,
+or `wallets` groups:
+
+```powershell
+.\bstrings-quality\bstrings.exe analyze -f D:\evidence\memory.raw `
+  --lr "pii,cpe23,tlp_marking,email_message_id" `
+  -o D:\results\focused
+```
+
+Run `.\bstrings-quality\bstrings.exe -p` to inspect the built-in names,
+descriptions, and expressions. Format and checksum matches are evidence
+candidates, not proof of identity, ownership, compromise, or maliciousness.
+The TSV findings and feature histogram retain raw matches, so protect the whole
+output directory as sensitive case material.
+
 The bootstrap always replaces an existing physical
 `Install-BstringsQuality.ps1`, but only after the release reports immutable
 state and the new download matches its published SHA-256. The installer also
@@ -272,7 +289,7 @@ residency. Hybrid and p4 remain deferred.
 
 `--full` freezes input hashes and defaults native extraction on, routes
 applicable files to FLOSS/OCR, then performs language assessment, local
-translation, all 66 built-in patterns, and the TSV/histogram reporting stage.
+translation, all 77 built-in patterns, and the TSV/histogram reporting stage.
 An explicit engine option still overrides its Full default. Specialist runs
 retain `content-routing.jsonl` and the three-rows-per-input
 `engine-status.jsonl` terminal coverage ledger with its hash/count summary,

@@ -1319,17 +1319,18 @@ public static partial class Program
                 : null;
 
             // Parse multiple patterns from lr parameter
-            var regexPatternsWithNames = ParseRegexPatternsWithNames(lr);
-            var regexPatterns = regexPatternsWithNames.Select(p => p.pattern).ToList();
+            var parsedRegexPatterns = ParseRegexPatternsWithNames(lr);
             var searchTargets = SearchTargetConfigurationCore.Build(
                 ls,
                 lr,
                 fs,
                 fr,
-                regexPatterns,
+                parsedRegexPatterns,
                 File.Exists,
                 File.ReadAllLines
             );
+            var regexPatternsWithNames = searchTargets.RegexPatterns.ToList();
+            var regexPatterns = regexPatternsWithNames.Select(p => p.pattern).ToList();
             var fileStrings = new HashSet<string>(searchTargets.FileStrings);
             var regexStrings = new HashSet<string>(searchTargets.RegexStrings);
             foreach (var missingFile in searchTargets.MissingFiles)
@@ -3947,17 +3948,11 @@ public static partial class Program
         var patterns = ParseRegexPatternsWithNames(lr);
         if (!string.IsNullOrWhiteSpace(regexFilePath))
         {
-            var lineNumber = 0;
-            foreach (var line in File.ReadLines(regexFilePath))
-            {
-                lineNumber++;
-                var pattern = line.Trim();
-                if (pattern.Length == 0 || pattern.StartsWith('#'))
-                {
-                    continue;
-                }
-                patterns.Add(($"file:{lineNumber}", pattern));
-            }
+            patterns.AddRange(
+                SearchTargetConfigurationCore.ParseRegexFilePatterns(
+                    File.ReadLines(regexFilePath)
+                )
+            );
         }
         if (patterns.Count == 0)
         {
@@ -3984,17 +3979,11 @@ public static partial class Program
                 return;
             }
 
-            var lineNumber = 0;
-            foreach (var line in File.ReadLines(regexFilePath))
-            {
-                lineNumber++;
-                var pattern = line.Trim();
-                if (pattern.Length == 0 || pattern.StartsWith('#'))
-                {
-                    continue;
-                }
-                patterns.Add(($"file:{lineNumber}", pattern));
-            }
+            patterns.AddRange(
+                SearchTargetConfigurationCore.ParseRegexFilePatterns(
+                    File.ReadLines(regexFilePath)
+                )
+            );
         }
 
         if (patterns.Count == 0)

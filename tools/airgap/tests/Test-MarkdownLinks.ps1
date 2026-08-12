@@ -85,6 +85,7 @@ try {
         'adr-0006-q4-cuda-full-translation.md',
         'adr-0007-translation-worthiness-routing.md',
         'adr-0008-independent-engine-execution.md',
+        'adr-0009-bounded-forensic-pattern-expansion.md',
         'decision-review-policy.md'
     )
     if (($architectureDocuments -join '|') -cne ($expectedArchitectureDocuments -join '|')) {

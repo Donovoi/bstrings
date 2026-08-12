@@ -117,7 +117,6 @@ internal static class RegexOutputCore
                 yield break;
             }
 
-            var outputGroup = isBuiltIn ? definition.OutputGroup : null;
             MatchCollection matches;
             if (
                 isBuiltIn
@@ -139,10 +138,6 @@ internal static class RegexOutputCore
                     )
                 )
                 {
-                    if (!BuiltInSemanticValidator.IsValid(definition, dataFound))
-                    {
-                        continue;
-                    }
                     var candidateStart = parsedHit.Data.IndexOf(
                         dataFound,
                         searchStart,
@@ -155,10 +150,25 @@ internal static class RegexOutputCore
                             StringComparison.Ordinal
                         );
                     }
-                    if (candidateStart >= 0)
+                    if (candidateStart < 0)
                     {
-                        searchStart = candidateStart + dataFound.Length;
+                        continue;
                     }
+                    var generatedCandidate = new CandidateRange(
+                        candidateStart,
+                        dataFound.Length
+                    );
+                    if (
+                        !IsValidCandidateRange(
+                            parsedHit.Data,
+                            definition,
+                            generatedCandidate
+                        )
+                    )
+                    {
+                        continue;
+                    }
+                    searchStart = candidateStart + dataFound.Length;
                     yield return new RegexOutputRecord(
                         patternName,
                         dataFound,
@@ -176,28 +186,34 @@ internal static class RegexOutputCore
 
             foreach (Match match in matches)
             {
-                var group = outputGroup is not null ? match.Groups[outputGroup] : null;
-                var candidateStart = group is not null && group.Success ? group.Index : match.Index;
-                var candidateLength = group is not null && group.Success ? group.Length : match.Length;
-                if (
-                    isBuiltIn
-                    && !BuiltInSemanticValidator.IsValid(
-                        definition,
-                        parsedHit.Data.AsSpan(candidateStart, candidateLength)
-                    )
-                )
+                CandidateRange candidate;
+                if (isBuiltIn)
                 {
-                    continue;
+                    if (
+                        !TryGetValidatedCandidateRange(
+                            parsedHit.Data,
+                            definition,
+                            match,
+                            out candidate
+                        )
+                    )
+                    {
+                        continue;
+                    }
                 }
-                var dataFound = parsedHit.Data.Substring(candidateStart, candidateLength);
+                else
+                {
+                    candidate = new CandidateRange(match.Index, match.Length);
+                }
+                var dataFound = parsedHit.Data.Substring(candidate.Start, candidate.Length);
                 yield return new RegexOutputRecord(
                     patternName,
                     dataFound,
                     sourceFile,
                     parsedHit.Offset,
                     patternType,
-                    candidateStart,
-                    candidateLength
+                    candidate.Start,
+                    candidate.Length
                 );
             }
 
@@ -348,12 +364,7 @@ internal static class RegexOutputCore
                         match.Index + groupOffset,
                         match.Length - groupOffset
                     );
-                    if (
-                        !BuiltInSemanticValidator.IsValid(
-                            definition,
-                            data.AsSpan(candidate.Start, candidate.Length)
-                        )
-                    )
+                    if (!IsValidCandidateRange(data, definition, candidate))
                     {
                         continue;
                     }
@@ -451,16 +462,12 @@ internal static class RegexOutputCore
 
         foreach (Match match in regex.Matches(data))
         {
-            var group = match.Groups[outputGroup];
-            var candidate =
-                group.Success
-                    ? new CandidateRange(group.Index, group.Length)
-                    : new CandidateRange(match.Index, match.Length);
             if (
-                definition is not null
-                && !BuiltInSemanticValidator.IsValid(
+                !TryGetValidatedCandidateRange(
+                    data,
                     definition,
-                    data.AsSpan(candidate.Start, candidate.Length)
+                    match,
+                    out var candidate
                 )
             )
             {
@@ -474,6 +481,32 @@ internal static class RegexOutputCore
             );
         }
     }
+
+    private static bool TryGetValidatedCandidateRange(
+        string data,
+        BuiltInPatternDefinition definition,
+        Match match,
+        out CandidateRange candidate
+    )
+    {
+        var outputGroup = definition.OutputGroup;
+        var group = outputGroup is null ? null : match.Groups[outputGroup];
+        candidate =
+            group is { Success: true }
+                ? new CandidateRange(group.Index, group.Length)
+                : new CandidateRange(match.Index, match.Length);
+        return IsValidCandidateRange(data, definition, candidate);
+    }
+
+    private static bool IsValidCandidateRange(
+        string data,
+        BuiltInPatternDefinition definition,
+        CandidateRange candidate
+    ) =>
+        BuiltInSemanticValidator.IsValid(
+            definition,
+            data.AsSpan(candidate.Start, candidate.Length)
+        );
 
     private static void AddCandidateRange(
         Span<CandidateRange> inlineRanges,
@@ -619,15 +652,11 @@ internal static class RegexOutputCore
                         foreach (var match in validatedInputRegex.EnumerateMatches(data))
                         {
                             var groupOffset = IsAsciiLetter(data[match.Index]) ? 0 : 1;
-                            if (
-                                BuiltInSemanticValidator.IsValid(
-                                    definition,
-                                    data.AsSpan(
-                                        match.Index + groupOffset,
-                                        match.Length - groupOffset
-                                    )
-                                )
-                            )
+                            var candidate = new CandidateRange(
+                                match.Index + groupOffset,
+                                match.Length - groupOffset
+                            );
+                            if (IsValidCandidateRange(data, definition, candidate))
                             {
                                 return true;
                             }
@@ -639,14 +668,31 @@ internal static class RegexOutputCore
                         Interlocked.Increment(ref _shortInputFallbackCount);
                     }
                 }
-                foreach (var match in regex.EnumerateMatches(data))
+            }
+            if (definition.OutputGroup is not null)
+            {
+                foreach (Match match in regex.Matches(data))
                 {
                     if (
-                        BuiltInSemanticValidator.IsValid(
+                        TryGetValidatedCandidateRange(
+                            data,
                             definition,
-                            data.AsSpan(match.Index, match.Length)
+                            match,
+                            out _
                         )
                     )
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            if (definition.Validation != BuiltInValidationKind.None)
+            {
+                foreach (var match in regex.EnumerateMatches(data))
+                {
+                    var candidate = new CandidateRange(match.Index, match.Length);
+                    if (IsValidCandidateRange(data, definition, candidate))
                     {
                         return true;
                     }
@@ -701,15 +747,11 @@ internal static class RegexOutputCore
                 foreach (var match in BuiltInGeneratedRegexes.Url3986ShortInput().EnumerateMatches(data))
                 {
                     var groupOffset = IsAsciiLetter(data[match.Index]) ? 0 : 1;
-                    if (
-                        BuiltInSemanticValidator.IsValid(
-                            definition,
-                            data.AsSpan(
-                                match.Index + groupOffset,
-                                match.Length - groupOffset
-                            )
-                        )
-                    )
+                    var candidate = new CandidateRange(
+                        match.Index + groupOffset,
+                        match.Length - groupOffset
+                    );
+                    if (IsValidCandidateRange(data, definition, candidate))
                     {
                         return true;
                     }

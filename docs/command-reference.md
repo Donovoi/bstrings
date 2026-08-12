@@ -49,7 +49,7 @@ failed or cancelled run; retain it for diagnosis and choose a new output path.
 
 `--full` supplies these defaults:
 
-- `--native-extraction on` for native ASCII/Unicode extraction and all 66
+- `--native-extraction on` for native ASCII/Unicode extraction and all 77
   built-in patterns;
 - one batched, fail-open Magika/signature routing pass;
 - automatic routed FLOSS recovery and PDF/image OCR;

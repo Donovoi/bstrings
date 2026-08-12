@@ -192,6 +192,61 @@ public sealed class ForensicReportCoreTests
         Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.chunk"));
     }
 
+    [Theory]
+    [InlineData("unselected-pattern")]
+    [InlineData("expression-mismatch")]
+    [InlineData("negative-range")]
+    [InlineData("length-mismatch")]
+    public async Task WriteAsync_RejectsRecordsThatDoNotMatchSelectedPatternAndRange(
+        string defect
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var matchesPath = scope.PathFor("matches.jsonl");
+        var record = new EnrichmentRegexMatchRecord
+        {
+            PatternName = "email",
+            Pattern = BuiltInPatternCatalog.Patterns["email"],
+            Match = "analyst@example.test",
+            MatchStart = 4,
+            MatchLength = 20,
+            MatchLine = 1,
+            SourceRecordId = "synthetic-1",
+            SourceFile = "synthetic.txt",
+            EvidenceClass = "byte-native",
+        };
+        record = defect switch
+        {
+            "unselected-pattern" => record with { PatternName = "jwt" },
+            "expression-mismatch" => record with { Pattern = "not-the-selected-expression" },
+            "negative-range" => record with { MatchStart = -1 },
+            "length-mismatch" => record with { MatchLength = record.Match.Length - 1 },
+            _ => throw new ArgumentOutOfRangeException(nameof(defect)),
+        };
+        await File.WriteAllTextAsync(
+            matchesPath,
+            JsonSerializer.Serialize(
+                record,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
+            ),
+            cancellationToken
+        );
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            ForensicReportCore.WriteAsync(
+                matchesPath,
+                scope.PathFor("findings.tsv"),
+                scope.PathFor("pattern-histogram.tsv"),
+                scope.PathFor("feature-histogram.tsv"),
+                scope.PathFor("pattern-histogram.html"),
+                [("email", BuiltInPatternCatalog.Patterns["email"])],
+                cancellationToken
+            )
+        );
+        Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.partial.*"));
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         internal TemporaryDirectory()

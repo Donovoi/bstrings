@@ -8,6 +8,7 @@ namespace bstrings;
 internal sealed record SearchTargetConfigurationResult(
     IReadOnlySet<string> FileStrings,
     IReadOnlySet<string> RegexStrings,
+    IReadOnlyList<(string name, string pattern)> RegexPatterns,
     IReadOnlyList<string> MissingFiles
 );
 
@@ -18,13 +19,14 @@ internal static class SearchTargetConfigurationCore
         string? literalRegex,
         string? stringsFilePath,
         string? regexFilePath,
-        IEnumerable<string> parsedRegexPatterns,
+        IEnumerable<(string name, string pattern)> parsedRegexPatterns,
         Func<string, bool> fileExists,
         Func<string, string[]> readAllLines
     )
     {
         var fileStrings = new HashSet<string>();
         var regexStrings = new HashSet<string>();
+        var regexPatterns = new List<(string name, string pattern)>();
         var missingFiles = new List<string>();
 
         if (!string.IsNullOrEmpty(literalString))
@@ -34,7 +36,11 @@ internal static class SearchTargetConfigurationCore
 
         if (!string.IsNullOrEmpty(literalRegex))
         {
-            regexStrings.UnionWith(parsedRegexPatterns);
+            foreach (var pattern in parsedRegexPatterns)
+            {
+                regexPatterns.Add(pattern);
+                regexStrings.Add(pattern.pattern);
+            }
         }
 
         if (!string.IsNullOrEmpty(stringsFilePath))
@@ -53,7 +59,11 @@ internal static class SearchTargetConfigurationCore
         {
             if (fileExists(regexFilePath))
             {
-                regexStrings.UnionWith(readAllLines(regexFilePath));
+                foreach (var pattern in ParseRegexFilePatterns(readAllLines(regexFilePath)))
+                {
+                    regexPatterns.Add(pattern);
+                    regexStrings.Add(pattern.pattern);
+                }
             }
             else
             {
@@ -61,6 +71,34 @@ internal static class SearchTargetConfigurationCore
             }
         }
 
-        return new SearchTargetConfigurationResult(fileStrings, regexStrings, missingFiles);
+        return new SearchTargetConfigurationResult(
+            fileStrings,
+            regexStrings,
+            regexPatterns,
+            missingFiles
+        );
+    }
+
+    internal static IReadOnlyList<(string name, string pattern)> ParseRegexFilePatterns(
+        IEnumerable<string> lines
+    )
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        var patterns = new List<(string name, string pattern)>();
+        var lineNumber = 0;
+        foreach (var line in lines)
+        {
+            lineNumber++;
+            var pattern = line.Trim();
+            if (pattern.Length == 0 || pattern.StartsWith('#'))
+            {
+                continue;
+            }
+
+            patterns.Add(($"file:{lineNumber}", pattern));
+        }
+
+        return patterns;
     }
 }

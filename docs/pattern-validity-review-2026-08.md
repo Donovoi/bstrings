@@ -7,7 +7,10 @@ benchmark totals. The catalog was subsequently expanded first to 51 patterns
 and then to 66 in v1.9.4. See the
 [top-50 crypto address coverage review](crypto-address-coverage-2026-08.md) and
 [forensic reporting review](forensic-reporting-2026-08.md) for the later
-additions, validators, research, and test evidence.
+additions, validators, research, and test evidence. The source catalogue was
+subsequently expanded to 77 bounded patterns under
+[ADR-0009](architecture/adr-0009-bounded-forensic-pattern-expansion.md); the
+33-pattern measurements below remain a named historical snapshot.
 
 ## Short version
 

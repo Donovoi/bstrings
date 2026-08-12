@@ -288,6 +288,35 @@ public class BuiltInPatternCatalogTests
                     "Sumoo72D2v7KEGvfPzGH5qC5VHGnLmafaAhoMooPwRALNwm2oSyK3myTaFefvyg5bviMbBXUFWN8McswTRowHNYXfo34VD9oWr1",
                 ]
             ),
+            ["cpe23"] = new(
+                "cpe:2.3:a:synthetic-vendor:synthetic-product:1.0:*:*:*:*:*:*:*",
+                "cpe:2.3:a:vendor:product:1:*:*:*:*:*:*"
+            ),
+            ["tlp_marking"] = new("TLP:AMBER+STRICT", "TLP:AMBER + STRICT"),
+            ["email_message_id"] = new(
+                "Message-ID: <fixture.0001@example.invalid>",
+                "Subject: Message-ID: <fixture.0001@example.invalid>"
+            ),
+            ["lei"] = new("TEST00ONLY0000000094", "TEST00ONLY0000000095"),
+            ["npi"] = new("NPI: 1999999984", "NPI: 1999999985"),
+            ["itin"] = new("ITIN: 900-70-1234", "ITIN: 900-69-1234"),
+            ["uk_nino"] = new("NINO: AA000000A", "NINO: BG000000A"),
+            ["md5_labelled"] = new(
+                "MD5: " + new string('a', 32),
+                "MD5: " + new string('a', 31)
+            ),
+            ["sha1_labelled"] = new(
+                "SHA-1: " + new string('a', 40),
+                "SHA-1: " + new string('a', 39)
+            ),
+            ["sha384_labelled"] = new(
+                "SHA-384: " + new string('a', 96),
+                "SHA-384: " + new string('a', 95)
+            ),
+            ["sha512_labelled"] = new(
+                "SHA-512: " + new string('a', 128),
+                "SHA-512: " + new string('a', 127)
+            ),
             ["cve"] = new(
                 ["fixed cve-2026-1234", "CVE-2026-" + new string('1', 19)],
                 [
@@ -399,6 +428,38 @@ public class BuiltInPatternCatalogTests
             }
             Assert.False(regex.IsMatch(string.Empty), $"{definition.Name} matches the empty string");
             Assert.Equal(definition.UseNonBacktracking, regex.Options.HasFlag(RegexOptions.NonBacktracking));
+        }
+    }
+
+    [Fact]
+    public void EveryOutputGroupBuiltIn_HasBooleanAndRecordCandidateParity()
+    {
+        foreach (
+            var definition in BuiltInPatternCatalog.Definitions.Where(definition =>
+                definition.OutputGroup is not null
+            )
+        )
+        {
+            var regex = RegexOutputCore.GetOrCreateRegex(definition.Name, definition.Pattern);
+            var corpus = Corpus[definition.Name];
+            foreach (var input in corpus.Positives.Concat(corpus.Negatives))
+            {
+                var records = RegexOutputCore
+                    .CreateRecords(
+                        new ParsedHit(input, input, string.Empty),
+                        definition.Name,
+                        regex,
+                        regexOutput: true,
+                        sourceFile: "synthetic.bin",
+                        patternType: "Regex"
+                    )
+                    .ToArray();
+
+                Assert.Equal(
+                    records.Length > 0,
+                    RegexOutputCore.IsMatch(definition.Name, regex, input)
+                );
+            }
         }
     }
 

@@ -179,17 +179,11 @@ internal static class ForensicReportCore
                             ex
                         );
                     }
-                    ValidateMatchRecord(record, lineNumber);
-
-                    if (!patternMetadata.TryGetValue(record.PatternName, out var metadata))
-                    {
-                        metadata = PatternMetadata.CreateCustom(
-                            record.PatternName,
-                            record.Pattern
-                        );
-                        patternMetadata[record.PatternName] = metadata;
-                        patternStats[record.PatternName] = new PatternStatistics(metadata);
-                    }
+                    var metadata = ValidateMatchRecord(
+                        record,
+                        lineNumber,
+                        patternMetadata
+                    );
 
                     patternStats[record.PatternName].Add(record);
                     var histogramFeature = NormalizeHistogramFeature(
@@ -668,7 +662,11 @@ internal static class ForensicReportCore
         }
     }
 
-    private static void ValidateMatchRecord(EnrichmentRegexMatchRecord record, long lineNumber)
+    private static PatternMetadata ValidateMatchRecord(
+        EnrichmentRegexMatchRecord record,
+        long lineNumber,
+        IReadOnlyDictionary<string, PatternMetadata> selectedPatterns
+    )
     {
         if (
             record.SchemaVersion != EnrichmentRegexPipelineCore.CurrentSchemaVersion
@@ -683,6 +681,31 @@ internal static class ForensicReportCore
                 $"Regex match JSONL line {lineNumber:N0} is missing required schema or provenance fields."
             );
         }
+
+        if (!selectedPatterns.TryGetValue(record.PatternName, out var metadata))
+        {
+            throw new InvalidDataException(
+                $"Regex match JSONL line {lineNumber:N0} references unselected pattern '{record.PatternName}'."
+            );
+        }
+        if (!string.Equals(record.Pattern, metadata.Pattern, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Regex match JSONL line {lineNumber:N0} expression does not match selected pattern '{record.PatternName}'."
+            );
+        }
+        if (
+            record.MatchStart < 0
+            || record.MatchLength != record.Match.Length
+            || record.MatchStart > int.MaxValue - record.MatchLength
+        )
+        {
+            throw new InvalidDataException(
+                $"Regex match JSONL line {lineNumber:N0} contains an invalid match range."
+            );
+        }
+
+        return metadata;
     }
 
     private static string NormalizeHistogramFeature(string value, out bool truncated)
@@ -710,6 +733,12 @@ internal static class ForensicReportCore
             BuiltInValidationKind.Iban => "iban-mod97",
             BuiltInValidationKind.CanadianSin => "canadian-sin-luhn",
             BuiltInValidationKind.DateOfBirth => "calendar-date",
+            BuiltInValidationKind.Cpe23 => "cpe23-binding",
+            BuiltInValidationKind.EmailMessageId => "rfc5322-message-id",
+            BuiltInValidationKind.Lei => "lei-mod97",
+            BuiltInValidationKind.Npi => "npi-luhn",
+            BuiltInValidationKind.Itin => "itin-published-range",
+            BuiltInValidationKind.UkNino => "hmrc-nino-syntax",
             _ => definition.Validation.ToString(),
         };
 
@@ -743,8 +772,11 @@ internal static class ForensicReportCore
             "win_path" => "filesystem",
             "b64" => "encoded-data",
             "browser_profile_path" => "browser-artifact",
-            "cve" => "security-identifier",
-            "sha256" => "hash",
+            "cve" or "cpe23" => "security-identifier",
+            "sha256" or "md5_labelled" or "sha1_labelled" or "sha384_labelled" or "sha512_labelled" => "hash",
+            "tlp_marking" => "handling-marking",
+            "email_message_id" => "communication-identifier",
+            "lei" => "legal-entity-identifier",
             "guid" or "sid" => "identifier",
             _ => "other",
         };
