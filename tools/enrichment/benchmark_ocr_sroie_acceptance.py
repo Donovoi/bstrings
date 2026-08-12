@@ -2199,9 +2199,7 @@ def load_calibration_context(report_path: Path, evidence_root: Path) -> Calibrat
         raise AcceptanceError(
             "The calibration corpus identity is absent", stage="calibration-input"
         )
-    persisted_repair_identity = {
-        key: corpus_identity.get(key) for key in _REPAIR_IDENTITY_KEYS
-    }
+    persisted_repair_identity = {key: corpus_identity.get(key) for key in _REPAIR_IDENTITY_KEYS}
     repair_identity = _validate_bbox_repair_audit(
         bbox_repair_audit,
         corpus_manifest=corpus_manifest,
@@ -2224,8 +2222,7 @@ def load_calibration_context(report_path: Path, evidence_root: Path) -> Calibrat
         ],
     )
     if (
-        corpus_identity.get("corpusManifestSha256")
-        != benchmark_core.sha256_file(corpus_manifest)
+        corpus_identity.get("corpusManifestSha256") != benchmark_core.sha256_file(corpus_manifest)
         or corpus_identity.get("workerManifestSha256")
         != benchmark_core.sha256_file(worker_manifest)
         or corpus_identity.get("duplicateAuditSha256")
@@ -2904,9 +2901,8 @@ def _confirmatory_report_bindings(
         "witnessSha256",
     }
 
-    if (
-        not isinstance(seal_context, ConfirmatorySealContext)
-        or not isinstance(seal_context.validated_policy, sroie_policy.ValidatedPolicy)
+    if not isinstance(seal_context, ConfirmatorySealContext) or not isinstance(
+        seal_context.validated_policy, sroie_policy.ValidatedPolicy
     ):
         raise AcceptanceError(
             "The confirmatory report lacks an authenticated sealing context",
@@ -2939,9 +2935,8 @@ def _confirmatory_report_bindings(
         _sha256_bytes(_per_document_bytes(candidate_metrics))
         for candidate_metrics in backend_metrics
     ]
-    quality_passed = (
-        set(recomputed_evaluations) == set(provider_names)
-        and all(value.get("passed") is True for value in recomputed_evaluations.values())
+    quality_passed = set(recomputed_evaluations) == set(provider_names) and all(
+        value.get("passed") is True for value in recomputed_evaluations.values()
     )
     determinism_passed = (
         isinstance(determinism_checks, Mapping)
@@ -3068,8 +3063,7 @@ def _confirmatory_report_bindings(
         or cross_backend_checks.get("allRawSourceImageSha256SetsDisjoint") is not True
         or not isinstance(confidence_parity, Mapping)
         or type(confidence_parity.get("passed")) is not bool
-        or confidence_parity.get("passed")
-        is not cross_backend_checks.get("confidenceParityPassed")
+        or confidence_parity.get("passed") is not cross_backend_checks.get("confidenceParityPassed")
         or sroie_policy.sha256_canonical(cross_backend)
         != seal_context.cross_backend_integrity_sha256
         or not isinstance(determinism, Mapping)
@@ -4127,9 +4121,7 @@ def execute_confirmatory(
         validated_policy=validated_policy,
         expected_identities=tuple(dict(item) for item in expected_identities),
         backends_sha256=sroie_policy.sha256_canonical(public_runs),
-        cross_backend_integrity_sha256=sroie_policy.sha256_canonical(
-            cross_backend_integrity
-        ),
+        cross_backend_integrity_sha256=sroie_policy.sha256_canonical(cross_backend_integrity),
         determinism_sha256=sroie_policy.sha256_canonical(determinism_evidence),
         evaluations_sha256=sroie_policy.sha256_canonical(evaluations),
         metrics_sha256=sroie_policy.sha256_canonical(runs[0]["metrics"]),

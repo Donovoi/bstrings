@@ -150,12 +150,7 @@ class OcrRuntimeInventoryRefreshTests(unittest.TestCase):
 
     def test_refresh_rejects_notice_mutation(self) -> None:
         notice = (
-            self.root
-            / "runtime"
-            / "ocr-cpu"
-            / "example.dist-info"
-            / "licenses"
-            / "LICENSE.txt"
+            self.root / "runtime" / "ocr-cpu" / "example.dist-info" / "licenses" / "LICENSE.txt"
         )
         notice_bytes = bytearray(notice.read_bytes())
         notice_bytes[0] ^= 1

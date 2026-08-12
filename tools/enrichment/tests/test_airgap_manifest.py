@@ -268,9 +268,7 @@ class AirgapManifestTests(unittest.TestCase):
     def test_quality_installer_is_version_pinned_and_release_gated(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]
         installer_path = repo_root / "Scripts" / "Install-BstringsQuality.ps1"
-        installer_test_path = (
-            repo_root / "Scripts" / "tests" / "Test-Install-BstringsQuality.ps1"
-        )
+        installer_test_path = repo_root / "Scripts" / "tests" / "Test-Install-BstringsQuality.ps1"
         self.assertTrue(installer_path.is_file())
         self.assertTrue(installer_test_path.is_file())
         installer = installer_path.read_text(encoding="utf-8")
@@ -292,9 +290,9 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn("SHA256SUMS.txt", installer)
         self.assertIn("bstrings-win-x64.zip", installer)
 
-        workflow = (
-            repo_root / ".github" / "workflows" / "dotnet-desktop.yml"
-        ).read_text(encoding="utf-8")
+        workflow = (repo_root / ".github" / "workflows" / "dotnet-desktop.yml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("Test quality installer with Windows PowerShell 5.1", workflow)
         self.assertIn("Test quality installer with PowerShell 7", workflow)
         self.assertIn(
@@ -322,9 +320,9 @@ class AirgapManifestTests(unittest.TestCase):
         success_index = core_release_workflow.index("exit 0", prepared_index)
         self.assertLess(prepared_index, success_index)
 
-        pack_builder = (
-            repo_root / "tools" / "airgap" / "New-BundlePackRelease.ps1"
-        ).read_text(encoding="utf-8")
+        pack_builder = (repo_root / "tools" / "airgap" / "New-BundlePackRelease.ps1").read_text(
+            encoding="utf-8"
+        )
         acceptance = (
             repo_root / "tools" / "airgap" / "Invoke-OfflineProfileAcceptance.ps1"
         ).read_text(encoding="utf-8")
@@ -342,9 +340,7 @@ class AirgapManifestTests(unittest.TestCase):
             repo_root / "docs" / "air-gapped-deployment.md",
             repo_root / "docs" / "releases" / "v1.9.17.md",
         )
-        public_sources = {
-            path: path.read_text(encoding="utf-8") for path in public_paths
-        }
+        public_sources = {path: path.read_text(encoding="utf-8") for path in public_paths}
 
         readme = public_sources[repo_root / "README.md"]
         self.assertIn("## Why use it?", readme)

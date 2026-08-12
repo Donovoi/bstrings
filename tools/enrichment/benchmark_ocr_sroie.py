@@ -159,8 +159,7 @@ def score_document_case_insensitive(
     return score_document(
         _casefold_document(document),
         tuple(
-            replace(prediction, text=_casefold_text(prediction.text))
-            for prediction in predictions
+            replace(prediction, text=_casefold_text(prediction.text)) for prediction in predictions
         ),
     )
 
@@ -411,9 +410,7 @@ def parse_sroie_row(row_index: int, row: Mapping[str, Any]) -> ParsedSroieAnnota
         "bboxes": source_bboxes,
     }
     try:
-        source_payload_sha256 = sha256_bytes(
-            canonical_json(source_payload).encode("utf-8")
-        )
+        source_payload_sha256 = sha256_bytes(canonical_json(source_payload).encode("utf-8"))
     except (TypeError, ValueError) as exc:
         raise BenchmarkError(
             "A SROIE source annotation payload is not canonical JSON",
@@ -429,9 +426,7 @@ def parse_sroie_row(row_index: int, row: Mapping[str, Any]) -> ParsedSroieAnnota
         zip(source_words, source_bboxes, strict=True)
     ):
         text = _normalized_transcription(source_text, index)
-        (left, top, right, bottom), repair = _bbox_with_repair(
-            source_box, index, width, height
-        )
+        (left, top, right, bottom), repair = _bbox_with_repair(source_box, index, width, height)
         if repair is not None:
             pending_repairs.append((index, repair))
         polygon = convex_hull(((left, top), (right, top), (right, bottom), (left, bottom)))
@@ -456,9 +451,7 @@ def parse_sroie_row(row_index: int, row: Mapping[str, Any]) -> ParsedSroieAnnota
         "normalization": "unicode-nfc-collapse-whitespace-v1",
         "bboxRepairPolicy": SROIE_BBOX_REPAIR_POLICY,
     }
-    scoring_annotation_sha256 = sha256_bytes(
-        canonical_json(annotation_document).encode("utf-8")
-    )
+    scoring_annotation_sha256 = sha256_bytes(canonical_json(annotation_document).encode("utf-8"))
     bbox_repairs = tuple(
         {
             "rowIndex": row_index,
@@ -571,12 +564,8 @@ def _duplicate_selection(
         if len(ordered) == 1:
             included.add(ordered[0].row_index)
             continue
-        source_payload_sha256s = sorted(
-            {item.source_payload_sha256 for item in ordered}
-        )
-        scoring_annotation_sha256s = sorted(
-            {item.scoring_annotation_sha256 for item in ordered}
-        )
+        source_payload_sha256s = sorted({item.source_payload_sha256 for item in ordered})
+        scoring_annotation_sha256s = sorted({item.scoring_annotation_sha256 for item in ordered})
         row_indices = [item.row_index for item in ordered]
         if split == "test":
             # The held-out population is fixed before its annotations are opened.
@@ -903,9 +892,7 @@ def extract_sroie_corpus(
     bbox_repair_audit = output_root / f"sroie-{split}-bbox-repair-audit.json"
     selection_sha256 = _selection_sha256(documents)
     duplicate_audit_document["selectionSha256"] = selection_sha256
-    bbox_repair_records_sha256 = sha256_bytes(
-        canonical_json(second_pass_repairs).encode("utf-8")
-    )
+    bbox_repair_records_sha256 = sha256_bytes(canonical_json(second_pass_repairs).encode("utf-8"))
     source_payload_identities = [
         {"rowIndex": item.row_index, "sourcePayloadSha256": item.source_payload_sha256}
         for item in identities

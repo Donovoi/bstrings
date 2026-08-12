@@ -165,8 +165,7 @@ def _confirmatory_metrics(identities: list[dict]) -> dict:
     ]
     documents = len(per_document)
     counts = {
-        key: sum(item["counts"][key] for item in per_document)
-        for key in per_document[0]["counts"]
+        key: sum(item["counts"][key] for item in per_document) for key in per_document[0]["counts"]
     }
     macro = {
         "pageCer": statistics.fmean(item["pageCer"] for item in per_document),
@@ -232,8 +231,7 @@ def confirmatory_fixture(
     metrics_sha256 = acceptance.sroie_policy.sha256_canonical(metrics)
     per_document_sha256 = hashlib.sha256(
         "".join(
-            acceptance.sroie_policy.canonical_json(item) + "\n"
-            for item in metrics["perDocument"]
+            acceptance.sroie_policy.canonical_json(item) + "\n" for item in metrics["perDocument"]
         ).encode("utf-8")
     ).hexdigest()
     backends = [
@@ -325,9 +323,7 @@ def confirmatory_fixture(
         },
         "repetitions": acceptance.DETERMINISM_REPETITIONS,
     }
-    evaluations = {
-        name: copy.deepcopy(evaluation) for name in ("cpu", "directml", "hybrid")
-    }
+    evaluations = {name: copy.deepcopy(evaluation) for name in ("cpu", "directml", "hybrid")}
     corpus = {
         "bboxRepairAuditSha256": "3" * 64,
         "bboxRepairRecordsSha256": "4" * 64,
@@ -559,9 +555,7 @@ def bbox_repair_fixture_identity(path: Path, audit: dict) -> dict:
         "bboxRepairAuditSha256": acceptance.benchmark_core.sha256_file(path),
         "bboxRepairRecordsSha256": audit["repairRecordsSha256"],
         "repairedRegionCount": audit["repairedRegions"],
-        "scoringAnnotationIdentitiesSha256": audit[
-            "scoringAnnotationIdentitiesSha256"
-        ],
+        "scoringAnnotationIdentitiesSha256": audit["scoringAnnotationIdentitiesSha256"],
         "sourcePayloadIdentitiesSha256": audit["sourcePayloadIdentitiesSha256"],
         "sourceRegionCount": audit["sourceRegions"],
     }
@@ -1540,8 +1534,9 @@ class SroieAcceptanceTests(unittest.TestCase):
         ):
             changed_expected = copy.deepcopy(expected_repair_identity)
             mutate_expected(changed_expected)
-            with self.subTest(expected_identity=name), self.assertRaises(
-                acceptance.AcceptanceError
+            with (
+                self.subTest(expected_identity=name),
+                self.assertRaises(acceptance.AcceptanceError),
             ):
                 acceptance._validate_bbox_repair_audit(
                     audit_path,
