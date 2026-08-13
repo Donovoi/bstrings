@@ -32,17 +32,83 @@ You do not need administrator rights.
 
 ## Install
 
-The next release uses `Install-Bstrings.ps1`. It installs the complete kit in
+Version 2.0.0 uses `Install-Bstrings.ps1`. It installs the complete kit in
 `bstrings-kit` by default.
 
-Use the authenticated install command from the release page. The command checks
-the immutable release and the installer digest before it starts the installer.
+Open PowerShell in the directory that will contain `bstrings-kit`. Run this
+command after the v2.0.0 release is published:
 
-The current public release is
-[v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17). That release
-is immutable and uses its historical installer and directory names. Use the
-exact steps in the [v1.9.17 README](https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started).
-The next major release removes those old names.
+```powershell
+& {
+  Set-StrictMode -Version Latest
+  $ErrorActionPreference = 'Stop'
+
+  $tag = 'v2.0.0'
+  $repo = 'Donovoi/bstrings'
+  $name = 'Install-Bstrings.ps1'
+  $headers = @{
+    Accept = 'application/vnd.github+json'
+    'X-GitHub-Api-Version' = '2022-11-28'
+    'User-Agent' = 'bstrings-installer-bootstrap'
+  }
+  $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/tags/$tag" `
+    -Headers $headers -UseBasicParsing
+  $asset = @($release.assets | Where-Object { $_.name -CEQ $name })
+  $url = "https://github.com/$repo/releases/download/$tag/$name"
+  if ($release.tag_name -CNE $tag -or $release.draft -or $release.prerelease -or
+      -not ($release.PSObject.Properties.Name -ccontains 'immutable') -or
+      -not [bool]$release.immutable -or $asset.Count -ne 1 -or
+      $asset[0].browser_download_url -CNE $url -or
+      ([string]$asset[0].digest) -CNotMatch '^sha256:[0-9a-f]{64}$') {
+    throw 'The exact immutable installer asset could not be authenticated.'
+  }
+  $installerPath = [IO.Path]::GetFullPath((Join-Path (Get-Location).Path $name))
+  $parent = [IO.Path]::GetDirectoryName($installerPath)
+  $downloadPath = Join-Path $parent `
+    ('.Install-Bstrings.download-' + [Guid]::NewGuid().ToString('N') + '.partial')
+  $backupPath = Join-Path $parent `
+    ('.Install-Bstrings.backup-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+  $expected = ([string]$asset[0].digest).Substring(7)
+  try {
+    Invoke-WebRequest $url -OutFile $downloadPath -UseBasicParsing
+    $stream = [IO.File]::OpenRead($downloadPath)
+    try {
+      $hasher = [Security.Cryptography.SHA256]::Create()
+      try {
+        $actual = ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+      }
+      finally { $hasher.Dispose() }
+    }
+    finally { $stream.Dispose() }
+    if ($actual -CNE $expected) { throw 'Installer SHA-256 mismatch.' }
+
+    $existing = Get-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+    if ($null -ne $existing) {
+      if ($existing.PSIsContainer -or
+          ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The existing installer path is not a physical file.'
+      }
+      [IO.File]::Replace($downloadPath, $installerPath, $backupPath)
+      [IO.File]::Delete($backupPath)
+    }
+    else {
+      [IO.File]::Move($downloadPath, $installerPath)
+    }
+  }
+  finally {
+    if ([IO.File]::Exists($downloadPath)) { [IO.File]::Delete($downloadPath) }
+  }
+  powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File $installerPath -ReleaseTag $tag
+  if ($LASTEXITCODE -ne 0) { throw "Installer failed with exit code $LASTEXITCODE" }
+}
+```
+
+The command checks the immutable release and the installer SHA-256 before it
+runs the installer.
+
+Version 1.9.17 remains available with its historical names. Use the exact steps
+in the [v1.9.17 README](https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started).
 
 See [Download and install](docs/download-and-install.md) for the full install,
 upgrade, cache, and rollback procedure.

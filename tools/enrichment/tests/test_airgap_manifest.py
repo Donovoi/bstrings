@@ -344,10 +344,11 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn("## Run an analysis", readme)
         installer = (repo_root / "Scripts" / "Install-Bstrings.ps1").read_text(encoding="utf-8")
         self.assertIn("$expectedReleaseTag = 'v2.0.0'", installer)
-        self.assertIn("current public release", readme)
         self.assertIn("v1.9.17", readme)
-        self.assertNotIn("$tag = 'v2.0.0'", readme)
-        self.assertNotIn("-ReleaseTag v2.0.0", readme)
+        self.assertIn("$tag = 'v2.0.0'", readme)
+        self.assertIn("$name = 'Install-Bstrings.ps1'", readme)
+        self.assertIn("/releases/download/$tag/$name", readme)
+        self.assertIn("-ReleaseTag $tag", readme)
 
         for path, source in public_sources.items():
             self.assertIn("Install-Bstrings.ps1", source, path)

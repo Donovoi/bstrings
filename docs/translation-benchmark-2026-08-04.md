@@ -1,9 +1,8 @@
 # Offline translation selection gate — 2026-08-04, updated 2026-08-10
 
-Distribution status: the accepted translation profiles are published through
-the complete v1.9.9 quality channel. They are not included in the standalone
-core ZIP. This document preserves the dated selection evidence; current
-acquisition instructions are in the
+Distribution status: the complete Windows kit contains the selected translation
+model. This document preserves dated v1.9.9 selection evidence. Current
+installation instructions are in the
 [download guide](download-and-install.md).
 
 This is a developer/research reproduction record. Examiners normally use the

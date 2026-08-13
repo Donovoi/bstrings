@@ -8,14 +8,9 @@ The project uses `MAJOR.MINOR.PATCH`:
 - Change `MINOR` for a compatible feature.
 - Change `MAJOR` for an incompatible public change.
 
-## Current public release
+## Version 2 release contract
 
-[v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17) is the
-current public Windows x64 release. It is immutable. Its historical asset and
-directory names cannot change.
-
-Current source prepares the next major release. That release has one complete
-Windows kit. It uses these public names:
+Version 2.0.0 has one complete Windows kit. It uses these public names:
 
 - `Install-Bstrings.ps1`
 - `bstrings-kit`
@@ -105,6 +100,9 @@ full maintenance procedure.
 Files in `docs/releases/` describe the names and commands for their releases.
 Do not change those historical facts. Older architecture decisions can also
 contain the former terms when they record earlier behavior.
+
+[v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17) is immutable.
+Its historical asset and directory names cannot change.
 
 The current one-kit decision is
 [ADR-0011](docs/architecture/adr-0011-single-windows-kit-and-plain-documentation.md).

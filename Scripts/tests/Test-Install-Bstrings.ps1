@@ -956,6 +956,47 @@ try {
         ([IO.Path]::GetFullPath((Join-Path $defaultCallerDestination 'bstrings.exe'))) `
         'The caller-relative default was not verified by its installed executable.'
 
+    # A default invocation must not choose between two installation roots.
+    # It fails before release authentication, native execution, or mutation.
+    $bothRoot = Join-Path $testRoot ('both-defaults-' + [Guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($bothRoot) | Out-Null
+    $bothLegacy = Join-Path $bothRoot 'bstrings-quality'
+    $bothDestination = Join-Path $bothRoot 'bstrings-kit'
+    New-VerifiedExistingBundle $bothLegacy $coreArchive $airgapManifest
+    New-VerifiedExistingBundle $bothDestination $coreArchive $airgapManifest
+    $bothLegacySentinel = Join-Path $bothLegacy 'legacy-sentinel.txt'
+    $bothDestinationSentinel = Join-Path $bothDestination 'current-sentinel.txt'
+    Write-Utf8File $bothLegacySentinel 'keep legacy bytes'
+    Write-Utf8File $bothDestinationSentinel 'keep current bytes'
+    $bothFixture = New-ReleaseFixture 'both-defaults' $coreArchive $airgapManifest
+    $bothEnvironment = New-StubEnvironment 'both-defaults' $airgapManifest
+    $bothArguments = New-InstallerArguments `
+        $bothFixture `
+        $bothDestination `
+        '' `
+        3 `
+        -UseDefaultReleaseTag
+    $bothArguments.Remove('DestinationDirectory')
+    Push-Location -LiteralPath $bothRoot
+    try {
+        $bothResult = Invoke-Installer $bothArguments $bothEnvironment
+    }
+    finally {
+        Pop-Location
+    }
+    Assert-True (-not $bothResult.Succeeded) `
+        'The installer accepted both default installation directories.'
+    Assert-True ($bothResult.Text -cmatch 'Both bstrings-kit and the previous bstrings-quality') `
+        'The installer did not explain the ambiguous default installation state.'
+    Assert-Equal ([IO.File]::ReadAllText($bothLegacySentinel)) 'keep legacy bytes' `
+        'The ambiguous default check changed the previous installation.'
+    Assert-Equal ([IO.File]::ReadAllText($bothDestinationSentinel)) 'keep current bytes' `
+        'The ambiguous default check changed the current installation.'
+    Assert-PathAbsent $bothEnvironment.BSTRINGS_INSTALLER_STUB_LOG `
+        'The ambiguous default check started the authenticated core.'
+    Assert-PathAbsent (Join-Path $bothRoot '.bstrings-installer-cache') `
+        'The ambiguous default check created the installer cache.'
+
     # The default path performs one bounded migration from a verified previous
     # installation. It uses the old kit only as a read-only seed, verifies the
     # new kit, re-verifies the old kit, and removes the old path last.
