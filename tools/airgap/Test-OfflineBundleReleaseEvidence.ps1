@@ -274,34 +274,29 @@ $releaseAssetBaseUrl = $ExpectedServerUrl.TrimEnd('/') + '/' +
 $resolvedComponentLock = Resolve-PhysicalFile $ComponentLockPath 'Offline component lock'
 $componentLock = Get-JsonDocument $resolvedComponentLock 'Offline component lock' 4194304
 if (
-    (Get-PositiveInt64 $componentLock.schemaVersion 'Offline component lock schemaVersion') -ne 1 -or
-    [string]$componentLock.profile -cne 'windows-x64-offline-v2' -or
-    [string]$componentLock.defaultTranslationProfile -cne 'quality'
+    (Get-PositiveInt64 $componentLock.schemaVersion 'Offline component lock schemaVersion') -ne 2 -or
+    [string]$componentLock.profile -cne 'windows-x64-offline-v3'
 ) {
-    throw 'Offline component lock does not use the exact reviewed release profile.'
+    throw 'Offline component lock does not use the exact one-kit release contract.'
 }
-$lockedProfileNames = @($componentLock.translationProfiles.PSObject.Properties.Name)
-if ((@($lockedProfileNames | Sort-Object) -join '|') -cne 'quality') {
-    throw 'Offline component lock does not contain the exact translation profile set.'
+if ($null -eq $componentLock.components.translationModel) {
+    throw 'Offline component lock does not contain the translation model.'
 }
 
 $assetRoot = Resolve-PhysicalDirectory $AssetDirectory 'Release asset directory'
-$resolvedEvidence = Resolve-PhysicalFile $EvidencePath 'Offline profile acceptance evidence'
-if ([IO.Path]::GetFileName($resolvedEvidence) -cne 'offline-profile-acceptance.json') {
-    throw 'Offline profile acceptance evidence must use its exact internal gate-evidence file name.'
+$resolvedEvidence = Resolve-PhysicalFile $EvidencePath 'Offline bundle acceptance evidence'
+if ([IO.Path]::GetFileName($resolvedEvidence) -cne 'offline-bundle-acceptance.json') {
+    throw 'Offline bundle acceptance evidence must use its exact internal gate-evidence file name.'
 }
 
-$profiles = @('quality')
 $packAssetNames = [Collections.Generic.List[string]]::new()
 $packAssetNames.Add('bstrings-win-x64-offline-base.zip')
 $packAssetNames.Add('bstrings-win-x64-offline-cuda.zip')
-$packAssetNames.Add('Install-BstringsQuality.ps1')
-foreach ($profile in $profiles) {
-    $packAssetNames.Add("airgap-config-$profile.json")
-    $packAssetNames.Add("Hy-MT2-Apache-2.0-$profile.txt")
-    $packAssetNames.Add("airgap-manifest-$profile.json")
-    $packAssetNames.Add("bundle-packs-$profile.json")
-}
+$packAssetNames.Add('Install-Bstrings.ps1')
+$packAssetNames.Add('airgap-config.json')
+$packAssetNames.Add('Hy-MT2-Apache-2.0.txt')
+$packAssetNames.Add('airgap-manifest.json')
+$packAssetNames.Add('bundle-packs.json')
 $expectedFileNames = @(
     'bstrings-win-x64.zip'
     @($packAssetNames)
@@ -336,32 +331,28 @@ foreach ($entry in $entries) {
     )
 }
 
-$record = Get-JsonDocument $resolvedEvidence 'Offline profile acceptance evidence' 4194304
+$record = Get-JsonDocument $resolvedEvidence 'Offline bundle acceptance evidence' 4194304
 if (
-    (Get-PositiveInt64 $record.schemaVersion 'Acceptance evidence schemaVersion') -ne 2 -or
+    (Get-PositiveInt64 $record.schemaVersion 'Acceptance evidence schemaVersion') -ne 3 -or
     [string]$record.status -cne 'passed' -or
-    [string]$record.classification -cne 'synthetic-release-profile-acceptance' -or
+    [string]$record.classification -cne 'synthetic-release-bundle-acceptance' -or
     [string]$record.sourceRepository -cne $ExpectedRepository -or
     [string]$record.sourceTag -cne $ExpectedTag -or
     [string]$record.sourceCommit -cne $ExpectedCommit.ToLowerInvariant() -or
     [string]$record.sourceBuildRunId -cne $ExpectedBuildRunId
 ) {
-    throw 'Profile-acceptance evidence is not bound to this exact repository, tag, commit, and build run.'
+    throw 'Bundle-acceptance evidence is not bound to this exact repository, tag, commit, and build run.'
 }
 if ([string]$record.acceptanceRunAttempt -notmatch '^[1-9][0-9]*$') {
-    throw 'Profile-acceptance evidence must record a positive acceptance run attempt.'
-}
-$advertisedProfiles = @($record.advertisedProfiles)
-if (($advertisedProfiles -join '|') -cne ($profiles -join '|')) {
-    throw 'Profile-acceptance evidence does not advertise the exact ordered profile set.'
+    throw 'Bundle-acceptance evidence must record a positive acceptance run attempt.'
 }
 
-$coreActual = Get-RequiredMapValue $actualByName 'bstrings-win-x64.zip' 'Release assets'
+$baseActual = Get-RequiredMapValue $actualByName 'bstrings-win-x64.zip' 'Release assets'
 Assert-Identity `
-    $coreActual `
-    $record.coreArchiveBytes `
-    $record.coreArchiveSha256 `
-    'Core release archive'
+    $baseActual `
+    $record.baseArchiveBytes `
+    $record.baseArchiveSha256 `
+    'Base release archive'
 $checksumActual = Get-RequiredMapValue $actualByName 'SHA256SUMS.txt' 'Release assets'
 Assert-Identity `
     $checksumActual `
@@ -371,7 +362,7 @@ Assert-Identity `
 
 $releaseAssetRows = @($record.releaseAssets)
 if ($releaseAssetRows.Count -ne $packAssetNames.Count) {
-    throw 'Profile-acceptance evidence does not contain the exact release-pack asset count.'
+    throw 'Bundle-acceptance evidence does not contain the exact release-pack asset count.'
 }
 $evidenceAssetByName = [Collections.Generic.Dictionary[string, object]]::new(
     [StringComparer]::OrdinalIgnoreCase
@@ -387,7 +378,7 @@ if (
     (@($evidenceAssetByName.Keys | Sort-Object) -join '|') -cne
     (@($packAssetNames | Sort-Object) -join '|')
 ) {
-    throw 'Profile-acceptance evidence does not contain the exact release-pack asset set.'
+    throw 'Bundle-acceptance evidence does not contain the exact release-pack asset set.'
 }
 foreach ($fileName in $packAssetNames) {
     $expected = Get-RequiredMapValue $evidenceAssetByName $fileName 'Release evidence assets'
@@ -431,12 +422,12 @@ if (
 ) {
     throw 'SHA256SUMS.txt does not name the exact checksummed public release-asset set.'
 }
-$coreChecksumHash = Get-RequiredChecksum $checksumByName 'bstrings-win-x64.zip'
+$baseChecksumHash = Get-RequiredChecksum $checksumByName 'bstrings-win-x64.zip'
 if (
-    $coreChecksumHash -cne [string]$coreActual.sha256 -or
-    $coreChecksumHash -cne (Get-LowerSha256 $record.coreArchiveSha256 'Core archive SHA-256')
+    $baseChecksumHash -cne [string]$baseActual.sha256 -or
+    $baseChecksumHash -cne (Get-LowerSha256 $record.baseArchiveSha256 'Base archive SHA-256')
 ) {
-    throw 'SHA256SUMS.txt differs from the core asset and acceptance-evidence hash.'
+    throw 'SHA256SUMS.txt differs from the base runtime asset and acceptance-evidence hash.'
 }
 foreach ($fileName in $packAssetNames) {
     $checksumHash = Get-RequiredChecksum $checksumByName $fileName
@@ -450,42 +441,24 @@ foreach ($fileName in $packAssetNames) {
     }
 }
 
-$profileRows = @($record.profiles)
-if ($profileRows.Count -ne $profiles.Count) {
-    throw 'Profile-acceptance evidence must contain exactly one quality result.'
-}
-$profileByName = [Collections.Generic.Dictionary[string, object]]::new(
-    [StringComparer]::OrdinalIgnoreCase
-)
-foreach ($row in $profileRows) {
-    $profileName = [string]$row.profile
-    if (-not $profileByName.TryAdd($profileName, $row)) {
-        throw "Duplicate profile-acceptance evidence row: $profileName"
-    }
-}
-if ((@($profileRows.profile) -join '|') -cne ($profiles -join '|')) {
-    throw 'Profile-acceptance evidence does not contain the exact ordered profile rows.'
-}
-
 $baseName = 'bstrings-win-x64-offline-base.zip'
 $baseEvidence = Get-RequiredMapValue $evidenceAssetByName $baseName 'Release evidence assets'
 $cudaName = 'bstrings-win-x64-offline-cuda.zip'
 $cudaEvidence = Get-RequiredMapValue $evidenceAssetByName $cudaName 'Release evidence assets'
-foreach ($profile in $profiles) {
-    $profileEvidence = Get-RequiredMapValue $profileByName $profile 'Profile evidence'
+$bundleEvidence = $record.bundle
     if (
-        [string]$profileEvidence.profile -cne $profile -or
-        [string]$profileEvidence.status -cne 'passed' -or
-        [string]$profileEvidence.translationSmoke -cne 'passed' -or
-        [string]::IsNullOrWhiteSpace([string]$profileEvidence.bundleIdentity)
+        $null -eq $bundleEvidence -or
+        [string]$bundleEvidence.status -cne 'passed' -or
+        [string]$bundleEvidence.translationSmoke -cne 'passed' -or
+        [string]::IsNullOrWhiteSpace([string]$bundleEvidence.bundleIdentity)
     ) {
-        throw "Profile-acceptance evidence is incomplete for $profile."
+        throw 'Bundle-acceptance evidence is incomplete.'
     }
 
-    $trustName = "bundle-packs-$profile.json"
-    $manifestName = "airgap-manifest-$profile.json"
-    $configurationName = "airgap-config-$profile.json"
-    $licenseName = "Hy-MT2-Apache-2.0-$profile.txt"
+    $trustName = 'bundle-packs.json'
+    $manifestName = 'airgap-manifest.json'
+    $configurationName = 'airgap-config.json'
+    $licenseName = 'Hy-MT2-Apache-2.0.txt'
     $trustEvidence = Get-RequiredMapValue $evidenceAssetByName $trustName 'Release evidence assets'
     $manifestEvidence = Get-RequiredMapValue $evidenceAssetByName $manifestName 'Release evidence assets'
     $configurationEvidence = Get-RequiredMapValue $evidenceAssetByName $configurationName 'Release evidence assets'
@@ -493,100 +466,101 @@ foreach ($profile in $profiles) {
 
     Assert-Identity `
         (Get-RequiredMapValue $actualByName $trustName 'Release assets') `
-        $profileEvidence.bundlePackTrustManifestBytes `
-        $profileEvidence.bundlePackTrustManifestSha256 `
-        "$profile trust manifest"
+        $bundleEvidence.bundlePackTrustManifestBytes `
+        $bundleEvidence.bundlePackTrustManifestSha256 `
+        'Bundle trust manifest'
     Assert-Identity `
         (Get-RequiredMapValue $actualByName $manifestName 'Release assets') `
-        $profileEvidence.airgapManifestBytes `
-        $profileEvidence.airgapManifestSha256 `
-        "$profile final manifest"
+        $bundleEvidence.airgapManifestBytes `
+        $bundleEvidence.airgapManifestSha256 `
+        'Bundle final manifest'
     Assert-Identity `
         (Get-RequiredMapValue $actualByName $configurationName 'Release assets') `
-        $profileEvidence.configurationBytes `
-        $profileEvidence.configurationSha256 `
-        "$profile configuration"
+        $bundleEvidence.configurationBytes `
+        $bundleEvidence.configurationSha256 `
+        'Bundle configuration'
     Assert-Identity `
         (Get-RequiredMapValue $actualByName $licenseName 'Release assets') `
-        $profileEvidence.translationLicenseBytes `
-        $profileEvidence.translationLicenseSha256 `
-        "$profile translation license"
+        $bundleEvidence.translationLicenseBytes `
+        $bundleEvidence.translationLicenseSha256 `
+        'Translation license'
     if (
-        [string]$profileEvidence.bundlePackTrustManifestSha256 -cne [string]$trustEvidence.sha256 -or
-        [string]$profileEvidence.airgapManifestSha256 -cne [string]$manifestEvidence.sha256 -or
-        [string]$profileEvidence.configurationSha256 -cne [string]$configurationEvidence.sha256 -or
-        [string]$profileEvidence.translationLicenseSha256 -cne [string]$licenseEvidence.sha256
+        [string]$bundleEvidence.bundlePackTrustManifestSha256 -cne [string]$trustEvidence.sha256 -or
+        [string]$bundleEvidence.airgapManifestSha256 -cne [string]$manifestEvidence.sha256 -or
+        [string]$bundleEvidence.configurationSha256 -cne [string]$configurationEvidence.sha256 -or
+        [string]$bundleEvidence.translationLicenseSha256 -cne [string]$licenseEvidence.sha256
     ) {
-        throw "$profile profile evidence differs from the release asset inventory."
+        throw 'Bundle evidence differs from the release asset inventory.'
     }
 
-    $modelId = [string]$profileEvidence.translationModelId
-    $modelRevision = [string]$profileEvidence.translationModelRevision
-    $modelUrl = [string]$profileEvidence.translationModelUrl
+    $modelId = [string]$bundleEvidence.translationModelId
+    $modelRevision = [string]$bundleEvidence.translationModelRevision
+    $modelUrl = [string]$bundleEvidence.translationModelUrl
     $modelBytes = Get-PositiveInt64 `
-        $profileEvidence.translationModelBytes `
-        "$profile translation model bytes"
+        $bundleEvidence.translationModelBytes `
+        'Translation model bytes'
     $modelHash = Get-LowerSha256 `
-        $profileEvidence.translationModelSha256 `
-        "$profile translation model SHA-256"
+        $bundleEvidence.translationModelSha256 `
+        'Translation model SHA-256'
     if ([string]::IsNullOrWhiteSpace($modelId) -or $modelRevision -notmatch '^[0-9a-f]{40}$') {
-        throw "$profile translation model ID or revision is invalid."
+        throw 'Translation model ID or revision is invalid.'
     }
-    $lockedModel = $componentLock.translationProfiles.$profile
+    $lockedModel = $componentLock.components.translationModel
     $lockedModelFileName = [string]$lockedModel.fileName
-    Assert-SafeLeafName $lockedModelFileName "$profile locked translation model file name"
+    Assert-SafeLeafName $lockedModelFileName 'Locked translation model file name'
     if (
         [string]$lockedModel.archiveType -cne 'file' -or
         [string]$lockedModel.modelId -cne $modelId -or
         [string]$lockedModel.revision -cne $modelRevision -or
-        (Get-PositiveInt64 $lockedModel.bytes "$profile locked translation model bytes") -ne $modelBytes -or
-        (Get-LowerSha256 $lockedModel.sha256 "$profile locked translation model SHA-256") -cne $modelHash -or
+        (Get-PositiveInt64 $lockedModel.bytes 'Locked translation model bytes') -ne $modelBytes -or
+        (Get-LowerSha256 $lockedModel.sha256 'Locked translation model SHA-256') -cne $modelHash -or
         [string]$lockedModel.url -cne $modelUrl
     ) {
-        throw "$profile translation model evidence differs from the exact checked component lock."
+        throw 'Translation model evidence differs from the exact checked component lock.'
     }
     if ($modelId -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
-        throw "$profile locked translation model ID is not a canonical Hugging Face repository ID."
+        throw 'Locked translation model ID is not a canonical Hugging Face repository ID.'
     }
     $canonicalModelUrl = 'https://huggingface.co/' + $modelId + '/resolve/' +
         $modelRevision + '/' + [Uri]::EscapeDataString($lockedModelFileName) + '?download=true'
-    Assert-ExactModelUrl $modelUrl $canonicalModelUrl "$profile evidence model URL"
+    Assert-ExactModelUrl $modelUrl $canonicalModelUrl 'Bundle evidence model URL'
 
     $configuration = Get-JsonDocument `
         (Join-Path $assetRoot $configurationName) `
-        "$profile air-gap configuration"
+        'Air-gap configuration'
     if (
-        (Get-PositiveInt64 $configuration.schemaVersion "$profile configuration schemaVersion") -ne 1 -or
-        [string]$configuration.translationProfile -cne $profile -or
+        (Get-PositiveInt64 $configuration.schemaVersion 'Configuration schemaVersion') -ne 2 -or
+        [string]$configuration.bundleProfile -cne 'windows-x64-offline-v3' -or
+        $configuration.PSObject.Properties.Name -ccontains 'translationProfile' -or
         [string]$configuration.translationModel.id -cne $modelId -or
         [string]$configuration.translationModel.revision -cne $modelRevision -or
         [string]$configuration.translationModel.sha256 -cne $modelHash
     ) {
-        throw "$profile configuration translation identity differs from checked evidence."
+        throw 'Configuration translation identity differs from checked evidence.'
     }
     $modelPath = [string]$configuration.translationModel.path
-    Assert-SafeManifestPath $modelPath "$profile translation model path"
+    Assert-SafeManifestPath $modelPath 'Translation model path'
     if (-not $modelPath.StartsWith('models/hy-mt2/', [StringComparison]::Ordinal)) {
-        throw "$profile translation model path is outside models/hy-mt2."
+        throw 'Translation model path is outside models/hy-mt2.'
     }
     $modelLeaf = $modelPath.Split('/')[-1]
-    Assert-SafeLeafName $modelLeaf "$profile translation model file name"
+    Assert-SafeLeafName $modelLeaf 'Translation model file name'
     if ($modelLeaf -cne $lockedModelFileName) {
-        throw "$profile configuration model file name differs from the exact checked component lock."
+        throw 'Configuration model file name differs from the exact checked component lock.'
     }
 
-    $trust = Get-JsonDocument (Join-Path $assetRoot $trustName) "$profile trust manifest"
+    $trust = Get-JsonDocument (Join-Path $assetRoot $trustName) 'Bundle trust manifest'
     if (
-        (Get-PositiveInt64 $trust.schemaVersion "$profile trust schemaVersion") -ne 1 -or
-        [string]$trust.profile -cne "windows-x64-offline-v2-$profile" -or
-        [string]$trust.bundleIdentity -cne [string]$profileEvidence.bundleIdentity -or
+        (Get-PositiveInt64 $trust.schemaVersion 'Trust schemaVersion') -ne 1 -or
+        [string]$trust.profile -cne 'windows-x64-offline-v3' -or
+        [string]$trust.bundleIdentity -cne [string]$bundleEvidence.bundleIdentity -or
         [string]$trust.airgapManifestSha256 -cne [string]$manifestEvidence.sha256
     ) {
-        throw "$profile trust manifest identity differs from checked evidence."
+        throw 'Trust manifest identity differs from checked evidence.'
     }
     $trustPacks = @($trust.packs)
     if ($trustPacks.Count -ne 6) {
-        throw "$profile trust manifest must contain exactly six packs."
+        throw 'Trust manifest must contain exactly six packs.'
     }
     $trustById = [Collections.Generic.Dictionary[string, object]]::new(
         [StringComparer]::Ordinal
@@ -594,11 +568,11 @@ foreach ($profile in $profiles) {
     foreach ($pack in $trustPacks) {
         $packId = [string]$pack.id
         if (-not $trustById.TryAdd($packId, $pack)) {
-            throw "$profile trust manifest contains duplicate pack ID: $packId"
+            throw "Trust manifest contains duplicate pack ID: $packId"
         }
     }
     if ((@($trustById.Keys | Sort-Object) -join '|') -cne 'airgap-manifest|base|configuration|cuda-runtime|translation-license|translation-model') {
-        throw "$profile trust manifest does not contain the exact pack ID set."
+        throw 'Trust manifest does not contain the exact pack ID set.'
     }
 
     $assetPackChecks = @(
@@ -619,60 +593,60 @@ foreach ($profile in $profiles) {
         }
     )
     foreach ($check in $assetPackChecks) {
-        $pack = Get-RequiredMapValue $trustById $check.id "$profile trust packs"
-        $packBytes = Get-PositiveInt64 $pack.bytes "$profile $($check.id) pack bytes"
-        $packHash = Get-LowerSha256 $pack.sha256 "$profile $($check.id) pack SHA-256"
+        $pack = Get-RequiredMapValue $trustById $check.id 'Bundle trust packs'
+        $packBytes = Get-PositiveInt64 $pack.bytes "$($check.id) pack bytes"
+        $packHash = Get-LowerSha256 $pack.sha256 "$($check.id) pack SHA-256"
         if (
             $packBytes -ne [long]$check.evidence.bytes -or
             $packHash -cne [string]$check.evidence.sha256
         ) {
-            throw "$profile $($check.id) trust pack differs from checked release evidence."
+            throw "$($check.id) trust pack differs from checked release evidence."
         }
         $expectedReleaseUrl = $releaseAssetBaseUrl + '/' +
             [Uri]::EscapeDataString([string]$check.fileName)
         Assert-ExactReleaseAssetUrl `
             $pack.url `
             $expectedReleaseUrl `
-            "$profile $($check.id) pack URL"
+            "$($check.id) pack URL"
         if ($null -ne $check.target) {
             if ([string]$pack.kind -cne 'file' -or [string]$pack.target -cne [string]$check.target) {
-                throw "$profile $($check.id) trust pack has an unexpected kind or target."
+                throw "$($check.id) trust pack has an unexpected kind or target."
             }
         }
     }
 
-    $modelPack = Get-RequiredMapValue $trustById 'translation-model' "$profile trust packs"
+    $modelPack = Get-RequiredMapValue $trustById 'translation-model' 'Bundle trust packs'
     if (
         [string]$modelPack.kind -cne 'file' -or
         [string]$modelPack.target -cne $modelPath -or
-        (Get-PositiveInt64 $modelPack.bytes "$profile trusted model bytes") -ne $modelBytes -or
-        (Get-LowerSha256 $modelPack.sha256 "$profile trusted model SHA-256") -cne $modelHash
+        (Get-PositiveInt64 $modelPack.bytes 'Trusted model bytes') -ne $modelBytes -or
+        (Get-LowerSha256 $modelPack.sha256 'Trusted model SHA-256') -cne $modelHash
     ) {
-        throw "$profile trusted translation model differs from configuration and acceptance evidence."
+        throw 'Trusted translation model differs from configuration and acceptance evidence.'
     }
     if ([string]$modelPack.url -cne $modelUrl) {
-        throw "$profile trust model URL differs from checked acceptance evidence."
+        throw 'Trust model URL differs from checked acceptance evidence.'
     }
-    Assert-ExactModelUrl $modelPack.url $canonicalModelUrl "$profile translation model URL"
+    Assert-ExactModelUrl $modelPack.url $canonicalModelUrl 'Translation model URL'
 
-    $manifest = Get-JsonDocument (Join-Path $assetRoot $manifestName) "$profile final manifest"
-    if ((Get-PositiveInt64 $manifest.schemaVersion "$profile final manifest schemaVersion") -ne 1) {
-        throw "$profile final manifest has an unexpected schema."
+    $manifest = Get-JsonDocument (Join-Path $assetRoot $manifestName) 'Final manifest'
+    if ((Get-PositiveInt64 $manifest.schemaVersion 'Final manifest schemaVersion') -ne 1) {
+        throw 'Final manifest has an unexpected schema.'
     }
     $manifestRows = @($manifest.files)
     if ($manifestRows.Count -lt 3 -or $manifestRows.Count -gt 250000) {
-        throw "$profile final manifest has an invalid file count."
+        throw 'Final manifest has an invalid file count.'
     }
     $manifestByPath = [Collections.Generic.Dictionary[string, object]]::new(
         [StringComparer]::OrdinalIgnoreCase
     )
     foreach ($manifestRow in $manifestRows) {
         $relativePath = [string]$manifestRow.path
-        Assert-SafeManifestPath $relativePath "$profile final manifest path"
-        Get-NonNegativeInt64 $manifestRow.bytes "$profile final manifest bytes for $relativePath" | Out-Null
-        Get-LowerSha256 $manifestRow.sha256 "$profile final manifest SHA-256 for $relativePath" | Out-Null
+        Assert-SafeManifestPath $relativePath 'Final manifest path'
+        Get-NonNegativeInt64 $manifestRow.bytes "Final manifest bytes for $relativePath" | Out-Null
+        Get-LowerSha256 $manifestRow.sha256 "Final manifest SHA-256 for $relativePath" | Out-Null
         if (-not $manifestByPath.TryAdd($relativePath, $manifestRow)) {
-            throw "$profile final manifest contains a duplicate path: $relativePath"
+            throw "Final manifest contains a duplicate path: $relativePath"
         }
     }
     $requiredManifestRows = @(
@@ -687,15 +661,13 @@ foreach ($profile in $profiles) {
         }
     )
     foreach ($required in $requiredManifestRows) {
-        $manifestRow = Get-RequiredMapValue $manifestByPath $required.path "$profile final manifest"
+        $manifestRow = Get-RequiredMapValue $manifestByPath $required.path 'Final manifest'
         if (
             [string]$manifestRow.path -cne [string]$required.path -or
             [long]$manifestRow.bytes -ne [long]$required.bytes -or
             [string]$manifestRow.sha256 -cne [string]$required.sha256
         ) {
-            throw "$profile final manifest identity differs for $($required.path)."
+            throw "Final manifest identity differs for $($required.path)."
         }
     }
-}
-
-Write-Host 'Offline profile release evidence and exact release assets passed validation.'
+Write-Host 'Offline bundle release evidence and exact release assets passed validation.'

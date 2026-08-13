@@ -1,7 +1,6 @@
 # Enrichment pipeline
 
-This document describes the integrated workflow in current source and the
-complete v1.9.17 quality release. See
+This document describes the integrated workflow in current source. See
 [download and installation](download-and-install.md) before choosing a command,
 and never combine assets from different versions.
 
@@ -18,7 +17,7 @@ input inventory and SHA-256 identity
   -> completion and provenance validation
 ```
 
-When a complete version-matched quality bundle is installed, the examiner
+When a complete version-matched kit is installed, the examiner
 interface is one command:
 
 ```powershell
@@ -41,12 +40,12 @@ when filesystem-level or embedded-executable/document coverage is required.
 The direct scanner can search raw image bytes, but FLOSS requires a complete
 supplied executable and OCR requires a supported image/PDF file.
 
-Full defaults native extraction on and enables routed FLOSS/OCR, automatic
-translation, and bounded decoding. Each producer or transform remains
+Full defaults native extraction on and enables routed FLOSS/OCR and automatic
+translation. Decoding remains an explicit option. Each producer or transform remains
 independently selectable, and an explicit
 mode overrides its Full default. The published v1.9.17 binaries include
-`--native-extraction`. Runtime selection does not split the installed quality
-bundle: that shared physical profile is still verified atomically.
+`--native-extraction`. Runtime selection does not split the installed kit. The
+complete physical file set is still verified as one unit.
 
 ## What each stage contributes
 
@@ -129,7 +128,7 @@ A selected specialist that has no applicable input or emits zero records can
 still complete successfully with truthful terminal status.
 
 In current source after v1.9.17, `--exclude-engine`/`-e` is a Full-only
-convenience modifier, not another profile. Each occurrence consumes one token
+convenience modifier, not another installed option. Each occurrence consumes one token
 containing one or more comma-separated names from `native`, `floss`, `ocr`,
 `decode`, and `translation`.
 Occurrences accumulate; surrounding whitespace is trimmed, but empty, unknown,
@@ -219,10 +218,10 @@ regex processing therefore operate on the exact selected-source union.
 
 Automatic OCR extracts every non-empty PDF text layer and renders only pages
 whose layer is absent, very short, or suspicious. Force mode renders every
-page. Images are always OCR inputs when the stage is enabled. The v1.9.17 profile
-defines CPU, DirectML, and DirectML+CPU hybrid paths, and each has passed a
-per-path inference smoke test. Those smokes do not establish cross-provider
-parity or corpus-level quality. CUDA OCR is not part of the profile. See
+page. Images are always OCR inputs when the stage is enabled. The installed
+runtime supports CPU, DirectML, and DirectML+CPU hybrid paths. Each path passed
+an inference smoke test. Those smokes do not establish cross-provider parity or
+corpus-level accuracy. CUDA OCR is not an accepted OCR path. See
 [OCR and document analysis](ocr-and-document-analysis.md) for formats, exact
 models, language scope, performance, output coordinates, and GPU-contention
 guidance.
@@ -330,30 +329,30 @@ by 45.9% in accurate mode and 47.7% in fast mode, while all-unique input did not
 regress. See the [performance review](language-triage-performance-2026-08.md)
 for the exact-output gates and limitations.
 
-## Offline translation profile
+## Offline translation
 
 The complete bundle uses the official
 [Hy-MT2 7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF) GGUF repository
-through a private local llama.cpp server. Current source publishes one profile:
+through a private local llama.cpp server. The kit contains one model:
 
-| Profile | Model | Bytes | WMT24++ chrF++ | Forensic chrF++ | Identifiers | Strings/s |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `quality` | Hy-MT2-7B Q4_K_M | 4,624,648,896 | **62.4386 CPU / 62.6129 CUDA p2** | **93.6923** | 22/22 | 0.1086 CPU / 1.3085 CUDA p2 |
+| Model | Bytes | WMT24++ chrF++ | Forensic chrF++ | Identifiers | Strings/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Hy-MT2-7B Q4_K_M | 4,624,648,896 | **62.4386 CPU / 62.6129 CUDA p2** | **93.6923** | 22/22 | 0.1086 CPU / 1.3085 CUDA p2 |
 
 The strict synthetic/attribution-safe gates are described in the
 [translation report](translation-benchmark-2026-08-04.md). CPU Q4 and the
 mixed source-built CPU server plus official CUDA overlay both retained 22/22
 identifiers and 10/10 downstream patterns. These small-corpus results are a
-bounded acceptance result, not a universal quality or hardware claim. The
+bounded acceptance result, not a universal accuracy or hardware claim. The
 model/runtime choice, exact bytes, failure policy, and release falsifiers are
 recorded in [ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
-`balanced` still names a language-triage policy above—it is not an install or
-model profile.
+`balanced` still names a language-triage policy above. It does not select an
+installation or model.
 
 TranslateGemma remains a research challenger, not the production one-executable
 engine. After gated access was accepted, the official BF16 4B model completed
 the same 72-row air-gap gate with 22/22 identifiers and 10/10 pattern matches,
-but scored 56.1631/84.2550 chrF++ at 0.05237 strings/s. That was lower quality
+but scored 56.1631/84.2550 chrF++ at 0.05237 strings/s. That was less accurate
 and about 51.7 times slower than the retired 1.8B Q4_K_M candidate on this
 bounded corpus. It also
 has not cleared the complete integrated-runtime and offline-packaging gates.
@@ -527,11 +526,11 @@ Use `bstrings.exe help analyze` for the installed option set, or see the
 [terminal help and command reference](command-reference.md) for a task-oriented
 workflow guide.
 
-The complete quality installation remains one exact trust profile. A missing,
-extra, or corrupt manifested file blocks any analysis that selects that bundle,
+The complete installation remains one exact verified file set. A missing,
+extra, or corrupt manifested file blocks any analysis that selects the kit,
 even when the affected engine was disabled. Runtime optionality does not create
 slim or independently repairable component packs; physically isolated
-capability profiles are deferred by
+separately installed capability sets are deferred by
 [ADR-0008](architecture/adr-0008-independent-engine-execution.md).
 
 ## Maintainer and regression entry points

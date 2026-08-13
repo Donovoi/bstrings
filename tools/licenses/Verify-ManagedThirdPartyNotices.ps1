@@ -301,7 +301,7 @@ foreach ($spec in @($inventory.repositoryNoticeFiles)) {
 $projectText = Get-Content -LiteralPath $projectFile -Raw
 $noticeText = Get-Content -LiteralPath $thirdPartyNoticeFile -Raw
 foreach ($requiredReference in @(
-    'CORE_RELEASE_README.md',
+    'BASE_PACK_NOTICE.md',
     'LICENSE.md',
     'bstrings-managed-win-x64.json',
     'ReleaseNoticeSourceDirectory',
@@ -384,7 +384,7 @@ if (-not [string]::IsNullOrWhiteSpace($PublishedDirectory)) {
             $sourceHash `
             "Published release notice $relativePath"
     }
-    $publishedReadmeSource = if ($CompleteBundle) { 'README.md' } else { 'CORE_RELEASE_README.md' }
+    $publishedReadmeSource = if ($CompleteBundle) { 'README.md' } else { 'BASE_PACK_NOTICE.md' }
     foreach ($repositoryFile in @(
         [pscustomobject]@{ source = 'LICENSE.md'; destination = 'LICENSE.md' },
         [pscustomobject]@{ source = $publishedReadmeSource; destination = 'README.md' }

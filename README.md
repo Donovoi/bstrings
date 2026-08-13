@@ -1,355 +1,183 @@
 # bstrings
 
-`bstrings` finds and validates useful forensic strings, recovers obfuscated
-strings with [FLOSS](https://github.com/mandiant/flare-floss), identifies files
-with [Magika](https://github.com/google/magika), performs OCR, detects language,
-and translates locally before applying the same pattern catalogue. The complete
-Windows kit runs offline through one interface: `bstrings.exe`.
+`bstrings` finds useful text in files, disk images, and memory images.
 
-## Why use it?
+It can recover hidden strings, read text in images, and translate text locally.
+It also finds forensic patterns such as email addresses, keys, tokens, hashes,
+payment data, and personal information.
 
-- One recursive workflow combines native CPU/Rust/CUDA/hybrid extraction,
-  validated patterns, FLOSS, OCR, bounded Base64 text-child decoding, language
-  triage, offline translation, and provenance.
-- Native extraction, FLOSS, and OCR are independently selectable source
-  producers. Native stays on by default and in Full; an explicit
-  `--native-extraction off` permits FLOSS-only or OCR-only analysis without
-  starting the native scanner. The published v1.9.17 kit includes this option.
-- Current source adds independently selectable `--decode off|auto|force`.
-  Ordinary and Full analysis keep it off after its preregistered automatic-mode
-  performance gate failed. Enable it explicitly with `--decode auto`; decoding
-  is offline, bounded, depth one, and never executes or translates recovered
-  content.
-- Completed analysis writes a filterable `findings.tsv`, exact pattern and
-  feature histograms, and a self-contained HTML pattern visualization while
-  retaining the authoritative JSONL evidence graph.
-- The 77-pattern catalogue includes PII, credentials, structurally validated
-  JWT candidates, product and communication identifiers, TLP markings,
-  labelled digest families, browser artifacts, high-value Registry paths, and
-  crypto address families alongside the original forensic patterns.
-- Automatic extraction measures eligible CPU, GPU, and hybrid backends and
-  selects an accelerator only when it projects a worthwhile win.
-- Language triage reuses successful detections for exact duplicate text only
-  within its bounded batch; reviewed 50%-duplicate workloads were 1.85-1.91x
-  faster without changing ordered report bytes.
-- Each language assessment also records a compact, deterministic shadow routing
-  decision for records that appear to contain only validated structured data.
-  Shadow routing is diagnostic: it does not yet suppress language detection or
-  translation candidates, and uncertain, mixed, or failed decisions retain the
-  existing high-recall path.
-- Offline translation reuses an exact source/configuration result through a
-  run-local SQLite cache while preserving one ordered child per parent. The
-  cache is bounded in memory, never shared between cases, and removed after the
-  transaction.
-- The quality kit includes its runtimes, models, tools, licences, and strict
-  manifest, so case work does not depend on Python, a package manager, or the
-  internet.
-- Downloads and the finished installation are checked by exact size and
-  SHA-256 before use.
+## What bstrings does
 
-## Get started
+- Finds text with native extraction, FLOSS, and OCR.
+- Decodes strict Base64 text when you select this function.
+- Detects languages and translates text on your computer.
+- Finds and validates 77 forensic pattern types.
+- Records the source and location of each result.
+- Creates JSONL evidence, TSV reports, histograms, and an HTML report.
+- Works offline after you install the kit.
 
-The complete Windows x64 quality/offline release is
-[v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17).
-There is one install and one Full profile rather than a user-facing model tier.
-Full uses the accepted Hy-MT2 7B Q4_K_M model and a separately authenticated
-CUDA overlay under [ADR-0006](docs/architecture/adr-0006-q4-cuda-full-translation.md).
-Users do not choose among quality/size tiers.
-Requirements: Windows 11 x64, a connected staging machine, and at least
-**30 GiB free**. Administrator rights are not required.
+There is one Windows kit. It contains all supported engines, models, runtimes,
+licenses, and verification data. There is no second kit to select.
 
-Your first run has three steps:
+Pattern matches are candidates. A match does not prove identity, ownership,
+compromise, or malicious activity.
 
-1. install the authenticated quality kit;
-2. verify the installed bundle; and
-3. analyze one file or directory into a new results directory.
+## Requirements
 
-The commands in these three steps work with the published v1.9.17 release.
-`--decode` and `-e`/`--exclude-engine` were added to current source after
-v1.9.17 and are not in
-the public v1.9.17 binary. Stable-release users can make the same selection with
-the explicit `--ocr off`, `--translation off`,
-`--recover-executable-strings off`, and `--native-extraction off` controls.
+- Windows 11 x64
+- At least 30 GiB of free space
+- Internet access on the computer that installs the kit
 
-### 1. Install the quality kit
+You do not need administrator rights.
 
-Open PowerShell in the directory where you want `bstrings-quality`, then run
-this pinned, checksum-verified installer bootstrap:
+## Install
+
+The next release uses `Install-Bstrings.ps1`. It installs the complete kit in
+`bstrings-kit` by default.
+
+Use the authenticated install command from the release page. The command checks
+the immutable release and the installer digest before it starts the installer.
+
+The current public release is
+[v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17). That release
+is immutable and uses its historical installer and directory names. Use the
+exact steps in the [v1.9.17 README](https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started).
+The next major release removes those old names.
+
+See [Download and install](docs/download-and-install.md) for the full install,
+upgrade, cache, and rollback procedure.
+
+## Verify
+
+Verify the kit before you analyze evidence:
 
 ```powershell
-& {
-  Set-StrictMode -Version Latest
-  $ErrorActionPreference = 'Stop'
-
-  $tag = 'v1.9.17'
-  $repo = 'Donovoi/bstrings'
-  $headers = @{
-    Accept = 'application/vnd.github+json'
-    'X-GitHub-Api-Version' = '2022-11-28'
-    'User-Agent' = 'bstrings-installer-bootstrap'
-  }
-  $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/tags/$tag" `
-    -Headers $headers -UseBasicParsing
-  $asset = @($release.assets | Where-Object { $_.name -CEQ 'Install-BstringsQuality.ps1' })
-  $url = "https://github.com/$repo/releases/download/$tag/Install-BstringsQuality.ps1"
-  if ($release.tag_name -CNE $tag -or $release.draft -or $release.prerelease -or
-      -not ($release.PSObject.Properties.Name -ccontains 'immutable') -or
-      -not [bool]$release.immutable -or
-      $asset.Count -ne 1 -or $asset[0].browser_download_url -CNE $url -or
-      ([string]$asset[0].digest) -CNotMatch '^sha256:[0-9a-f]{64}$') {
-    throw 'The exact immutable published installer asset could not be authenticated.'
-  }
-  $installerPath = [IO.Path]::GetFullPath(
-    (Join-Path (Get-Location).Path 'Install-BstringsQuality.ps1')
-  )
-  $downloadPath = Join-Path ([IO.Path]::GetDirectoryName($installerPath)) `
-    ('.Install-BstringsQuality.download-' + [Guid]::NewGuid().ToString('N') + '.partial')
-  $backupPath = Join-Path ([IO.Path]::GetDirectoryName($installerPath)) `
-    ('.Install-BstringsQuality.backup-' + [Guid]::NewGuid().ToString('N') + '.tmp')
-  $expected = ([string]$asset[0].digest).Substring(7)
-  try {
-    Invoke-WebRequest $url -OutFile $downloadPath -UseBasicParsing
-    $download = Get-Item -LiteralPath $downloadPath -Force
-    $stream = [IO.File]::OpenRead($download.FullName)
-    try {
-      $hasher = [Security.Cryptography.SHA256]::Create()
-      try {
-        $actual = ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
-      }
-      finally { $hasher.Dispose() }
-    }
-    finally { $stream.Dispose() }
-    if ($actual -CNE $expected) { throw 'Installer SHA-256 mismatch.' }
-
-    $existing = Get-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
-    if ($null -ne $existing) {
-      if ($existing.PSIsContainer -or
-          ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'The existing installer path is not a physical file.'
-      }
-      [IO.File]::Replace($downloadPath, $installerPath, $backupPath)
-      [IO.File]::Delete($backupPath)
-    }
-    else {
-      [IO.File]::Move($downloadPath, $installerPath)
-    }
-  }
-  finally {
-    if ([IO.File]::Exists($downloadPath)) { [IO.File]::Delete($downloadPath) }
-  }
-  powershell.exe -NoProfile -ExecutionPolicy Bypass `
-    -File $installerPath -ReleaseTag $tag
-  if ($LASTEXITCODE -ne 0) { throw "Installer failed with exit code $LASTEXITCODE" }
-}
+.\bstrings-kit\bstrings.exe bundle verify
 ```
 
-### 2. Verify the installation
+Do not analyze evidence if this command returns a nonzero exit code.
+
+## Run an analysis
+
+Use a new or empty output directory:
 
 ```powershell
-.\bstrings-quality\bstrings.exe bundle verify
+.\bstrings-kit\bstrings.exe analyze `
+  -d D:\evidence `
+  -o D:\results\case-01 `
+  --full
 ```
 
-Do not analyze evidence unless verification exits with code 0.
+Replace the input and output paths with your paths.
 
-### 3. Run the first analysis
+A complete run has all these results:
 
-Choose a results path that does not exist or is empty, then run:
+- The command returns exit code 0.
+- `run.json` has `status: complete`.
+- `summary.json` has `status: complete`.
+- The output directory does not contain `.incomplete`.
+
+Keep incomplete output for diagnosis. Use a different new or empty directory
+for the next attempt.
+
+The output can contain sensitive case data. Protect the complete output
+directory.
+
+## Select engines
+
+`--full` selects the normal complete analysis preset. You can exclude one or
+more engines with `-e`:
 
 ```powershell
-.\bstrings-quality\bstrings.exe analyze -d D:\evidence -o D:\results --full
+.\bstrings-kit\bstrings.exe analyze `
+  -d D:\evidence `
+  -o D:\results\no-ocr-or-translation `
+  --full -e ocr,translation
 ```
 
-Replace `D:\evidence` and `D:\results` with your real input and output paths.
-Success requires exit code 0, `run.json` and `summary.json` to report
-`status: complete`, and no `.incomplete` marker. Preserve an incomplete result
-for diagnosis and use a different new or empty directory for a retry.
+You can also select source engines directly.
 
-`analyze` searches the complete built-in catalogue by default. Narrow it with
-comma-separated names or one of the `pii`, `credentials`, `browser`, `registry`,
-or `wallets` groups:
+Native extraction only:
 
 ```powershell
-.\bstrings-quality\bstrings.exe analyze -f D:\evidence\memory.raw `
-  --lr "pii,cpe23,tlp_marking,email_message_id" `
-  -o D:\results\focused
+.\bstrings-kit\bstrings.exe analyze `
+  -f D:\evidence\memory.raw `
+  -o D:\results\native `
+  --native-extraction on `
+  --recover-executable-strings off `
+  --ocr off --translation off
 ```
 
-Run `.\bstrings-quality\bstrings.exe -p` to inspect the built-in names,
-descriptions, and expressions. Format and checksum matches are evidence
-candidates, not proof of identity, ownership, compromise, or maliciousness.
-The TSV findings and feature histogram retain raw matches, so protect the whole
-output directory as sensitive case material.
-
-The bootstrap always replaces an existing physical
-`Install-BstringsQuality.ps1`, but only after the release reports immutable
-state and the new download matches its published SHA-256. The installer also
-always refreshes an existing
-physical `bstrings-quality` directory with the complete authenticated release;
-it never patches old files in place. The replacement is assembled and verified
-beside the destination first, and the previous directory is restored if the
-swap or installed-path verification fails. A retry or later release may reuse
-only fully size- and SHA-256-reverified bytes. The default shared cache is
-retained beside the installation and can reuse an unchanged exact pack across
-releases, but its filename or prior presence never authorizes its bytes: every
-use reopens and fully hashes the pack against the current release manifest. Add
-`-RemoveCacheAfterSuccess` to the authenticated installer's final invocation
-when bounded cache cleanup is preferred over later reuse. The installer still
-creates and verifies a fresh sibling replacement on every run.
-
-## Choose a command
+FLOSS only:
 
 ```powershell
-.\bstrings-quality\bstrings.exe help
-.\bstrings-quality\bstrings.exe help analyze
-.\bstrings-quality\bstrings.exe help bundle verify
+.\bstrings-kit\bstrings.exe analyze `
+  -d D:\evidence\executables `
+  -o D:\results\floss `
+  --native-extraction off `
+  --recover-executable-strings force `
+  --ocr off --translation off
 ```
 
-- Use `analyze --full` for the complete provenance-preserving workflow and
-  filterable reports.
-- In current source only until a release containing it is published, use
-  `--full --exclude-engine <name>` (or `-e`) to keep Full's defaults except for
-  explicitly named engines. Published v1.9.17 users must use the equivalent
-  explicit `off` selectors.
-- Use `analyze` with FLOSS, OCR, and translation set to `off` for a native-only
-  report directory.
-- Use `--native-extraction off` with one or both specialist producers for a
-  deliberate FLOSS-only or OCR-only run.
-- In current source, use `--decode auto` to add strict canonical Base64 and
-  contextual PowerShell EncodedCommand text children without translation.
-- Use the root `-f`/`-d` options only for the legacy single-file output.
-- Use `bundle verify` before examination and after copying the kit offline.
-
-The source-producer controls are orthogonal:
+OCR only:
 
 ```powershell
-# Native extraction only
-.\bstrings-quality\bstrings.exe analyze -f D:\evidence\memory.raw `
-  --native-extraction on --recover-executable-strings off `
-  --ocr off --translation off -o D:\results\native
-
-# FLOSS only; force deliberately attempts every supplied input
-.\bstrings-quality\bstrings.exe analyze -d D:\evidence\executables `
-  --native-extraction off --recover-executable-strings force `
-  --ocr off --translation off -o D:\results\floss
-
-# OCR only
-.\bstrings-quality\bstrings.exe analyze -d D:\evidence\documents `
-  --native-extraction off --recover-executable-strings off `
-  --ocr force --translation off -o D:\results\ocr
-
-# Native strings plus bounded decoding; decoded children are matched, not translated
-.\bstrings-quality\bstrings.exe analyze -f D:\evidence\memory.raw `
-  --decode auto --translation off -o D:\results\decoded
+.\bstrings-kit\bstrings.exe analyze `
+  -d D:\evidence\documents `
+  -o D:\results\ocr `
+  --native-extraction off `
+  --recover-executable-strings off `
+  --ocr force --translation off
 ```
 
-Native extraction, FLOSS, and OCR produce source records. Decoding and
-translation are transforms over records produced by one or more of them, so
-they never substitute for a producer. Decoded children enter pattern matching
-but not language triage or translation. Disabling every producer is invalid
-for any `analyze` run. Pattern matching and the JSONL/TSV/histogram
-reports remain mandatory finalization for every `analyze` run; “only” refers to
-the selected source producer, not to removing integrity checks or reports.
-FLOSS-only output includes FLOSS static strings, while native-plus-FLOSS keeps
-the existing static-string deduplication.
-
-In current source after v1.9.17, Full exclusions are strict shorthand for the
-existing explicit `off` modes:
+Native extraction with Base64 decoding:
 
 ```powershell
-# Equivalent spellings: Full without OCR or translation
-.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved `
-  --full --exclude-engine ocr --exclude-engine translation `
-  -o D:\results\without-ocr-translation
-
-.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved `
-  --full -e ocr,translation -o D:\results\without-ocr-translation
-
-# Published v1.9.17 equivalent
-.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved `
-  --full --ocr off --translation off `
-  -o D:\results\without-ocr-translation
+.\bstrings-kit\bstrings.exe analyze `
+  -f D:\evidence\memory.raw `
+  -o D:\results\decoded `
+  --decode auto --translation off
 ```
 
-`--exclude-engine`/`-e` requires `--full`. Each occurrence consumes one token,
-which may contain a comma-separated list of `native`, `floss`, `ocr`, `decode`,
-and `translation`; repeat and comma forms may be combined. Names are
-case-insensitive and surrounding whitespace is trimmed, but empty, unknown,
-duplicate (including case-duplicate), or whitespace-separated values fail.
-Excluding an engine also conflicts with explicitly setting that engine's main
-selector, even to `off`. Tuning options for an excluded engine remain validated
-but cannot start it. The shorthand resolves to the same effective options as
-the explicit controls and adds no separate runtime or provenance path.
+Decoding and translation need records from native extraction, FLOSS, or OCR.
+You cannot disable all three source engines.
 
-Installer, bundle, direct extraction, and integrated-analysis commands print
-percentage completion. Integrated analysis combines stage progress with
-measured byte or record progress for long-running work. Percentages are
-completed work units, not elapsed-time estimates.
+## Find patterns
 
-Full remains the high-recall translation-selection profile. The optional
-`--translation-policy high-precision` expert setting uses effective floors of
-0.65 confidence and 0.15 target margin, but it is not a calibrated accuracy
-claim. Translation reports its record percentage, rate, ETA, cache hits, model
-inputs, and preservation fallbacks; exact deduplication avoids redundant calls
-but mostly unique high-recall workloads can still be long-running. In current
-source, Full `auto` first probes the authenticated Windows sm89 CUDA path with
-complete Q4 model load, a synthetic request, observed 33/33 layer offload, and
-p2. A failed probe closes CUDA and self-tests CPU before evidence work. Explicit
-CUDA fails closed, and the provider never changes after the first evidence
-request. This validation is scoped to the reviewed RTX 4060 Laptop/sm89 host,
-not a universal CUDA claim. The accepted placement still reported a
-410.69 MiB `CPU_Mapped` model buffer; 33/33 offload does not mean zero host
-residency. Hybrid and p4 remain deferred.
+The default analysis uses all built-in patterns. Use `-p` to list them:
 
-`--full` freezes input hashes and defaults native extraction on, routes
-applicable files to FLOSS/OCR, performs language assessment and local
-translation over raw records, then applies all 77 built-in patterns and the
-TSV/histogram reporting stage. Add `--decode auto` explicitly when bounded
-decoded text children are worth the additional passes and evidence output.
-An explicit engine option still overrides its Full default. Specialist runs
-retain `content-routing.jsonl` and the three-rows-per-input
-`engine-status.jsonl` terminal coverage ledger with its hash/count summary,
-including engines explicitly disabled by the user. Full does not mount
-filesystems or carve embedded files from raw disk or memory images; mount or
-carve those images first when file-level FLOSS and OCR coverage is required.
+```powershell
+.\bstrings-kit\bstrings.exe -p
+```
 
-For an air-gapped workstation, copy the whole `bstrings-quality` directory and
-run `bundle verify` again before examining evidence.
+Use `--lr` to select names or groups:
 
-Runtime selection does not make the installed quality kit modular. It remains
-one atomic authenticated profile, and any missing, extra, or corrupt manifested
-file blocks every mode that selects that bundle, even when the damaged engine
-was not requested. Smaller physically isolated capability profiles are deferred
-under [ADR-0008](docs/architecture/adr-0008-independent-engine-execution.md).
+```powershell
+.\bstrings-kit\bstrings.exe analyze `
+  -f D:\evidence\memory.raw `
+  -o D:\results\focused `
+  --lr "pii,credentials,browser,registry,wallets"
+```
 
-Detailed guidance: [terminal help and command reference](docs/command-reference.md),
-[download and installation](docs/download-and-install.md),
-[air-gapped deployment](docs/air-gapped-deployment.md),
-[analysis and translation](docs/enrichment-pipeline.md), and
-[OCR and document analysis](docs/ocr-and-document-analysis.md),
-[document-reading research and roadmap](docs/document-reading-research-2026-08.md),
-the [C#/Native AOT/P/Invoke performance review](docs/language-triage-performance-2026-08.md),
-and [outputs and provenance](docs/output-and-provenance.md). The forensic report
-contract and its bulk_extractor/Timeline Explorer design evidence are recorded
-in [forensic reporting](docs/forensic-reporting-2026-08.md).
+## Get help
 
-High-level changes that can affect evidence coverage, provenance, model/tool
-selection, routing, privacy, or performance defaults use the
-[Robin-round architecture decision policy](docs/architecture/decision-review-policy.md).
-The evidence, detractor review, falsifiers, implementation, and release gates
-for the early shared fail-open routing stage are recorded in
-[ADR-0001](docs/architecture/adr-0001-early-fail-open-content-routing.md).
-The hostile-cache trust boundary, fresh-overwrite guarantee, and batched
-release policy are recorded in
-[ADR-0003](docs/architecture/adr-0003-persistent-verified-bytes-and-batched-releases.md).
-The single Q4 model, scoped Windows sm89 CUDA p2 path, pre-evidence CPU
-fallback, and release falsifiers are recorded in
-[ADR-0006](docs/architecture/adr-0006-q4-cuda-full-translation.md).
-Independent runtime engine selection and its unchanged atomic-bundle boundary
-are recorded in
-[ADR-0008](docs/architecture/adr-0008-independent-engine-execution.md).
-The bounded Base64 text-child profiles, resource limits, provenance contract,
-and deliberately deferred recursion are recorded in
-[ADR-0010](docs/architecture/adr-0010-bounded-reversible-decoding.md).
+```powershell
+.\bstrings-kit\bstrings.exe help
+.\bstrings-kit\bstrings.exe help analyze
+.\bstrings-kit\bstrings.exe help bundle verify
+```
 
-The project remains under its upstream terms in [LICENSE.md](LICENSE.md), with
-component attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Read these guides for more information:
+
+- [Command reference](docs/command-reference.md)
+- [Download and install](docs/download-and-install.md)
+- [Air-gapped deployment](docs/air-gapped-deployment.md)
+- [Analysis stages](docs/enrichment-pipeline.md)
+- [Output and provenance](docs/output-and-provenance.md)
+- [OCR and document analysis](docs/ocr-and-document-analysis.md)
+
+Disk and memory images can contain files that FLOSS and OCR cannot read
+directly. Mount or carve these images before you use file-level analysis.
+
+The project uses [LICENSE.md](LICENSE.md). Component notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -408,7 +408,8 @@ public sealed class AnalysisBundleIntegrityTests
             );
             var configuration = new Dictionary<string, object?>
             {
-                ["schemaVersion"] = 1,
+                ["schemaVersion"] = 2,
+                ["bundleProfile"] = "windows-x64-offline-v3",
                 ["bstringsExecutable"] = "bstrings.exe",
                 ["pythonExecutable"] = "runtime/python.exe",
                 ["enrichmentAdapter"] = "tools/bstrings_enrich.py",

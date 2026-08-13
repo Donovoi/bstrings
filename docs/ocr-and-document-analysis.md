@@ -1,9 +1,8 @@
 # OCR and document analysis
 
-OCR is distributed in the complete v1.9.17 quality kit. The commands in this
-guide require a verified, version-matched quality bundle. See
-[download and installation](download-and-install.md); do not copy OCR assets
-manually into a core-only directory.
+OCR is part of the bstrings kit. The commands in this guide require a verified,
+version-matched installation. See [download and installation](download-and-install.md).
+Do not copy OCR assets between releases.
 
 The integrated OCR stage turns text from supported images and PDFs into normal
 bstrings child records. Those records retain source hashes, page/frame numbers,
@@ -11,7 +10,7 @@ coordinates, confidence, render identity, engine/model identity, and execution
 provider. They then enter the same language-detection, optional translation,
 and regex-matching pipeline as native and FLOSS-recovered strings.
 
-OCR hardware selection is independent of translation hardware. The quality kit
+OCR hardware selection is independent of translation hardware. The bstrings kit
 can use DirectML for OCR. Full translation separately probes the accepted
 Windows sm89 CUDA p2 closure and falls back to tested CPU only before evidence
 work. Explicit
@@ -25,7 +24,7 @@ manifest-covered component and is not a separate user command.
 
 ## Use it
 
-In the v1.9.17 quality kit, `--full` enables OCR in automatic mode and asks the
+In the published v1.9.17 kit, `--full` enables OCR in automatic mode and asks the
 verified bundle to select a provider:
 
 ```powershell

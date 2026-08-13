@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source_run_id:
-        description: Build-workflow run ID containing the core and offline-pack artifacts
+        description: Build-workflow run ID containing the base runtime and offline-pack artifacts
         required: true
         type: number
 
@@ -33,11 +33,11 @@ jobs:
             throw 'source_run_id must be a positive numeric GitHub Actions run ID.'
           }
 
-      - name: Download core artifact from the selected build
+      - name: Download base runtime component from the selected build
         uses: actions/download-artifact@v8
         with:
           name: bstrings-win-x64
-          path: ${{ runner.temp }}\bstrings-hardware-input-${{ github.run_id }}-${{ github.run_attempt }}\core
+          path: ${{ runner.temp }}\bstrings-hardware-input-${{ github.run_id }}-${{ github.run_attempt }}\base
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ inputs.source_run_id }}
 
@@ -49,7 +49,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ inputs.source_run_id }}
 
-      - name: Assemble the exact highest-quality bundle
+      - name: Assemble the exact offline bstrings kit
         id: assemble
         shell: pwsh
         timeout-minutes: 90
@@ -63,34 +63,34 @@ jobs:
           }
           [IO.Directory]::CreateDirectory($workRoot) | Out-Null
 
-          $coreArchives = @(
-            Get-ChildItem -LiteralPath (Join-Path $inputRoot 'core') -Recurse -File `
+          $baseArchives = @(
+            Get-ChildItem -LiteralPath (Join-Path $inputRoot 'base') -Recurse -File `
               -Filter 'bstrings-win-x64.zip'
           )
-          if ($coreArchives.Count -ne 1) {
-            throw "Expected one core ZIP, found $($coreArchives.Count)."
+          if ($baseArchives.Count -ne 1) {
+            throw "Expected one base runtime ZIP, found $($baseArchives.Count)."
           }
-          $coreRoot = Join-Path $workRoot 'core'
-          [IO.Compression.ZipFile]::ExtractToDirectory($coreArchives[0].FullName, $coreRoot)
-          $coreExecutable = Join-Path $coreRoot 'bstrings.exe'
-          if (-not (Test-Path -LiteralPath $coreExecutable -PathType Leaf)) {
-            throw 'The selected core artifact has no root bstrings.exe.'
+          $baseRoot = Join-Path $workRoot 'base-runtime'
+          [IO.Compression.ZipFile]::ExtractToDirectory($baseArchives[0].FullName, $baseRoot)
+          $baseExecutable = Join-Path $baseRoot 'bstrings.exe'
+          if (-not (Test-Path -LiteralPath $baseExecutable -PathType Leaf)) {
+            throw 'The selected base runtime artifact has no root bstrings.exe.'
           }
 
           $packsRoot = Join-Path $inputRoot 'packs'
           $trustManifest = Get-ChildItem -LiteralPath $packsRoot -Recurse -File `
-            -Filter 'bundle-packs-quality.json'
+            -Filter 'bundle-packs.json'
           if (@($trustManifest).Count -ne 1) {
-            throw 'Expected one quality split-pack trust manifest.'
+            throw 'Expected one split-pack trust manifest.'
           }
           $packCache = Join-Path $workRoot 'pack-cache'
           [IO.Directory]::CreateDirectory($packCache) | Out-Null
           $cacheInputs = [ordered]@{
             'bstrings-win-x64-offline-base.zip' = 'base.zip'
             'bstrings-win-x64-offline-cuda.zip' = 'cuda-runtime.zip'
-            'airgap-config-quality.json' = 'configuration.file'
-            'Hy-MT2-Apache-2.0-quality.txt' = 'translation-license.file'
-            'airgap-manifest-quality.json' = 'airgap-manifest.file'
+            'airgap-config.json' = 'configuration.file'
+            'Hy-MT2-Apache-2.0.txt' = 'translation-license.file'
+            'airgap-manifest.json' = 'airgap-manifest.file'
           }
           foreach ($sourceName in $cacheInputs.Keys) {
             $source = @(Get-ChildItem -LiteralPath $packsRoot -Recurse -File -Filter $sourceName)
@@ -102,16 +102,16 @@ jobs:
           }
 
           $bundleRoot = Join-Path $workRoot 'bundle'
-          & $coreExecutable bundle acquire `
+          & $baseExecutable bundle acquire `
             --manifest $trustManifest.FullName `
             --cache $packCache `
             --output $bundleRoot
           if ($LASTEXITCODE -ne 0) {
-            throw "Quality bundle acquisition failed with exit code $LASTEXITCODE."
+            throw "Bundle acquisition failed with exit code $LASTEXITCODE."
           }
           & (Join-Path $bundleRoot 'bstrings.exe') bundle verify --bundle-root $bundleRoot
           if ($LASTEXITCODE -ne 0) {
-            throw "Assembled quality bundle verification failed with exit code $LASTEXITCODE."
+            throw "Assembled bundle verification failed with exit code $LASTEXITCODE."
           }
           "bundle_root=$bundleRoot" >> $env:GITHUB_OUTPUT
           "trust_manifest=$($trustManifest.FullName)" >> $env:GITHUB_OUTPUT

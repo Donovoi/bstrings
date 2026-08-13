@@ -67,6 +67,14 @@ try {
     $builderBundle = Join-Path $testRoot 'builder-document-set'
     $bundleDocs = Join-Path $builderBundle 'docs'
     [IO.Directory]::CreateDirectory((Join-Path $bundleDocs 'releases')) | Out-Null
+    $rootDocuments = @(Get-LiteralArrayAssignment $builder 'bundleRootDocumentNames')
+    $expectedRootDocuments = @('BASE_PACK_NOTICE.md', 'VERSIONING.md')
+    if (($rootDocuments -join '|') -cne ($expectedRootDocuments -join '|')) {
+        throw 'The bundle root-document fixture differs from its exact reviewed inventory.'
+    }
+    foreach ($documentName in $rootDocuments) {
+        Copy-Item -LiteralPath (Join-Path $repoRoot $documentName) -Destination $builderBundle
+    }
     foreach ($documentName in Get-LiteralArrayAssignment $builder 'bundleDocumentNames') {
         Copy-Item `
             -LiteralPath (Join-Path $repoRoot "docs\$documentName") `
@@ -87,6 +95,7 @@ try {
         'adr-0008-independent-engine-execution.md',
         'adr-0009-bounded-forensic-pattern-expansion.md',
         'adr-0010-bounded-reversible-decoding.md',
+        'adr-0011-single-windows-kit-and-plain-documentation.md',
         'decision-review-policy.md'
     )
     if (($architectureDocuments -join '|') -cne ($expectedArchitectureDocuments -join '|')) {

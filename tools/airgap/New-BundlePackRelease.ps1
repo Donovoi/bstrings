@@ -7,7 +7,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ReleaseAssetBaseUrl,
     [Parameter(Mandatory = $true)]
-    [string]$CoreReleaseArchive,
+    [string]$BaseReleaseArchive,
     [Parameter(Mandatory = $true)]
     [string]$InstallerScript,
     [string]$ComponentLockPath,
@@ -39,10 +39,10 @@ if (
     ($installerScriptItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
     [long]$installerScriptItem.Length -lt 1
 ) {
-    throw "Quality installer must be a non-empty physical file: $installerScriptPath"
+    throw "Installer must be a non-empty physical file: $installerScriptPath"
 }
-if ($installerScriptItem.Name -cne 'Install-BstringsQuality.ps1') {
-    throw "Quality installer must use the exact public asset name Install-BstringsQuality.ps1: $installerScriptPath"
+if ($installerScriptItem.Name -cne 'Install-Bstrings.ps1') {
+    throw "Installer must use the exact public asset name Install-Bstrings.ps1: $installerScriptPath"
 }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $output) {
@@ -131,30 +131,23 @@ function Assert-LockedFileSpec([object]$Spec, [string]$Name) {
 Assert-NoReparsePoints $bundleRoot 'Complete bundle'
 $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
 if (
-    [int]$lock.schemaVersion -ne 1 -or
-    [string]$lock.profile -ne 'windows-x64-offline-v2' -or
-    [string]$lock.defaultTranslationProfile -ne 'quality'
+    [int]$lock.schemaVersion -ne 2 -or
+    [string]$lock.profile -ne 'windows-x64-offline-v3'
 ) {
-    throw 'Offline component lock does not use the reviewed split-pack profile.'
+    throw 'Offline component lock does not use the one-kit contract.'
 }
-$profileNames = @($lock.translationProfiles.PSObject.Properties.Name)
-if ((@($profileNames | Sort-Object) -join '|') -cne 'quality') {
-    throw 'Offline component lock must contain exactly the quality profile.'
+$model = $lock.components.translationModel
+Assert-LockedFileSpec $model 'translation model'
+if (
+    [string]$model.archiveType -ne 'file' -or
+    [string]::IsNullOrWhiteSpace([string]$model.modelId) -or
+    [string]$model.revision -notmatch '^[0-9a-f]{40}$'
+) {
+    throw 'Translation model metadata is incomplete.'
 }
-foreach ($profileName in $profileNames) {
-    $profile = $lock.translationProfiles.$profileName
-    Assert-LockedFileSpec $profile "$profileName translation model"
-    if (
-        [string]$profile.archiveType -ne 'file' -or
-        [string]::IsNullOrWhiteSpace([string]$profile.modelId) -or
-        [string]$profile.revision -notmatch '^[0-9a-f]{40}$'
-    ) {
-        throw "$profileName translation model metadata is incomplete."
-    }
-    Assert-LockedFileSpec $profile.license "$profileName translation license"
-    if ([string]$profile.license.source -ne 'download') {
-        throw "$profileName translation license must be a locked download."
-    }
+Assert-LockedFileSpec $model.license 'translation model license'
+if ([string]$model.license.source -ne 'download') {
+    throw 'Translation model license must be a locked download.'
 }
 $cudaLock = $lock.llamaCudaOverlay
 if (
@@ -181,17 +174,20 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Complete input bundle failed native manifest verification.'
 }
 $templateConfiguration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
-$templateProfile = [string]$templateConfiguration.translationProfile
-if ($templateProfile -notin $profileNames) {
-    throw "Complete input bundle has an unknown translation profile: $templateProfile"
+$unexpectedProfileProperty = $templateConfiguration.PSObject.Properties['translationProfile']
+if (
+    [string]$templateConfiguration.bundleProfile -cne 'windows-x64-offline-v3' -or
+    $null -ne $unexpectedProfileProperty
+) {
+    throw 'Complete input bundle does not use the one-kit configuration contract.'
 }
-$templateModel = $lock.translationProfiles.$templateProfile
+$templateModel = $model
 if (
     [string]$templateConfiguration.translationModel.id -ne [string]$templateModel.modelId -or
     [string]$templateConfiguration.translationModel.revision -ne [string]$templateModel.revision -or
     [string]$templateConfiguration.translationModel.sha256 -ne [string]$templateModel.sha256
 ) {
-    throw 'Complete input bundle translation identity does not match its selected profile.'
+    throw 'Complete input bundle translation identity does not match its component lock.'
 }
 $templateModelPath = Join-Path $bundleRoot (
     ([string]$templateConfiguration.translationModel.path) -replace '/', '\'
@@ -211,9 +207,7 @@ $originalManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Js
 if ([int]$originalManifest.schemaVersion -ne 1 -or @($originalManifest.files).Count -lt 1) {
     throw 'Complete input bundle has an invalid air-gap manifest.'
 }
-$modelTargets = @(
-    $profileNames | ForEach-Object { "models/hy-mt2/$($lock.translationProfiles.$_.fileName)" }
-)
+$modelTargets = @("models/hy-mt2/$($model.fileName)")
 $cudaTargets = @(
     $cudaLock.runtimeFiles | ForEach-Object { "runtime/llama/$($_.path)" }
 ) + @(
@@ -263,7 +257,7 @@ $baseRows = @(
     $originalManifest.files | Where-Object { [string]$_.path -notin $baseExclusions }
 )
 if ($baseRows.Count -ge @($originalManifest.files).Count) {
-    throw 'Split-pack base exclusions did not remove the template model and profile files.'
+    throw 'Split-pack base exclusions did not remove the template model and kit-specific files.'
 }
 
 [IO.Directory]::CreateDirectory($output) | Out-Null
@@ -373,35 +367,29 @@ if ($cudaIdentity.bytes -lt 1 -or $cudaIdentity.bytes -ge 2000000000) {
     throw "CUDA ZIP must be between 1 and 1,999,999,999 bytes; found $($cudaIdentity.bytes)."
 }
 
-$licenseSources = @{
-    quality = 'licenses/Hy-MT2-7B-Apache-2.0.txt'
-}
 $results = [Collections.Generic.List[object]]::new()
-foreach ($profileName in @('quality')) {
-    $profile = $lock.translationProfiles.$profileName
-    $configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
-    $configuration.translationProfile = $profileName
-    $configuration.translationModel.path = "models/hy-mt2/$($profile.fileName)"
-    $configuration.translationModel.id = [string]$profile.modelId
-    $configuration.translationModel.revision = [string]$profile.revision
-    $configuration.translationModel.sha256 = [string]$profile.sha256
-    $configurationName = "airgap-config-$profileName.json"
+$configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
+$configuration.translationModel.path = "models/hy-mt2/$($model.fileName)"
+$configuration.translationModel.id = [string]$model.modelId
+$configuration.translationModel.revision = [string]$model.revision
+$configuration.translationModel.sha256 = [string]$model.sha256
+$configurationName = 'airgap-config.json'
     $configurationOutput = Join-Path $output $configurationName
     Write-JsonFile $configurationOutput $configuration 10
     $configurationIdentity = Get-FileIdentity $configurationOutput
 
-    $licenseSource = Join-Path $bundleRoot ($licenseSources[$profileName] -replace '/', '\')
+$licenseSource = Join-Path $bundleRoot 'licenses\Hy-MT2-7B-Apache-2.0.txt'
     if (-not (Test-Path -LiteralPath $licenseSource -PathType Leaf)) {
-        throw "Complete bundle lacks the $profileName translation license source: $licenseSource"
+        throw "Complete bundle lacks the translation license source: $licenseSource"
     }
     $licenseSourceIdentity = Get-FileIdentity $licenseSource
     if (
-        $licenseSourceIdentity.bytes -ne [long]$profile.license.bytes -or
-        $licenseSourceIdentity.sha256 -ne [string]$profile.license.sha256
+        $licenseSourceIdentity.bytes -ne [long]$model.license.bytes -or
+        $licenseSourceIdentity.sha256 -ne [string]$model.license.sha256
     ) {
-        throw "$profileName translation license source does not match its lock."
+        throw 'Translation license source does not match its lock.'
     }
-    $licenseName = "Hy-MT2-Apache-2.0-$profileName.txt"
+    $licenseName = 'Hy-MT2-Apache-2.0.txt'
     $licenseOutput = Join-Path $output $licenseName
     Copy-Item -LiteralPath $licenseSource -Destination $licenseOutput
     $licenseIdentity = Get-FileIdentity $licenseOutput
@@ -432,26 +420,26 @@ foreach ($profileName in @('quality')) {
         sha256 = $licenseIdentity.sha256
     })
     $rows.Add([ordered]@{
-        path = "models/hy-mt2/$($profile.fileName)"
-        bytes = [long]$profile.bytes
-        sha256 = [string]$profile.sha256
+        path = "models/hy-mt2/$($model.fileName)"
+        bytes = [long]$model.bytes
+        sha256 = [string]$model.sha256
     })
     $manifestDocument = [ordered]@{
         schemaVersion = 1
         files = @($rows | Sort-Object { [string]$_.path })
     }
-    $profileManifestName = "airgap-manifest-$profileName.json"
-    $profileManifestOutput = Join-Path $output $profileManifestName
-    Write-JsonFile $profileManifestOutput $manifestDocument 6
-    $profileManifestIdentity = Get-FileIdentity $profileManifestOutput
+    $kitManifestName = 'airgap-manifest.json'
+    $kitManifestOutput = Join-Path $output $kitManifestName
+    Write-JsonFile $kitManifestOutput $manifestDocument 6
+    $kitManifestIdentity = Get-FileIdentity $kitManifestOutput
 
-    $trustManifestName = "bundle-packs-$profileName.json"
+    $trustManifestName = 'bundle-packs.json'
     $trustManifestOutput = Join-Path $output $trustManifestName
     $trustManifest = [ordered]@{
         schemaVersion = 1
-        profile = "windows-x64-offline-v2-$profileName"
-        bundleIdentity = "bstrings-$profileName-$($profileManifestIdentity.sha256.Substring(0, 24))"
-        airgapManifestSha256 = $profileManifestIdentity.sha256
+        profile = 'windows-x64-offline-v3'
+        bundleIdentity = "bstrings-kit-$($kitManifestIdentity.sha256.Substring(0, 24))"
+        airgapManifestSha256 = $kitManifestIdentity.sha256
         packs = @(
             [ordered]@{
                 id = 'base'
@@ -483,35 +471,33 @@ foreach ($profileName in @('quality')) {
             },
             [ordered]@{
                 id = 'airgap-manifest'
-                url = Get-AssetUrl $profileManifestName
+                url = Get-AssetUrl $kitManifestName
                 kind = 'file'
                 target = 'airgap-manifest.json'
-                bytes = $profileManifestIdentity.bytes
-                sha256 = $profileManifestIdentity.sha256
+                bytes = $kitManifestIdentity.bytes
+                sha256 = $kitManifestIdentity.sha256
             },
             [ordered]@{
                 id = 'translation-model'
-                url = [string]$profile.url
+                url = [string]$model.url
                 kind = 'file'
-                target = "models/hy-mt2/$($profile.fileName)"
-                bytes = [long]$profile.bytes
-                sha256 = [string]$profile.sha256
+                target = "models/hy-mt2/$($model.fileName)"
+                bytes = [long]$model.bytes
+                sha256 = [string]$model.sha256
             }
         )
     }
     Write-JsonFile $trustManifestOutput $trustManifest 8
     $trustIdentity = Get-FileIdentity $trustManifestOutput
     $results.Add([pscustomobject]@{
-        profile = $profileName
         trustManifest = $trustManifestOutput
         trustManifestSha256 = $trustIdentity.sha256
-        airgapManifestSha256 = $profileManifestIdentity.sha256
+        airgapManifestSha256 = $kitManifestIdentity.sha256
     })
-}
 
 [IO.File]::Copy(
     $installerScriptItem.FullName,
-    (Join-Path $output 'Install-BstringsQuality.ps1'),
+    (Join-Path $output 'Install-Bstrings.ps1'),
     $false
 )
 
@@ -524,20 +510,20 @@ foreach ($file in Get-ChildItem -LiteralPath $output -File | Sort-Object Name) {
         throw "Duplicate release-asset checksum name: $($file.Name)"
     }
 }
-$coreArchivePath = [IO.Path]::GetFullPath($CoreReleaseArchive)
-$coreArchiveItem = Get-Item -LiteralPath $coreArchivePath -Force -ErrorAction Stop
+$baseReleaseArchivePath = [IO.Path]::GetFullPath($BaseReleaseArchive)
+$baseReleaseArchiveItem = Get-Item -LiteralPath $baseReleaseArchivePath -Force -ErrorAction Stop
 if (
-    $coreArchiveItem.PSIsContainer -or
-    ($coreArchiveItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
-    [long]$coreArchiveItem.Length -lt 1
+    $baseReleaseArchiveItem.PSIsContainer -or
+    ($baseReleaseArchiveItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+    [long]$baseReleaseArchiveItem.Length -lt 1
 ) {
-    throw "Core release archive must be a non-empty physical file: $coreArchivePath"
+    throw "Base release archive must be a non-empty physical file: $baseReleaseArchivePath"
 }
-if ($coreArchiveItem.Name -cne 'bstrings-win-x64.zip') {
-    throw "Core release archive must use the exact public asset name bstrings-win-x64.zip: $coreArchivePath"
+if ($baseReleaseArchiveItem.Name -cne 'bstrings-win-x64.zip') {
+    throw "Runtime archive must use the exact internal asset name bstrings-win-x64.zip: $baseReleaseArchivePath"
 }
-if (-not $checksumInputByName.TryAdd($coreArchiveItem.Name, $coreArchiveItem.FullName)) {
-    throw "Duplicate release-asset checksum name: $($coreArchiveItem.Name)"
+if (-not $checksumInputByName.TryAdd($baseReleaseArchiveItem.Name, $baseReleaseArchiveItem.FullName)) {
+    throw "Duplicate release-asset checksum name: $($baseReleaseArchiveItem.Name)"
 }
 
 $checksums = [Collections.Generic.List[string]]::new()
@@ -554,8 +540,7 @@ foreach ($fileName in @($checksumInputByName.Keys | Sort-Object)) {
 )
 
 if (-not $SkipAssemblyTest) {
-    $testProfile = $templateProfile
-    $testTrust = Join-Path $output "bundle-packs-$testProfile.json"
+    $testTrust = Join-Path $output 'bundle-packs.json'
     $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('bstrings-pack-test-' + [Guid]::NewGuid().ToString('N'))
     $cache = Join-Path $testRoot 'cache'
     $assembled = Join-Path $testRoot 'assembled'
@@ -564,13 +549,13 @@ if (-not $SkipAssemblyTest) {
         Copy-Item -LiteralPath $baseArchivePath -Destination (Join-Path $cache 'base.zip')
         Copy-Item -LiteralPath $cudaArchivePath -Destination (Join-Path $cache 'cuda-runtime.zip')
         Copy-Item `
-            -LiteralPath (Join-Path $output "airgap-config-$testProfile.json") `
+            -LiteralPath (Join-Path $output 'airgap-config.json') `
             -Destination (Join-Path $cache 'configuration.file')
         Copy-Item `
-            -LiteralPath (Join-Path $output "Hy-MT2-Apache-2.0-$testProfile.txt") `
+            -LiteralPath (Join-Path $output 'Hy-MT2-Apache-2.0.txt') `
             -Destination (Join-Path $cache 'translation-license.file')
         Copy-Item `
-            -LiteralPath (Join-Path $output "airgap-manifest-$testProfile.json") `
+            -LiteralPath (Join-Path $output 'airgap-manifest.json') `
             -Destination (Join-Path $cache 'airgap-manifest.file')
         try {
             New-Item `
@@ -588,7 +573,7 @@ if (-not $SkipAssemblyTest) {
             --cache $cache `
             --output $assembled
         if ($LASTEXITCODE -ne 0) {
-            throw "Local $testProfile split-pack assembly test failed."
+            throw 'Local one-kit split-pack assembly test failed.'
         }
     }
     finally {
@@ -613,4 +598,4 @@ $results | Format-Table -AutoSize | Out-Host
 Write-Host "Split-pack release created: $output"
 Write-Host "Base ZIP: $($baseIdentity.bytes) bytes; $($baseIdentity.sha256)"
 Write-Host "CUDA ZIP: $($cudaIdentity.bytes) bytes; $($cudaIdentity.sha256)"
-Write-Host 'Quality is the default; each model remains an immutable, hash-gated external file pack.'
+Write-Host 'The one translation model remains an immutable, hash-gated external file pack.'

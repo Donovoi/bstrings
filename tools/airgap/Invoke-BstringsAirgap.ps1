@@ -11,7 +11,7 @@ Enable-BstringsAirgapEnvironment -BundleRoot $PSScriptRoot
 
 $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'airgap-config.json') -Raw |
     ConvertFrom-Json
-if ($config.schemaVersion -ne 1) {
+if ($config.schemaVersion -ne 2) {
     throw "Unsupported air-gap configuration schema: $($config.schemaVersion)"
 }
 function Resolve-BundlePath([string]$RelativePath) {

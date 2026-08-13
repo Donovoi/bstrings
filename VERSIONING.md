@@ -1,33 +1,38 @@
 # Versioning and releases
 
-The application version lives in `bstrings/bstrings.csproj`:
-
-```xml
-<Version>1.9.17</Version>
-```
+The application version is in `bstrings/bstrings.csproj`.
 
 The project uses `MAJOR.MINOR.PATCH`:
 
-- bump `PATCH` for a compatible fix;
-- bump `MINOR` for a compatible feature; and
-- bump `MAJOR` for a breaking change.
+- Change `PATCH` for a compatible fix.
+- Change `MINOR` for a compatible feature.
+- Change `MAJOR` for an incompatible public change.
 
-## Current release
+## Current public release
 
-v1.9.17 is the complete Windows x64 quality/offline release. Its release assets
-contain the current core plus the version-matched installer, offline base,
-quality manifest, licence, and trust metadata needed to assemble and verify the
-single advertised Full profile. See
-[download and installation](docs/download-and-install.md) for the user-facing
-feature matrix.
+[v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17) is the
+current public Windows x64 release. It is immutable. Its historical asset and
+directory names cannot change.
 
-Tags and published assets remain immutable in identity. A new version and
-successful build are required to publish a replacement core; a new complete
-quality release additionally requires every offline acceptance gate.
+Current source prepares the next major release. That release has one complete
+Windows kit. It uses these public names:
+
+- `Install-Bstrings.ps1`
+- `bstrings-kit`
+- `bundle-packs.json`
+- `airgap-config.json`
+- `airgap-manifest.json`
+- `Hy-MT2-Apache-2.0.txt`
+
+The release can split the kit into download parts. These parts are installer
+inputs. They are not separate products or installation choices.
+
+The base archive contains `BASE_PACK_NOTICE.md`. This notice tells users to run
+the installer instead of treating the archive as a separate installation.
 
 ## Change the version
 
-The helper updates the project file locally:
+Use the helper:
 
 ```powershell
 .\Scripts\UpdateVersion.ps1 patch
@@ -35,110 +40,71 @@ The helper updates the project file locally:
 .\Scripts\UpdateVersion.ps1 major
 ```
 
-Review the diff and commit it like any other change. Commit-message keywords do
-not change the version, and CI never writes a version commit back to the
-repository. The helper changes only the project file.
+Review and commit the change. CI does not write a version commit.
 
-Ordinary product, test, build, packaging, installer, workflow, and documentation
-changes may retain the current version so maintainers can batch several tested
-changes into one release. CI compares the base and head with
-`tools/release/Assert-CodeVersion.ps1`: it always rejects a decrease, accepts an
-equal version as an ordinary change, and recognizes an unused forward version
-as deliberate release preparation. A forward version whose tag already exists
-is rejected.
+Ordinary changes can keep the current source version. Maintainers can combine
+several tested changes in one release. A forward version change starts release
+preparation.
 
-The automatic Windows-core channel does not change the quality installer's
-pinned tag. Update `Scripts/Install-BstringsQuality.ps1`, its tests, the
-air-gap release document inventory, and versioned user documentation only when
-preparing a new fully gated quality/offline release.
+## Update release-owned files
+
+For each new release, update all these items together:
+
+- `bstrings/bstrings.csproj`
+- the installer release pin
+- the release notes
+- README release links
+- the supported trust identity
+- the component lock
+- release acceptance tests and expected assets
+
+A release tag and all published assets are immutable. Do not replace an asset
+in an existing release. Publish a new version.
 
 ## Validate before tagging
 
-Run the same core steps used by CI:
+Run the normal build and test gates. Also run the complete Windows kit gates:
 
-```powershell
-dotnet restore bstrings.sln
-dotnet build bstrings.sln -c Release --no-restore
-dotnet test bstrings.sln -c Release --no-build
-```
+- Build the exact tested commit.
+- Assemble the complete kit.
+- Verify every manifest row.
+- Test native extraction, FLOSS, OCR, and translation.
+- Run the installer with Windows PowerShell 5.1 and PowerShell 7.
+- Test a clean installation and a verified upgrade.
+- Test old-install and old-cache migration.
+- Run air-gapped bundle acceptance.
+- Check the release asset inventory and checksums.
+- Scan all public files for private case data.
 
-The workflow additionally checks Rust formatting/lints/tests, Python
-lint/compilation/tests, PowerShell syntax, third-party inventories, the
-self-contained publish, the quality installer under Windows PowerShell 5.1 and
-PowerShell 7, and the integrated offline smoke. An ordinary manual dispatch
-runs this fast lane. A manual dispatch on `master` with `full_offline=true`, or
-any version tag, also builds the complete CPU/Q4 archive and authenticated CUDA
-overlay, fully rehashes the exact restored component cache without network
-fallback, enforces the
-archive-size/checksum boundary, extracts the exact ZIP, verifies its manifest,
-and runs the CPU translation and FLOSS recovery smokes. The exact procedure is in
-[offline release maintenance](docs/offline-release-maintenance.md). Do not run
-the tag workflow until the explicit full-offline `master` dispatch has passed
-for the release-preparation commit.
+The public release must contain the exact tested commit. Its tag, assets,
+checksums, trust records, installer, and acceptance evidence must agree.
 
-## Automatic Windows x64 release draft
+## Release workflow
 
-Every successful `Build and test` push run on `master` is followed by
-`Stage Windows release draft`. The workflow checks out the exact tested
-commit and reads the project version. Equal-version ordinary changes are a
-no-op when that version already belongs to an earlier staged or published
-release; they do not create another draft or tag. For a deliberate unused
-forward version, the workflow creates the exact immutable-candidate tag,
-downloads the `bstrings-win-x64` artifact from that successful run,
-extracts and verifies its required files, creates a SHA-256 checksum list, and
-stages a private draft containing only:
+A successful master build can stage a draft. The draft is not a second product.
+It holds installer components until the complete release gates pass.
 
-- `bstrings-win-x64.zip`; and
-- `SHA256SUMS.txt`.
+The release workflow must:
 
-The workflow runs only for a successful same-repository `master` push. It does
-not execute pull-request code with a write token, does not use a personal
-access token, and refuses to retarget an existing tag. Reruns are idempotent
-when the exact draft or published release already exists. The preliminary core
-draft is not a user download channel; it remains mutable only until the full
-workflow replaces its assets and publishes it once.
+1. Use the exact tested commit.
+2. Create the exact version tag once.
+3. Build and verify the complete Windows kit.
+4. Create the split installer parts.
+5. Run independent bundle acceptance.
+6. Replace the draft component set with the accepted public asset set.
+7. Publish the immutable release once.
 
-## Full quality/offline release
+The internal acceptance file is `offline-bundle-acceptance.json`. Do not publish
+this file as a release asset.
 
-The larger quality/offline release remains separately gated. Its release job
-publishes:
+See [Offline release maintenance](docs/offline-release-maintenance.md) for the
+full maintenance procedure.
 
-- `Install-BstringsQuality.ps1`;
-- `bstrings-win-x64.zip`;
-- `bstrings-win-x64-offline-base.zip`;
-- `airgap-config-quality.json`;
-- `airgap-manifest-quality.json`;
-- `Hy-MT2-Apache-2.0-quality.txt`;
-- `bundle-packs-quality.json`;
-- `SHA256SUMS.txt`, which covers the installer and every other public asset.
+## Historical records
 
-The full workflow separately retains `offline-profile-acceptance.json` as an
-internal Actions gate artifact. The release job validates it against the exact
-tagged build, but it is not a public Release download.
+Files in `docs/releases/` describe the names and commands for their releases.
+Do not change those historical facts. Older architecture decisions can also
+contain the former terms when they record earlier behavior.
 
-After the deliberate version bump passes fast CI and the automatic channel
-creates its tested tag and core draft, manually dispatch `Build and test` on
-`master` with `full_offline=true`. This runs the complete hosted lane and, only
-after the network-blocked `ValidateOnly` pass has fully rehashed every cached
-component, may populate the exact default-branch component cache. It does not
-publish a release. Then dispatch `Build and test` with the version tag as the
-selected ref. The tag run restores only that exact cache key, never writes a
-duplicate tag-scoped cache, rebuilds and verifies the complete release, and
-runs fresh cold self-hosted acquisition, assembly, verification, translation
-smoke, and evidence generation. It replaces the preliminary draft assets,
-adds the full asset set, and publishes exactly once. GitHub then makes the tag
-and assets immutable. Dispatching against a branch cannot publish a full
-release.
-
-For v1.9.17 the complete release body is
-[`docs/releases/v1.9.17.md`](docs/releases/v1.9.17.md). Keep historical release
-documents unchanged. Before promoting a version to the full quality/offline
-asset set, update its installer pin, documentation inventory, human release
-body, and the quality-profile acceptance evidence.
-
-GitHub Releases are the product channel. Keep only usable program/download,
-installation, license, checksum, manifest, and release-verification assets
-there. Benchmark corpora, raw outputs, one-shot witnesses and ledgers, logs,
-host details, and experimental test reports belong in workflow artifacts or
-controlled internal evidence storage. Put only a concise, qualified benchmark
-summary in repository documentation and release notes.
+The current one-kit decision is
+[ADR-0011](docs/architecture/adr-0011-single-windows-kit-and-plain-documentation.md).

@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$DestinationDirectory = (Join-Path (Get-Location).Path 'bstrings-quality'),
+    [string]$DestinationDirectory = (Join-Path (Get-Location).Path 'bstrings-kit'),
     [string]$InstallerCacheDirectory,
-    [string]$ReleaseTag = 'v1.9.17',
+    [string]$ReleaseTag = 'v2.0.0',
     [switch]$KeepCache,
     [ValidateRange(1, 10)]
     [int]$AcquireAttempts = 3,
@@ -19,18 +19,24 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$expectedReleaseTag = 'v1.9.17'
+$expectedReleaseTag = 'v2.0.0'
 $repository = 'Donovoi/bstrings'
-$qualityManifestName = 'bundle-packs-quality.json'
+$trustManifestName = 'bundle-packs.json'
 $coreArchiveName = 'bstrings-win-x64.zip'
 $checksumName = 'SHA256SUMS.txt'
-$installerName = 'Install-BstringsQuality.ps1'
+$installerName = 'Install-Bstrings.ps1'
+$compatiblePriorManifestSha256 = @(
+    # Immutable v1.9.17 complete-kit manifest. This private compatibility
+    # identity permits a verified existing installation to seed one upgrade.
+    '8685a859dbf3927e076f974f21290b62036e6be43c0b7238e32e76e4a1ed5142'
+)
 $maximumMetadataBytes = 4MB
 $maximumCoreBytes = 2000000000
 $productionMinimumFreeBytes = 30GB
 $installationSucceeded = $false
 $ownedCache = $false
 $cacheRoot = $null
+$legacyCacheRoot = $null
 $destination = $null
 $destinationParent = $null
 $stagingDestination = $null
@@ -38,13 +44,15 @@ $stagingDestinationCreated = $false
 $backupDestination = $null
 $backupDestinationCreated = $false
 $publishedDestination = $false
+$legacyInstallation = $null
+$removeLegacyInstallationAfterSuccess = $false
 
 function Write-InstallerProgress([double]$Percent, [string]$Activity) {
     if ($Percent -lt 0 -or $Percent -gt 100 -or [string]::IsNullOrWhiteSpace($Activity)) {
         throw 'Installer progress requires a percentage from 0 through 100 and an activity.'
     }
     $formatted = $Percent.ToString('F1', [Globalization.CultureInfo]::InvariantCulture)
-    Write-Host "Progress: quality installer: $formatted% ($Activity)"
+    Write-Host "Progress: bstrings installer: $formatted% ($Activity)"
 }
 
 function Get-FullPath([string]$Path, [string]$Name) {
@@ -169,7 +177,7 @@ function Assert-FreeSpace([string[]]$Paths, [long]$RequiredBytes) {
         }
         $available = [long]$drive.AvailableFreeSpace
         if ($available -lt $RequiredBytes) {
-            throw "The quality installation requires at least $RequiredBytes free bytes on '$root'; found $available."
+            throw "The bstrings installation requires at least $RequiredBytes free bytes on '$root'; found $available."
         }
     }
 }
@@ -346,15 +354,15 @@ function Expand-VerifiedCore(
     [string]$ExpectedSha256
 ) {
     if ($ExpectedBytes -lt 1 -or $ExpectedSha256 -cnotmatch '^[0-9a-f]{64}$') {
-        throw 'Authenticated core archive identity is invalid.'
+        throw 'Authenticated base runtime archive identity is invalid.'
     }
     $runtimeLeaf = '.core-runtime-' + [Guid]::NewGuid().ToString('N')
     $runtimeRoot = Join-Path $CacheDirectory $runtimeLeaf
     if (Test-Path -LiteralPath $runtimeRoot) {
-        throw "Core runtime staging path unexpectedly exists: $runtimeRoot"
+        throw "Base runtime staging path unexpectedly exists: $runtimeRoot"
     }
     [IO.Directory]::CreateDirectory($runtimeRoot) | Out-Null
-    Assert-PhysicalItem $runtimeRoot 'Core runtime staging directory' $true | Out-Null
+    Assert-PhysicalItem $runtimeRoot 'Base runtime staging directory' $true | Out-Null
 
     # Windows PowerShell 5.1 does not reliably load ZipArchive when only the
     # FileSystem companion assembly is requested.
@@ -363,7 +371,7 @@ function Expand-VerifiedCore(
     $archive = $null
     $archiveStream = $null
     try {
-        $archiveItem = Assert-PhysicalItem $ArchivePath 'Core release archive' $false
+        $archiveItem = Assert-PhysicalItem $ArchivePath 'Base runtime archive' $false
         $archiveStream = [IO.FileStream]::new(
             $archiveItem.FullName,
             [IO.FileMode]::Open,
@@ -373,7 +381,7 @@ function Expand-VerifiedCore(
             [IO.FileOptions]::SequentialScan
         )
         if ([long]$archiveStream.Length -ne $ExpectedBytes) {
-            throw 'The leased core release archive has an unexpected byte length.'
+            throw 'The leased base runtime archive has an unexpected byte length.'
         }
         $hasher = [Security.Cryptography.SHA256]::Create()
         try {
@@ -385,7 +393,7 @@ function Expand-VerifiedCore(
             $hasher.Dispose()
         }
         if ($leasedHash -cne $ExpectedSha256) {
-            throw 'The leased core release archive failed exact SHA-256 authentication.'
+            throw 'The leased base runtime archive failed exact SHA-256 authentication.'
         }
         $archiveStream.Position = 0
         $archive = [IO.Compression.ZipArchive]::new(
@@ -394,7 +402,7 @@ function Expand-VerifiedCore(
             $true
         )
         if ($archive.Entries.Count -lt 1 -or $archive.Entries.Count -gt 10000) {
-            throw 'The core archive has an invalid entry count.'
+            throw 'The base runtime archive has an invalid entry count.'
         }
         $seen = [Collections.Generic.HashSet[string]]::new(
             [StringComparer]::OrdinalIgnoreCase
@@ -413,7 +421,7 @@ function Expand-VerifiedCore(
                 $name.Contains(':') -or
                 $name.StartsWith('/', [StringComparison]::Ordinal)
             ) {
-                throw "The core archive contains an unsafe path: '$name'"
+                throw "The base runtime archive contains an unsafe path: '$name'"
             }
             $isDirectory = $name.EndsWith('/', [StringComparison]::Ordinal)
             $segments = @($name.TrimEnd('/').Split('/'))
@@ -423,33 +431,33 @@ function Expand-VerifiedCore(
                     [string]::IsNullOrWhiteSpace($_) -or $_ -eq '.' -or $_ -eq '..'
                 }).Count -ne 0
             ) {
-                throw "The core archive contains an unsafe path: '$name'"
+                throw "The base runtime archive contains an unsafe path: '$name'"
             }
             $relative = $segments -join [IO.Path]::DirectorySeparatorChar
             $target = [IO.Path]::GetFullPath((Join-Path $runtimeRoot $relative))
             if (-not $target.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase)) {
-                throw "The core archive path escapes its staging directory: '$name'"
+                throw "The base runtime archive path escapes its staging directory: '$name'"
             }
             if (-not $seen.Add($target)) {
-                throw "The core archive contains a duplicate path: '$name'"
+                throw "The base runtime archive contains a duplicate path: '$name'"
             }
             $unixType = (($entry.ExternalAttributes -shr 16) -band 0xF000)
             if (
                 $unixType -eq 0xA000 -or
                 ($entry.ExternalAttributes -band [int][IO.FileAttributes]::ReparsePoint) -ne 0
             ) {
-                throw "The core archive contains a linked entry: '$name'"
+                throw "The base runtime archive contains a linked entry: '$name'"
             }
             if ($isDirectory) {
                 [IO.Directory]::CreateDirectory($target) | Out-Null
                 continue
             }
             if ([long]$entry.Length -lt 0) {
-                throw "The core archive contains an invalid entry length: '$name'"
+                throw "The base runtime archive contains an invalid entry length: '$name'"
             }
             $expandedBytes += [long]$entry.Length
             if ($expandedBytes -gt 4GB) {
-                throw 'The core archive expands beyond the installer safety limit.'
+                throw 'The base runtime archive expands beyond the installer safety limit.'
             }
             [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target)) | Out-Null
             $input = $null
@@ -469,7 +477,7 @@ function Expand-VerifiedCore(
                 if ($null -ne $input) { $input.Dispose() }
             }
             if ([long](Get-Item -LiteralPath $target -Force).Length -ne [long]$entry.Length) {
-                throw "The extracted core entry has the wrong length: '$name'"
+                throw "The extracted base runtime entry has the wrong length: '$name'"
             }
         }
     }
@@ -478,7 +486,7 @@ function Expand-VerifiedCore(
         if ($null -ne $archiveStream) { $archiveStream.Dispose() }
     }
     $executable = Join-Path $runtimeRoot 'bstrings.exe'
-    Assert-PhysicalItem $executable 'Extracted core bstrings.exe' $false | Out-Null
+    Assert-PhysicalItem $executable 'Extracted base runtime bstrings.exe' $false | Out-Null
     return [pscustomobject]@{
         Root = $runtimeRoot
         Executable = $executable
@@ -486,9 +494,9 @@ function Expand-VerifiedCore(
 }
 
 function Get-TrustManifestIdentity([string]$Path) {
-    $item = Assert-PhysicalItem $Path 'Quality trust manifest' $false
+    $item = Assert-PhysicalItem $Path 'Bundle trust manifest' $false
     if ([long]$item.Length -lt 2 -or [long]$item.Length -gt $script:maximumMetadataBytes) {
-        throw 'The quality trust manifest has an invalid byte length.'
+        throw 'The bundle trust manifest has an invalid byte length.'
     }
     try {
         $manifest = [IO.File]::ReadAllText(
@@ -497,15 +505,15 @@ function Get-TrustManifestIdentity([string]$Path) {
         ) | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
-        throw "The quality trust manifest is not valid JSON: $($_.Exception.Message)"
+        throw "The bundle trust manifest is not valid JSON: $($_.Exception.Message)"
     }
     $airgapHash = [string]$manifest.airgapManifestSha256
     if (
         [int]$manifest.schemaVersion -ne 1 -or
-        [string]$manifest.profile -cne 'windows-x64-offline-v2-quality' -or
+        [string]$manifest.profile -cne 'windows-x64-offline-v3' -or
         $airgapHash -cnotmatch '^[0-9a-f]{64}$'
     ) {
-        throw 'The trust manifest is not the exact supported quality profile.'
+        throw 'The trust manifest is not the exact supported bstrings kit.'
     }
     return [pscustomobject]@{
         AirgapManifestSha256 = $airgapHash
@@ -517,8 +525,212 @@ function Assert-InstalledManifest([string]$BundleRoot, [string]$ExpectedHash) {
     $manifestPath = Join-Path $BundleRoot 'airgap-manifest.json'
     $actualHash = Get-LowerSha256 $manifestPath 'Installed air-gap manifest'
     if ($actualHash -cne $ExpectedHash) {
-        throw 'The installed air-gap manifest does not match the quality trust manifest.'
+        throw 'The installed air-gap manifest does not match the bundle trust manifest.'
     }
+}
+
+function Import-VerifiedLegacyReleaseAsset(
+    [object]$Asset,
+    [string]$LegacyDirectory,
+    [string]$DestinationDirectory
+) {
+    if (
+        [string]::IsNullOrWhiteSpace($LegacyDirectory) -or
+        -not (Test-Path -LiteralPath $LegacyDirectory -PathType Container)
+    ) {
+        return
+    }
+    $sourcePath = Join-Path $LegacyDirectory ([string]$Asset.Name)
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        return
+    }
+    try {
+        Assert-ExistingPathChain $sourcePath 'Legacy release-asset cache entry'
+        $source = Assert-PhysicalItem $sourcePath 'Legacy release-asset cache entry' $false
+        if (
+            [long]$source.Length -ne [long]$Asset.Bytes -or
+            (Get-LowerSha256 $sourcePath 'Legacy release-asset cache entry') -cne
+                [string]$Asset.Sha256
+        ) {
+            Write-Warning "Ignored an invalid legacy cached release asset: $($Asset.Name)"
+            return
+        }
+        $destinationRoot = Ensure-PhysicalDirectory `
+            $DestinationDirectory `
+            'Release-asset cache directory'
+        $destinationPath = Join-Path $destinationRoot ([string]$Asset.Name)
+        if (Test-Path -LiteralPath $destinationPath) {
+            return
+        }
+        $partialPath = Join-Path $destinationRoot (
+            ".$($Asset.Name).download-$([Guid]::NewGuid().ToString('N')).partial"
+        )
+        try {
+            [IO.File]::Copy($sourcePath, $partialPath, $false)
+            $partial = Assert-PhysicalItem $partialPath 'Imported release-asset cache entry' $false
+            if (
+                [long]$partial.Length -ne [long]$Asset.Bytes -or
+                (Get-LowerSha256 $partialPath 'Imported release-asset cache entry') -cne
+                    [string]$Asset.Sha256
+            ) {
+                throw "Legacy release-asset import changed while copying '$($Asset.Name)'."
+            }
+            [IO.File]::Move($partialPath, $destinationPath)
+        }
+        finally {
+            Remove-ValidatedPartialFile $partialPath $destinationRoot
+        }
+    }
+    catch {
+        Write-Warning "Could not reuse legacy release asset '$($Asset.Name)': $($_.Exception.Message)"
+    }
+}
+
+function Import-VerifiedLegacyPackCache(
+    [string]$ManifestPath,
+    [string]$LegacyPackCache,
+    [string]$DestinationPackCache
+) {
+    if (
+        [string]::IsNullOrWhiteSpace($LegacyPackCache) -or
+        -not (Test-Path -LiteralPath $LegacyPackCache -PathType Container)
+    ) {
+        return
+    }
+    try {
+        Assert-ExistingPathChain $LegacyPackCache 'Legacy bundle-pack cache'
+        Assert-PhysicalItem $LegacyPackCache 'Legacy bundle-pack cache' $true | Out-Null
+        $manifest = [IO.File]::ReadAllText(
+            (Assert-PhysicalItem $ManifestPath 'Bundle trust manifest' $false).FullName,
+            [Text.UTF8Encoding]::new($false, $true)
+        ) | ConvertFrom-Json -ErrorAction Stop
+        $packs = @($manifest.packs)
+        if ($packs.Count -lt 1 -or $packs.Count -gt 16) {
+            throw 'The bundle trust manifest has an invalid pack count.'
+        }
+        foreach ($pack in $packs) {
+            $bytes = [long]$pack.bytes
+            $sha256 = [string]$pack.sha256
+            $kind = if (
+                -not ($pack.PSObject.Properties.Name -ccontains 'kind') -or
+                [string]$pack.kind -ceq 'zip'
+            ) {
+                'zip'
+            }
+            elseif ([string]$pack.kind -ceq 'file') {
+                'file'
+            }
+            else {
+                throw "The bundle trust manifest has an unsupported pack kind: $($pack.kind)"
+            }
+            if ($bytes -lt 1 -or $sha256 -cnotmatch '^[0-9a-f]{64}$') {
+                throw 'The bundle trust manifest has an invalid pack identity.'
+            }
+            $relativeObjectPath = Join-Path `
+                (Join-Path `
+                    (Join-Path `
+                        (Join-Path `
+                            (Join-Path 'objects' 'v1') `
+                            $kind
+                        ) `
+                        $bytes.ToString([Globalization.CultureInfo]::InvariantCulture)
+                    ) `
+                    $sha256.Substring(0, 2)
+                ) `
+                ($sha256 + '.object')
+            $sourcePath = Join-Path $LegacyPackCache $relativeObjectPath
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                continue
+            }
+            try {
+                Assert-ExistingPathChain $sourcePath 'Legacy bundle-pack cache object'
+                $source = Assert-PhysicalItem `
+                    $sourcePath `
+                    'Legacy bundle-pack cache object' `
+                    $false
+                if (
+                    [long]$source.Length -ne $bytes -or
+                    (Get-LowerSha256 $sourcePath 'Legacy bundle-pack cache object') -cne $sha256
+                ) {
+                    Write-Warning "Ignored an invalid legacy bundle-pack object: $sha256"
+                    continue
+                }
+                $destinationPath = Join-Path $DestinationPackCache $relativeObjectPath
+                $destinationParent = Ensure-PhysicalDirectory `
+                    ([IO.Path]::GetDirectoryName($destinationPath)) `
+                    'Bundle-pack cache object parent'
+                if (Test-Path -LiteralPath $destinationPath) {
+                    continue
+                }
+                $partialPath = Join-Path $destinationParent (
+                    ".$sha256.import-$([Guid]::NewGuid().ToString('N')).partial"
+                )
+                try {
+                    [IO.File]::Copy($sourcePath, $partialPath, $false)
+                    $partial = Assert-PhysicalItem `
+                        $partialPath `
+                        'Imported bundle-pack cache object' `
+                        $false
+                    if (
+                        [long]$partial.Length -ne $bytes -or
+                        (Get-LowerSha256 $partialPath 'Imported bundle-pack cache object') -cne
+                            $sha256
+                    ) {
+                        throw "Legacy bundle-pack object changed while copying: $sha256"
+                    }
+                    [IO.File]::Move($partialPath, $destinationPath)
+                }
+                finally {
+                    if (Test-Path -LiteralPath $partialPath) {
+                        Assert-PhysicalItem `
+                            $partialPath `
+                            'Imported bundle-pack cache partial' `
+                            $false | Out-Null
+                        [IO.File]::Delete($partialPath)
+                    }
+                }
+            }
+            catch {
+                Write-Warning "Could not reuse legacy bundle-pack object '$sha256': $($_.Exception.Message)"
+            }
+        }
+    }
+    catch {
+        Write-Warning "Legacy bundle-pack cache reuse was skipped: $($_.Exception.Message)"
+    }
+}
+
+function Assert-ExistingBundleShape([string]$BundleRoot) {
+    Assert-PhysicalDirectoryTree $BundleRoot 'Existing destination'
+    Assert-PhysicalItem `
+        (Join-Path $BundleRoot 'bstrings.exe') `
+        'Existing destination bstrings.exe' `
+        $false | Out-Null
+    Assert-PhysicalItem `
+        (Join-Path $BundleRoot 'airgap-manifest.json') `
+        'Existing destination air-gap manifest' `
+        $false | Out-Null
+}
+
+function Assert-ExistingBundleIsReplaceable(
+    [string]$BundleRoot,
+    [string]$VerifierExecutable,
+    [string]$CurrentManifestSha256
+) {
+    Assert-ExistingBundleShape $BundleRoot
+    $manifestPath = Join-Path $BundleRoot 'airgap-manifest.json'
+    $manifestSha256 = Get-LowerSha256 $manifestPath 'Existing destination air-gap manifest'
+    $allowedManifestSha256 = @($CurrentManifestSha256) + @($script:compatiblePriorManifestSha256)
+    if ($allowedManifestSha256 -cnotcontains $manifestSha256) {
+        throw (
+            'The existing destination is not a supported prior bstrings kit. ' +
+            'Choose an empty destination or move the unrelated directory first.'
+        )
+    }
+    Invoke-BundleVerify `
+        $VerifierExecutable `
+        $BundleRoot `
+        'Existing destination ownership verification'
 }
 
 function ConvertTo-WindowsCommandLineArgument([string]$Value) {
@@ -646,12 +858,12 @@ function Remove-OwnedInstallerCache([string]$Path, [string]$ExpectedParent) {
     Remove-ValidatedDirectory `
         $fullPath `
         $ExpectedParent `
-        '.bstrings-quality-installer-cache' `
+        '.bstrings-installer-cache' `
         'shared installer cache'
 }
 
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
-    throw 'The quality installer supports Windows only.'
+    throw 'The bstrings installer supports Windows only.'
 }
 $operatingSystemArchitecture = if (
     -not [string]::IsNullOrWhiteSpace($env:PROCESSOR_ARCHITEW6432)
@@ -662,7 +874,7 @@ else {
     $env:PROCESSOR_ARCHITECTURE
 }
 if ($operatingSystemArchitecture -cne 'AMD64') {
-    throw "The quality installer requires Windows x64; detected '$operatingSystemArchitecture'."
+    throw "The bstrings installer requires Windows x64; detected '$operatingSystemArchitecture'."
 }
 if ($ReleaseTag -cne $expectedReleaseTag) {
     throw "This installer is pinned to $expectedReleaseTag; '$ReleaseTag' is not supported."
@@ -715,13 +927,34 @@ if ([string]::IsNullOrWhiteSpace($destinationParent)) {
 }
 $existingDestination = Get-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
 if ($null -ne $existingDestination) {
-    Assert-PhysicalDirectoryTree $destination 'DestinationDirectory'
+    Assert-ExistingBundleShape $destination
 }
 Assert-ExistingPathChain $destination 'DestinationDirectory'
 
+if (
+    $null -eq $existingDestination -and
+    -not $PSBoundParameters.ContainsKey('DestinationDirectory')
+) {
+    $legacyCandidate = Join-Path $destinationParent 'bstrings-quality'
+    if (Test-Path -LiteralPath $legacyCandidate) {
+        $legacyInstallation = Get-NormalizedDirectoryPath `
+            $legacyCandidate `
+            'Previous bstrings installation'
+        if (
+            (Test-SameOrDescendant $legacyInstallation $destination) -or
+            (Test-SameOrDescendant $destination $legacyInstallation)
+        ) {
+            throw 'The previous and current installation paths must not overlap.'
+        }
+        Assert-ExistingBundleShape $legacyInstallation
+        $removeLegacyInstallationAfterSuccess = $true
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($InstallerCacheDirectory)) {
     $ownedCache = $true
-    $cacheRoot = Join-Path $destinationParent '.bstrings-quality-installer-cache'
+    $cacheRoot = Join-Path $destinationParent '.bstrings-installer-cache'
+    $legacyCacheRoot = Join-Path $destinationParent '.bstrings-quality-installer-cache'
 }
 else {
     $cacheRoot = Get-NormalizedDirectoryPath `
@@ -743,6 +976,24 @@ if (
     throw 'DestinationDirectory and InstallerCacheDirectory must not overlap.'
 }
 Assert-ExistingPathChain $cacheRoot 'InstallerCacheDirectory'
+if (
+    $null -ne $legacyCacheRoot -and
+    (Test-Path -LiteralPath $legacyCacheRoot)
+) {
+    $legacyCacheRoot = Get-NormalizedDirectoryPath `
+        $legacyCacheRoot `
+        'Legacy installer cache directory'
+    if (
+        (Test-SameOrDescendant $legacyCacheRoot $destination) -or
+        (Test-SameOrDescendant $destination $legacyCacheRoot) -or
+        (Test-SameOrDescendant $legacyCacheRoot $cacheRoot) -or
+        (Test-SameOrDescendant $cacheRoot $legacyCacheRoot)
+    ) {
+        throw 'The legacy cache must not overlap the destination or current installer cache.'
+    }
+    Assert-ExistingPathChain $legacyCacheRoot 'Legacy installer cache directory'
+    Assert-PhysicalItem $legacyCacheRoot 'Legacy installer cache directory' $true | Out-Null
+}
 Assert-FreeSpace @($destination, $cacheRoot) $MinimumFreeBytes
 
 $destinationParent = Ensure-PhysicalDirectory $destinationParent 'Destination parent directory'
@@ -760,7 +1011,7 @@ $packCache = Ensure-PhysicalDirectory `
 $script:webHeaders = @{
     Accept = 'application/vnd.github+json'
     'X-GitHub-Api-Version' = '2022-11-28'
-    'User-Agent' = "bstrings-$ReleaseTag-quality-installer"
+    'User-Agent' = "bstrings-$ReleaseTag-installer"
 }
 $previousProgressPreference = $ProgressPreference
 $ProgressPreference = 'SilentlyContinue'
@@ -789,9 +1040,9 @@ try {
     $installerAsset = Get-RequiredAsset $release $installerName $maximumMetadataBytes
     $checksumAsset = Get-RequiredAsset $release $checksumName $maximumMetadataBytes
     $coreAsset = Get-RequiredAsset $release $coreArchiveName $maximumCoreBytes
-    $qualityManifestAsset = Get-RequiredAsset `
+    $trustManifestAsset = Get-RequiredAsset `
         $release `
-        $qualityManifestName `
+        $trustManifestName `
         $maximumMetadataBytes
 
     $selfPath = Get-FullPath $PSCommandPath 'Running installer path'
@@ -811,35 +1062,66 @@ try {
     $checksums = Read-ChecksumMap $checksumPath
     Assert-AssetChecksum $installerAsset $checksums
     Assert-AssetChecksum $coreAsset $checksums
-    Assert-AssetChecksum $qualityManifestAsset $checksums
+    Assert-AssetChecksum $trustManifestAsset $checksums
     $selfChecksum = Get-RequiredChecksum $checksums $installerName
     if ((Get-LowerSha256 $selfPath 'Running installer') -cne $selfChecksum) {
         throw 'The running installer does not match SHA256SUMS.txt.'
     }
     Write-InstallerProgress 15 'release checksums authenticated'
 
+    if ($null -ne $legacyCacheRoot) {
+        $legacyReleaseAssetCache = Join-Path `
+            (Join-Path $legacyCacheRoot 'release-assets') `
+            $ReleaseTag
+        Import-VerifiedLegacyReleaseAsset `
+            $coreAsset `
+            $legacyReleaseAssetCache `
+            $releaseAssetCache
+    }
     $coreArchivePath = Receive-VerifiedAsset $coreAsset $releaseAssetCache
-    if ((Get-LowerSha256 $coreArchivePath 'Core release archive') -cne (
+    if ((Get-LowerSha256 $coreArchivePath 'Base runtime archive') -cne (
         Get-RequiredChecksum $checksums $coreArchiveName
     )) {
-        throw 'The core release archive does not match SHA256SUMS.txt.'
+        throw 'The base runtime archive does not match SHA256SUMS.txt.'
     }
-    Write-InstallerProgress 20 'core runtime downloaded and verified'
-    $qualityManifestPath = Receive-VerifiedAsset $qualityManifestAsset $releaseAssetCache
-    if ((Get-LowerSha256 $qualityManifestPath 'Quality trust manifest') -cne (
-        Get-RequiredChecksum $checksums $qualityManifestName
+    Write-InstallerProgress 20 'base runtime downloaded and verified'
+    $trustManifestPath = Receive-VerifiedAsset $trustManifestAsset $releaseAssetCache
+    if ((Get-LowerSha256 $trustManifestPath 'Bundle trust manifest') -cne (
+        Get-RequiredChecksum $checksums $trustManifestName
     )) {
-        throw 'The quality trust manifest does not match SHA256SUMS.txt.'
+        throw 'The bundle trust manifest does not match SHA256SUMS.txt.'
     }
-    Write-InstallerProgress 25 'quality manifest downloaded and verified'
+    Write-InstallerProgress 25 'bundle manifest downloaded and verified'
 
-    $trustIdentity = Get-TrustManifestIdentity $qualityManifestPath
+    $trustIdentity = Get-TrustManifestIdentity $trustManifestPath
     $coreRuntime = Expand-VerifiedCore `
         $coreArchivePath `
         $cacheRoot `
         ([long]$coreAsset.Bytes) `
         ([string]$coreAsset.Sha256)
-    Write-InstallerProgress 30 'authenticated core runtime ready'
+    Write-InstallerProgress 30 'authenticated base runtime ready'
+
+    if ($null -ne $existingDestination) {
+        Assert-ExistingBundleIsReplaceable `
+            $destination `
+            $coreRuntime.Executable `
+            $trustIdentity.AirgapManifestSha256
+        Write-InstallerProgress 32 'existing bstrings kit ownership verified'
+    }
+    if ($null -ne $legacyInstallation) {
+        Assert-ExistingBundleIsReplaceable `
+            $legacyInstallation `
+            $coreRuntime.Executable `
+            $trustIdentity.AirgapManifestSha256
+        Write-InstallerProgress 33 'previous bstrings installation verified for migration'
+    }
+
+    if ($null -ne $legacyCacheRoot) {
+        Import-VerifiedLegacyPackCache `
+            $trustManifestPath `
+            (Join-Path $legacyCacheRoot 'bundle-packs') `
+            $packCache
+    }
 
     $destinationLeaf = [IO.Path]::GetFileName($destination)
     $stagingLeaf = ".${destinationLeaf}.install-$([Guid]::NewGuid().ToString('N')).staging"
@@ -856,12 +1138,12 @@ try {
 
     $lastAcquireExit = 0
     for ($attempt = 1; $attempt -le $AcquireAttempts; $attempt++) {
-        Write-Host "Acquiring the quality bundle (attempt $attempt of $AcquireAttempts)..."
+        Write-Host "Acquiring the bstrings kit (attempt $attempt of $AcquireAttempts)..."
         $acquireArguments = @(
             'bundle',
             'acquire',
             '--manifest',
-            $qualityManifestPath,
+            $trustManifestPath,
             '--cache',
             $packCache,
             '--output',
@@ -869,6 +1151,9 @@ try {
         )
         if ($null -ne $existingDestination) {
             $acquireArguments += @('--seed-bundle', $destination)
+        }
+        elseif ($null -ne $legacyInstallation) {
+            $acquireArguments += @('--seed-bundle', $legacyInstallation)
         }
         $lastAcquireExit = Invoke-NativeProcess `
             $coreRuntime.Executable `
@@ -891,16 +1176,20 @@ try {
     if ($lastAcquireExit -ne 0) {
         throw "Bundle acquisition failed after $AcquireAttempts attempt(s); last exit code: $lastAcquireExit."
     }
-    Write-InstallerProgress 85 'quality bundle acquired and assembled'
-    Assert-PhysicalDirectoryTree $stagingDestination 'Staged replacement quality bundle'
+    Write-InstallerProgress 85 'bstrings kit acquired and assembled'
+    Assert-PhysicalDirectoryTree $stagingDestination 'Staged replacement bstrings kit'
     Assert-InstalledManifest $stagingDestination $trustIdentity.AirgapManifestSha256
     Invoke-BundleVerify `
         $coreRuntime.Executable `
         $stagingDestination `
-        'Authenticated-core verification of the staged replacement quality bundle'
-    Write-InstallerProgress 90 'replacement quality bundle verified'
+        'Authenticated base runtime verification of the staged replacement bstrings kit'
+    Write-InstallerProgress 90 'replacement bstrings kit verified'
 
     if ($null -ne $existingDestination) {
+        Assert-ExistingBundleIsReplaceable `
+            $destination `
+            $coreRuntime.Executable `
+            $trustIdentity.AirgapManifestSha256
         Assert-PhysicalDirectoryTree $destination 'DestinationDirectory before replacement'
         [IO.Directory]::Move($destination, $backupDestination)
         $backupDestinationCreated = $true
@@ -924,9 +1213,31 @@ try {
     Invoke-BundleVerify `
         $installedExecutable `
         $destination `
-        'Final installed quality-bundle verification'
+        'Final installed bstrings-kit verification'
     $installationSucceeded = $true
     Write-InstallerProgress 95 'installed replacement verified'
+
+    if ($removeLegacyInstallationAfterSuccess -and $null -ne $legacyInstallation) {
+        try {
+            Assert-ExistingBundleIsReplaceable `
+                $legacyInstallation `
+                $installedExecutable `
+                $trustIdentity.AirgapManifestSha256
+            Remove-ValidatedDirectory `
+                $legacyInstallation `
+                $destinationParent `
+                'bstrings-quality' `
+                'verified previous bstrings installation'
+            Write-Host 'Removed the verified previous installation after migration.'
+            $removeLegacyInstallationAfterSuccess = $false
+        }
+        catch {
+            Write-Warning (
+                'The new bstrings kit is verified, but the previous installation ' +
+                "could not be removed: $($_.Exception.Message)"
+            )
+        }
+    }
 
     if ($backupDestinationCreated) {
         try {
@@ -934,7 +1245,7 @@ try {
                 $backupDestination `
                 $destinationParent `
                 $backupLeaf `
-                'replaced quality-bundle backup'
+                'replaced bstrings-kit backup'
             $backupDestinationCreated = $false
         }
         catch {
@@ -944,13 +1255,13 @@ try {
             )
         }
     }
-    Write-Host "bstrings quality kit installed or refreshed and verified: $destination"
+    Write-Host "bstrings kit installed or refreshed and verified: $destination"
 
     Remove-ValidatedDirectory `
         $coreRuntime.Root `
         $cacheRoot `
         ([IO.Path]::GetFileName([string]$coreRuntime.Root)) `
-        'temporary authenticated core runtime'
+        'temporary authenticated base runtime'
 
     if ($ownedCache -and $RemoveCacheAfterSuccess) {
         Remove-OwnedInstallerCache $cacheRoot $destinationParent
@@ -978,10 +1289,10 @@ catch {
             if ($backupDestinationCreated -and -not (Test-Path -LiteralPath $destination)) {
                 [IO.Directory]::Move($backupDestination, $destination)
                 $backupDestinationCreated = $false
-                Write-Warning 'Restored the previous quality kit after the replacement failed.'
+                Write-Warning 'Restored the previous bstrings kit after the replacement failed.'
             }
             elseif ($backupDestinationCreated) {
-                throw "The previous quality kit could not be restored because the destination path reappeared. The previous bytes remain at: $backupDestination"
+                throw "The previous bstrings kit could not be restored because the destination path reappeared. The previous bytes remain at: $backupDestination"
             }
             if (
                 $stagingDestinationCreated -and

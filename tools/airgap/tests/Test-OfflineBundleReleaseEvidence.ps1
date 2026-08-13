@@ -44,7 +44,6 @@ function Sync-CheckedEvidence(
     [string]$Root,
     [object]$Evidence,
     [string]$EvidencePath,
-    [string[]]$Profiles,
     [string[]]$PackAssetNames
 ) {
     $releaseAssets = [Collections.Generic.List[object]]::new()
@@ -52,37 +51,31 @@ function Sync-CheckedEvidence(
         $releaseAssets.Add((Get-Identity (Join-Path $Root $fileName) $fileName))
     }
     $Evidence.releaseAssets = @($releaseAssets)
-    foreach ($profile in $Profiles) {
-        $profileRows = @($Evidence.profiles | Where-Object { [string]$_.profile -ceq $profile })
-        if ($profileRows.Count -ne 1) {
-            throw "Synthetic evidence lost its exact $profile row."
-        }
-        $profileRow = $profileRows[0]
+        $bundleRow = $Evidence.bundle
         $trustIdentity = Get-Identity `
-            (Join-Path $Root "bundle-packs-$profile.json") `
-            "bundle-packs-$profile.json"
+            (Join-Path $Root 'bundle-packs.json') `
+            'bundle-packs.json'
         $manifestIdentity = Get-Identity `
-            (Join-Path $Root "airgap-manifest-$profile.json") `
-            "airgap-manifest-$profile.json"
+            (Join-Path $Root 'airgap-manifest.json') `
+            'airgap-manifest.json'
         $configurationIdentity = Get-Identity `
-            (Join-Path $Root "airgap-config-$profile.json") `
-            "airgap-config-$profile.json"
+            (Join-Path $Root 'airgap-config.json') `
+            'airgap-config.json'
         $licenseIdentity = Get-Identity `
-            (Join-Path $Root "Hy-MT2-Apache-2.0-$profile.txt") `
-            "Hy-MT2-Apache-2.0-$profile.txt"
-        $profileRow.bundlePackTrustManifestBytes = $trustIdentity.bytes
-        $profileRow.bundlePackTrustManifestSha256 = $trustIdentity.sha256
-        $profileRow.airgapManifestBytes = $manifestIdentity.bytes
-        $profileRow.airgapManifestSha256 = $manifestIdentity.sha256
-        $profileRow.configurationBytes = $configurationIdentity.bytes
-        $profileRow.configurationSha256 = $configurationIdentity.sha256
-        $profileRow.translationLicenseBytes = $licenseIdentity.bytes
-        $profileRow.translationLicenseSha256 = $licenseIdentity.sha256
-    }
-    $coreIdentity = Get-Identity `
+            (Join-Path $Root 'Hy-MT2-Apache-2.0.txt') `
+            'Hy-MT2-Apache-2.0.txt'
+        $bundleRow.bundlePackTrustManifestBytes = $trustIdentity.bytes
+        $bundleRow.bundlePackTrustManifestSha256 = $trustIdentity.sha256
+        $bundleRow.airgapManifestBytes = $manifestIdentity.bytes
+        $bundleRow.airgapManifestSha256 = $manifestIdentity.sha256
+        $bundleRow.configurationBytes = $configurationIdentity.bytes
+        $bundleRow.configurationSha256 = $configurationIdentity.sha256
+        $bundleRow.translationLicenseBytes = $licenseIdentity.bytes
+        $bundleRow.translationLicenseSha256 = $licenseIdentity.sha256
+    $baseReleaseIdentity = Get-Identity `
         (Join-Path $Root 'bstrings-win-x64.zip') `
         'bstrings-win-x64.zip'
-    $checksummedAssets = @($coreIdentity) + @($releaseAssets)
+    $checksummedAssets = @($baseReleaseIdentity) + @($releaseAssets)
     $checksumRows = @(
         $checksummedAssets |
             Sort-Object fileName |
@@ -97,7 +90,7 @@ function Sync-CheckedEvidence(
 }
 
 $validator = [IO.Path]::GetFullPath(
-    (Join-Path $PSScriptRoot '..\Test-OfflineProfileReleaseEvidence.ps1')
+    (Join-Path $PSScriptRoot '..\Test-OfflineBundleReleaseEvidence.ps1')
 )
 $validatorItem = Get-Item -LiteralPath $validator -Force -ErrorAction Stop
 if (
@@ -124,15 +117,12 @@ try {
     $tag = 'v9.9.9-test'
     $commit = '0123456789abcdef0123456789abcdef01234567'
     $runId = '123456789'
-    $profiles = @('quality')
     $componentLockPath = [IO.Path]::GetFullPath(
         (Join-Path $PSScriptRoot '..\offline-components.lock.json')
     )
     $componentLock = Get-Content -LiteralPath $componentLockPath -Raw | ConvertFrom-Json
-    $modelSpecs = @{}
-    foreach ($profile in $profiles) {
-        $lockedModel = $componentLock.translationProfiles.$profile
-        $modelSpecs[$profile] = [pscustomobject]@{
+        $lockedModel = $componentLock.components.translationModel
+        $model = [pscustomobject]@{
             id = [string]$lockedModel.modelId
             revision = [string]$lockedModel.revision
             bytes = [long]$lockedModel.bytes
@@ -140,23 +130,19 @@ try {
             fileName = [string]$lockedModel.fileName
             url = [string]$lockedModel.url
         }
-    }
 
-    Write-Utf8 (Join-Path $assetRoot 'bstrings-win-x64.zip') 'synthetic core archive'
+    Write-Utf8 (Join-Path $assetRoot 'bstrings-win-x64.zip') 'synthetic base runtime archive'
     Write-Utf8 (Join-Path $assetRoot 'bstrings-win-x64-offline-base.zip') 'synthetic base archive'
     Write-Utf8 (Join-Path $assetRoot 'bstrings-win-x64-offline-cuda.zip') 'synthetic CUDA archive'
-    $profileEvidenceRows = [Collections.Generic.List[object]]::new()
-    foreach ($profile in $profiles) {
-        $model = $modelSpecs[$profile]
-        $configurationName = "airgap-config-$profile.json"
-        $licenseName = "Hy-MT2-Apache-2.0-$profile.txt"
-        $manifestName = "airgap-manifest-$profile.json"
-        $trustName = "bundle-packs-$profile.json"
+        $configurationName = 'airgap-config.json'
+        $licenseName = 'Hy-MT2-Apache-2.0.txt'
+        $manifestName = 'airgap-manifest.json'
+        $trustName = 'bundle-packs.json'
         $modelPath = "models/hy-mt2/$($model.fileName)"
 
         $configuration = [ordered]@{
-            schemaVersion = 1
-            translationProfile = $profile
+            schemaVersion = 2
+            bundleProfile = 'windows-x64-offline-v3'
             translationModel = [ordered]@{
                 path = $modelPath
                 id = $model.id
@@ -165,7 +151,7 @@ try {
             }
         }
         Write-Json (Join-Path $assetRoot $configurationName) $configuration
-        Write-Utf8 (Join-Path $assetRoot $licenseName) "synthetic $profile license`n"
+        Write-Utf8 (Join-Path $assetRoot $licenseName) "synthetic translation license`n"
         $configurationIdentity = Get-Identity `
             (Join-Path $assetRoot $configurationName) `
             $configurationName
@@ -199,11 +185,11 @@ try {
         $cudaIdentity = Get-Identity `
             (Join-Path $assetRoot 'bstrings-win-x64-offline-cuda.zip') `
             'bstrings-win-x64-offline-cuda.zip'
-        $bundleIdentity = "synthetic-$profile-$($manifestIdentity.sha256.Substring(0, 24))"
+        $bundleIdentity = "synthetic-kit-$($manifestIdentity.sha256.Substring(0, 24))"
         $assetBaseUrl = "$serverUrl/$repository/releases/download/$tag"
         $trust = [ordered]@{
             schemaVersion = 1
-            profile = "windows-x64-offline-v2-$profile"
+            profile = 'windows-x64-offline-v3'
             bundleIdentity = $bundleIdentity
             airgapManifestSha256 = $manifestIdentity.sha256
             packs = @(
@@ -255,8 +241,7 @@ try {
         }
         Write-Json (Join-Path $assetRoot $trustName) $trust
         $trustIdentity = Get-Identity (Join-Path $assetRoot $trustName) $trustName
-        $profileEvidenceRows.Add([pscustomobject]@{
-            profile = $profile
+        $bundleEvidence = [pscustomobject]@{
             status = 'passed'
             translationSmoke = 'passed'
             acceptedAtUtc = '2026-08-05T00:00:00.0000000+00:00'
@@ -274,28 +259,25 @@ try {
             translationModelUrl = $model.url
             translationModelBytes = $model.bytes
             translationModelSha256 = $model.sha256
-        })
-    }
+        }
 
     $packAssetNames = [Collections.Generic.List[string]]::new()
     $packAssetNames.Add('bstrings-win-x64-offline-base.zip')
     $packAssetNames.Add('bstrings-win-x64-offline-cuda.zip')
-    Write-Utf8 (Join-Path $assetRoot 'Install-BstringsQuality.ps1') "# synthetic installer`n"
-    $packAssetNames.Add('Install-BstringsQuality.ps1')
-    foreach ($profile in $profiles) {
-        $packAssetNames.Add("airgap-config-$profile.json")
-        $packAssetNames.Add("Hy-MT2-Apache-2.0-$profile.txt")
-        $packAssetNames.Add("airgap-manifest-$profile.json")
-        $packAssetNames.Add("bundle-packs-$profile.json")
-    }
+    Write-Utf8 (Join-Path $assetRoot 'Install-Bstrings.ps1') "# synthetic installer`n"
+    $packAssetNames.Add('Install-Bstrings.ps1')
+    $packAssetNames.Add('airgap-config.json')
+    $packAssetNames.Add('Hy-MT2-Apache-2.0.txt')
+    $packAssetNames.Add('airgap-manifest.json')
+    $packAssetNames.Add('bundle-packs.json')
     $releaseAssets = [Collections.Generic.List[object]]::new()
     foreach ($fileName in $packAssetNames) {
         $releaseAssets.Add((Get-Identity (Join-Path $assetRoot $fileName) $fileName))
     }
-    $coreIdentity = Get-Identity `
+    $baseReleaseIdentity = Get-Identity `
         (Join-Path $assetRoot 'bstrings-win-x64.zip') `
         'bstrings-win-x64.zip'
-    $checksummedAssets = @($coreIdentity) + @($releaseAssets)
+    $checksummedAssets = @($baseReleaseIdentity) + @($releaseAssets)
     $checksumRows = @(
         $checksummedAssets |
             Sort-Object fileName |
@@ -305,9 +287,9 @@ try {
     Write-Utf8 $checksumPath (($checksumRows -join "`n") + "`n")
     $checksumIdentity = Get-Identity $checksumPath 'SHA256SUMS.txt'
     $evidence = [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         status = 'passed'
-        classification = 'synthetic-release-profile-acceptance'
+        classification = 'synthetic-release-bundle-acceptance'
         generatedAtUtc = '2026-08-05T00:00:00.0000000+00:00'
         sourceRepository = $repository
         sourceTag = $tag
@@ -316,15 +298,14 @@ try {
         acceptanceRunAttempt = '7'
         minimumFreeBytes = [long]1
         freeBytesAtStart = [long]1
-        coreArchiveBytes = $coreIdentity.bytes
-        coreArchiveSha256 = $coreIdentity.sha256
+        baseArchiveBytes = $baseReleaseIdentity.bytes
+        baseArchiveSha256 = $baseReleaseIdentity.sha256
         checksumFileBytes = $checksumIdentity.bytes
         checksumFileSha256 = $checksumIdentity.sha256
-        advertisedProfiles = $profiles
         releaseAssets = @($releaseAssets)
-        profiles = @($profileEvidenceRows)
+        bundle = $bundleEvidence
     }
-    $evidencePath = Join-Path $testRoot 'offline-profile-acceptance.json'
+    $evidencePath = Join-Path $testRoot 'offline-bundle-acceptance.json'
     Write-Json $evidencePath $evidence
     $validatorArguments = @{
         EvidencePath = $evidencePath
@@ -366,15 +347,15 @@ try {
     $evidence.checksumFileSha256 = $checksumIdentity.sha256
     Write-Json $evidencePath $evidence
 
-    $publicEvidencePath = Join-Path $assetRoot 'offline-profile-acceptance.json'
+    $publicEvidencePath = Join-Path $assetRoot 'offline-bundle-acceptance.json'
     Copy-Item -LiteralPath $evidencePath -Destination $publicEvidencePath
     Assert-ValidationFails $validatorArguments 'exact expected file set'
     [IO.File]::Delete($publicEvidencePath)
 
-    $withoutCoreChecksumRows = @(
+    $withoutBaseChecksumRows = @(
         $checksumRows | Where-Object { $_ -notmatch '  bstrings-win-x64\.zip$' }
     )
-    Write-Utf8 $checksumPath (($withoutCoreChecksumRows -join "`n") + "`n")
+    Write-Utf8 $checksumPath (($withoutBaseChecksumRows -join "`n") + "`n")
     $mutatedChecksumIdentity = Get-Identity $checksumPath 'SHA256SUMS.txt'
     $evidence.checksumFileBytes = $mutatedChecksumIdentity.bytes
     $evidence.checksumFileSha256 = $mutatedChecksumIdentity.sha256
@@ -393,23 +374,23 @@ try {
     $evidence.releaseAssets[-1] = $originalLastAsset
     Write-Json $evidencePath $evidence
 
-    $originalModelId = $evidence.profiles[0].translationModelId
-    $evidence.profiles[0].translationModelId = 'example/tampered-model'
+    $originalModelId = $evidence.bundle.translationModelId
+    $evidence.bundle.translationModelId = 'example/tampered-model'
     Write-Json $evidencePath $evidence
     Assert-ValidationFails $validatorArguments 'translation model evidence differs from the exact checked component lock'
-    $evidence.profiles[0].translationModelId = $originalModelId
+    $evidence.bundle.translationModelId = $originalModelId
     Write-Json $evidencePath $evidence
 
-    $qualityTrustPath = Join-Path $assetRoot 'bundle-packs-quality.json'
-    $qualityTrust = Get-Content -LiteralPath $qualityTrustPath -Raw | ConvertFrom-Json
-    $qualityBasePacks = @($qualityTrust.packs | Where-Object { [string]$_.id -ceq 'base' })
-    $qualityModelPacks = @($qualityTrust.packs | Where-Object { [string]$_.id -ceq 'translation-model' })
-    if ($qualityBasePacks.Count -ne 1 -or $qualityModelPacks.Count -ne 1) {
-        throw 'Synthetic quality trust manifest lost its exact base or model pack.'
+    $bundleTrustPath = Join-Path $assetRoot 'bundle-packs.json'
+    $bundleTrust = Get-Content -LiteralPath $bundleTrustPath -Raw | ConvertFrom-Json
+    $bundleBasePacks = @($bundleTrust.packs | Where-Object { [string]$_.id -ceq 'base' })
+    $bundleModelPacks = @($bundleTrust.packs | Where-Object { [string]$_.id -ceq 'translation-model' })
+    if ($bundleBasePacks.Count -ne 1 -or $bundleModelPacks.Count -ne 1) {
+        throw 'Synthetic bundle trust manifest lost its exact base or model pack.'
     }
-    $qualityBasePack = $qualityBasePacks[0]
-    $qualityModelPack = $qualityModelPacks[0]
-    $canonicalBaseUrl = [string]$qualityBasePack.url
+    $bundleBasePack = $bundleBasePacks[0]
+    $bundleModelPack = $bundleModelPacks[0]
+    $canonicalBaseUrl = [string]$bundleBasePack.url
     $releaseUrlMutations = @(
         "https://wrong-host.example.invalid/$repository/releases/download/$tag/bstrings-win-x64-offline-base.zip"
         "$serverUrl/other/bstrings/releases/download/$tag/bstrings-win-x64-offline-base.zip"
@@ -420,28 +401,28 @@ try {
         "$serverUrl/example/%62strings/releases/download/$tag/bstrings-win-x64-offline-base.zip"
     )
     foreach ($mutatedUrl in $releaseUrlMutations) {
-        $qualityBasePack.url = $mutatedUrl
-        Write-Json $qualityTrustPath $qualityTrust
-        Sync-CheckedEvidence $assetRoot $evidence $evidencePath $profiles @($packAssetNames)
+        $bundleBasePack.url = $mutatedUrl
+        Write-Json $bundleTrustPath $bundleTrust
+        Sync-CheckedEvidence $assetRoot $evidence $evidencePath @($packAssetNames)
         Assert-ValidationFails `
             $validatorArguments `
             'exact expected server, repository, tag, path, and casing|without credentials, a query, or a fragment'
     }
-    $qualityBasePack.url = $canonicalBaseUrl
-    Write-Json $qualityTrustPath $qualityTrust
-    Sync-CheckedEvidence $assetRoot $evidence $evidencePath $profiles @($packAssetNames)
+    $bundleBasePack.url = $canonicalBaseUrl
+    Write-Json $bundleTrustPath $bundleTrust
+    Sync-CheckedEvidence $assetRoot $evidence $evidencePath @($packAssetNames)
 
-    $canonicalModelUrl = [string]$qualityModelPack.url
+    $canonicalModelUrl = [string]$bundleModelPack.url
     $mutatedModelUrl = $canonicalModelUrl.Replace('huggingface.co', 'models.example.invalid')
-    $qualityModelPack.url = $mutatedModelUrl
-    $evidence.profiles[0].translationModelUrl = $mutatedModelUrl
-    Write-Json $qualityTrustPath $qualityTrust
-    Sync-CheckedEvidence $assetRoot $evidence $evidencePath $profiles @($packAssetNames)
+    $bundleModelPack.url = $mutatedModelUrl
+    $evidence.bundle.translationModelUrl = $mutatedModelUrl
+    Write-Json $bundleTrustPath $bundleTrust
+    Sync-CheckedEvidence $assetRoot $evidence $evidencePath @($packAssetNames)
     Assert-ValidationFails $validatorArguments 'translation model evidence differs from the exact checked component lock'
-    $qualityModelPack.url = $canonicalModelUrl
-    $evidence.profiles[0].translationModelUrl = $canonicalModelUrl
-    Write-Json $qualityTrustPath $qualityTrust
-    Sync-CheckedEvidence $assetRoot $evidence $evidencePath $profiles @($packAssetNames)
+    $bundleModelPack.url = $canonicalModelUrl
+    $evidence.bundle.translationModelUrl = $canonicalModelUrl
+    Write-Json $bundleTrustPath $bundleTrust
+    Sync-CheckedEvidence $assetRoot $evidence $evidencePath @($packAssetNames)
 
     $basePath = Join-Path $assetRoot 'bstrings-win-x64-offline-base.zip'
     $originalBase = [IO.File]::ReadAllBytes($basePath)
@@ -467,7 +448,7 @@ try {
     }
 
     & $validator @validatorArguments | Out-Null
-    Write-Host 'Offline profile release evidence synthetic tests passed.'
+    Write-Host 'Offline bundle release evidence synthetic tests passed.'
 }
 finally {
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(

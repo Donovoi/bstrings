@@ -187,12 +187,12 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertLess(marker_index, rejection_index)
         self.assertLess(rejection_index, native_index)
 
-    def test_tag_release_is_gated_on_all_advertised_profile_acceptance(self) -> None:
+    def test_tag_release_is_gated_on_bundle_acceptance(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]
         workflow = (repo_root / ".github" / "workflows" / "dotnet-desktop.yml").read_text(
             encoding="utf-8"
         )
-        acceptance_index = workflow.index("  profile-acceptance:")
+        acceptance_index = workflow.index("  bundle-acceptance:")
         release_index = workflow.index("  release:", acceptance_index)
         acceptance = workflow[acceptance_index:release_index]
         release = workflow[release_index:]
@@ -202,22 +202,22 @@ class AirgapManifestTests(unittest.TestCase):
             "runs-on: [self-hosted, Windows, X64, bstrings-offline-release]",
             acceptance,
         )
-        self.assertIn("Invoke-OfflineProfileAcceptance.ps1", acceptance)
-        self.assertIn("name: bstrings-offline-profile-acceptance", acceptance)
-        self.assertIn("needs: [build, profile-acceptance]", release)
-        self.assertIn("name: bstrings-offline-profile-acceptance", release)
-        self.assertIn("Validate checked profile-acceptance evidence", release)
-        self.assertIn("Test-OfflineProfileReleaseEvidence.ps1", release)
+        self.assertIn("Invoke-OfflineBundleAcceptance.ps1", acceptance)
+        self.assertIn("name: bstrings-offline-bundle-acceptance", acceptance)
+        self.assertIn("needs: [build, bundle-acceptance]", release)
+        self.assertIn("name: bstrings-offline-bundle-acceptance", release)
+        self.assertIn("Validate checked bundle-acceptance evidence", release)
+        self.assertIn("Test-OfflineBundleReleaseEvidence.ps1", release)
         self.assertIn("path: release-gate-evidence", release)
         self.assertIn(
-            "-EvidencePath release-gate-evidence/offline-profile-acceptance.json",
+            "-EvidencePath release-gate-evidence/offline-bundle-acceptance.json",
             release,
         )
         self.assertIn("-ExpectedServerUrl $env:GITHUB_SERVER_URL", release)
         self.assertIn("-ComponentLockPath tools/airgap/offline-components.lock.json", release)
         self.assertIn("fail_on_unmatched_files: true", release)
         validation = release[
-            release.index("Validate checked profile-acceptance evidence") : release.index(
+            release.index("Validate checked bundle-acceptance evidence") : release.index(
                 "Create GitHub release"
             )
         ]
@@ -230,21 +230,18 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn("Verify the published immutable release", publication)
         self.assertIn("-not $release.isImmutable", publication)
         self.assertIn("Published release asset set mismatch", publication)
-        self.assertNotIn("offline-profile-acceptance.json", publication)
+        self.assertNotIn("offline-bundle-acceptance.json", publication)
 
-        script = (repo_root / "tools" / "airgap" / "Invoke-OfflineProfileAcceptance.ps1").read_text(
+        script = (repo_root / "tools" / "airgap" / "Invoke-OfflineBundleAcceptance.ps1").read_text(
             encoding="utf-8"
         )
-        profiles_index = script.index("$profiles = @('quality')")
-        loop_index = script.index("foreach ($profile in $profiles)", profiles_index)
-        acquire_index = script.index("& $coreExecutable bundle acquire", loop_index)
+        acquire_index = script.index("& $baseExecutable bundle acquire")
         verify_index = script.index("& $bundleExecutable bundle verify", acquire_index)
         smoke_index = script.index("-TranslationSmoke", verify_index)
-        result_index = script.index("$results.Add", smoke_index)
-        cleanup_index = script.index("Remove-CompletedProfileDirectory", result_index)
-        evidence_index = script.index("offline-profile-acceptance.json", cleanup_index)
+        result_index = script.index("$result =", smoke_index)
+        cleanup_index = script.index("Remove-CompletedBundleDirectory", result_index)
+        evidence_index = script.index("offline-bundle-acceptance.json", cleanup_index)
 
-        self.assertLess(loop_index, acquire_index)
         self.assertLess(acquire_index, verify_index)
         self.assertLess(verify_index, smoke_index)
         self.assertLess(smoke_index, result_index)
@@ -252,7 +249,7 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertLess(cleanup_index, evidence_index)
 
         validator = (
-            repo_root / "tools" / "airgap" / "Test-OfflineProfileReleaseEvidence.ps1"
+            repo_root / "tools" / "airgap" / "Test-OfflineBundleReleaseEvidence.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn("Acceptance evidence schemaVersion", validator)
         self.assertIn("positive acceptance run attempt", validator)
@@ -265,10 +262,10 @@ class AirgapManifestTests(unittest.TestCase):
 
         self.assertIn("translationModelUrl = [string]$modelPack.url", script)
 
-    def test_quality_installer_is_version_pinned_and_release_gated(self) -> None:
+    def test_kit_installer_is_version_pinned_and_release_gated(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]
-        installer_path = repo_root / "Scripts" / "Install-BstringsQuality.ps1"
-        installer_test_path = repo_root / "Scripts" / "tests" / "Test-Install-BstringsQuality.ps1"
+        installer_path = repo_root / "Scripts" / "Install-Bstrings.ps1"
+        installer_test_path = repo_root / "Scripts" / "tests" / "Test-Install-Bstrings.ps1"
         self.assertTrue(installer_path.is_file())
         self.assertTrue(installer_test_path.is_file())
         installer = installer_path.read_text(encoding="utf-8")
@@ -283,23 +280,23 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIsNotNone(default_tag_match)
         self.assertIsNotNone(expected_tag_match)
         self.assertEqual(default_tag_match.group(1), expected_tag_match.group(1))
-        self.assertIn("Join-Path (Get-Location).Path 'bstrings-quality'", installer)
-        self.assertIn("bundle-packs-quality.json", installer)
-        self.assertNotIn("bundle-packs-balanced.json", installer)
-        self.assertNotIn("bundle-packs-compact.json", installer)
+        self.assertEqual("v2.0.0", expected_tag_match.group(1))
+        self.assertIn("Join-Path (Get-Location).Path 'bstrings-kit'", installer)
+        self.assertIn("bundle-packs.json", installer)
         self.assertIn("SHA256SUMS.txt", installer)
         self.assertIn("bstrings-win-x64.zip", installer)
 
         workflow = (repo_root / ".github" / "workflows" / "dotnet-desktop.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Test quality installer with Windows PowerShell 5.1", workflow)
-        self.assertIn("Test quality installer with PowerShell 7", workflow)
+        self.assertIn("Test Windows kit installer with Windows PowerShell 5.1", workflow)
+        self.assertIn("Test Windows kit installer with PowerShell 7", workflow)
         self.assertIn(
-            "-InstallerScript (Join-Path $PWD 'Scripts\\Install-BstringsQuality.ps1')",
+            "-InstallerScript (Join-Path $PWD 'Scripts\\Install-Bstrings.ps1')",
             workflow,
         )
-        self.assertIn("release-assets/Install-BstringsQuality.ps1", workflow)
+        self.assertIn("release-assets/Install-Bstrings.ps1", workflow)
+        self.assertIn("release-assets/bundle-packs.json", workflow)
 
         core_release_workflow = (
             repo_root / ".github" / "workflows" / "publish-windows-release.yml"
@@ -307,7 +304,7 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn("bstrings/bstrings.csproj", core_release_workflow)
         self.assertIn('$tag = "v$($versions[0])"', core_release_workflow)
         self.assertIn("bstrings-win-x64.zip", core_release_workflow)
-        self.assertNotIn("Install-BstringsQuality.ps1", core_release_workflow)
+        self.assertNotIn("Install-Bstrings.ps1", core_release_workflow)
         self.assertIn("Create the exact tested version tag", core_release_workflow)
         self.assertIn('-f ref="refs/tags/$env:RELEASE_TAG"', core_release_workflow)
         self.assertIn("--verify-tag", core_release_workflow)
@@ -324,51 +321,44 @@ class AirgapManifestTests(unittest.TestCase):
             encoding="utf-8"
         )
         acceptance = (
-            repo_root / "tools" / "airgap" / "Invoke-OfflineProfileAcceptance.ps1"
+            repo_root / "tools" / "airgap" / "Invoke-OfflineBundleAcceptance.ps1"
         ).read_text(encoding="utf-8")
         release_validator = (
-            repo_root / "tools" / "airgap" / "Test-OfflineProfileReleaseEvidence.ps1"
+            repo_root / "tools" / "airgap" / "Test-OfflineBundleReleaseEvidence.ps1"
         ).read_text(encoding="utf-8")
         for source in (pack_builder, acceptance, release_validator):
-            self.assertIn("Install-BstringsQuality.ps1", source)
+            self.assertIn("Install-Bstrings.ps1", source)
 
     def test_public_getting_started_path_is_installer_only(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]
-        public_paths = (
+        active_paths = (
             repo_root / "README.md",
-            repo_root / "CORE_RELEASE_README.md",
+            repo_root / "BASE_PACK_NOTICE.md",
             repo_root / "docs" / "air-gapped-deployment.md",
-            repo_root / "docs" / "releases" / "v1.9.17.md",
         )
-        public_sources = {path: path.read_text(encoding="utf-8") for path in public_paths}
+        public_sources = {path: path.read_text(encoding="utf-8") for path in active_paths}
 
         readme = public_sources[repo_root / "README.md"]
-        self.assertIn("## Why use it?", readme)
-        self.assertIn("## Get started", readme)
-        self.assertIn("## Choose a command", readme)
-        self.assertEqual(
-            ["## Why use it?", "## Get started", "## Choose a command"],
-            re.findall(r"^## .+$", readme, flags=re.MULTILINE),
-        )
-        installer = (repo_root / "Scripts" / "Install-BstringsQuality.ps1").read_text(
-            encoding="utf-8"
-        )
-        quality_tag_match = re.search(
-            r"\$expectedReleaseTag\s*=\s*['\"](v[0-9]+\.[0-9]+\.[0-9]+)['\"]",
-            installer,
-        )
-        self.assertIsNotNone(quality_tag_match)
-        self.assertRegex(
-            readme,
-            rf"\$tag\s*=\s*['\"]{re.escape(quality_tag_match.group(1))}['\"]",
-        )
-        self.assertIn("-ReleaseTag $tag", readme)
+        self.assertIn("## What bstrings does", readme)
+        self.assertIn("## Install", readme)
+        self.assertIn("## Run an analysis", readme)
+        installer = (repo_root / "Scripts" / "Install-Bstrings.ps1").read_text(encoding="utf-8")
+        self.assertIn("$expectedReleaseTag = 'v2.0.0'", installer)
+        self.assertIn("current public release", readme)
+        self.assertIn("v1.9.17", readme)
+        self.assertNotIn("$tag = 'v2.0.0'", readme)
+        self.assertNotIn("-ReleaseTag v2.0.0", readme)
 
         for path, source in public_sources.items():
-            self.assertIn("Install-BstringsQuality.ps1", source, path)
+            self.assertIn("Install-Bstrings.ps1", source, path)
             self.assertNotIn("bundle acquire", source, path)
             self.assertNotIn("bundle assemble", source, path)
             self.assertNotIn("bundle-packs-", source, path)
+
+        historical_release = (repo_root / "docs" / "releases" / "v1.9.17.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Install-BstringsQuality.ps1", historical_release)
 
     def test_visual_cpp_overlay_refreshes_ocr_inventory_before_bundle_validation(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]

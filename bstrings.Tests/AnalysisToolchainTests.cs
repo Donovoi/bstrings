@@ -235,12 +235,12 @@ public sealed class AnalysisToolchainTests
             );
 
             Assert.Contains(
-                "Install-BstringsQuality.ps1",
+                "Install-Bstrings.ps1",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );
             Assert.Contains(
-                "github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started",
+                "github.com/Donovoi/bstrings/releases",
                 error.Message,
                 StringComparison.OrdinalIgnoreCase
             );
@@ -345,7 +345,8 @@ public sealed class AnalysisToolchainTests
         File.Copy(Environment.ProcessPath!, Path.Combine(root, "bstrings.exe"));
         var configuration = new Dictionary<string, object?>
         {
-            ["schemaVersion"] = 1,
+            ["schemaVersion"] = 2,
+            ["bundleProfile"] = "windows-x64-offline-v3",
             ["bstringsExecutable"] = "bstrings.exe",
             ["pythonExecutable"] = "runtime/python.exe",
             ["enrichmentAdapter"] = "tools/bstrings_enrich.py",

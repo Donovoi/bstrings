@@ -1,27 +1,7 @@
 {
-  "schemaVersion": 1,
-  "profile": "windows-x64-offline-v2",
-  "description": "Pinned, redistributable inputs for the single highest-quality bstrings Windows x64 offline bundle.",
-  "defaultTranslationProfile": "quality",
-  "translationProfiles": {
-    "quality": {
-      "version": "Q4_K_M",
-      "archiveType": "file",
-      "fileName": "Hy-MT2-7B-Q4_K_M.gguf",
-      "url": "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/Hy-MT2-7B-Q4_K_M.gguf?download=true",
-      "bytes": 4624648896,
-      "sha256": "9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b",
-      "modelId": "tencent/Hy-MT2-7B-GGUF",
-      "revision": "ab8472660ac61fac25f1af43fac2599d52a8a775",
-      "license": {
-        "source": "download",
-        "fileName": "LICENSE-Hy-MT2-7B.txt",
-        "url": "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/LICENSE.txt?download=true",
-        "bytes": 11635,
-        "sha256": "746750afa6af28fe4f8b326751ad2a40c700d2e5c459c0a1f6a2e76d99ace224"
-      }
-    }
-  },
+  "schemaVersion": 2,
+  "profile": "windows-x64-offline-v3",
+  "description": "Pinned, redistributable inputs for the one bstrings Windows x64 offline kit.",
   "runtimeDlls": [
     "vcruntime140.dll",
     "vcruntime140_1.dll",

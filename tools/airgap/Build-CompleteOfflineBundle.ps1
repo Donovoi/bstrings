@@ -7,8 +7,6 @@ param(
     [string]$WorkingDirectory,
     [string]$ComponentLockPath,
     [string]$OcrComponentLockPath,
-    [ValidateSet('quality')]
-    [string]$TranslationProfile = 'quality',
     [string]$VisualCppRuntimeDirectory,
     [switch]$DryRun,
     [switch]$ValidateOnly,
@@ -359,28 +357,9 @@ $publishedDirectory = Resolve-ExistingDirectory `
     $PublishedBstringsDirectory `
     'Published bstrings directory'
 $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
-if ($lock.schemaVersion -ne 1 -or $lock.profile -ne 'windows-x64-offline-v2') {
+if ($lock.schemaVersion -ne 2 -or $lock.profile -ne 'windows-x64-offline-v3') {
     throw "Unsupported offline component lock schema or profile: $lockPath"
 }
-if ([string]$lock.defaultTranslationProfile -ne 'quality') {
-    throw 'The offline component lock must select quality as its default translation profile.'
-}
-$translationProfileNames = @($lock.translationProfiles.PSObject.Properties.Name)
-if ((@($translationProfileNames | Sort-Object) -join '|') -cne 'quality') {
-    throw 'The offline component lock must define exactly the quality translation profile.'
-}
-$translationProfileSpecs = @{}
-foreach ($profileName in $translationProfileNames) {
-    $profileSpec = $lock.translationProfiles.$profileName
-    Assert-LockedFileSpec $profileSpec "$profileName translation profile"
-    Assert-LockedFileSpec $profileSpec.license "$profileName translation profile license"
-    $translationProfileSpecs[$profileName] = $profileSpec
-}
-$selectedTranslationModel = $lock.translationProfiles.$TranslationProfile
-if ($null -eq $selectedTranslationModel) {
-    throw "Translation profile is not present in the component lock: $TranslationProfile"
-}
-$lock.components.translationModel = $selectedTranslationModel
 $componentOrder = @('python', 'magika', 'floss', 'llamaCpp', 'translationModel')
 foreach ($componentName in $componentOrder) {
     $component = $lock.components.$componentName
@@ -705,7 +684,6 @@ if (-not $ValidateOnly) {
 $downloadPaths = @{}
 $licensePaths = @{}
 $cudaArchivePaths = @{}
-$translationProfileLicensePaths = @{}
 try {
     foreach ($componentName in $componentOrder) {
         $component = $lock.components.$componentName
@@ -745,16 +723,6 @@ try {
         $cudaLicensePath `
         'NVIDIA CUDA 12.4 EULA' `
         (-not $ValidateOnly)
-    foreach ($profileName in $translationProfileNames) {
-        $license = $translationProfileSpecs[$profileName].license
-        $licensePath = Join-Path $script:downloadsDirectory ([string]$license.fileName)
-        Get-VerifiedDownload `
-            $license `
-            $licensePath `
-            "$profileName translation profile license" `
-            (-not $ValidateOnly)
-        $translationProfileLicensePaths[$profileName] = $licensePath
-    }
 }
 finally {
     if ($null -ne $script:httpClient) {
@@ -918,19 +886,6 @@ try {
             -LiteralPath $licensePaths[$componentName] `
             -Destination (Join-Path $staged[$componentName] ([string]$license.fileName))
     }
-    $copiedProfileLicenses = [Collections.Generic.HashSet[string]]::new(
-        [StringComparer]::OrdinalIgnoreCase
-    )
-    foreach ($profileName in $translationProfileNames) {
-        $licenseName = [string]$translationProfileSpecs[$profileName].license.fileName
-        if ($copiedProfileLicenses.Add($licenseName)) {
-            Copy-Item `
-                -LiteralPath $translationProfileLicensePaths[$profileName] `
-                -Destination (Join-Path $staged.translationModel $licenseName) `
-                -Force
-        }
-    }
-
     $null = New-VerifiedMagikaRedistribution `
         -DestinationDirectory $staged.magikaRedistribution
     $archiveMagika = Join-Path $staged.magika ([string]$lock.components.magika.executable)
@@ -997,7 +952,6 @@ try {
         -TranslationModelRevision ([string]$lock.components.translationModel.revision) `
         -TranslationModelId ([string]$lock.components.translationModel.modelId) `
         -TranslationModel ([string]$lock.components.translationModel.fileName) `
-        -TranslationProfile $TranslationProfile `
         -ComponentLockPath $lockPath
     $completed = $true
 }
@@ -1013,4 +967,4 @@ finally {
 if (-not $completed) {
     throw 'Complete offline bundle construction did not complete.'
 }
-Write-Host "Complete offline $TranslationProfile bundle is ready: $outputRoot"
+Write-Host "Complete offline bstrings kit is ready: $outputRoot"

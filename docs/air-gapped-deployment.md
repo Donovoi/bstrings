@@ -1,231 +1,176 @@
 # Air-gapped deployment
 
-The complete Windows x64 v1.9.17 quality kit is prepared on a connected staging
-machine, verified, then copied as a directory to the
-disconnected workstation. During an examination, the user runs only the root
-`bstrings.exe`: no package manager, Python command, model hub, service
-installation, or network access is needed.
-PowerShell is only the shell displaying the examples below; normal users do not
-run a Python script or package-manager command.
+The bstrings Windows kit can run without internet access after installation.
 
-The same v1.9.17 installation contains the current backend, reporting, pattern,
-FLOSS, OCR, language, and translation features. See
-[download and installation](download-and-install.md), and do not mix files or
-manifests between versions.
+Use one connected staging computer to install and verify the complete kit.
+Then, transfer the complete `bstrings-kit` directory.
 
-The conservative supported baseline is Windows 11 x64 24H2 or newer, following
-Microsoft's [.NET supported-Windows table](https://learn.microsoft.com/en-us/dotnet/core/install/windows).
-CPU analysis needs no GPU. DirectML uses the host's D3D12/DXGI stack and a
-compatible graphics driver; those operating-system components are not bundled.
+## Requirements
 
-## Install on a connected staging machine
+- Windows 11 x64 on the staging and analysis computers
+- At least 30 GiB of free space during installation
+- Approved transfer media
 
-On a connected staging machine, start in the directory where you want
-`.\bstrings-quality`. The installer needs no administrator rights and requires
-at least 30 GiB free on the volume holding its install and cache. It installs
-the complete quality profile.
+You do not need administrator rights.
 
-Use the [pinned, checksum-verified v1.9.17
-bootstrap](https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started)
-for `Install-BstringsQuality.ps1`. The installer handles the downloads,
-resumable cache, assembly, and final strict verification. It requires the exact
-published release to report immutable state. The default shared cache survives
-success so retries and later releases can reuse unchanged exact packs, but each
-materialized hit is reopened and fully size- and SHA-256-verified. Add
-`-RemoveCacheAfterSuccess` to remove the bounded script-owned cache after a
-successful installation.
+## Install on the staging computer
+
+Use the authenticated `Install-Bstrings.ps1` command from the immutable release
+page. The installer creates `bstrings-kit` by default.
+
+The current public v1.9.17 release uses historical names. Use the exact command
+and paths on its release page.
+
+Verify the staged kit:
 
 ```powershell
-.\bstrings-quality\bstrings.exe bundle verify
-.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved-files --full -o D:\results\case-01
+.\bstrings-kit\bstrings.exe bundle verify
 ```
 
-Transfer the entire verified `bstrings-quality` directory to the disconnected
-workstation, then run `bundle verify` there again before case work. “One
-executable” means one user interface; keep the adjacent models, runtimes,
-tools, licences, configuration, and manifests with it.
+Do not transfer a kit that fails verification.
 
-## Transfer and verify offline
-
-Apply the organization's malware scanning, approved-media, and chain-of-custody
-procedure to the complete output directory. Copy the whole directory; do not
-move `bstrings.exe` away from its adjacent `runtime`, `tools`, `models`,
-`licenses`, configuration, and manifest files.
-
-On the disconnected workstation:
+Run a small test before transfer:
 
 ```powershell
-.\bstrings.exe bundle verify
-.\bstrings.exe analyze -d D:\evidence\carved-files --full -o D:\results\case-01
+.\bstrings-kit\bstrings.exe analyze `
+  -d D:\test-evidence `
+  -o D:\test-results `
+  --full
 ```
 
-`bundle verify` rejects a missing, extra, linked, resized, or SHA-256-mismatched
-file. In the complete quality kit, `analyze --full` freezes the evidence
-inventory, runs one early batched Magika/signature routing pass, preserves
-native extraction over every input, then runs routed FLOSS and OCR, language
-assessment, local translation, all 66
-built-in patterns, and the report projection. A requested stage fails instead
-of being silently skipped.
+Use synthetic or approved test evidence. Do not mix test output with case data.
 
-`--full` does not parse filesystems or carve embedded files from a raw disk or
-memory image. Mount or carve an image with an appropriate forensic tool when
-that coverage is required. The direct scanner can still search the raw bytes,
-but FLOSS sees an executable only when the complete executable is supplied as a
-file, and OCR sees only supported image/PDF files in the input inventory.
+## Transfer the kit
 
-## What is bundled
+1. Close all bstrings processes.
+2. Copy the complete `bstrings-kit` directory to approved media.
+3. Eject the media safely.
+4. Move the directory to the disconnected computer.
+5. Keep the directory contents unchanged.
 
-The `windows-x64-offline-v2` base carries:
+Do not transfer only selected engines, models, or runtime files. The manifest
+describes one complete kit.
 
-- the self-contained Windows x64 .NET application and native Rust scanner;
-- isolated official CPython embeddable runtimes;
-- [Magika](https://github.com/google/magika) and its app-local DirectML
-  dependency;
-- standalone [FLOSS](https://github.com/mandiant/flare-floss);
-- a CPU [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime built from
-  lock-pinned source with network-fetched build inputs disabled, plus a
-  separately authenticated official CUDA 12.4 overlay for the accepted Windows
-  sm89 path;
-- CPU and DirectML OCR runtimes using
-  [RapidOCR](https://github.com/RapidAI/RapidOCR),
-  [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR),
-  [ONNX Runtime](https://github.com/microsoft/onnxruntime),
-  [PDFium](https://pdfium.googlesource.com/pdfium/), Pillow, and OpenCV;
-- the enrichment/OCR workers, offline guards, documentation, smoke fixtures,
-  dependency inventories, notices, corresponding source where required, and
-  licenses; and
-- application-local Visual C++ runtime DLLs and a strict file manifest.
+## Verify on the disconnected computer
 
-The installer adds the quality Hy-MT2-7B Q4_K_M model and its canonical licence.
-Exact URLs, lengths, hashes, revisions, runtime inventories, and
-license inputs are frozen in `offline-components.lock.json` and
-`ocr-components.lock.json` inside the bundle.
+```powershell
+.\bstrings-kit\bstrings.exe bundle verify
+```
 
-Nothing installs a service, driver, global runtime, or Python package.
-llama.cpp is a private loopback child process with its offline guard. Offline
-model variables are forced, the adapters reject non-loopback network use, and
-the OCR worker performs no network request. Application-local payloads are not
-system prerequisites.
+Do not analyze evidence if verification fails.
 
-Current Full `auto` probes the authenticated Windows sm89 CUDA closure by
-loading the exact Q4 model, running one synthetic request, and observing 33/33
-layers offloaded at p2 before evidence work. The accepted command still reports
-a 410.69 MiB `CPU_Mapped` model buffer. If the probe fails, CUDA is closed and
-CPU is tested before evidence inference, cache insertion, or output. Explicit
-CUDA fails closed, the provider cannot change mid-run, and hybrid/p4 remain
-deferred. This is not a universal CUDA claim; see
-[ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md). Full remains
-high-recall, so large mostly unique candidate sets can remain long-running even
-after exact deduplication. During translation, a randomly named SQLite cache is
-created only inside the selected examination output, keeps a bounded in-memory
-hot set, and never reuses evidence text across examinations. It is removed on
-normal completion and handled failure. Console/log progress exposes completed
-percentage, rate, ETA, cache hits, distinct model inputs, and preservation
-fallbacks so offline operators can judge the remaining work.
+Verification checks the manifest, exact file set, file sizes, SHA-256 values,
+configuration, licenses, runtimes, models, and tools.
 
-## OCR hardware choices
+## Analyze evidence
 
-The v1.9.17 OCR profile defines two runtime environments:
+Use a new or empty results directory:
 
-- a CPU-only ONNX Runtime environment, verified separately as a fallback; and
-- the active DirectML ONNX Runtime environment, which exposes both DirectML and
-  CPU execution providers. Normal CPU and hybrid requests use provider-specific
-  sessions in this active environment.
+```powershell
+.\bstrings-kit\bstrings.exe analyze `
+  -d D:\evidence\carved-files `
+  -o D:\results\case-01 `
+  --full
+```
 
-CPU, DirectML, and DirectML+CPU hybrid paths passed per-path source-profile
-smoke tests. Those checks show that each path can run; they do not establish
-cross-provider equality or corpus-level OCR quality. CUDA OCR is not bundled or
-claimed by this profile, even though the general CLI accepts
-`--ocr-provider cuda` for future/custom profiles.
+Confirm exit code 0, two complete status files, and no `.incomplete` file. Keep
+failed output for diagnosis.
 
-Three evidence types answer different questions:
+The result directory can contain sensitive case data. Store and transfer it as
+evidence.
 
-- synthetic smoke demonstrates on fixed fixtures that the packaged paths run
-  and recover expected text;
-- the local v3 616-document CPU SROIE calibration provides bounded
-  printed-receipt quality evidence for its frozen candidate; and
-- release-specific DirectML acceptance demonstrates the packaged GPU path on
-  the named hardware/driver.
+## What the kit contains
 
-The local CPU-only v3 calibration selected 616 of 626 training documents and
-passed its frozen development-data gate. The exact metrics and limits are in
-the [OCR benchmark record](ocr-benchmark-2026-08-05.md).
+The kit contains:
 
-The separate 361-document one-shot test failed closed on one degenerate source
-annotation before OCR or quality scoring. It was consumed and was not rerun,
-so it does not establish independent acceptance. A later post-hoc diagnostic
-audited all 361 rows, excluded eight exact train/test image overlaps, and
-scored 353 rows, including repaired dataset row index 142 (zero-based). Every
-backend met all 11 frozen numeric thresholds, and the aggregate and
-per-document scored metrics matched. Evidence-record integrity did not, so the
-diagnostic failed overall. It is not an acceptance or parity result. Raw
-benchmark evidence remains in CI/internal evidence storage rather than GitHub
-Releases; see the [OCR benchmark record](ocr-benchmark-2026-08-05.md) for the
-public summary.
+- `bstrings.exe`;
+- native extraction support;
+- FLOSS and its notices;
+- OCR runtimes and models;
+- the local translation runtime and model;
+- optional CUDA runtime files for accepted hardware;
+- pattern and report support;
+- configuration and manifests; and
+- licenses and third-party notices.
 
-Hybrid does not guarantee higher throughput, and another GPU-heavy process can
-exhaust graphics memory or cause a DirectML device-loss error. Use
-`--ocr-provider cpu` to avoid GPU execution, or schedule GPU work so OCR and
-other large models do not compete. The integrated pipeline completes OCR
-before translation.
+The user selects engines at run time. Engine selection does not change the kit
+or its verification rules.
 
-More detail is in [OCR and document analysis](ocr-and-document-analysis.md).
+## Select engines offline
+
+Use the complete preset:
+
+```powershell
+.\bstrings-kit\bstrings.exe analyze `
+  -d D:\evidence `
+  -o D:\results\full `
+  --full
+```
+
+Exclude engines with a comma-separated list:
+
+```powershell
+.\bstrings-kit\bstrings.exe analyze `
+  -d D:\evidence `
+  -o D:\results\without-ocr `
+  --full -e ocr
+```
+
+See the [Command reference](command-reference.md) for direct native, FLOSS, OCR,
+decoding, and translation controls.
+
+## OCR and translation hardware
+
+Automatic mode tests supported backends before it processes evidence. It uses a
+tested fallback when an automatic accelerator test fails.
+
+An explicit unsupported hardware choice fails closed. The selected provider
+does not change after evidence processing starts.
+
+CPU remains the no-GPU path. See
+[OCR and document analysis](ocr-and-document-analysis.md) for accepted OCR
+hardware.
+
+## Disk and memory images
+
+Native extraction can read a raw image as a byte stream. FLOSS and OCR need
+individual supported files.
+
+Mount or carve a disk or memory image before you expect file-level FLOSS or OCR
+coverage. Keep the carved files and tool logs with the case.
+
+## Update an offline computer
+
+1. Install and verify the new kit on a connected staging computer.
+2. Transfer the complete new directory.
+3. Verify it on the disconnected computer.
+4. Keep the old verified kit until the new kit passes an approved test.
+5. Remove the old kit through your evidence-lab change process.
+
+Do not merge files from two kit versions.
 
 ## Acceptance checks
 
-Run `bundle verify` after every transfer and before evidence work. An
-administrator can additionally run the bundled real-inference smoke tests:
+Before operational use, confirm these facts:
 
-```powershell
-.\bstrings.exe bundle verify
-.\Verify-AirgapBundle.ps1 -TranslationSmoke -OcrSmoke
-```
+- The exact release tag is approved.
+- The release is immutable.
+- The installer and assets match release checksums.
+- `bundle verify` succeeds after transfer.
+- A synthetic analysis completes.
+- The result has complete status records.
+- No network access occurs during the offline analysis.
+- Operators can preserve failed and cancelled output.
 
-The OCR smoke creates synthetic image and image-only PDF fixtures, exercises
-the configured active and alternate runtimes, requires exact recovery of fixed
-email, URL, IP/CVE, and Windows-path lines, and verifies that the output remains
-air-gapped. The translation smoke loads the exact selected GGUF and requires
-complete output plus protected-identifier retention. Recovery smoke sends a
-reviewed benign executable through Magika and FLOSS and requires its fixed
-marker.
+Record the installed version and bundle identity in the case notes.
 
-These are per-path packaging smokes, not cross-provider parity or SROIE quality
-evidence.
+## Security boundary
 
-This PowerShell verifier is an administrator/release acceptance tool. The
-normal examiner interface remains `bstrings.exe`.
+An old cache, filename, timestamp, or success report does not prove file
+integrity. Current manifest size and SHA-256 checks authorize the bytes.
 
-CI runs these checks with offline flags and dead external proxies after
-extracting the complete bundle. Generic hosted CI exercises CPU OCR only;
-DirectML and hybrid release acceptance is a separate manual job on an explicitly
-labeled self-hosted Windows runner, with an evidence artifact tied to the source
-build run. Those are strong regression checks, but they are not the same as an
-independently prepared clean VM with its virtual NIC disabled. Organizations
-should accept their actual workstation image under their own controls.
+Do not modify, add, or remove files inside the installed kit. Any such change
+causes verification to fail.
 
-## Integrity, authenticity, and operational boundaries
-
-- The internal manifest and release checksums prove byte consistency, not
-  publisher identity. Authenticate the GitHub release through the
-  organization's normal trusted process.
-- A driver is host and operating-system software. It cannot be made a truthful
-  application-local dependency. CPU remains the no-GPU path.
-- Current source includes the separately reviewed CUDA translation overlay only
-  for its Windows sm89 acceptance scope. A compatible host driver remains an
-  external prerequisite; selecting `cuda` does not manufacture it. Unsupported
-  `auto` hosts use CPU only after the pre-evidence probe, while explicit CUDA
-  fails closed.
-- Endpoint security, WDAC, AppLocker, or organizational policy may block a
-  bundled upstream executable even when its hash matches. Approve exact hashes
-  through the local process.
-- Model output, language detection, and OCR are probabilistic. Verify
-  consequential leads against the source evidence and untranslated parents.
-- Editing an executable, model, configuration, document, notice, or license
-  invalidates the strict manifest. Rebuild rather than patching a bundle.
-
-Do not describe the release as signed unless it actually has Authenticode/RFC
-3161 signatures and an independently verified signed manifest. Microsoft
-documents [Authenticode timestamping](https://learn.microsoft.com/en-us/windows/win32/seccrypto/time-stamping-authenticode-signatures),
-and GitHub documents [immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
-
-Maintainers should continue with [offline release maintenance](offline-release-maintenance.md).
+See [Download and install](download-and-install.md) and
+[Output and provenance](output-and-provenance.md) for related procedures.
