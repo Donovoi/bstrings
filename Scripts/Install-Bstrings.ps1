@@ -926,6 +926,19 @@ if ([string]::IsNullOrWhiteSpace($destinationParent)) {
     throw 'DestinationDirectory must have a parent directory.'
 }
 $existingDestination = Get-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+$usingDefaultDestination = -not $PSBoundParameters.ContainsKey('DestinationDirectory')
+$legacyCandidate = $null
+$legacyCandidateExists = $false
+if ($usingDefaultDestination) {
+    $legacyCandidate = Join-Path $destinationParent 'bstrings-quality'
+    $legacyCandidateExists = Test-Path -LiteralPath $legacyCandidate
+    if ($null -ne $existingDestination -and $legacyCandidateExists) {
+        throw (
+            'Both bstrings-kit and the previous bstrings-quality installation exist. ' +
+            'Verify and remove or move one installation before you continue.'
+        )
+    }
+}
 if ($null -ne $existingDestination) {
     Assert-ExistingBundleShape $destination
 }
@@ -933,22 +946,20 @@ Assert-ExistingPathChain $destination 'DestinationDirectory'
 
 if (
     $null -eq $existingDestination -and
-    -not $PSBoundParameters.ContainsKey('DestinationDirectory')
+    $usingDefaultDestination -and
+    $legacyCandidateExists
 ) {
-    $legacyCandidate = Join-Path $destinationParent 'bstrings-quality'
-    if (Test-Path -LiteralPath $legacyCandidate) {
-        $legacyInstallation = Get-NormalizedDirectoryPath `
-            $legacyCandidate `
-            'Previous bstrings installation'
-        if (
-            (Test-SameOrDescendant $legacyInstallation $destination) -or
-            (Test-SameOrDescendant $destination $legacyInstallation)
-        ) {
-            throw 'The previous and current installation paths must not overlap.'
-        }
-        Assert-ExistingBundleShape $legacyInstallation
-        $removeLegacyInstallationAfterSuccess = $true
+    $legacyInstallation = Get-NormalizedDirectoryPath `
+        $legacyCandidate `
+        'Previous bstrings installation'
+    if (
+        (Test-SameOrDescendant $legacyInstallation $destination) -or
+        (Test-SameOrDescendant $destination $legacyInstallation)
+    ) {
+        throw 'The previous and current installation paths must not overlap.'
     }
+    Assert-ExistingBundleShape $legacyInstallation
+    $removeLegacyInstallationAfterSuccess = $true
 }
 
 if ([string]::IsNullOrWhiteSpace($InstallerCacheDirectory)) {

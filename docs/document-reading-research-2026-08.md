@@ -2,8 +2,8 @@
 
 ## Decision
 
-Bstrings exposes one user-facing **Full** profile, but it should not force every
-document through one engine. The defensible local design is:
+Bstrings provides one user-facing **Full** analysis preset. It should not force
+every document through one engine. The defensible local design is:
 
 1. extract native text and object structure first;
 2. run coordinate-preserving OCR/layout analysis where native coverage is absent

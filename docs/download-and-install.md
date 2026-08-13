@@ -13,26 +13,18 @@ There is no second kit to select.
 
 You do not need administrator rights.
 
-## Current public release
+## Version 2.0.0
 
-The current public release is
-[v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17). It is
-immutable and uses historical asset and directory names.
-
-Use the exact steps in the
-[v1.9.17 README](https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started).
-Do not rename its files or change its commands.
-
-Current source prepares the next major release. That release uses:
+Version 2.0.0 uses:
 
 - `Install-Bstrings.ps1` for the installer;
 - `bstrings-kit` for the default installation; and
 - `.bstrings-installer-cache` for verified download bytes.
 
-## Install the next release
+## Install version 2.0.0
 
-Get `Install-Bstrings.ps1` from the immutable release page. Use the
-checksum-authenticated command on that page.
+Use the authenticated command in the main README. It gets
+`Install-Bstrings.ps1` from the immutable v2.0.0 release.
 
 Run the authenticated installer from the directory that will contain
 `bstrings-kit`:
@@ -92,7 +84,7 @@ only a directory that it identifies as an installed bstrings kit.
 The installer refuses to replace an unrelated `bstrings-kit` directory. This
 rule protects source trees and other user files.
 
-The first next-major upgrade can migrate the historical default installation.
+The first version 2 upgrade can migrate the historical default installation.
 Migration occurs only when all these conditions are true:
 
 - You use the default destination.
@@ -114,8 +106,12 @@ cache can avoid another large model download.
 The cache is not trusted. The installer checks the exact size and SHA-256 of
 each object every time it uses that object.
 
-The next-major installer can import an unchanged object from the historical
+The version 2 installer can import an unchanged object from the historical
 cache. It verifies the source, copies it to the new cache, and verifies the copy.
+
+Version 1.9.17 remains immutable. Use its
+[historical README](https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started)
+when you install that release.
 
 Use the installer cleanup option when you do not want to keep verified download
 bytes:

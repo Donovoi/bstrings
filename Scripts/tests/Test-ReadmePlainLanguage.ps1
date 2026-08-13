@@ -27,11 +27,6 @@ if ($readme -match '(?im)^## Why use it\?\s*$') {
     throw 'README must use the short What bstrings does section.'
 }
 
-$wordCount = [regex]::Matches($readme, "\b[\p{L}\p{N}][\p{L}\p{N}'-]*\b").Count
-if ($wordCount -gt 900) {
-    throw "README is too long for the quick-start contract: $wordCount words."
-}
-
 $plainLines = [Collections.Generic.List[string]]::new()
 $insideFence = $false
 foreach ($line in [IO.File]::ReadAllLines($readmePath)) {
@@ -56,6 +51,13 @@ if ($insideFence) {
 }
 
 $plainText = $plainLines -join "`n"
+$wordCount = [regex]::Matches(
+    $plainText,
+    "\b[\p{L}\p{N}][\p{L}\p{N}'-]*\b"
+).Count
+if ($wordCount -gt 900) {
+    throw "README prose is too long for the quick-start contract: $wordCount words."
+}
 $paragraphs = [regex]::Split($plainText.Trim(), '(?:\r?\n){2,}')
 foreach ($rawParagraph in $paragraphs) {
     $paragraph = ($rawParagraph -replace '(?m)^\s*[-*]\s+', '') -replace '\r?\n', ' '
@@ -94,6 +96,8 @@ $activeFiles = @(
     'docs/enrichment-pipeline.md',
     'docs/output-and-provenance.md',
     'docs/ocr-and-document-analysis.md',
+    'docs/document-reading-research-2026-08.md',
+    'docs/translation-benchmark-2026-08-04.md',
     'docs/floss-standalone-redistribution.md',
     'docs/magika-cli-redistribution.md',
     'benchmarks/README.md',
@@ -114,7 +118,11 @@ $forbidden = @(
     'airgap-manifest-quality.json',
     'core-only installation',
     'core release',
-    'core ZIP'
+    'core ZIP',
+    'quality channel',
+    'standalone core',
+    'translation profiles',
+    'Full profile'
 )
 foreach ($relativePath in $activeFiles) {
     $path = Join-Path $repoRoot $relativePath
