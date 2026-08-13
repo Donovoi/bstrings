@@ -43,7 +43,7 @@ public static partial class Program
         + "\r\nUpstream: https://github.com/EricZimmerman/bstrings"
         + "\r\nFork: https://github.com/Donovoi/bstrings";
     private static readonly string Footer =
-        @"Quick start (complete quality kit):"
+        @"Quick start (bstrings kit):"
         + "\r\n\t "
         + @"bstrings.exe analyze -d ""C:\evidence\carved-files"" --full -o ""C:\results\carved"""
         + "\r\n\t "

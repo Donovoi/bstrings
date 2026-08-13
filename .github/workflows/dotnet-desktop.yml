@@ -170,13 +170,13 @@ jobs:
             throw 'PowerShell syntax validation failed.'
           }
 
-      - name: Test quality installer with Windows PowerShell 5.1
+      - name: Test Windows kit installer with Windows PowerShell 5.1
         shell: powershell
-        run: .\Scripts\tests\Test-Install-BstringsQuality.ps1
+        run: .\Scripts\tests\Test-Install-Bstrings.ps1
 
-      - name: Test quality installer with PowerShell 7
+      - name: Test Windows kit installer with PowerShell 7
         shell: pwsh
-        run: ./Scripts/tests/Test-Install-BstringsQuality.ps1
+        run: ./Scripts/tests/Test-Install-Bstrings.ps1
 
       - name: Test README installer bootstrap with Windows PowerShell 5.1
         shell: powershell
@@ -186,9 +186,17 @@ jobs:
         shell: pwsh
         run: ./Scripts/tests/Test-ReadmeBootstrap.ps1
 
+      - name: Test README plain language with Windows PowerShell 5.1
+        shell: powershell
+        run: .\Scripts\tests\Test-ReadmePlainLanguage.ps1
+
+      - name: Test README plain language with PowerShell 7
+        shell: pwsh
+        run: ./Scripts/tests/Test-ReadmePlainLanguage.ps1
+
       - name: Test offline release evidence validation
         shell: pwsh
-        run: ./tools/airgap/tests/Test-OfflineProfileReleaseEvidence.ps1
+        run: ./tools/airgap/tests/Test-OfflineBundleReleaseEvidence.ps1
 
       - name: Test bundled Markdown-link validation
         shell: pwsh
@@ -359,7 +367,7 @@ jobs:
         run: |
           $packagePath = Join-Path $PWD "bstrings-win-x64.zip"
           Compress-Archive -Path "publish/win-x64/*" -DestinationPath $packagePath -Force
-          $verifyRoot = Join-Path $env:RUNNER_TEMP 'bstrings-core-archive-verification'
+          $verifyRoot = Join-Path $env:RUNNER_TEMP 'bstrings-base-archive-verification'
           if (Test-Path -LiteralPath $verifyRoot) {
             throw "Core archive verification directory already exists: $verifyRoot"
           }
@@ -390,7 +398,7 @@ jobs:
             ${{ runner.temp }}\bstrings-offline\ocr-downloads
           key: bstrings-offline-default-v1-${{ runner.os }}-${{ hashFiles('tools/airgap/offline-components.lock.json', 'tools/airgap/ocr-components.lock.json') }}
 
-      - name: Build the complete highest-quality offline bundle
+      - name: Build the complete offline bstrings kit
         if: >-
           startsWith(github.ref, 'refs/tags/v') ||
           (github.event_name == 'workflow_dispatch' && inputs.full_offline)
@@ -401,8 +409,7 @@ jobs:
           ./tools/airgap/Build-CompleteOfflineBundle.ps1 `
             -PublishedBstringsDirectory publish/win-x64 `
             -OutputDirectory publish/offline `
-            -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline') `
-            -TranslationProfile quality
+            -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline')
 
       - name: Revalidate the warmed offline cache without network fallback
         if: >-
@@ -417,7 +424,6 @@ jobs:
             -PublishedBstringsDirectory publish/win-x64 `
             -OutputDirectory $validationOutput `
             -WorkingDirectory (Join-Path $env:RUNNER_TEMP 'bstrings-offline') `
-            -TranslationProfile quality `
             -ValidateOnly
           if (Test-Path -LiteralPath $validationOutput) {
             throw 'Cache-only offline validation unexpectedly created bundle output.'
@@ -489,16 +495,16 @@ jobs:
             -BundleDirectory $bundleRoot `
             -OutputDirectory release-packs `
             -ReleaseAssetBaseUrl $releaseBase `
-            -CoreReleaseArchive (Join-Path $PWD 'bstrings-win-x64.zip') `
-            -InstallerScript (Join-Path $PWD 'Scripts\Install-BstringsQuality.ps1')
+            -BaseReleaseArchive (Join-Path $PWD 'bstrings-win-x64.zip') `
+            -InstallerScript (Join-Path $PWD 'Scripts\Install-Bstrings.ps1')
 
           $checksumRows = Get-Content -LiteralPath release-packs/SHA256SUMS.txt
           $expectedChecksumFiles = [Collections.Generic.Dictionary[string, string]]::new(
             [StringComparer]::Ordinal
           )
-          $coreArchive = Get-Item -LiteralPath bstrings-win-x64.zip -Force
-          if (-not $expectedChecksumFiles.TryAdd($coreArchive.Name, $coreArchive.FullName)) {
-            throw "Duplicate public release-asset name: $($coreArchive.Name)"
+          $baseArchive = Get-Item -LiteralPath bstrings-win-x64.zip -Force
+          if (-not $expectedChecksumFiles.TryAdd($baseArchive.Name, $baseArchive.FullName)) {
+            throw "Duplicate public release-asset name: $($baseArchive.Name)"
           }
           foreach ($file in Get-ChildItem -LiteralPath release-packs -File -Force) {
             if ($file.Name -ceq 'SHA256SUMS.txt') {
@@ -544,8 +550,8 @@ jobs:
           retention-days: 30
           compression-level: 0
 
-  profile-acceptance:
-    name: Accept the highest-quality offline bundle
+  bundle-acceptance:
+    name: Accept the offline bstrings kit
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: [self-hosted, Windows, X64, bstrings-offline-release]
@@ -554,53 +560,53 @@ jobs:
       actions: read
       contents: read
     concurrency:
-      group: bstrings-offline-profile-acceptance
+      group: bstrings-offline-bundle-acceptance
       cancel-in-progress: false
 
     steps:
       - name: Check out the exact tagged source
         uses: actions/checkout@v7
 
-      - name: Download core release package
+      - name: Download base runtime component
         uses: actions/download-artifact@v8
         with:
           name: bstrings-win-x64
-          path: ${{ runner.temp }}\bstrings-profile-input-${{ github.run_id }}-${{ github.run_attempt }}\core
+          path: ${{ runner.temp }}\bstrings-bundle-input-${{ github.run_id }}-${{ github.run_attempt }}\base
 
       - name: Download complete offline split packs
         uses: actions/download-artifact@v8
         with:
           name: bstrings-win-x64-offline-packs
-          path: ${{ runner.temp }}\bstrings-profile-input-${{ github.run_id }}-${{ github.run_attempt }}\packs
+          path: ${{ runner.temp }}\bstrings-bundle-input-${{ github.run_id }}-${{ github.run_attempt }}\packs
 
-      - name: Acquire, assemble, verify, and smoke the quality bundle
+      - name: Acquire, assemble, verify, and smoke the bstrings kit
         shell: pwsh
         timeout-minutes: 330
         run: |
           $ErrorActionPreference = 'Stop'
-          $inputRoot = Join-Path $env:RUNNER_TEMP "bstrings-profile-input-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          ./tools/airgap/Invoke-OfflineProfileAcceptance.ps1 `
-            -CoreArchive (Join-Path $inputRoot 'core\bstrings-win-x64.zip') `
+          $inputRoot = Join-Path $env:RUNNER_TEMP "bstrings-bundle-input-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          ./tools/airgap/Invoke-OfflineBundleAcceptance.ps1 `
+            -BaseArchive (Join-Path $inputRoot 'base\bstrings-win-x64.zip') `
             -PackDirectory (Join-Path $inputRoot 'packs') `
-            -WorkingDirectory (Join-Path $env:RUNNER_TEMP "bstrings-profile-work-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT") `
-            -EvidenceDirectory (Join-Path $env:RUNNER_TEMP "bstrings-profile-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT") `
+            -WorkingDirectory (Join-Path $env:RUNNER_TEMP "bstrings-bundle-work-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT") `
+            -EvidenceDirectory (Join-Path $env:RUNNER_TEMP "bstrings-bundle-evidence-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT") `
             -SourceBuildRunId $env:GITHUB_RUN_ID `
             -SourceRunAttempt $env:GITHUB_RUN_ATTEMPT `
             -SourceTag $env:GITHUB_REF_NAME `
             -SourceCommit $env:GITHUB_SHA `
             -SourceRepository $env:GITHUB_REPOSITORY
 
-      - name: Upload checked profile-acceptance evidence
+      - name: Upload checked bundle-acceptance evidence
         uses: actions/upload-artifact@v7
         with:
-          name: bstrings-offline-profile-acceptance
-          path: ${{ runner.temp }}\bstrings-profile-evidence-${{ github.run_id }}-${{ github.run_attempt }}\offline-profile-acceptance.json
+          name: bstrings-offline-bundle-acceptance
+          path: ${{ runner.temp }}\bstrings-bundle-evidence-${{ github.run_id }}-${{ github.run_attempt }}\offline-bundle-acceptance.json
           if-no-files-found: error
           retention-days: 90
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, profile-acceptance]
+    needs: [build, bundle-acceptance]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -609,7 +615,7 @@ jobs:
       - name: Check out the exact tagged source
         uses: actions/checkout@v7
 
-      - name: Download core release package
+      - name: Download base runtime component
         uses: actions/download-artifact@v8
         with:
           name: bstrings-win-x64
@@ -621,18 +627,18 @@ jobs:
           name: bstrings-win-x64-offline-packs
           path: release-assets
 
-      - name: Download checked profile-acceptance evidence
+      - name: Download checked bundle-acceptance evidence
         uses: actions/download-artifact@v8
         with:
-          name: bstrings-offline-profile-acceptance
+          name: bstrings-offline-bundle-acceptance
           path: release-gate-evidence
 
-      - name: Validate checked profile-acceptance evidence
+      - name: Validate checked bundle-acceptance evidence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          ./tools/airgap/Test-OfflineProfileReleaseEvidence.ps1 `
-            -EvidencePath release-gate-evidence/offline-profile-acceptance.json `
+          ./tools/airgap/Test-OfflineBundleReleaseEvidence.ps1 `
+            -EvidencePath release-gate-evidence/offline-bundle-acceptance.json `
             -AssetDirectory release-assets `
             -ExpectedRepository $env:GITHUB_REPOSITORY `
             -ExpectedServerUrl $env:GITHUB_SERVER_URL `
@@ -652,11 +658,11 @@ jobs:
             release-assets/bstrings-win-x64.zip
             release-assets/bstrings-win-x64-offline-base.zip
             release-assets/bstrings-win-x64-offline-cuda.zip
-            release-assets/Install-BstringsQuality.ps1
-            release-assets/airgap-config-*.json
-            release-assets/airgap-manifest-*.json
-            release-assets/Hy-MT2-Apache-2.0-*.txt
-            release-assets/bundle-packs-*.json
+            release-assets/Install-Bstrings.ps1
+            release-assets/airgap-config.json
+            release-assets/airgap-manifest.json
+            release-assets/Hy-MT2-Apache-2.0.txt
+            release-assets/bundle-packs.json
             release-assets/SHA256SUMS.txt
           generate_release_notes: false
           fail_on_unmatched_files: true
@@ -682,14 +688,14 @@ jobs:
           }
           $actual = @($release.assets | ForEach-Object { [string]$_.name } | Sort-Object)
           $expected = @(
-            'airgap-config-quality.json'
-            'airgap-manifest-quality.json'
+            'airgap-config.json'
+            'airgap-manifest.json'
             'bstrings-win-x64-offline-base.zip'
             'bstrings-win-x64-offline-cuda.zip'
             'bstrings-win-x64.zip'
-            'bundle-packs-quality.json'
-            'Hy-MT2-Apache-2.0-quality.txt'
-            'Install-BstringsQuality.ps1'
+            'bundle-packs.json'
+            'Hy-MT2-Apache-2.0.txt'
+            'Install-Bstrings.ps1'
             'SHA256SUMS.txt'
           ) | Sort-Object
           if (($actual -join "`n") -cne ($expected -join "`n")) {

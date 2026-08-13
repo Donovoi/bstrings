@@ -45,7 +45,7 @@ PaddlePaddle [PP-OCRv6](https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs
 [PaddleOCR-VL-1.6](https://huggingface.co/PaddlePaddle/PaddleOCR-VL-1.6);
 and [OvisOCR2](https://huggingface.co/ATH-MaaS/OvisOCR2).
 
-## Why one large VLM is not the Full profile
+## Why one large VLM is not the Full preset
 
 The strongest contrary proposal is to replace native parsing and OCR with the
 highest-scoring compact VLM. It fails the current forensic requirements:

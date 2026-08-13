@@ -5,14 +5,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $installerPath = [IO.Path]::GetFullPath(
-    (Join-Path $PSScriptRoot '..\Install-BstringsQuality.ps1')
+    (Join-Path $PSScriptRoot '..\Install-Bstrings.ps1')
 )
 $installerSource = [IO.File]::ReadAllText($installerPath)
 if ($installerSource -cmatch '(?m)\bGet-FileHash\b') {
-    throw 'The quality installer must not depend on Get-FileHash.'
+    throw 'The bstrings installer must not depend on Get-FileHash.'
 }
 if ($installerSource -cnotmatch '\[Security\.Cryptography\.SHA256\]::Create\(\)') {
-    throw 'The quality installer must hash through the .NET SHA-256 API.'
+    throw 'The bstrings installer must hash through the .NET SHA-256 API.'
 }
 if ($installerSource -cmatch '\[IO\.Compression\.ZipFile\]::OpenRead\(\$ArchivePath\)') {
     throw 'Core extraction must not reopen an authenticated archive by path.'
@@ -40,13 +40,13 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 if ($LASTEXITCODE -ne 0 -or @($zipArchiveProbe) -cnotcontains 'System.IO.Compression.ZipArchive') {
     throw 'A clean Windows PowerShell 5.1 process could not resolve ZipArchive.'
 }
-$releaseTag = 'v1.9.17'
+$releaseTag = 'v2.0.0'
 $testBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot = Join-Path $testBase (
-    'bstrings-quality-installer-test-' + [Guid]::NewGuid().ToString('N')
+    'bstrings-installer-test-' + [Guid]::NewGuid().ToString('N')
 )
 $neighborRoot = Join-Path $testBase (
-    'bstrings-quality-installer-neighbor-' + [Guid]::NewGuid().ToString('N')
+    'bstrings-installer-neighbor-' + [Guid]::NewGuid().ToString('N')
 )
 $serverProcesses = [Collections.Generic.List[Diagnostics.Process]]::new()
 
@@ -94,6 +94,18 @@ function Get-PhysicalFile([string]$Path, [string]$Name) {
         throw "$Name is not a non-empty physical file: $Path"
     }
     return $item
+}
+
+function New-VerifiedExistingBundle(
+    [string]$Root,
+    [string]$CoreArchive,
+    [string]$AirgapManifest
+) {
+    [IO.Compression.ZipFile]::ExtractToDirectory($CoreArchive, $Root)
+    Copy-Item `
+        -LiteralPath $AirgapManifest `
+        -Destination (Join-Path $Root 'airgap-manifest.json')
+    Write-Utf8File (Join-Path $Root 'kit-marker.txt') 'bstrings-kit'
 }
 
 function New-StubCoreArchive([string]$Root) {
@@ -206,7 +218,7 @@ internal static class Program
             return 25;
         }
         File.Copy(airgapSource, Path.Combine(output, "airgap-manifest.json"), overwrite: false);
-        File.WriteAllText(Path.Combine(output, "quality-profile.txt"), "quality");
+        File.WriteAllText(Path.Combine(output, "kit-marker.txt"), "bstrings-kit");
         File.WriteAllText(Path.Combine(cache, "stub-verified.cache"), "verified");
         return 0;
     }
@@ -225,7 +237,7 @@ internal static class Program
         var root = OptionalOption(args, "--bundle-root") ?? AppContext.BaseDirectory;
         return File.Exists(Path.Combine(root, "bstrings.exe")) &&
             File.Exists(Path.Combine(root, "airgap-manifest.json")) &&
-            File.Exists(Path.Combine(root, "quality-profile.txt"))
+            File.Exists(Path.Combine(root, "kit-marker.txt"))
                 ? 0
                 : 26;
     }
@@ -349,9 +361,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         request_path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         with request_log.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(request_path + "\n")
-        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v1.9.17"):
+        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v2.0.0"):
             candidate = root / "release.json"
-        elif "/Donovoi/bstrings/releases/download/v1.9.17/" in request_path:
+        elif "/Donovoi/bstrings/releases/download/v2.0.0/" in request_path:
             name = pathlib.PurePosixPath(request_path).name
             candidate = root / name
         else:
@@ -458,24 +470,24 @@ function New-ReleaseFixture(
 ) {
     $assetRoot = Join-Path $testRoot "fixture-$Name"
     [IO.Directory]::CreateDirectory($assetRoot) | Out-Null
-    $installerAsset = Join-Path $assetRoot 'Install-BstringsQuality.ps1'
+    $installerAsset = Join-Path $assetRoot 'Install-Bstrings.ps1'
     $coreAsset = Join-Path $assetRoot 'bstrings-win-x64.zip'
-    $trustAsset = Join-Path $assetRoot 'bundle-packs-quality.json'
+    $trustAsset = Join-Path $assetRoot 'bundle-packs.json'
     Copy-Item -LiteralPath $installerPath -Destination $installerAsset
     Copy-Item -LiteralPath $CoreArchive -Destination $coreAsset
 
     $airgapHash = Get-LowerSha256 $AirgapManifest
     $trust = [ordered]@{
         schemaVersion = 1
-        profile = 'windows-x64-offline-v2-quality'
-        bundleIdentity = "synthetic-quality-$($airgapHash.Substring(0, 24))"
+        profile = 'windows-x64-offline-v3'
+        bundleIdentity = "synthetic-kit-$($airgapHash.Substring(0, 24))"
         airgapManifestSha256 = $airgapHash
         packs = @(
             [ordered]@{
                 id = 'synthetic-base'
-                url = 'https://example.invalid/bstrings-quality-test.zip'
+                url = 'https://example.invalid/bstrings-kit-test.zip'
                 bytes = 1
-                sha256 = ('1' * 64)
+                sha256 = '2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881'
             }
         )
     }
@@ -485,9 +497,9 @@ function New-ReleaseFixture(
     $coreHash = Get-LowerSha256 $coreAsset
     $trustHash = Get-LowerSha256 $trustAsset
     $checksums = [ordered]@{
-        'Install-BstringsQuality.ps1' = if ($WrongInstallerChecksum) { '0' * 64 } else { $installerHash }
+        'Install-Bstrings.ps1' = if ($WrongInstallerChecksum) { '0' * 64 } else { $installerHash }
         'bstrings-win-x64.zip' = if ($WrongCoreChecksum) { '0' * 64 } else { $coreHash }
-        'bundle-packs-quality.json' = if ($WrongTrustChecksum) { '0' * 64 } else { $trustHash }
+        'bundle-packs.json' = if ($WrongTrustChecksum) { '0' * 64 } else { $trustHash }
     }
     $checksumRows = @(
         $checksums.Keys |
@@ -501,10 +513,10 @@ function New-ReleaseFixture(
     $assets = [Collections.Generic.List[object]]::new()
     $assetId = 1000
     foreach ($fileName in @(
-        'Install-BstringsQuality.ps1',
+        'Install-Bstrings.ps1',
         'SHA256SUMS.txt',
         'bstrings-win-x64.zip',
-        'bundle-packs-quality.json'
+        'bundle-packs.json'
     )) {
         $path = Join-Path $assetRoot $fileName
         $item = Get-PhysicalFile $path "Synthetic release asset $fileName"
@@ -757,13 +769,13 @@ function Remove-ValidatedTestTree([string]$Path, [string]$LeafPattern) {
 
 $testLeaf = [IO.Path]::GetFileName($testRoot)
 $neighborLeaf = [IO.Path]::GetFileName($neighborRoot)
-if ($testLeaf -notmatch '^bstrings-quality-installer-test-[0-9a-f]{32}$') {
+if ($testLeaf -notmatch '^bstrings-installer-test-[0-9a-f]{32}$') {
     throw "Unexpected installer test path: $testRoot"
 }
-if ($neighborLeaf -notmatch '^bstrings-quality-installer-neighbor-[0-9a-f]{32}$') {
+if ($neighborLeaf -notmatch '^bstrings-installer-neighbor-[0-9a-f]{32}$') {
     throw "Unexpected installer neighbor path: $neighborRoot"
 }
-Get-PhysicalFile $installerPath 'Quality installer under test' | Out-Null
+Get-PhysicalFile $installerPath 'bstrings installer under test' | Out-Null
 [IO.Directory]::CreateDirectory($testRoot) | Out-Null
 [IO.Directory]::CreateDirectory($neighborRoot) | Out-Null
 $neighborSentinel = Join-Path $neighborRoot 'must-survive.txt'
@@ -779,12 +791,12 @@ try {
         files = @()
     })
 
-    # A complete default-profile run must acquire quality, verify through the
+    # A complete default run must acquire the kit and verify through the
     # installed executable, use exact argument values, and retain one shared
     # cache whose release assets remain isolated under the exact tag.
     $successFixture = New-ReleaseFixture 'success' $coreArchive $airgapManifest
     $successDestination = Join-Path $testRoot ('destination success ' + [char]0x00b5)
-    $successCache = Join-Path $testRoot '.bstrings-quality-installer-cache'
+    $successCache = Join-Path $testRoot '.bstrings-installer-cache'
     $successEnvironment = New-StubEnvironment 'success' $airgapManifest
     $successArguments = New-InstallerArguments `
         $successFixture `
@@ -793,13 +805,13 @@ try {
         3 `
         -UseDefaultReleaseTag
     $success = Invoke-Installer $successArguments $successEnvironment
-    Assert-True $success.Succeeded "The synthetic quality installation failed: $($success.Text)"
-    Assert-True ($success.Text -cmatch 'Progress: quality installer: 0\.0% \(starting\)') `
+    Assert-True $success.Succeeded "The synthetic bstrings installation failed: $($success.Text)"
+    Assert-True ($success.Text -cmatch 'Progress: bstrings installer: 0\.0% \(starting\)') `
         'The installer did not report its starting percentage.'
-    Assert-True ($success.Text -cmatch 'Progress: quality installer: 100\.0% \(complete\)') `
+    Assert-True ($success.Text -cmatch 'Progress: bstrings installer: 100\.0% \(complete\)') `
         'The installer did not report completion at 100 percent.'
-    Assert-True (Test-Path -LiteralPath (Join-Path $successDestination 'quality-profile.txt') -PathType Leaf) `
-        'The successful installation did not publish the quality marker.'
+    Assert-True (Test-Path -LiteralPath (Join-Path $successDestination 'kit-marker.txt') -PathType Leaf) `
+        'The successful installation did not publish the kit marker.'
     Assert-True (Test-Path -LiteralPath $successCache -PathType Container) `
         'A successful default installation did not retain its shared installer cache.'
     Assert-True ($success.Text -cmatch 'Verified shared installer cache retained:') `
@@ -810,8 +822,8 @@ try {
     Assert-CommandPrefix $successInvocations[1] 'verify'
     Assert-CommandPrefix $successInvocations[2] 'verify'
     $successManifestArgument = Get-InvocationOption $successInvocations[0] '--manifest'
-    Assert-Equal ([IO.Path]::GetFileName($successManifestArgument)) 'bundle-packs-quality.json' `
-        'The installer did not pass the quality trust manifest to bundle acquire.'
+    Assert-Equal ([IO.Path]::GetFileName($successManifestArgument)) 'bundle-packs.json' `
+        'The installer did not pass the kit trust manifest to bundle acquire.'
     Assert-Equal `
         ([IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($successManifestArgument))) `
         ([IO.Path]::GetFullPath((Join-Path $successCache "release-assets\$releaseTag"))) `
@@ -843,7 +855,7 @@ try {
         'Final verification did not run through the installed bstrings.exe.'
 
     # With no DestinationDirectory argument, the one-command path must remain
-    # relative to the caller, install only the quality profile, verify it, and
+    # relative to the caller, install the kit, verify it, and
     # retain the caller-relative shared cache beside the installation.
     $defaultCallerRoot = Join-Path $testRoot (
         'default-caller-' + [Guid]::NewGuid().ToString('N')
@@ -853,10 +865,10 @@ try {
         'default-caller' `
         $coreArchive `
         $airgapManifest
-    $defaultCallerDestination = Join-Path $defaultCallerRoot 'bstrings-quality'
+    $defaultCallerDestination = Join-Path $defaultCallerRoot 'bstrings-kit'
     $defaultCallerCacheParent = Join-Path `
         $defaultCallerRoot `
-        '.bstrings-quality-installer-cache'
+        '.bstrings-installer-cache'
     $defaultCallerEnvironment = New-StubEnvironment 'default-caller' $airgapManifest
     $defaultCallerArguments = New-InstallerArguments `
         $defaultCallerFixture `
@@ -870,6 +882,12 @@ try {
         'The default-destination scenario unexpectedly passed DestinationDirectory.'
     Assert-PathAbsent $defaultCallerDestination `
         'The default caller-relative destination existed before the test.'
+    $legacyCallerCache = Join-Path $defaultCallerRoot '.bstrings-quality-installer-cache'
+    $syntheticPackSha256 = '2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881'
+    $legacyPackObject = Join-Path $legacyCallerCache (
+        "bundle-packs\objects\v1\zip\1\$($syntheticPackSha256.Substring(0, 2))\$syntheticPackSha256.object"
+    )
+    Write-Utf8File $legacyPackObject 'x'
 
     Push-Location -LiteralPath $defaultCallerRoot
     try {
@@ -889,17 +907,24 @@ try {
         "The caller-relative default installation failed: $($defaultCaller.Text)"
     )
     Assert-True `
-        (Test-Path -LiteralPath (Join-Path $defaultCallerDestination 'quality-profile.txt') -PathType Leaf) `
-        'The caller-relative default did not install the quality profile.'
+        (Test-Path -LiteralPath (Join-Path $defaultCallerDestination 'kit-marker.txt') -PathType Leaf) `
+        'The caller-relative default did not install the kit.'
     Assert-True (Test-Path -LiteralPath $defaultCallerCacheParent -PathType Container) `
         'The caller-relative default did not retain its shared installer cache.'
+    $importedPackObject = Join-Path $defaultCallerCacheParent (
+        "bundle-packs\objects\v1\zip\1\$($syntheticPackSha256.Substring(0, 2))\$syntheticPackSha256.object"
+    )
+    Assert-Equal (Get-LowerSha256 $importedPackObject) $syntheticPackSha256 `
+        'The default install did not authenticate and reuse the legacy pack-cache object.'
+    Assert-Equal (Get-LowerSha256 $legacyPackObject) $syntheticPackSha256 `
+        'Legacy pack-cache reuse changed or removed the source object.'
     $defaultCallerChildren = @(Get-ChildItem -LiteralPath $defaultCallerRoot -Force)
-    Assert-Equal $defaultCallerChildren.Count 2 `
-        'The caller-relative default published content outside bstrings-quality.'
+    Assert-Equal $defaultCallerChildren.Count 3 `
+        'The caller-relative default published content outside bstrings-kit.'
     $defaultCallerChildNames = @($defaultCallerChildren.Name | Sort-Object)
     Assert-Equal `
         ($defaultCallerChildNames -join '|') `
-        ((@('.bstrings-quality-installer-cache', 'bstrings-quality') | Sort-Object) -join '|') `
+        ((@('.bstrings-installer-cache', '.bstrings-quality-installer-cache', 'bstrings-kit') | Sort-Object) -join '|') `
         'The caller-relative default published an unexpected top-level path.'
     $defaultCallerInvocations = @(
         Read-StubInvocations $defaultCallerEnvironment.BSTRINGS_INSTALLER_STUB_LOG
@@ -911,13 +936,13 @@ try {
     Assert-CommandPrefix $defaultCallerInvocations[2] 'verify'
     Assert-Equal `
         ([IO.Path]::GetFileName((Get-InvocationOption $defaultCallerInvocations[0] '--manifest'))) `
-        'bundle-packs-quality.json' `
-        'The caller-relative default did not acquire the quality-only manifest.'
+        'bundle-packs.json' `
+        'The caller-relative default did not acquire the kit manifest.'
     $defaultCallerStaging = Get-InvocationOption $defaultCallerInvocations[0] '--output'
     Assert-ReplacementStagingPath `
         $defaultCallerStaging `
         $defaultCallerDestination `
-        'The omitted destination did not stage beside caller-relative bstrings-quality.'
+        'The omitted destination did not stage beside caller-relative bstrings-kit.'
     Assert-Equal `
         ([IO.Path]::GetFullPath((Get-InvocationOption $defaultCallerInvocations[1] '--bundle-root'))) `
         ([IO.Path]::GetFullPath($defaultCallerStaging)) `
@@ -931,10 +956,58 @@ try {
         ([IO.Path]::GetFullPath((Join-Path $defaultCallerDestination 'bstrings.exe'))) `
         'The caller-relative default was not verified by its installed executable.'
 
+    # The default path performs one bounded migration from a verified previous
+    # installation. It uses the old kit only as a read-only seed, verifies the
+    # new kit, re-verifies the old kit, and removes the old path last.
+    $migrationRoot = Join-Path $testRoot ('migration-' + [Guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($migrationRoot) | Out-Null
+    $migrationLegacy = Join-Path $migrationRoot 'bstrings-quality'
+    $migrationDestination = Join-Path $migrationRoot 'bstrings-kit'
+    New-VerifiedExistingBundle $migrationLegacy $coreArchive $airgapManifest
+    $migrationLegacySentinel = Join-Path $migrationLegacy 'previous-release.txt'
+    Write-Utf8File $migrationLegacySentinel 'verified previous release'
+    $migrationFixture = New-ReleaseFixture 'default-migration' $coreArchive $airgapManifest
+    $migrationEnvironment = New-StubEnvironment 'default-migration' $airgapManifest
+    $migrationArguments = New-InstallerArguments `
+        $migrationFixture `
+        $migrationDestination `
+        '' `
+        3 `
+        -UseDefaultReleaseTag
+    $migrationArguments.Remove('DestinationDirectory')
+    Push-Location -LiteralPath $migrationRoot
+    try {
+        $migration = Invoke-Installer $migrationArguments $migrationEnvironment
+    }
+    finally {
+        Pop-Location
+    }
+    Assert-True $migration.Succeeded "The verified default-path migration failed: $($migration.Text)"
+    Assert-PathAbsent $migrationLegacy `
+        'The verified previous installation remained after a successful migration.'
+    Assert-True (Test-Path -LiteralPath $migrationDestination -PathType Container) `
+        'The migration did not publish bstrings-kit.'
+    Assert-True ($migration.Text -cmatch 'Removed the verified previous installation') `
+        'The installer did not report bounded migration cleanup.'
+    $migrationInvocations = @(
+        Read-StubInvocations $migrationEnvironment.BSTRINGS_INSTALLER_STUB_LOG
+    )
+    Assert-Equal $migrationInvocations.Count 5 `
+        'Migration did not use every ownership, assembly, and verification boundary.'
+    Assert-CommandPrefix $migrationInvocations[0] 'verify'
+    Assert-CommandPrefix $migrationInvocations[1] 'acquire'
+    Assert-CommandPrefix $migrationInvocations[2] 'verify'
+    Assert-CommandPrefix $migrationInvocations[3] 'verify'
+    Assert-CommandPrefix $migrationInvocations[4] 'verify'
+    Assert-Equal `
+        ([IO.Path]::GetFullPath((Get-InvocationOption $migrationInvocations[1] '--seed-bundle'))) `
+        ([IO.Path]::GetFullPath($migrationLegacy)) `
+        'Migration did not use only the verified previous installation as its seed.'
+
     # KeepCache remains a compatible explicit spelling of the new default.
     $keptFixture = New-ReleaseFixture 'kept-cache' $coreArchive $airgapManifest
     $keptDestination = Join-Path $testRoot 'destination-kept'
-    $keptCache = Join-Path $testRoot '.bstrings-quality-installer-cache'
+    $keptCache = Join-Path $testRoot '.bstrings-installer-cache'
     $keptEnvironment = New-StubEnvironment 'kept-cache' $airgapManifest
     $keptArguments = New-InstallerArguments `
         $keptFixture `
@@ -965,12 +1038,14 @@ try {
     Assert-PathAbsent $idempotentSentinel `
         'The replacement retained a stale destination file.'
     $idempotentInvocations = @(Read-StubInvocations $keptEnvironment.BSTRINGS_INSTALLER_STUB_LOG)
-    Assert-Equal $idempotentInvocations.Count 6 'The replacement run did not reacquire and reverify the bundle.'
-    Assert-CommandPrefix $idempotentInvocations[3] 'acquire'
-    Assert-CommandPrefix $idempotentInvocations[4] 'verify'
+    Assert-Equal $idempotentInvocations.Count 8 'The replacement run did not prove ownership, reacquire, and reverify the bundle.'
+    Assert-CommandPrefix $idempotentInvocations[3] 'verify'
+    Assert-CommandPrefix $idempotentInvocations[4] 'acquire'
     Assert-CommandPrefix $idempotentInvocations[5] 'verify'
+    Assert-CommandPrefix $idempotentInvocations[6] 'verify'
+    Assert-CommandPrefix $idempotentInvocations[7] 'verify'
     Assert-Equal `
-        ([IO.Path]::GetFullPath((Get-InvocationOption $idempotentInvocations[3] '--seed-bundle'))) `
+        ([IO.Path]::GetFullPath((Get-InvocationOption $idempotentInvocations[4] '--seed-bundle'))) `
         ([IO.Path]::GetFullPath($keptDestination)) `
         'The replacement did not offer the exact physical installed bundle as a cache seed.'
 
@@ -1230,7 +1305,7 @@ try {
         $trustHashCache `
         1
     $trustHash = Invoke-Installer $trustHashArguments $trustHashEnvironment
-    Assert-InstallerFailed $trustHash 'SHA-?256|checksum|hash' 'Quality trust-manifest hash mismatch'
+    Assert-InstallerFailed $trustHash 'SHA-?256|checksum|hash' 'Bundle trust-manifest hash mismatch'
     Assert-PathAbsent $trustHashDestination 'A trust-manifest hash mismatch created the destination.'
     Assert-PathAbsent $trustHashEnvironment.BSTRINGS_INSTALLER_STUB_LOG `
         'A trust-manifest hash mismatch executed bstrings.exe.'
@@ -1294,68 +1369,87 @@ try {
     Assert-PathAbsent $urlEnvironment.BSTRINGS_INSTALLER_STUB_LOG `
         'A noncanonical release asset URL executed bstrings.exe.'
 
-    # A stale or invalid pre-existing destination is replaced by the newly
-    # authenticated release rather than rejected by its old manifest.
-    $existingFixture = New-ReleaseFixture 'existing-invalid' $coreArchive $airgapManifest
-    $existingDestination = Join-Path $testRoot 'destination-existing-invalid'
-    [IO.Directory]::CreateDirectory($existingDestination) | Out-Null
-    $existingSentinel = Join-Path $existingDestination 'original.txt'
-    Write-Utf8File $existingSentinel 'original destination bytes'
-    $existingOldManifest = Join-Path $existingDestination 'airgap-manifest.json'
-    Write-JsonFile $existingOldManifest ([ordered]@{
-        schemaVersion = 1
-        files = @(
-            [ordered]@{
-                path = 'obsolete-release-file.txt'
-                bytes = 17
-                sha256 = ('a' * 64)
-            }
-        )
-    })
-    $existingCache = Join-Path $testRoot 'cache-existing-invalid'
-    $existingEnvironment = New-StubEnvironment 'existing-invalid' $airgapManifest
+    # An unrelated or malformed directory must never be treated as an owned
+    # installation. It remains byte-for-byte present and no native code runs.
+    $unknownFixture = New-ReleaseFixture 'existing-unknown' $coreArchive $airgapManifest
+    $unknownDestination = Join-Path $testRoot 'destination-existing-unknown'
+    [IO.Directory]::CreateDirectory($unknownDestination) | Out-Null
+    $unknownSentinel = Join-Path $unknownDestination 'original.txt'
+    Write-Utf8File $unknownSentinel 'original destination bytes'
+    $unknownCache = Join-Path $testRoot 'cache-existing-unknown'
+    $unknownEnvironment = New-StubEnvironment 'existing-unknown' $airgapManifest
+    $unknownArguments = New-InstallerArguments `
+        $unknownFixture `
+        $unknownDestination `
+        $unknownCache `
+        1
+    $unknown = Invoke-Installer $unknownArguments $unknownEnvironment
+    Assert-InstallerFailed $unknown 'Existing destination|bstrings\.exe|supported prior' `
+        'Unknown existing destination ownership'
+    Assert-Equal ([IO.File]::ReadAllText($unknownSentinel)) 'original destination bytes' `
+        'The installer changed an unrelated existing destination.'
+    Assert-Equal (@(Get-ChildItem -LiteralPath $unknownDestination -Force).Count) 1 `
+        'The installer added files to an unrelated existing destination.'
+    Assert-PathAbsent $unknownEnvironment.BSTRINGS_INSTALLER_STUB_LOG `
+        'The installer executed native code for an unrelated destination.'
+
+    # A manifest-bound, verified existing kit may seed a replacement.
+    $existingFixture = New-ReleaseFixture 'existing-valid' $coreArchive $airgapManifest
+    $existingDestination = Join-Path $testRoot 'destination-existing-valid'
+    New-VerifiedExistingBundle $existingDestination $coreArchive $airgapManifest
+    $existingSentinel = Join-Path $existingDestination 'old-kit-sentinel.txt'
+    Write-Utf8File $existingSentinel 'verified old kit bytes'
+    $existingCache = Join-Path $testRoot 'cache-existing-valid'
+    $existingEnvironment = New-StubEnvironment 'existing-valid' $airgapManifest
     $existingArguments = New-InstallerArguments `
         $existingFixture `
         $existingDestination `
         $existingCache `
         1
     $existing = Invoke-Installer $existingArguments $existingEnvironment
-    Assert-True $existing.Succeeded "The stale-destination replacement failed: $($existing.Text)"
+    Assert-True $existing.Succeeded "The verified-destination replacement failed: $($existing.Text)"
     Assert-PathAbsent $existingSentinel `
-        'The installer retained stale bytes from the replaced destination.'
+        'The installer retained old bytes from the replaced kit.'
     Assert-True `
         ((Get-LowerSha256 (Join-Path $existingDestination 'airgap-manifest.json')) -ceq
             (Get-LowerSha256 $airgapManifest)) `
         'The installer did not replace the stale air-gap manifest.'
     Assert-True `
-        (Test-Path -LiteralPath (Join-Path $existingDestination 'quality-profile.txt') -PathType Leaf) `
-        'The replacement did not publish the current quality bundle.'
+        (Test-Path -LiteralPath (Join-Path $existingDestination 'kit-marker.txt') -PathType Leaf) `
+        'The replacement did not publish the current bstrings kit.'
     $existingInvocations = @(
         Read-StubInvocations $existingEnvironment.BSTRINGS_INSTALLER_STUB_LOG
     )
-    Assert-Equal $existingInvocations.Count 3 `
-        'The stale-destination replacement used an unexpected command count.'
-    Assert-CommandPrefix $existingInvocations[0] 'acquire'
-    Assert-CommandPrefix $existingInvocations[1] 'verify'
+    Assert-Equal $existingInvocations.Count 5 `
+        'The verified-destination replacement used an unexpected command count.'
+    Assert-CommandPrefix $existingInvocations[0] 'verify'
+    Assert-CommandPrefix $existingInvocations[1] 'acquire'
     Assert-CommandPrefix $existingInvocations[2] 'verify'
+    Assert-CommandPrefix $existingInvocations[3] 'verify'
+    Assert-CommandPrefix $existingInvocations[4] 'verify'
     Assert-Equal `
-        ([IO.Path]::GetFullPath((Get-InvocationOption $existingInvocations[0] '--seed-bundle'))) `
+        ([IO.Path]::GetFullPath((Get-InvocationOption $existingInvocations[1] '--seed-bundle'))) `
         ([IO.Path]::GetFullPath($existingDestination)) `
-        'The stale-destination refresh did not bound seeding to the installed bundle.'
+        'The verified-destination refresh did not bound seeding to the installed bundle.'
 
     # If the installed-path verification fails after the swap, the complete
     # previous destination must be restored and the staged replacement removed.
     $rollbackFixture = New-ReleaseFixture 'rollback-existing' $coreArchive $airgapManifest
     $rollbackDestination = Join-Path $testRoot 'destination-rollback-existing'
-    [IO.Directory]::CreateDirectory($rollbackDestination) | Out-Null
+    New-VerifiedExistingBundle $rollbackDestination $coreArchive $airgapManifest
     $rollbackSentinel = Join-Path $rollbackDestination 'previous-kit.txt'
     Write-Utf8File $rollbackSentinel 'restore this exact previous kit'
+    $rollbackBeforeNames = @(
+        Get-ChildItem -LiteralPath $rollbackDestination -Force |
+            ForEach-Object { $_.Name } |
+            Sort-Object
+    ) -join '|'
     $rollbackCache = Join-Path $testRoot 'cache-rollback-existing'
     $rollbackEnvironment = New-StubEnvironment `
         'rollback-existing' `
         $airgapManifest `
         -VerifyExit 41 `
-        -VerifyFailureAt 2
+        -VerifyFailureAt 4
     $rollbackArguments = New-InstallerArguments `
         $rollbackFixture `
         $rollbackDestination `
@@ -1367,18 +1461,25 @@ try {
         ([IO.File]::ReadAllText($rollbackSentinel)) `
         'restore this exact previous kit' `
         'The failed post-swap verification did not restore the previous destination.'
-    Assert-Equal (@(Get-ChildItem -LiteralPath $rollbackDestination -Force).Count) 1 `
+    $rollbackAfterNames = @(
+        Get-ChildItem -LiteralPath $rollbackDestination -Force |
+            ForEach-Object { $_.Name } |
+            Sort-Object
+    ) -join '|'
+    Assert-Equal $rollbackAfterNames $rollbackBeforeNames `
         'The failed replacement mixed new files into the restored previous destination.'
     $rollbackInvocations = @(
         Read-StubInvocations $rollbackEnvironment.BSTRINGS_INSTALLER_STUB_LOG
     )
-    Assert-Equal $rollbackInvocations.Count 3 `
-        'The rollback scenario did not reach both verification boundaries.'
-    Assert-CommandPrefix $rollbackInvocations[0] 'acquire'
-    Assert-CommandPrefix $rollbackInvocations[1] 'verify'
+    Assert-Equal $rollbackInvocations.Count 5 `
+        'The rollback scenario did not reach ownership and both replacement verification boundaries.'
+    Assert-CommandPrefix $rollbackInvocations[0] 'verify'
+    Assert-CommandPrefix $rollbackInvocations[1] 'acquire'
     Assert-CommandPrefix $rollbackInvocations[2] 'verify'
+    Assert-CommandPrefix $rollbackInvocations[3] 'verify'
+    Assert-CommandPrefix $rollbackInvocations[4] 'verify'
     Assert-Equal `
-        ([IO.Path]::GetFullPath((Get-InvocationOption $rollbackInvocations[0] '--seed-bundle'))) `
+        ([IO.Path]::GetFullPath((Get-InvocationOption $rollbackInvocations[1] '--seed-bundle'))) `
         ([IO.Path]::GetFullPath($rollbackDestination)) `
         'The rollback refresh did not seed only from the existing destination.'
     Assert-True (Test-Path -LiteralPath $rollbackCache -PathType Container) `
@@ -1404,7 +1505,7 @@ try {
 
     Assert-Equal ([IO.File]::ReadAllText($neighborSentinel)) 'outside the installer test root' `
         'Installer cleanup crossed the bounded test directory.'
-    Write-Host 'Quality installer synthetic integration tests passed.'
+    Write-Host 'bstrings installer synthetic integration tests passed.'
 }
 finally {
     foreach ($process in $serverProcesses) {
@@ -1425,8 +1526,8 @@ finally {
     }
     Remove-ValidatedTestTree `
         $testRoot `
-        '^bstrings-quality-installer-test-[0-9a-f]{32}$'
+        '^bstrings-installer-test-[0-9a-f]{32}$'
     Remove-ValidatedTestTree `
         $neighborRoot `
-        '^bstrings-quality-installer-neighbor-[0-9a-f]{32}$'
+        '^bstrings-installer-neighbor-[0-9a-f]{32}$'
 }

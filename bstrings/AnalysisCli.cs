@@ -36,9 +36,9 @@ internal static class AnalysisCli
     internal const string TranslationPolicyHelp =
         "Automatic translation gate used by --translation auto: high-recall keeps uncertain detections; balanced uses the configured confidence and margin; high-precision applies floors of 0.65 confidence and 0.15 margin";
     internal const string FullProfileHelp =
-        "Run the single Full profile: hash inputs, classify each input in one early shared pass, extract native strings, route applicable files to FLOSS/OCR, then fail-open shadow translation-worthiness routing and language triage, pinned 7B Q4_K_M offline translation (validated sm89 CUDA p2 or pre-evidence CPU selection), all patterns, and reports; shadow routing does not yet remove candidates. Bounded Base64 decoding remains explicit opt-in because its preregistered performance gate did not pass. An explicit engine selector overrides its default; repeat -e/--exclude-engine to subtract named engines, but do not combine both controls for the same engine";
+        "Run the Full analysis preset. It hashes inputs and runs native extraction, routing, FLOSS, OCR, language detection, local Q4_K_M translation, patterns, and reports. Full keeps fail-open shadow translation-worthiness routing. It does not yet remove candidates. Base64 decoding stays off because its performance gate did not pass. An explicit engine selector overrides its default. Use -e or --exclude-engine to subtract engines. Do not set and exclude the same engine";
     internal const string TranslationDeviceHelp =
-        "Translation hardware: auto, cpu, cuda, or hybrid; separate from native --processor (the quality kit promotes only validated compute capability 8.9 to full-offload CUDA p2, otherwise auto selects CPU before evidence inference; explicit cuda fails closed)";
+        "Select auto, cpu, cuda, or hybrid translation hardware. This is separate from native --processor. Auto uses validated compute capability 8.9 for full-offload CUDA p2. Otherwise, it selects CPU before evidence inference. Explicit cuda fails closed";
     internal const int DefaultDecoderMaximumCandidateCharacters = 16_384;
     internal const int DefaultDecoderMaximumBytesPerRecord = 12_288;
     internal const long DefaultDecoderMaximumCandidates = 100_000;

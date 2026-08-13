@@ -1,270 +1,172 @@
 # Download and install bstrings on Windows
 
-## Current release
+There is one Windows kit. It contains all supported engines, models, runtimes,
+licenses, and verification data.
 
-[bstrings v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17)
-is the complete Windows x64 release. Its quality installer assembles one
-verified offline directory containing the current native scanner and reporting
-code together with FLOSS, Magika, OCR, language detection, and local
-translation assets. There is no model-tier choice: Full uses one Hy-MT2 7B
-Q4_K_M model plus an authenticated Windows sm89 CUDA overlay
-under [ADR-0006](architecture/adr-0006-q4-cuda-full-translation.md).
+There is no second kit to select.
 
-| Installation | Included | Intended use |
-| --- | --- | --- |
-| Complete `bstrings-quality` kit | Every v1.9.17 stage, runtime, model, licence, manifest, all 66 patterns, TSV reports, and histograms | Normal and air-gapped forensic analysis |
-| Core ZIP only | Native CPU/Rust/CUDA/hybrid extraction, current patterns, native-only JSONL/TSV reports, and histograms | Small native-only installation or diagnostics |
+## Requirements
 
-Do not combine executables, manifests, packs, tools, or models from different
-versions. The installer and bundle verifier intentionally reject mixed-version
-installations.
+- Windows 11 x64
+- At least 30 GiB of free space
+- Internet access on the staging computer
 
-## Install every feature
+You do not need administrator rights.
 
-Requirements: Windows 11 x64, a connected staging machine, and at least
-30 GiB free on the installation/cache volume. Administrator rights are not
-required. DirectML OCR requires a compatible Windows GPU/driver stack; CPU OCR
-and native CPU extraction remain available without a GPU. Full `auto` uses the
-authenticated CUDA overlay only after a pre-evidence Q4 model load,
-synthetic inference, and observed 33/33 layer-offload check at p2; otherwise it
-self-tests CPU before evidence work. Explicit CUDA fails closed, and there is no
-mid-run provider switch. Acceptance is limited to the reviewed Windows RTX 4060
-Laptop/sm89 host; hybrid and p4 remain deferred.
+## Current public release
 
-Run the [safe pinned installer bootstrap from the v1.9.17
-README](https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started)
-verbatim. Do not pipe a downloaded script into `Invoke-Expression`. The
-bootstrap downloads to a unique temporary file, requires the exact GitHub
-release to be published and immutable, authenticates the installer digest, and
-then replaces any existing physical
-`Install-BstringsQuality.ps1` before launching it. A failed download or digest
-check preserves the previous installer. The installer then downloads, resumes,
-assembles, and strictly verifies the complete `bstrings-quality` directory.
-Every run refreshes an existing physical destination rather than accepting or
-patching its old contents. It verifies a unique sibling replacement first,
-keeps the previous directory as a rollback backup during the swap, and removes
-that backup only after the installed executable verifies the new directory.
-Stale files that are absent from the current release therefore do not survive.
+The current public release is
+[v1.9.17](https://github.com/Donovoi/bstrings/releases/tag/v1.9.17). It is
+immutable and uses historical asset and directory names.
 
-The installer prints an overall percentage, while its bundle client prints
-measured percentages for each pack download and hash plus assembly and final
-verification. The default shared cache is retained beside the destination so a
-retry or later release can reuse an unchanged exact pack. Every materialized
-cache hit is length-checked and fully SHA-256 hashed against the current trust
-manifest before use; cache metadata and prior success are never authoritative.
-An interrupted retry resumes private partial data and begins a new displayed
-attempt. Percentages describe bytes or other completed work units, not an ETA.
+Use the exact steps in the
+[v1.9.17 README](https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started).
+Do not rename its files or change its commands.
 
-Verify the completed bundle before use:
+Current source prepares the next major release. That release uses:
+
+- `Install-Bstrings.ps1` for the installer;
+- `bstrings-kit` for the default installation; and
+- `.bstrings-installer-cache` for verified download bytes.
+
+## Install the next release
+
+Get `Install-Bstrings.ps1` from the immutable release page. Use the
+checksum-authenticated command on that page.
+
+Run the authenticated installer from the directory that will contain
+`bstrings-kit`:
 
 ```powershell
-.\bstrings-quality\bstrings.exe bundle verify
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\Install-Bstrings.ps1
 ```
 
-Run every v1.9.17 stage over one file:
+The installer performs these actions:
+
+1. Authenticates the exact immutable release.
+2. Authenticates its own release digest.
+3. Downloads and checks each kit part.
+4. Builds a new kit in a private sibling directory.
+5. Verifies the new kit.
+6. Replaces a verified old installation safely.
+7. Verifies the installed path again.
+
+The installer does not patch files in place. It restores the previous verified
+installation if a replacement fails.
+
+## Verify the installation
 
 ```powershell
-.\bstrings-quality\bstrings.exe analyze `
-  -f "C:\evidence\memory.raw" `
-  -o "C:\results\memory-full" `
+.\bstrings-kit\bstrings.exe bundle verify
+```
+
+Do not analyze evidence unless this command returns exit code 0.
+
+## Run the first analysis
+
+Use a new or empty output directory:
+
+```powershell
+.\bstrings-kit\bstrings.exe analyze `
+  -d D:\evidence `
+  -o D:\results\case-01 `
   --full
 ```
 
-Or analyze a directory recursively:
+Confirm all these results:
+
+- The command returns exit code 0.
+- `run.json` has `status: complete`.
+- `summary.json` has `status: complete`.
+- The output directory does not contain `.incomplete`.
+
+Keep failed output for diagnosis. Use another new or empty directory for a
+retry.
+
+## Upgrade safely
+
+Run the authenticated installer for the new release. The installer can replace
+only a directory that it identifies as an installed bstrings kit.
+
+The installer refuses to replace an unrelated `bstrings-kit` directory. This
+rule protects source trees and other user files.
+
+The first next-major upgrade can migrate the historical default installation.
+Migration occurs only when all these conditions are true:
+
+- You use the default destination.
+- `bstrings-kit` does not exist.
+- The historical installation is a physical directory.
+- Its files match the current release manifest where they are reused.
+- The complete new kit passes verification before the old path is removed.
+
+The installer stops if both old and new default directories exist. Select and
+verify the installation that you want to keep before you continue.
+
+An explicit destination does not start automatic migration.
+
+## Use the verified cache
+
+The default cache is `.bstrings-installer-cache` beside the installation. The
+cache can avoid another large model download.
+
+The cache is not trusted. The installer checks the exact size and SHA-256 of
+each object every time it uses that object.
+
+The next-major installer can import an unchanged object from the historical
+cache. It verifies the source, copies it to the new cache, and verifies the copy.
+
+Use the installer cleanup option when you do not want to keep verified download
+bytes:
 
 ```powershell
-.\bstrings-quality\bstrings.exe analyze `
-  -d "C:\evidence\carved-files" `
-  -o "C:\results\case-01" `
-  --full
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\Install-Bstrings.ps1 `
+  -RemoveCacheAfterSuccess
 ```
 
-The results directory must be new or empty. `--full` selects immutable input
-hashing, one batched fail-open routing pass, universal native extraction,
-routed FLOSS recovery and PDF/OCR processing, language assessment, local
-translation, all built-in patterns, and the report projection. The completed
-result includes the authoritative JSONL evidence graph, `content-routing.jsonl`,
-the routed input projections, the per-input `engine-status.jsonl` terminal
-coverage ledger, `findings.tsv`,
-`pattern-histogram.tsv`, `feature-histogram.tsv`, and
-`pattern-histogram.html`, plus input, run, summary, and completion records.
-During the run, `Progress: analysis:` lines show overall stage completion.
-Long-running stages also report their own byte, file, chunk, or record percentages,
-so a quiet stage is distinguishable from a stalled process.
+## Install to another directory
 
-Full retains high-recall translation selection. Exact source/configuration
-duplicates are inferred once through a bounded-memory, run-local SQLite cache,
-but one child and provenance link are still emitted for every parent. The cache
-is never reused across cases and is removed when the translation transaction
-finishes or fails cleanly. Translation progress includes percentage, measured
-rate, ETA, cache hits, model-input count, and integrity-fallback count. Dedup can
-remove many redundant calls, but a mostly unique high-recall CPU run can still
-take a long time. The explicit `high-precision` policy uses at least 0.65
-confidence and 0.15 target margin if reduced candidate volume is acceptable.
-
-Discover commands and current defaults without touching evidence:
+Use an explicit physical path:
 
 ```powershell
-.\bstrings-quality\bstrings.exe help
-.\bstrings-quality\bstrings.exe help analyze
-.\bstrings-quality\bstrings.exe help bundle verify
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\Install-Bstrings.ps1 `
+  -DestinationDirectory C:\Tools\bstrings-kit
 ```
 
-The published v1.9.17 command includes `--native-extraction on|off`. Current
-source also provides `--exclude-engine`/`-e` as Full-only shorthand; confirm an
-installed build exposes it with `help analyze` before use. A release without
-that shorthand can express the same selection with the explicit controls.
-Where available, these are equivalent:
+The destination and cache must not overlap. Do not use a filesystem root.
 
-```powershell
-.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved-files `
-  --full -e ocr,translation -o D:\results\without-ocr-translation
+## Transfer the kit offline
 
-.\bstrings-quality\bstrings.exe analyze -d D:\evidence\carved-files `
-  --full --ocr off --translation off `
-  -o D:\results\without-ocr-translation
-```
+1. Install and verify the kit on a connected staging computer.
+2. Copy the complete `bstrings-kit` directory to approved media.
+3. Copy it to the disconnected computer.
+4. Run `bundle verify` on the disconnected computer.
+5. Analyze evidence only after verification succeeds.
 
-The shorthand requires `--full`. It accepts repeated occurrences or one-token
-comma lists of `native`, `floss`, `ocr`, and `translation`. Missing, empty,
-unknown, duplicate/case-duplicate, whitespace-separated, and same-engine
-explicit-selector conflicts fail before output or evidence access. Tuning
-options for an excluded engine remain validated but cannot start it. Runtime
-selection does not narrow verification of the complete quality directory.
+Do not copy individual engines or models into another installation. The
+manifest describes one complete authenticated kit.
 
-See the [terminal help and command reference](command-reference.md) for the
-workflow chooser, pattern groups, hardware controls, completion rules, and
-legacy flat-output interface.
+See [Air-gapped deployment](air-gapped-deployment.md) for the full transfer
+procedure.
 
-## Upgrade or retry safely
+## Installer parts are not separate kits
 
-Rerun the pinned bootstrap in the same parent directory whenever the local
-installer script is stale: a successfully authenticated download always
-replaces that file. The bundle transaction then:
+The release can contain a base archive, packs, manifests, and licenses. These
+files let the installer transfer and verify the kit.
 
-1. assembles and verifies a complete sibling replacement on every run;
-2. can reuse an exact pack across releases only after reopening it and fully
-   checking its current expected size and SHA-256; cache hits never reuse a
-   verification decision;
-3. swaps the verified replacement over a valid physical destination, removes
-   all stale old files, and restores the prior directory if final verification
-   fails;
-4. rejects a linked destination tree rather than risking writes outside it; and
-5. leaves analysis output rules unchanged: a new analysis still requires a new
-   or empty result directory.
+Do not run the base archive as a separate product. It does not contain every
+supported engine and model.
 
-For a version upgrade, rerun the current pinned bootstrap from the same parent
-directory. The installer keeps the persistent cache but creates a new complete
-sibling installation, keeps the previous directory as an internal rollback
-backup, and replaces it only after both staged and installed verification pass.
-Use `-RemoveCacheAfterSuccess` only when the default script-owned cache should
-be deleted after a successful fresh overwrite. `-KeepCache` remains a
-compatible explicit spelling of the default, while a caller-supplied
-`-InstallerCacheDirectory` is always retained and cannot be removed by that
-cleanup switch. Do not merge release files by hand.
-If analysis failed, retain its `.incomplete` result for diagnosis and rerun into
-a different empty directory after correcting the cause.
+## Security boundary
 
-`--full` does not mount filesystems or carve files from raw disk or memory
-images. The direct native scanner can search raw bytes, but file-level FLOSS
-and OCR coverage requires the relevant executable, image, or PDF to be mounted
-or carved and supplied as an input file.
+Release metadata, filenames, cache entries, and old success reports do not
+authorize bytes. Exact current size and SHA-256 checks authorize each file.
 
-## Transfer the complete kit offline
+The installer rejects links, reparse points, path escapes, malformed manifests,
+unexpected assets, and unverified replacement directories.
 
-After the connected installation succeeds, copy the entire verified
-`bstrings-quality` directory to approved media. Preserve the adjacent tools,
-runtimes, models, licences, configuration, and manifests. On the disconnected
-workstation, run:
-
-```powershell
-.\bstrings.exe bundle verify
-.\bstrings.exe analyze -d D:\evidence\carved-files --full -o D:\results\case-01
-```
-
-No package manager, Python installation, model hub, service installation, or
-network connection is required during examination.
-
-## Optional core-only installation
-
-Use this smaller path only when native extraction and the current report set
-are sufficient. Open PowerShell in the directory where the new
-`bstrings-v1.9.17` directory should be created, then run this exact-tag,
-API-digest-verified download:
-
-```powershell
-& {
-  Set-StrictMode -Version Latest
-  $ErrorActionPreference = 'Stop'
-
-  $tag = 'v1.9.17'
-  $repo = 'Donovoi/bstrings'
-  $archiveName = 'bstrings-win-x64.zip'
-  $destination = Join-Path (Get-Location) 'bstrings-v1.9.17'
-  if ((Test-Path -LiteralPath $archiveName) -or
-      (Test-Path -LiteralPath $destination)) {
-    throw 'Refusing to overwrite the archive or destination.'
-  }
-
-  $headers = @{
-    Accept = 'application/vnd.github+json'
-    'X-GitHub-Api-Version' = '2022-11-28'
-    'User-Agent' = 'bstrings-core-bootstrap'
-  }
-  $release = Invoke-RestMethod `
-    "https://api.github.com/repos/$repo/releases/tags/$tag" `
-    -Headers $headers -UseBasicParsing
-  $asset = @($release.assets | Where-Object { $_.name -CEQ $archiveName })
-  $expectedUrl = "https://github.com/$repo/releases/download/$tag/$archiveName"
-  if ($release.tag_name -CNE $tag -or $release.draft -or
-      $release.prerelease -or
-      -not ($release.PSObject.Properties.Name -ccontains 'immutable') -or
-      -not [bool]$release.immutable -or $asset.Count -ne 1 -or
-      $asset[0].browser_download_url -CNE $expectedUrl -or
-      ([string]$asset[0].digest) -CNotMatch '^sha256:[0-9a-f]{64}$') {
-    throw 'The exact immutable published core asset could not be authenticated.'
-  }
-
-  Invoke-WebRequest $expectedUrl -OutFile $archiveName -UseBasicParsing
-  $expected = ([string]$asset[0].digest).Substring(7)
-  $actual = (Get-FileHash -LiteralPath $archiveName -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($actual -CNE $expected) { throw 'Core archive SHA-256 mismatch.' }
-
-  Expand-Archive -LiteralPath $archiveName -DestinationPath $destination
-  & (Join-Path $destination 'bstrings.exe') --help
-}
-```
-
-The release also publishes `SHA256SUMS.txt` covering every public release
-asset. Use the integrated native-only path when the filterable report set is
-wanted:
-
-```powershell
-.\bstrings-v1.9.17\bstrings.exe analyze `
-  -f "C:\evidence\memory.raw" `
-  -o "C:\results\memory-native" `
-  --recover-executable-strings off `
-  --ocr off `
-  --translation off `
-  --lr all `
-  --processor auto
-```
-
-The legacy command below writes one flat output file instead of the integrated
-TSV/histogram report set:
-
-```powershell
-.\bstrings-v1.9.17\bstrings.exe `
-  -f "C:\evidence\memory.raw" `
-  --lr all --ro --off --trace `
-  -o "C:\results\memory-hits.csv"
-```
-
-The core ZIP alone cannot run FLOSS, OCR, or translation. Run the quality
-installer when those stages are required; do not copy their files manually
-into the core directory.
-
-See [air-gapped deployment](air-gapped-deployment.md),
-[enrichment pipeline](enrichment-pipeline.md), and
-[output and provenance](output-and-provenance.md) for operational details and
-interpretation boundaries.
+For release design and migration evidence, see
+[ADR-0011](architecture/adr-0011-single-windows-kit-and-plain-documentation.md).

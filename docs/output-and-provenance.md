@@ -1,6 +1,6 @@
 # Output, completion, and provenance
 
-The complete v1.9.17 quality kit produces native, FLOSS, OCR, language, and
+The complete version-matched kit produces native, FLOSS, OCR, language, and
 translation records together with the current JSONL, TSV, and histogram report
 set. See [download and installation](download-and-install.md).
 
@@ -18,7 +18,7 @@ and engine-status records, remain authoritative; the raw invocation and
 exclusion spelling are not persisted. Published v1.9.17 users select the same
 modes with the explicit controls.
 
-With a complete version-matched quality bundle, the full enrichment workflow
+With a complete version-matched kit, the full enrichment workflow
 writes a result set from one command:
 
 ```powershell
@@ -42,7 +42,7 @@ steps take different amounts of time.
 
 The existence of an output file is not proof that a scan finished.
 
-- Direct core extraction creates a sibling `<output>.incomplete` marker before
+- Direct native extraction creates a sibling `<output>.incomplete` marker before
   writing and removes it only after the writer flushes and the complete run
   succeeds.
 - Enrichment JSONL is written to a sibling temporary file and atomically moved
@@ -78,7 +78,7 @@ conflicts when routing ran. Specialist runs also bind `engine-status.jsonl` by S
 has three rows per input, one each for native extraction, FLOSS, and OCR, keyed
 by the routing decision and source identity.
 
-When analysis uses the complete offline bundle, `run.json` and `summary.json`
+When analysis uses the complete installed kit, `run.json` and `summary.json`
 also contain the same `bundleIntegrity` object. It records the bundle manifest
 path, the manifest's SHA-256, the verified file and byte counts, the configured
 executable path, and the running executable's SHA-256. The running executable
@@ -89,12 +89,12 @@ stop the run.
 This proves which manifest governed the toolchain used for the examination. It
 is an integrity record, not publisher authentication or code signing.
 
-The complete quality bundle is an atomic trust profile. Disabling an engine at
+The complete kit is one verified file set. Disabling an engine at
 runtime does not exclude its bytes from whole-manifest verification: corruption
 of an unselected component still blocks the run. This prevents unverified DLLs,
 Python packages, or models in the same loadable tree from being mistaken for a
-partially trusted installation. Independently installable physical capability
-profiles are not part of v1.9.17 and remain deferred by
+partially trusted installation. Separately installable physical capability
+sets remain deferred by
 [ADR-0008](architecture/adr-0008-independent-engine-execution.md).
 
 Input content is hashed while the manifest is created and verified around and

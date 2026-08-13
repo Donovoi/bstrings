@@ -44,9 +44,9 @@ internal sealed record AnalysisToolchain(
 internal static class AnalysisToolchainLocator
 {
     private const string OfflineBundleAcquisition =
-        "Use the checked Install-BstringsQuality.ps1 asset from the latest GitHub Release "
-        + "to install and verify the complete quality kit: "
-        + "https://github.com/Donovoi/bstrings/blob/v1.9.17/README.md#get-started";
+        "Use the checked Install-Bstrings.ps1 asset from the matching GitHub Release "
+        + "to install and verify the bstrings kit: "
+        + "https://github.com/Donovoi/bstrings/releases";
 
     private const string ConfigurationFileName = "airgap-config.json";
     private const string MagikaUrl = "https://github.com/google/magika#command-line-tool";
@@ -113,10 +113,25 @@ internal static class AnalysisToolchainLocator
         var configurationPath = Path.Combine(bundleRoot, ConfigurationFileName);
         using var document = JsonDocument.Parse(File.ReadAllText(configurationPath));
         var root = document.RootElement;
-        if (!root.TryGetProperty("schemaVersion", out var schema) || schema.GetInt32() != 1)
+        if (!root.TryGetProperty("schemaVersion", out var schema) || schema.GetInt32() != 2)
         {
             throw new InvalidDataException(
-                $"'{configurationPath}' does not use supported schema version 1."
+                $"'{configurationPath}' does not use supported schema version 2."
+            );
+        }
+        if (
+            !root.TryGetProperty("bundleProfile", out var profile)
+            || profile.ValueKind != JsonValueKind.String
+            || !string.Equals(
+                profile.GetString(),
+                "windows-x64-offline-v3",
+                StringComparison.Ordinal
+            )
+            || root.TryGetProperty("translationProfile", out _)
+        )
+        {
+            throw new InvalidDataException(
+                $"'{configurationPath}' does not use the supported one-kit configuration."
             );
         }
 

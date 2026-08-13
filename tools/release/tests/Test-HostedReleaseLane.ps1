@@ -39,7 +39,7 @@ Assert-Matches $workflow $dispatchPattern 'workflow_dispatch must define full_of
 
 $offlineSteps = @(
     'Restore exact default-branch offline component cache'
-    'Build the complete highest-quality offline bundle'
+    'Build the complete offline bstrings kit'
     'Revalidate the warmed offline cache without network fallback'
     'Verify and split the offline release packs'
     'Upload complete offline split packs'
@@ -73,13 +73,13 @@ if ($validationIndex -lt 0 -or $saveIndex -le $validationIndex) {
 foreach ($cacheStep in @($restore, $save)) {
     Assert-Matches $cacheStep '\$\{\{ runner\.temp \}\}\\bstrings-offline\\downloads' 'The cache must contain only component downloads.'
     Assert-Matches $cacheStep '\$\{\{ runner\.temp \}\}\\bstrings-offline\\ocr-downloads' 'The cache must contain only OCR component downloads.'
-    Assert-DoesNotMatch $cacheStep '(publish/offline|release-packs|profile-acceptance|evidence)' 'Compiled bundles and acceptance evidence must never enter the shared cache.'
+    Assert-DoesNotMatch $cacheStep '(publish/offline|release-packs|bundle-acceptance|evidence)' 'Compiled bundles and acceptance evidence must never enter the shared cache.'
 }
 
-$acceptanceStart = $workflow.IndexOf("  profile-acceptance:", [StringComparison]::Ordinal)
+$acceptanceStart = $workflow.IndexOf("  bundle-acceptance:", [StringComparison]::Ordinal)
 $releaseStart = $workflow.IndexOf("  release:", $acceptanceStart, [StringComparison]::Ordinal)
 if ($acceptanceStart -lt 0 -or $releaseStart -le $acceptanceStart) {
-    throw 'Could not locate the self-hosted profile-acceptance job.'
+    throw 'Could not locate the self-hosted bundle-acceptance job.'
 }
 $acceptance = $workflow.Substring($acceptanceStart, $releaseStart - $acceptanceStart)
 Assert-DoesNotMatch $acceptance 'actions/cache' 'Self-hosted acceptance must remain cold and independent of the hosted cache.'

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$CoreArchive,
+    [string]$BaseArchive,
     [Parameter(Mandatory = $true)]
     [string]$PackDirectory,
     [Parameter(Mandatory = $true)]
@@ -178,10 +178,9 @@ function Get-CheckedPackInventory(
     return @($inventory)
 }
 
-function Remove-CompletedProfileDirectory(
+function Remove-CompletedBundleDirectory(
     [string]$Root,
-    [string]$Target,
-    [string]$Profile
+    [string]$Target
 ) {
     $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd(
         [IO.Path]::DirectorySeparatorChar,
@@ -194,16 +193,16 @@ function Remove-CompletedProfileDirectory(
     $requiredPrefix = $rootPath + [IO.Path]::DirectorySeparatorChar
     if (
         -not $targetPath.StartsWith($requiredPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-        [IO.Path]::GetFileName($targetPath) -cne "profile-$Profile"
+        [IO.Path]::GetFileName($targetPath) -cne 'bundle'
     ) {
-        throw "Refusing to remove an uncontrolled profile path: $targetPath"
+        throw "Refusing to remove an uncontrolled bundle path: $targetPath"
     }
     $targetItem = Get-Item -LiteralPath $targetPath -Force -ErrorAction Stop
     if (
         -not $targetItem.PSIsContainer -or
         ($targetItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
     ) {
-        throw "Refusing to remove a linked or non-directory profile path: $targetPath"
+        throw "Refusing to remove a linked or non-directory bundle path: $targetPath"
     }
     $linkedEntries = @(
         Get-ChildItem -LiteralPath $targetPath -Recurse -Force |
@@ -212,11 +211,11 @@ function Remove-CompletedProfileDirectory(
             }
     )
     if ($linkedEntries.Count -ne 0) {
-        throw "Refusing to remove a profile tree containing links: $($linkedEntries.FullName -join ', ')"
+        throw "Refusing to remove a bundle tree containing links: $($linkedEntries.FullName -join ', ')"
     }
     Remove-Item -LiteralPath $targetPath -Recurse -Force
     if ($null -ne (Get-Item -LiteralPath $targetPath -Force -ErrorAction SilentlyContinue)) {
-        throw "Completed profile work directory was not removed: $targetPath"
+        throw "Completed bundle work directory was not removed: $targetPath"
     }
 }
 
@@ -236,13 +235,13 @@ if ($SourceRepository -notmatch '^[^/\s]+/[^/\s]+$') {
     throw 'SourceRepository must be an owner/repository name.'
 }
 
-$resolvedCoreArchive = Resolve-PhysicalFile $CoreArchive 'Core release archive'
-if ([IO.Path]::GetFileName($resolvedCoreArchive) -cne 'bstrings-win-x64.zip') {
-    throw "Unexpected core release archive name: $resolvedCoreArchive"
+$resolvedBaseArchive = Resolve-PhysicalFile $BaseArchive 'Internal base runtime archive'
+if ([IO.Path]::GetFileName($resolvedBaseArchive) -cne 'bstrings-win-x64.zip') {
+    throw "Unexpected internal runtime archive name: $resolvedBaseArchive"
 }
 $packRoot = Resolve-PhysicalDirectory $PackDirectory 'Split-pack artifact directory'
-$workRoot = Assert-NewDirectory $WorkingDirectory 'Profile acceptance work directory'
-$evidenceRoot = Assert-NewDirectory $EvidenceDirectory 'Profile acceptance evidence directory'
+$workRoot = Assert-NewDirectory $WorkingDirectory 'Bundle acceptance work directory'
+$evidenceRoot = Assert-NewDirectory $EvidenceDirectory 'Bundle acceptance evidence directory'
 if ($workRoot -ceq $evidenceRoot) {
     throw 'WorkingDirectory and EvidenceDirectory must be different paths.'
 }
@@ -250,27 +249,24 @@ if ($workRoot -ceq $evidenceRoot) {
 $driveRoot = [IO.Path]::GetPathRoot($workRoot)
 $drive = [IO.DriveInfo]::new($driveRoot)
 if (-not $drive.IsReady) {
-    throw "Profile acceptance drive is not ready: $driveRoot"
+    throw "Bundle acceptance drive is not ready: $driveRoot"
 }
 $freeBytesAtStart = [long]$drive.AvailableFreeSpace
 if ($freeBytesAtStart -lt $MinimumFreeBytes) {
-    throw "Profile acceptance requires at least $MinimumFreeBytes free bytes; found $freeBytesAtStart on $driveRoot."
+    throw "Bundle acceptance requires at least $MinimumFreeBytes free bytes; found $freeBytesAtStart on $driveRoot."
 }
 
-$profiles = @('quality')
 $releaseAssetNames = [Collections.Generic.List[string]]::new()
 $releaseAssetNames.Add('bstrings-win-x64-offline-base.zip')
 $releaseAssetNames.Add('bstrings-win-x64-offline-cuda.zip')
-$releaseAssetNames.Add('Install-BstringsQuality.ps1')
-foreach ($profile in $profiles) {
-    $releaseAssetNames.Add("airgap-config-$profile.json")
-    $releaseAssetNames.Add("Hy-MT2-Apache-2.0-$profile.txt")
-    $releaseAssetNames.Add("airgap-manifest-$profile.json")
-    $releaseAssetNames.Add("bundle-packs-$profile.json")
-}
-$coreIdentity = Get-FileIdentityRow $resolvedCoreArchive 'bstrings-win-x64.zip'
+$releaseAssetNames.Add('Install-Bstrings.ps1')
+$releaseAssetNames.Add('airgap-config.json')
+$releaseAssetNames.Add('Hy-MT2-Apache-2.0.txt')
+$releaseAssetNames.Add('airgap-manifest.json')
+$releaseAssetNames.Add('bundle-packs.json')
+$baseIdentity = Get-FileIdentityRow $resolvedBaseArchive 'bstrings-win-x64.zip'
 $releaseAssets = @(
-    Get-CheckedPackInventory $packRoot @($releaseAssetNames) @($coreIdentity)
+    Get-CheckedPackInventory $packRoot @($releaseAssetNames) @($baseIdentity)
 )
 $releaseAssetByName = @{}
 foreach ($releaseAsset in $releaseAssets) {
@@ -282,50 +278,47 @@ $checksumIdentity = Get-FileIdentityRow `
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Directory]::CreateDirectory($workRoot) | Out-Null
-$coreRoot = Join-Path $workRoot 'core'
-[IO.Compression.ZipFile]::ExtractToDirectory($resolvedCoreArchive, $coreRoot)
-$coreExecutable = Resolve-PhysicalFile (Join-Path $coreRoot 'bstrings.exe') 'Core bstrings executable'
+$baseRoot = Join-Path $workRoot 'base-runtime'
+[IO.Compression.ZipFile]::ExtractToDirectory($resolvedBaseArchive, $baseRoot)
+$baseExecutable = Resolve-PhysicalFile (Join-Path $baseRoot 'bstrings.exe') 'Base bstrings executable'
 $childPowerShell = Resolve-PhysicalFile (Get-Process -Id $PID).Path 'Current PowerShell executable'
-$results = [Collections.Generic.List[object]]::new()
-
-foreach ($profile in $profiles) {
-    $profileRoot = Join-Path $workRoot "profile-$profile"
-    $cacheRoot = Join-Path $profileRoot 'pack-cache'
-    $bundleRoot = Join-Path $profileRoot 'bundle'
+$bundleWorkRoot = Join-Path $workRoot 'bundle'
+$cacheRoot = Join-Path $bundleWorkRoot 'pack-cache'
+$bundleRoot = Join-Path $bundleWorkRoot 'assembled'
     [IO.Directory]::CreateDirectory($cacheRoot) | Out-Null
 
-    $trustManifest = Get-RequiredPack $packRoot "bundle-packs-$profile.json"
+    $trustManifest = Get-RequiredPack $packRoot 'bundle-packs.json'
     $cacheInputs = [ordered]@{
         'bstrings-win-x64-offline-base.zip' = 'base.zip'
         'bstrings-win-x64-offline-cuda.zip' = 'cuda-runtime.zip'
-        "airgap-config-$profile.json" = 'configuration.file'
-        "Hy-MT2-Apache-2.0-$profile.txt" = 'translation-license.file'
-        "airgap-manifest-$profile.json" = 'airgap-manifest.file'
+        'airgap-config.json' = 'configuration.file'
+        'Hy-MT2-Apache-2.0.txt' = 'translation-license.file'
+        'airgap-manifest.json' = 'airgap-manifest.file'
     }
     foreach ($sourceName in $cacheInputs.Keys) {
         $sourcePath = Get-RequiredPack $packRoot $sourceName
         Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $cacheRoot $cacheInputs[$sourceName])
     }
 
-    & $coreExecutable bundle acquire `
+    & $baseExecutable bundle acquire `
         --manifest $trustManifest `
         --cache $cacheRoot `
         --output $bundleRoot
     if ($LASTEXITCODE -ne 0) {
-        throw "$profile bundle acquisition and assembly failed with exit code $LASTEXITCODE."
+        throw "Bundle acquisition and assembly failed with exit code $LASTEXITCODE."
     }
 
     $bundleExecutable = Resolve-PhysicalFile `
         (Join-Path $bundleRoot 'bstrings.exe') `
-        "$profile assembled bstrings executable"
+        'Assembled bstrings executable'
     & $bundleExecutable bundle verify --bundle-root $bundleRoot
     if ($LASTEXITCODE -ne 0) {
-        throw "$profile assembled bundle verification failed with exit code $LASTEXITCODE."
+        throw "Assembled bundle verification failed with exit code $LASTEXITCODE."
     }
 
     $verifier = Resolve-PhysicalFile `
         (Join-Path $bundleRoot 'Verify-AirgapBundle.ps1') `
-        "$profile runtime verifier"
+        'Bundle runtime verifier'
     $smokeExitCode = 0
     Push-Location $bundleRoot
     try {
@@ -341,7 +334,7 @@ foreach ($profile in $profiles) {
         Pop-Location
     }
     if ($smokeExitCode -ne 0) {
-        throw "$profile translation smoke failed with exit code $smokeExitCode."
+        throw "Bundle translation smoke failed with exit code $smokeExitCode."
     }
 
     $trust = Get-Content -LiteralPath $trustManifest -Raw | ConvertFrom-Json
@@ -349,15 +342,16 @@ foreach ($profile in $profiles) {
     $configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
     if (
         [int]$trust.schemaVersion -ne 1 -or
-        [string]$trust.profile -cne "windows-x64-offline-v2-$profile" -or
-        [int]$configuration.schemaVersion -ne 1 -or
-        [string]$configuration.translationProfile -cne $profile
+        [string]$trust.profile -cne 'windows-x64-offline-v3' -or
+        [int]$configuration.schemaVersion -ne 2 -or
+        [string]$configuration.bundleProfile -cne 'windows-x64-offline-v3' -or
+        $configuration.PSObject.Properties.Name -ccontains 'translationProfile'
     ) {
-        throw "$profile acceptance resolved an unexpected trust manifest or bundle configuration."
+        throw 'Bundle acceptance resolved an unexpected trust manifest or bundle configuration.'
     }
     $modelPacks = @($trust.packs | Where-Object { [string]$_.id -ceq 'translation-model' })
     if ($modelPacks.Count -ne 1) {
-        throw "$profile trust manifest must contain exactly one translation-model pack."
+        throw 'Bundle trust manifest must contain exactly one translation-model pack.'
     }
     $modelPack = $modelPacks[0]
     $configuredModelHash = ([string]$configuration.translationModel.sha256).ToLowerInvariant()
@@ -367,56 +361,50 @@ foreach ($profile in $profiles) {
         $configuredModelHash -cne $trustedModelHash -or
         [long]$modelPack.bytes -lt 1
     ) {
-        throw "$profile translation model identity differs between trust and configuration."
+        throw 'Translation model identity differs between trust and configuration.'
     }
     $modelPath = Resolve-PhysicalFile `
         (Join-Path $bundleRoot ([string]$configuration.translationModel.path -replace '/', '\')) `
-        "$profile translation model"
+        'Translation model'
     $modelIdentity = Get-Item -LiteralPath $modelPath
     if (
         [long]$modelIdentity.Length -ne [long]$modelPack.bytes -or
         (Get-FileHash -LiteralPath $modelPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne
             $trustedModelHash
     ) {
-        throw "$profile translation model bytes differ after acceptance."
+        throw 'Translation model bytes differ after acceptance.'
     }
 
     $airgapManifestPath = Resolve-PhysicalFile `
         (Join-Path $bundleRoot 'airgap-manifest.json') `
-        "$profile air-gap manifest"
-    $results.Add([pscustomobject]@{
-        profile = $profile
+        'Air-gap manifest'
+    $result = [pscustomobject]@{
         status = 'passed'
         translationSmoke = 'passed'
         acceptedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
         bundleIdentity = [string]$trust.bundleIdentity
-        bundlePackTrustManifestBytes = [long]$releaseAssetByName["bundle-packs-$profile.json"].bytes
+        bundlePackTrustManifestBytes = [long]$releaseAssetByName['bundle-packs.json'].bytes
         bundlePackTrustManifestSha256 = (Get-FileHash -LiteralPath $trustManifest -Algorithm SHA256).Hash.ToLowerInvariant()
-        airgapManifestBytes = [long]$releaseAssetByName["airgap-manifest-$profile.json"].bytes
+        airgapManifestBytes = [long]$releaseAssetByName['airgap-manifest.json'].bytes
         airgapManifestSha256 = (Get-FileHash -LiteralPath $airgapManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        configurationBytes = [long]$releaseAssetByName["airgap-config-$profile.json"].bytes
-        configurationSha256 = [string]$releaseAssetByName["airgap-config-$profile.json"].sha256
-        translationLicenseBytes = [long]$releaseAssetByName["Hy-MT2-Apache-2.0-$profile.txt"].bytes
-        translationLicenseSha256 = [string]$releaseAssetByName["Hy-MT2-Apache-2.0-$profile.txt"].sha256
+        configurationBytes = [long]$releaseAssetByName['airgap-config.json'].bytes
+        configurationSha256 = [string]$releaseAssetByName['airgap-config.json'].sha256
+        translationLicenseBytes = [long]$releaseAssetByName['Hy-MT2-Apache-2.0.txt'].bytes
+        translationLicenseSha256 = [string]$releaseAssetByName['Hy-MT2-Apache-2.0.txt'].sha256
         translationModelId = [string]$configuration.translationModel.id
         translationModelRevision = [string]$configuration.translationModel.revision
         translationModelUrl = [string]$modelPack.url
         translationModelBytes = [long]$modelPack.bytes
         translationModelSha256 = $trustedModelHash
-    })
+    }
 
-    Remove-CompletedProfileDirectory $workRoot $profileRoot $profile
-}
-
-if ($results.Count -ne $profiles.Count) {
-    throw "Quality acceptance completed $($results.Count) of $($profiles.Count) bundles."
-}
+    Remove-CompletedBundleDirectory $workRoot $bundleWorkRoot
 [IO.Directory]::CreateDirectory($evidenceRoot) | Out-Null
-$evidencePath = Join-Path $evidenceRoot 'offline-profile-acceptance.json'
+$evidencePath = Join-Path $evidenceRoot 'offline-bundle-acceptance.json'
 $record = [ordered]@{
-    schemaVersion = 2
+    schemaVersion = 3
     status = 'passed'
-    classification = 'synthetic-release-profile-acceptance'
+    classification = 'synthetic-release-bundle-acceptance'
     generatedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
     sourceRepository = $SourceRepository
     sourceTag = $SourceTag
@@ -425,17 +413,16 @@ $record = [ordered]@{
     acceptanceRunAttempt = $SourceRunAttempt
     minimumFreeBytes = $MinimumFreeBytes
     freeBytesAtStart = $freeBytesAtStart
-    coreArchiveBytes = [long]$coreIdentity.bytes
-    coreArchiveSha256 = [string]$coreIdentity.sha256
+    baseArchiveBytes = [long]$baseIdentity.bytes
+    baseArchiveSha256 = [string]$baseIdentity.sha256
     checksumFileBytes = [long]$checksumIdentity.bytes
     checksumFileSha256 = [string]$checksumIdentity.sha256
-    advertisedProfiles = $profiles
     releaseAssets = $releaseAssets
-    profiles = @($results)
+    bundle = $result
 }
 [IO.File]::WriteAllText(
     $evidencePath,
     ($record | ConvertTo-Json -Depth 8) + "`n",
     [Text.UTF8Encoding]::new($false)
 )
-Write-Host "The advertised highest-quality offline bundle passed acceptance: $evidencePath"
+Write-Host "The offline bstrings kit passed acceptance: $evidencePath"

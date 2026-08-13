@@ -24,8 +24,6 @@ param(
     [string]$OcrComponentsDirectory,
     [Parameter(Mandatory = $true)]
     [string]$TranslationModelRevision,
-    [ValidateSet('quality')]
-    [string]$TranslationProfile = 'quality',
     [ValidateSet('cpu', 'directml', 'hybrid')]
     [string[]]$OcrSelfTestProviders = @('cpu'),
     [string]$TranslationModelId = 'tencent/Hy-MT2-7B-GGUF',
@@ -190,7 +188,7 @@ $resolvedComponentLock = Resolve-ChildFile `
     (Split-Path -Leaf $ComponentLockPath) `
     'Offline component lock'
 $componentLock = Get-Content -LiteralPath $resolvedComponentLock -Raw | ConvertFrom-Json
-if ($componentLock.schemaVersion -ne 1 -or $componentLock.profile -ne 'windows-x64-offline-v2') {
+if ($componentLock.schemaVersion -ne 2 -or $componentLock.profile -ne 'windows-x64-offline-v3') {
     throw "Unsupported offline component lock schema or profile: $resolvedComponentLock"
 }
 $requiredComponents = @('python', 'magika', 'floss', 'llamaCpp', 'translationModel')
@@ -280,24 +278,14 @@ $flossVerifyScript = Resolve-ChildFile `
     $repoRoot `
     ([string]$flossRedistributionLock.verifyScript) `
     'FLOSS redistribution verifier'
-$translationProfileNames = @($componentLock.translationProfiles.PSObject.Properties.Name)
+$modelLock = $componentLock.components.translationModel
 if (
-    [string]$componentLock.defaultTranslationProfile -ne 'quality' -or
-    (@($translationProfileNames | Sort-Object) -join '|') -cne 'quality'
-) {
-    throw 'The offline component lock must define only the highest-quality translation profile.'
-}
-$modelLock = $componentLock.translationProfiles.$TranslationProfile
-if ($null -eq $modelLock) {
-    throw "Translation profile is not present in the component lock: $TranslationProfile"
-}
-$componentLock.components.translationModel = $modelLock
-if (
+    $null -eq $modelLock -or
     $TranslationModel -ne $modelLock.fileName -or
     $TranslationModelId -ne $modelLock.modelId -or
     $TranslationModelRevision -ne $modelLock.revision
 ) {
-    throw 'The requested translation model name, ID, or revision does not match the selected translation profile.'
+    throw 'The requested translation model name, ID, or revision does not match the component lock.'
 }
 $componentLockHash = (Get-FileHash -LiteralPath $resolvedComponentLock -Algorithm SHA256).Hash.ToLowerInvariant()
 $resolvedOcrComponentLock = Resolve-ChildFile `
@@ -980,6 +968,7 @@ $bundleArchitectureDocumentNames = @(
     'adr-0008-independent-engine-execution.md',
     'adr-0009-bounded-forensic-pattern-expansion.md',
     'adr-0010-bounded-reversible-decoding.md',
+    'adr-0011-single-windows-kit-and-plain-documentation.md',
     'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(
@@ -990,7 +979,12 @@ $bundleBenchmarkResultNames = @(
     'language-triage-reuse-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
-    'v1.9.17.md'
+    'v1.9.17.md',
+    'v2.0.0.md'
+)
+$bundleRootDocumentNames = @(
+    'BASE_PACK_NOTICE.md',
+    'VERSIONING.md'
 )
 foreach ($toolName in $bundleEnrichmentToolNames) {
     $null = Resolve-ChildFile `
@@ -1021,6 +1015,9 @@ foreach ($documentName in $bundleReleaseDocumentNames) {
         (Join-Path $repoRoot 'docs\releases') `
         $documentName `
         "Bundled release document $documentName"
+}
+foreach ($documentName in $bundleRootDocumentNames) {
+    $null = Resolve-ChildFile $repoRoot $documentName "Bundled root document $documentName"
 }
 
 $fixtureSourceDirectory = Join-Path $PSScriptRoot 'fixtures'
@@ -1185,6 +1182,10 @@ try {
             "Bundled release document $documentName"
         Copy-Item -LiteralPath $document -Destination $bundleReleaseDocs
     }
+    foreach ($documentName in $bundleRootDocumentNames) {
+        $document = Resolve-ChildFile $repoRoot $documentName "Bundled root document $documentName"
+        Copy-Item -LiteralPath $document -Destination $output
+    }
     Copy-Item -LiteralPath (Join-Path $repoRoot 'README.md') `
         -Destination (Join-Path $output 'README.md')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE.md') `
@@ -1219,30 +1220,18 @@ try {
         Copy-Item -LiteralPath $sourceLicense `
             -Destination (Join-Path $bundleLicenses $upstreamLicenseDestinations[$componentName])
     }
-    $translationLicenseDestinations = [ordered]@{
-        quality = 'Hy-MT2-7B-Apache-2.0.txt'
-    }
-    $copiedTranslationLicenses = [Collections.Generic.HashSet[string]]::new(
-        [StringComparer]::OrdinalIgnoreCase
-    )
-    foreach ($profileName in $translationProfileNames) {
-        $destinationName = $translationLicenseDestinations[$profileName]
-        if (-not $copiedTranslationLicenses.Add($destinationName)) {
-            continue
-        }
-        $profileLicense = $componentLock.translationProfiles.$profileName.license
-        $sourceLicense = Resolve-ChildFile `
-            $sources.model `
-            ([string]$profileLicense.fileName) `
-            "$profileName translation profile license"
-        Assert-ExactFile `
-            $sourceLicense `
-            ([long]$profileLicense.bytes) `
-            ([string]$profileLicense.sha256) `
-            "$profileName translation profile license"
-        Copy-Item -LiteralPath $sourceLicense `
-            -Destination (Join-Path $bundleLicenses $destinationName)
-    }
+    $translationLicense = $componentLock.components.translationModel.license
+    $sourceTranslationLicense = Resolve-ChildFile `
+        $sources.model `
+        ([string]$translationLicense.fileName) `
+        'translation model license'
+    Assert-ExactFile `
+        $sourceTranslationLicense `
+        ([long]$translationLicense.bytes) `
+        ([string]$translationLicense.sha256) `
+        'translation model license'
+    Copy-Item -LiteralPath $sourceTranslationLicense `
+        -Destination (Join-Path $bundleLicenses 'Hy-MT2-7B-Apache-2.0.txt')
     Copy-DirectoryContents `
         (Join-Path $sources.llama 'notices\llama.cpp') `
         (Join-Path $bundleLicenses 'llama.cpp')
@@ -1268,9 +1257,8 @@ try {
         }
     }
     $config = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         bundleProfile = [string]$componentLock.profile
-        translationProfile = $TranslationProfile
         componentLock = 'offline-components.lock.json'
         componentLockSha256 = $componentLockHash
         visualCppRuntime = [ordered]@{

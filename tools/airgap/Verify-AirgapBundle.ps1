@@ -22,7 +22,7 @@ Enable-BstringsAirgapEnvironment -BundleRoot $PSScriptRoot
 $configPath = Join-Path $PSScriptRoot 'airgap-config.json'
 $manifestPath = Join-Path $PSScriptRoot 'airgap-manifest.json'
 $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-if ($config.schemaVersion -ne 1) {
+if ($config.schemaVersion -ne 2) {
     throw "Unsupported air-gap configuration schema: $($config.schemaVersion)"
 }
 function Resolve-BundlePath([string]$RelativePath) {
@@ -107,18 +107,25 @@ foreach ($relativePath in $requiredNoticeFiles) {
 }
 $offlineLockPath = Resolve-BundlePath $config.componentLock
 $offlineLock = Get-Content -LiteralPath $offlineLockPath -Raw | ConvertFrom-Json
-$translationProfileName = [string]$config.translationProfile
-if ($translationProfileName -cne 'quality') {
-    throw "Bundle configuration has an unsupported translation profile: $translationProfileName"
+if (
+    [int]$offlineLock.schemaVersion -ne 2 -or
+    [string]$offlineLock.profile -cne 'windows-x64-offline-v3' -or
+    [string]$config.bundleProfile -cne 'windows-x64-offline-v3'
+) {
+    throw 'The bundle does not use the exact one-kit offline contract.'
 }
-$translationProfile = $offlineLock.translationProfiles.$translationProfileName
+if ($config.PSObject.Properties.Name -ccontains 'translationProfile') {
+    throw 'The bundle configuration must not contain a translation-profile selector.'
+}
+$translationModel = $offlineLock.components.translationModel
 $translationLicense = Resolve-BundlePath 'licenses/Hy-MT2-Apache-2.0.txt'
 if (
-    (Get-Item -LiteralPath $translationLicense).Length -ne [long]$translationProfile.license.bytes -or
+    $null -eq $translationModel -or
+    (Get-Item -LiteralPath $translationLicense).Length -ne [long]$translationModel.license.bytes -or
     (Get-FileHash -LiteralPath $translationLicense -Algorithm SHA256).Hash.ToLowerInvariant() -ne
-        [string]$translationProfile.license.sha256
+        [string]$translationModel.license.sha256
 ) {
-    throw 'The canonical Hy-MT2 license does not match the selected translation profile.'
+    throw 'The canonical Hy-MT2 license does not match the locked translation model.'
 }
 
 if (-not ($config.PSObject.Properties.Name -contains 'magikaRedistribution')) {

@@ -52,7 +52,7 @@ outside the repository. The predeclared reviewed-host target is 48 hours.
 
 ## Superseded Q8 selection evidence — 2026-08-05
 
-The published v1.9.16 Full profile uses Hy-MT2-7B Q8_0 through CPU llama.cpp.
+The published v1.9.16 Full preset uses Hy-MT2-7B Q8_0 through CPU llama.cpp.
 The following table preserves the dated choice and retired smaller candidates;
 it is not the current-source model plan.
 
@@ -360,8 +360,8 @@ hf download google/wmt24pp `
 
 & $benchPython tools\enrichment\benchmark_translation.py `
   --engine llama-cpp `
-  --llama-server C:\Tools\bstrings-quality\runtime\llama\llama-server.exe `
-  --model-path C:\Tools\bstrings-quality\models\hy-mt2\Hy-MT2-7B-Q4_K_M.gguf `
+  --llama-server C:\Tools\bstrings-kit\runtime\llama\llama-server.exe `
+  --model-path C:\Tools\bstrings-kit\models\hy-mt2\Hy-MT2-7B-Q4_K_M.gguf `
   --model-id tencent/Hy-MT2-7B-GGUF `
   --model-revision ab8472660ac61fac25f1af43fac2599d52a8a775 `
   --model-sha256 9f96256500f3fc1ab4d64336b58f52a949a95ad7516b0c229476eef782f9f77b `

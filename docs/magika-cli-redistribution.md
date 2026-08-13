@@ -1,9 +1,8 @@
 # Magika CLI in the offline bundle
 
-Distribution status: this reviewed Magika payload is included in the complete
-v1.9.17 quality kit. It is not included in the standalone core ZIP. Examiners
-should use the version-matched installer in the
-[download guide](download-and-install.md), not copy the runtime into another
+Distribution status: this reviewed Magika payload is included in the bstrings
+kit. Examiners should use the version-matched installer in the
+[download guide](download-and-install.md). Do not copy the runtime into another
 release.
 
 The complete offline bundle includes the reviewed
