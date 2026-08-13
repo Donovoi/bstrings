@@ -51,6 +51,80 @@ the resolver runs exactly once per analysis. See
 [ADR-0008](../docs/architecture/adr-0008-independent-engine-execution.md) for
 the preregistration correction, accepted result, and end-to-end parity gate.
 
+## Bounded decoding pipeline
+
+`DecoderPipelineBenchmark` is the reproducible public/synthetic performance and
+correctness gate for the bounded decoder in
+[ADR-0010](../docs/architecture/adr-0010-bounded-reversible-decoding.md). It
+compares operationally equivalent final-stream paths in fresh child processes:
+decoder-off copies the raw stream through the production enrichment merge, and
+decoder-auto performs the production decoder pass before copying the same raw
+stream and appending decoded children. The extra raw read is intentionally
+measured. If it fails the gate, the result supports an integration optimization
+or rollback decision; it must not be removed from the baseline after results are
+known.
+
+The deterministic workloads contain no case data, secrets, local evidence
+paths, or private aggregates:
+
+- `natural` rotates authored multilingual prose that has no Base64 candidate;
+- `no-candidate` uses long synthetic machine-shaped strings with a terminal
+  non-alphabet character, exercising complete-record rejection; and
+- `candidate-heavy` rotates canonical UTF-8 text, contextual PowerShell
+  UTF-16LE text, a public PDF signature, opaque control bytes, disallowed-NUL
+  text, and noncanonical pad bits.
+
+The acceptance run uses seven rotated off/auto pairs at both 100,000 and
+1,000,000 rows:
+
+```powershell
+dotnet run --project .\benchmarks\DecoderPipelineBenchmark -c Release -- `
+  --output C:\bench\decoder-pipeline.json `
+  --records 100000,1000000 `
+  --rounds 7 `
+  --workloads natural,no-candidate,candidate-heavy
+```
+
+Each child reports wall and process CPU time, managed allocation, process peak
+working set, input/final/decoder-artifact bytes, candidate and outcome counts,
+decoded-byte work, child cardinality, and SHA-256 identities. Auto timing
+includes the mandatory production completion validator and its disk-backed
+provenance/cardinality replay. Result hashing and symmetric correctness checks
+run after timing. The harness requires exact raw preservation, ordered
+raw-plus-child concatenation, authored child text and lineage,
+assessment/work-stat reconciliation, one child at most per parent, and
+identical artifact hashes across repeated auto runs.
+
+For `natural` and `no-candidate`, median wall-time and peak-working-set
+regression must each be at most 3%. The `candidate-heavy` median wall-time and
+peak-working-set regression must each be at most 5%. No individual paired wall
+or peak-working-set regression in any workload may exceed 5%. Candidate-heavy
+output growth, throughput, allocation, attempted and decoded bytes, and child
+count remain explicit rather than being hidden inside the timing result. This
+strict gate is intentional: failure triggers review of ADR-0010's Full default,
+not benchmark relabeling. The timing gate activates only when one run includes
+at least seven pairs and both exact ADR tiers (100,000 and 1,000,000 rows)
+across all three workloads; smaller runs enforce correctness but do not
+activate timing gates.
+
+Run the bounded smoke before a long measurement:
+
+```powershell
+.\benchmarks\DecoderPipelineBenchmark\Test-DecoderPipelineBenchmark.ps1
+```
+
+Do not check in a local result or describe it as accepted until the run scope,
+host conditions, raw report, and gate interpretation receive independent
+review. The harness records no hostname or temporary path.
+
+The 2026-08 acceptance baseline and the allocation-free early-rejection rerun
+both passed correctness but failed the frozen overhead gate. The post-
+optimization 1,000,000-row natural and no-candidate medians remained roughly
++1,507% and +1,501% slower with roughly +179% and +184% peak-working-set regression. ADR-0010
+therefore keeps decoding explicit opt-in and leaves Full decoder-off. The raw
+privacy-safe reports are retained in this directory; they are failed gate
+evidence, not accepted performance results.
+
 ## Bounded language-detection reuse
 
 `LanguageTriageBenchmark` generates synthetic attributed string records and

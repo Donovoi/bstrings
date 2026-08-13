@@ -44,6 +44,11 @@ internal static class ForensicReportCore
         + "\tByteNativeCount\tDerivedExtractorCount\tDerivedTranslationCount\tOtherEvidenceCount"
         + "\tSourceFileCount\tVisualization";
 
+    internal const string PatternHistogramHeaderWithDecoding =
+        "PatternName\tPatternCategory\tPatternDescription\tMatchCount\tPercentOfAllMatches"
+        + "\tByteNativeCount\tDerivedExtractorCount\tDerivedTranslationCount\tDerivedDecodingCount"
+        + "\tOtherEvidenceCount\tSourceFileCount\tVisualization";
+
     internal const string FeatureHistogramHeader =
         "BulkExtractorCount\tCount\tPatternName\tPatternCategory\tFeature\tFeatureTruncated";
 
@@ -64,7 +69,8 @@ internal static class ForensicReportCore
         string visualizationPath,
         IReadOnlyList<(string name, string pattern)> patterns,
         CancellationToken cancellationToken = default,
-        int histogramChunkEntryLimit = HistogramChunkEntryLimit
+        int histogramChunkEntryLimit = HistogramChunkEntryLimit,
+        bool includeDecodingEvidence = false
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(matchesPath);
@@ -184,6 +190,19 @@ internal static class ForensicReportCore
                         lineNumber,
                         patternMetadata
                     );
+                    if (
+                        !includeDecodingEvidence
+                        && string.Equals(
+                            record.EvidenceClass,
+                            "derived-decoding",
+                            StringComparison.Ordinal
+                        )
+                    )
+                    {
+                        throw new InvalidDataException(
+                            $"Regex match JSONL line {lineNumber:N0} contains decoding evidence, but decoder report projection is disabled."
+                        );
+                    }
 
                     patternStats[record.PatternName].Add(record);
                     var histogramFeature = NormalizeHistogramFeature(
@@ -218,7 +237,8 @@ internal static class ForensicReportCore
                 temporaryPaths[1],
                 patternStats.Values,
                 findingRows,
-                cancellationToken
+                cancellationToken,
+                includeDecodingEvidence
             );
             var featureRows = await WriteFeatureHistogramAsync(
                 temporaryPaths[2],
@@ -382,7 +402,8 @@ internal static class ForensicReportCore
         string path,
         IEnumerable<PatternStatistics> statistics,
         long totalMatches,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool includeDecodingEvidence
     )
     {
         var ordered = statistics
@@ -391,29 +412,34 @@ internal static class ForensicReportCore
             .ToArray();
         var maximum = ordered.Length == 0 ? 0 : ordered.Max(value => value.MatchCount);
         await using var writer = CreateWriter(path);
-        await writer.WriteLineAsync(PatternHistogramHeader.AsMemory(), cancellationToken);
+        await writer.WriteLineAsync(
+            (includeDecodingEvidence ? PatternHistogramHeaderWithDecoding : PatternHistogramHeader).AsMemory(),
+            cancellationToken
+        );
         foreach (var value in ordered)
         {
             var percentage = totalMatches == 0
                 ? 0
                 : value.MatchCount * 100.0 / totalMatches;
-            await WriteTsvRowAsync(
-                writer,
-                [
-                    value.Metadata.Name,
-                    value.Metadata.Category,
-                    value.Metadata.Description,
-                    value.MatchCount.ToString(CultureInfo.InvariantCulture),
-                    percentage.ToString("0.0000", CultureInfo.InvariantCulture),
-                    value.ByteNativeCount.ToString(CultureInfo.InvariantCulture),
-                    value.DerivedExtractorCount.ToString(CultureInfo.InvariantCulture),
-                    value.DerivedTranslationCount.ToString(CultureInfo.InvariantCulture),
-                    value.OtherEvidenceCount.ToString(CultureInfo.InvariantCulture),
-                    value.SourceFiles.Count.ToString(CultureInfo.InvariantCulture),
-                    CreateBar(value.MatchCount, maximum, 40),
-                ],
-                cancellationToken
-            );
+            var row = new List<string>
+            {
+                value.Metadata.Name,
+                value.Metadata.Category,
+                value.Metadata.Description,
+                value.MatchCount.ToString(CultureInfo.InvariantCulture),
+                percentage.ToString("0.0000", CultureInfo.InvariantCulture),
+                value.ByteNativeCount.ToString(CultureInfo.InvariantCulture),
+                value.DerivedExtractorCount.ToString(CultureInfo.InvariantCulture),
+                value.DerivedTranslationCount.ToString(CultureInfo.InvariantCulture),
+            };
+            if (includeDecodingEvidence)
+            {
+                row.Add(value.DerivedDecodingCount.ToString(CultureInfo.InvariantCulture));
+            }
+            row.Add(value.OtherEvidenceCount.ToString(CultureInfo.InvariantCulture));
+            row.Add(value.SourceFiles.Count.ToString(CultureInfo.InvariantCulture));
+            row.Add(CreateBar(value.MatchCount, maximum, 40));
+            await WriteTsvRowAsync(writer, row, cancellationToken);
         }
         await writer.FlushAsync(cancellationToken);
     }
@@ -704,6 +730,42 @@ internal static class ForensicReportCore
                 $"Regex match JSONL line {lineNumber:N0} contains an invalid match range."
             );
         }
+        var isDecoding = string.Equals(
+            record.Transform?.Kind,
+            "decoding",
+            StringComparison.OrdinalIgnoreCase
+        );
+        if (
+            isDecoding
+            && (
+                !string.Equals(record.EvidenceClass, "derived-decoding", StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(record.ParentRecordId)
+                || !string.Equals(record.Transform?.Engine, "bstrings", StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(record.Transform?.EngineVersion)
+                || record.Transform?.Profile
+                    is not ("powershell-encoded-command-v1" or "rfc4648-base64-text-v1")
+                || !string.Equals(
+                    record.Transform?.PolicyVersion,
+                    "decoder-policy-v1",
+                    StringComparison.Ordinal
+                )
+                || !string.Equals(record.Transform?.Outcome, "decoded-text", StringComparison.Ordinal)
+            )
+        )
+        {
+            throw new InvalidDataException(
+                $"Regex match JSONL line {lineNumber:N0} has incomplete decoding provenance."
+            );
+        }
+        if (
+            !isDecoding
+            && string.Equals(record.EvidenceClass, "derived-decoding", StringComparison.Ordinal)
+        )
+        {
+            throw new InvalidDataException(
+                $"Regex match JSONL line {lineNumber:N0} claims derived-decoding evidence without a decoding transform."
+            );
+        }
 
         return metadata;
     }
@@ -854,7 +916,11 @@ internal static class ForensicReportCore
             && !record.Transform.Kind.Equals("translation", StringComparison.OrdinalIgnoreCase)
         )
         {
-            values.Add($"{record.Transform.Engine}:{record.Transform.Kind}");
+            values.Add(
+                record.Transform.Kind.Equals("decoding", StringComparison.OrdinalIgnoreCase)
+                    ? $"{record.Transform.Engine}:{record.Transform.Profile}"
+                    : $"{record.Transform.Engine}:{record.Transform.Kind}"
+            );
         }
         return string.Join(" -> ", values.Distinct(StringComparer.OrdinalIgnoreCase));
     }
@@ -1027,6 +1093,7 @@ internal static class ForensicReportCore
         internal long ByteNativeCount { get; private set; }
         internal long DerivedExtractorCount { get; private set; }
         internal long DerivedTranslationCount { get; private set; }
+        internal long DerivedDecodingCount { get; private set; }
         internal long OtherEvidenceCount { get; private set; }
         internal HashSet<string> SourceFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -1044,6 +1111,9 @@ internal static class ForensicReportCore
                     break;
                 case "derived-translation":
                     DerivedTranslationCount++;
+                    break;
+                case "derived-decoding":
+                    DerivedDecodingCount++;
                     break;
                 default:
                     OtherEvidenceCount++;

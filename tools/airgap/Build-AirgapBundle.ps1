@@ -979,6 +979,7 @@ $bundleArchitectureDocumentNames = @(
     'adr-0007-translation-worthiness-routing.md',
     'adr-0008-independent-engine-execution.md',
     'adr-0009-bounded-forensic-pattern-expansion.md',
+    'adr-0010-bounded-reversible-decoding.md',
     'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(

@@ -11,8 +11,8 @@ then applies one pattern catalog without losing where each string came from:
 ```text
 input inventory and SHA-256 identity
   -> selected source producers: native, FLOSS, and/or PDF/OCR
-  -> language assessment
-  -> selected local translation
+  -> raw-record language assessment and selected local translation
+  -> bounded Base64 text-child decoding from raw records
   -> built-in and custom regex matching
   -> filterable TSV reports and exact histograms
   -> completion and provenance validation
@@ -41,8 +41,9 @@ when filesystem-level or embedded-executable/document coverage is required.
 The direct scanner can search raw image bytes, but FLOSS requires a complete
 supplied executable and OCR requires a supported image/PDF file.
 
-Full defaults native extraction on and enables routed FLOSS/OCR plus automatic
-translation. Each producer remains independently selectable, and an explicit
+Full defaults native extraction on and enables routed FLOSS/OCR, automatic
+translation, and bounded decoding. Each producer or transform remains
+independently selectable, and an explicit
 mode overrides its Full default. The published v1.9.17 binaries include
 `--native-extraction`. Runtime selection does not split the installed quality
 bundle: that shared physical profile is still verified atomically.
@@ -55,6 +56,7 @@ bundle: that shared physical profile is still verified atomically.
 | Magika | Probabilistically classifies supplied files and routes likely PE files to FLOSS | It samples file content; it is not complete-byte validation, carving, or malware detection |
 | FLOSS | Recovers stack, tight-loop, decoded, and selected language strings from supported PE files | Recovered addresses may be program/virtual locations, not file offsets |
 | PDF/OCR | Extracts born-digital PDF text and reads raster text from images/pages | OCR remains probabilistic and script/model dependent |
+| Decoder | Publishes strict canonical Base64 or contextual PowerShell text children | Depth is one; binary outcomes are assessed but not carved, decompressed, or turned into strings |
 | Language assessment | Scores whether eligible text likely needs translation | Scores are ranking/gating signals, not calibrated certainty |
 | Hy-MT2 | Creates an offline English child while protecting structured identifiers | A translated token is not proof those bytes existed in the source |
 | Pattern matcher | Applies the same validated catalog/custom patterns to normalized parents and children | Consequential derived hits must be checked against source evidence |
@@ -103,6 +105,10 @@ after all requested stages complete.
   --ocr force --translation auto --translation-policy high-recall `
   -o D:\results\ocr-translated
 
+# Native strings plus bounded decoding, with no translation
+.\bstrings.exe analyze -f D:\evidence\memory.raw `
+  --decode auto --translation off -o D:\results\decoded
+
 # Inventory likely languages without running translation
 .\bstrings.exe analyze -d D:\carved `
   --translation detect-only -o D:\results\languages
@@ -124,8 +130,8 @@ still complete successfully with truthful terminal status.
 
 In current source after v1.9.17, `--exclude-engine`/`-e` is a Full-only
 convenience modifier, not another profile. Each occurrence consumes one token
-containing one or more comma-separated names from `native`, `floss`, `ocr`, and
-`translation`.
+containing one or more comma-separated names from `native`, `floss`, `ocr`,
+`decode`, and `translation`.
 Occurrences accumulate; surrounding whitespace is trimmed, but empty, unknown,
 duplicate/case-duplicate, and whitespace-separated extra values fail before
 output or evidence access. An exclusion conflicts with explicitly supplying
@@ -133,6 +139,30 @@ the same engine's main selector. Valid tuning options for an excluded engine
 remain validated but are inert. Resolution produces the same `AnalysisOptions`
 as the equivalent explicit-off command, so no runtime or provenance branch is
 added and the complete bundle remains atomically verified when selected.
+
+## Bounded decoding
+
+Current source can publish depth-one text children from raw records with
+`--decode auto` or `--decode force`. `auto` accepts an exact contextual
+PowerShell EncodedCommand or a complete canonical standard-Base64 record with
+the low-ambiguity guard defined by
+[ADR-0010](architecture/adr-0010-bounded-reversible-decoding.md). `force`
+removes that ambiguity guard and lowers the candidate floor, but does not relax
+canonical round-trip validation, text validity, or any resource limit.
+
+The decoder reads only `raw-strings.jsonl`, after raw translation processing.
+It does not read translated or decoded output. Decoded children therefore
+cannot become language/translation candidates in this release. They are
+appended after raw and translated records and enter the same pattern matcher
+and reports. Every encoded parent remains intact. Successful binary,
+unsupported-text, invalid, and resource-limited outcomes are recorded without
+inventing a text child.
+
+The default bounds are 16,384 candidate characters, 12,288 decoded bytes per
+record, 100,000 attempted candidates, and 64 MiB total decoded work. Advanced
+overrides are bounded by 2,097,152 characters, 1,572,864 bytes per record,
+1,000,000 candidates, and 2,147,483,647 total bytes. Work after the candidate
+cap is aggregated rather than generating unbounded assessment rows.
 
 ## Executable recovery
 
@@ -453,8 +483,9 @@ version, device path, GPU-layer policy, slots/threads, and `execution.airgap`.
 
 ## Matching and lineage
 
-Selected native, recovered, OCR, PDF-text, and translated records are merged in
-a stable order before matching. Disabled producer files remain atomically empty
+Selected native, recovered, OCR, PDF-text, translated, and decoded records are
+merged in stable raw/translation/decoded order before matching. Disabled
+producer and transform files remain atomically empty
 so positional accounting stays stable. Built-in `--lr` groups and custom
 `--fr` patterns use the same validation semantics on each normalized record.
 The matcher does not rewrite or discard parent records.
@@ -476,6 +507,8 @@ The important result files are:
 - `ocr-assessments.jsonl` and `language-assessments.jsonl`;
 - `translated-strings.jsonl`, `enriched-strings.jsonl`, and
   `regex-matches.jsonl`;
+- `decoded-strings.jsonl`, `decoder-assessments.jsonl`, and
+  `decoder-work-stats.json`, with their validated run/summary projection;
 - `translation-work-stats.json`, with its validated projection in `run.json`
   and `summary.json`;
 - specialist `content-routing.jsonl` and routed input projections, plus its

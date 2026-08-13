@@ -33,6 +33,8 @@ internal sealed record EnrichmentTransform
     public string? ModelSha256 { get; init; }
     public string? SourceLanguage { get; init; }
     public string? TargetLanguage { get; init; }
+    public string? Profile { get; init; }
+    public string? PolicyVersion { get; init; }
     public string? Outcome { get; init; }
 }
 
@@ -120,5 +122,6 @@ internal readonly record struct EnrichmentPipelineStats(
     long InputRecords,
     long TranslatedRecords,
     long MatchRecords,
-    long PreservationFallbackRecords = 0
+    long PreservationFallbackRecords = 0,
+    long DecodedRecords = 0
 );

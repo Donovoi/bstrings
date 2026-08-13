@@ -52,8 +52,8 @@ The existence of an output file is not proof that a scan finished.
   hash mismatch makes the affected result incomplete. Retain it for diagnosis,
   but do not report it as a completed examination.
 - Copy or archive a completed integrated result directory as a unit so OCR
-  assessments, language assessments, parents, translated children, and regex
-  hits do not become separated.
+  assessments, language assessments, parents, translated/decoded children, and
+  regex hits do not become separated.
 
 The workflow writes `input-files.txt` and `input-manifest.jsonl` once, before
 extraction. The manifest records each canonical path, byte length, and SHA-256;
@@ -208,10 +208,11 @@ mean the translated characters existed at that location in the evidence bytes.
 | `byte-native` | The text maps to source bytes and a file offset |
 | `derived-extractor` | FLOSS reconstructed the text, OCR recognized it from pixels, or PDFium extracted a document text layer |
 | `derived-translation` | A local translation model produced the text from an identified parent record |
+| `derived-decoding` | The bounded bstrings decoder losslessly recovered text from an identified encoded parent |
 
 Derived evidence can create strong leads, but it is not interchangeable with a
-byte-native finding. Confirm consequential OCR and translated matches against
-their page/parent and surrounding source evidence.
+byte-native finding. Confirm consequential OCR, translated, and decoded matches
+against their page/parent and surrounding source evidence.
 
 ## Engine terminal statuses
 
@@ -431,6 +432,37 @@ stage without replacing prior translated output. Console/log progress reports
 percentage, record rate, ETA, cache hits, distinct model inputs, and fallback
 count. Those statistics explain work avoided; they do not change record
 provenance or imply that a large high-recall translation run will be short.
+
+## Decoding lineage
+
+When bounded decoding is selected, `decoded-strings.jsonl` contains only
+lossless text children. Each child retains exactly one earlier raw parent's
+`sourceFile`, typed `location`, `origin`, and `parentRecordId`. Its transform is
+not a generic extension point: `transform.kind` is exactly `decoding`, the
+engine is `bstrings`, the engine version is canonical `major.minor.patch`, the
+profile is `powershell-encoded-command-v1` or
+`rfc4648-base64-text-v1`, the policy is `decoder-policy-v1`, and the outcome is
+`decoded-text`. Model and language fields are forbidden because no model or
+language transform produced the child.
+
+The child attributes retain any parent attributes and add the decoder name,
+profile/policy copies, exact candidate start and length, outer ASCII-whitespace
+treatment and counts, decoded byte length and SHA-256, selected strict charset,
+depth, and all four effective resource limits. Managed validation reconstructs
+the exact decoded bytes from the BOM-stripped child text, verifies their length
+and digest, enforces the recorded limits and depth one, and rejects missing or
+inconsistent transform metadata. A binary or invalid-text decode remains an
+assessment outcome; it is not fabricated as a string child.
+
+Final enrichment order is all raw originals, then all translation children,
+then all decoding children. A decoding child can reference only a raw original,
+not a translation or another decoding child. Exact record-ID uniqueness,
+parent existence, and source/location/origin equality are checked with the same
+bounded disk-backed index used for translations. Hashes select partitions but
+never decide identity. Decoded findings are labelled `derived-decoding`;
+decoder-enabled pattern histograms add `DerivedDecodingCount`, and
+`findings.tsv` renders the decoder profile in `DecoderChain`. Decoder-off keeps
+the pre-decoding report header and existing output bytes unchanged.
 
 ## Related guides
 

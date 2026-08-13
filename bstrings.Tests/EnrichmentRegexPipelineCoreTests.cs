@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Xunit;
 
@@ -5,6 +7,195 @@ namespace bstrings.Tests;
 
 public sealed class EnrichmentRegexPipelineCoreTests
 {
+    [Fact]
+    public async Task ProcessAsync_ValidatesAndLabelsDecodingChildren()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("decoding.jsonl");
+        var outputPath = scope.PathFor("matches.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                RawRecord("raw-1", "encoded parent"),
+                DecodingRecord("decoded-1", "raw-1", "contact decoded@example.test"),
+            ],
+            cancellationToken
+        );
+
+        var stats = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            outputPath,
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            cancellationToken: cancellationToken,
+            trustedParentFirstInput: true
+        );
+
+        Assert.Equal(new EnrichmentPipelineStats(2, 0, 1, 0, 1), stats);
+        using var row = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath, cancellationToken));
+        Assert.Equal("derived-decoding", row.RootElement.GetProperty("evidenceClass").GetString());
+        Assert.Equal("raw-1", row.RootElement.GetProperty("parentRecordId").GetString());
+        Assert.Equal(
+            "decoding",
+            row.RootElement.GetProperty("transform").GetProperty("kind").GetString()
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TrustedStreamRejectsDecodingLineageMismatch()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("decoding-lineage.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                RawRecord("raw-1", "encoded parent"),
+                DecodingRecord(
+                    "decoded-1",
+                    "raw-1",
+                    "contact decoded@example.test",
+                    location: "0x11"
+                ),
+            ],
+            cancellationToken
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                outputPath: null,
+                [("email", BuiltInPatternCatalog.Patterns["email"])],
+                new StringWriter(),
+                cancellationToken,
+                trustedParentFirstInput: true
+            )
+        );
+
+        Assert.Contains(
+            "exact sourceFile, location, and origin",
+            error.Message,
+            StringComparison.OrdinalIgnoreCase
+        );
+    }
+
+    [Fact]
+    public async Task ProcessAsync_TrustedStreamRequiresTranslationsBeforeDecodingChildren()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("decoding-order.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                RawRecord("raw-1", "encoded parent"),
+                DecodingRecord("decoded-1", "raw-1", "contact decoded@example.test"),
+                CreateRecord("translated-1", "contact translated@example.test", "raw-1"),
+            ],
+            cancellationToken
+        );
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                outputPath: null,
+                [("email", BuiltInPatternCatalog.Patterns["email"])],
+                new StringWriter(),
+                cancellationToken,
+                trustedParentFirstInput: true
+            )
+        );
+
+        Assert.Contains("translated record after decoding", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("missing-attribute")]
+    [InlineData("digest-mismatch")]
+    [InlineData("wrong-depth")]
+    [InlineData("record-limit")]
+    [InlineData("profile-copy-mismatch")]
+    public void ValidateRecord_RejectsIncompleteOrTamperedDecodingProvenance(string defect)
+    {
+        const string text = "contact decoded@example.test";
+        var decodedBytes = Encoding.UTF8.GetBytes(text);
+        var attributes = new Dictionary<string, JsonElement>
+        {
+            ["decoder"] = JsonSerializer.SerializeToElement("base64"),
+            ["decoderProfile"] = JsonSerializer.SerializeToElement("rfc4648-base64-text-v1"),
+            ["decoderPolicyVersion"] = JsonSerializer.SerializeToElement("decoder-policy-v1"),
+            ["candidateStart"] = JsonSerializer.SerializeToElement(0),
+            ["candidateLength"] = JsonSerializer.SerializeToElement(40),
+            ["outerWhitespaceTreatment"] = JsonSerializer.SerializeToElement("none"),
+            ["leadingWhitespaceCharacters"] = JsonSerializer.SerializeToElement(0),
+            ["trailingWhitespaceCharacters"] = JsonSerializer.SerializeToElement(0),
+            ["decodedByteLength"] = JsonSerializer.SerializeToElement(decodedBytes.Length),
+            ["decodedSha256"] = JsonSerializer.SerializeToElement(
+                Convert.ToHexString(SHA256.HashData(decodedBytes)).ToLowerInvariant()
+            ),
+            ["decodedCharset"] = JsonSerializer.SerializeToElement("utf-8"),
+            ["decodeDepth"] = JsonSerializer.SerializeToElement(1),
+            ["maxCandidateCharacters"] = JsonSerializer.SerializeToElement(16_384),
+            ["maxDecodedBytesPerRecord"] = JsonSerializer.SerializeToElement(12_288),
+            ["maxAttemptedCandidates"] = JsonSerializer.SerializeToElement(100_000),
+            ["maxTotalDecodedBytes"] = JsonSerializer.SerializeToElement(67_108_864L),
+        };
+        switch (defect)
+        {
+            case "missing-attribute":
+                attributes.Remove("decodedCharset");
+                break;
+            case "digest-mismatch":
+                attributes["decodedSha256"] = JsonSerializer.SerializeToElement(new string('0', 64));
+                break;
+            case "wrong-depth":
+                attributes["decodeDepth"] = JsonSerializer.SerializeToElement(2);
+                break;
+            case "record-limit":
+                attributes["maxDecodedBytesPerRecord"] = JsonSerializer.SerializeToElement(1);
+                break;
+            case "profile-copy-mismatch":
+                attributes["decoderProfile"] = JsonSerializer.SerializeToElement(
+                    "powershell-encoded-command-v1"
+                );
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(defect));
+        }
+        var record = new EnrichmentStringRecord
+        {
+            SchemaVersion = 1,
+            RecordType = "string",
+            RecordId = "decoded-1",
+            Text = text,
+            SourceFile = "sample.exe",
+            Location = new EnrichmentLocation { Kind = "file_offset", Value = "0x10" },
+            Origin = new EnrichmentOrigin
+            {
+                Extractor = "bstrings",
+                Version = "test",
+                Kind = "static",
+            },
+            ParentRecordId = "raw-1",
+            Transform = new EnrichmentTransform
+            {
+                Kind = "decoding",
+                Engine = "bstrings",
+                EngineVersion = "1.0.0",
+                Profile = "rfc4648-base64-text-v1",
+                PolicyVersion = "decoder-policy-v1",
+                Outcome = "decoded-text",
+            },
+            Attributes = attributes,
+        };
+
+        var error = Assert.Throws<InvalidDataException>(() =>
+            EnrichmentRegexPipelineCore.ValidateRecord(record, 1)
+        );
+
+        Assert.Contains("Decoding enrichment record", error.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ProcessAsync_PreservesRawAndTranslatedLineage()
     {
@@ -628,6 +819,73 @@ public sealed class EnrichmentRegexPipelineCoreTests
                 },
             }
         );
+
+    private static string RawRecord(string recordId, string text) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion = 1,
+                recordType = "string",
+                recordId,
+                text,
+                sourceFile = "sample.exe",
+                location = new { kind = "file_offset", value = "0x10" },
+                origin = new { extractor = "bstrings", version = "test", kind = "static" },
+            }
+        );
+
+    private static string DecodingRecord(
+        string recordId,
+        string parentRecordId,
+        string text,
+        string location = "0x10"
+    )
+    {
+        var decodedBytes = Encoding.UTF8.GetBytes(text);
+        return JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion = 1,
+                recordType = "string",
+                recordId,
+                text,
+                sourceFile = "sample.exe",
+                location = new { kind = "file_offset", value = location },
+                origin = new { extractor = "bstrings", version = "test", kind = "static" },
+                parentRecordId,
+                transform = new
+                {
+                    kind = "decoding",
+                    engine = "bstrings",
+                    engineVersion = "1.0.0",
+                    profile = "rfc4648-base64-text-v1",
+                    policyVersion = "decoder-policy-v1",
+                    outcome = "decoded-text",
+                },
+                attributes = new
+                {
+                    decoder = "base64",
+                    decoderProfile = "rfc4648-base64-text-v1",
+                    decoderPolicyVersion = "decoder-policy-v1",
+                    candidateStart = 0,
+                    candidateLength = 40,
+                    outerWhitespaceTreatment = "none",
+                    leadingWhitespaceCharacters = 0,
+                    trailingWhitespaceCharacters = 0,
+                    decodedByteLength = decodedBytes.Length,
+                    decodedSha256 = Convert
+                        .ToHexString(SHA256.HashData(decodedBytes))
+                        .ToLowerInvariant(),
+                    decodedCharset = "utf-8",
+                    decodeDepth = 1,
+                    maxCandidateCharacters = 16_384,
+                    maxDecodedBytesPerRecord = 12_288,
+                    maxAttemptedCandidates = 100_000,
+                    maxTotalDecodedBytes = 67_108_864L,
+                },
+            }
+        );
+    }
 
     private static string OcrTranslation(
         string recordId,

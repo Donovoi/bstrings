@@ -2,7 +2,7 @@
 
 This page documents current source. The latest published release is v1.9.17;
 its installed `help` output is authoritative for that binary. In particular,
-v1.9.17 includes `--native-extraction` but predates the
+v1.9.17 includes `--native-extraction` but predates the `--decode` transform and
 `-e`/`--exclude-engine` shorthand described below.
 
 The normal examiner interface is `bstrings.exe`. It has three user-facing
@@ -53,6 +53,7 @@ failed or cancelled run; retain it for diagnosis and choose a new output path.
   built-in patterns;
 - one batched, fail-open Magika/signature routing pass;
 - automatic routed FLOSS recovery and PDF/image OCR;
+- optional strict bounded Base64 text-child decoding when explicitly selected;
 - fail-open shadow translation-worthiness routing, adaptive language detection,
   and high-recall translation selection; and
 - offline translation with the single installed Hy-MT2 7B Q4_K_M Full model.
@@ -114,7 +115,7 @@ v1.9.17 binary, use the equivalent explicit selectors such as
 
 Each occurrence consumes exactly one value token. That token is split on
 commas, surrounding whitespace is trimmed, and every segment must be one of
-`native`, `floss`, `ocr`, or `translation` (case-insensitive). Repeating the
+`native`, `floss`, `ocr`, `decode`, or `translation` (case-insensitive). Repeating the
 option and using commas may be combined. Quote a token that contains spaces,
 for example `-e "ocr, translation"`.
 
@@ -129,6 +130,7 @@ selector, including a matching `off` value:
 | `native` | `--native-extraction` |
 | `floss` | `--recover-executable-strings` |
 | `ocr` | `--ocr` |
+| `decode` | `--decode` |
 | `translation` | `--translation` |
 
 Selectors for other engines remain valid. Provider, device, scheduling,
@@ -147,16 +149,19 @@ is unchanged.
 
 The published v1.9.17 binaries already include `--native-extraction`.
 
-`analyze` has three source-record producers and one downstream transform:
+`analyze` has three source-record producers and two downstream transforms:
 
 | Control | Role | Modes |
 | --- | --- | --- |
 | `--native-extraction` | Native ASCII/Unicode source records | `on` or `off`; default `on`, including Full |
 | `--recover-executable-strings` | FLOSS source records | `off`, `auto`, or `force` |
 | `--ocr` | PDF text-layer and OCR source records | `off`, `auto`, or `force` |
+| `--decode` | Strict Base64/PowerShell text children from raw records | `off`, `auto`, or `force` |
 | `--translation` | Language assessment and/or translated children of selected source records | `off`, `auto`, `all`, or `detect-only` |
 
-Explicit choices override the corresponding Full defaults. At least one source
+Full leaves decoding off because its preregistered automatic-mode performance
+gate failed; `--full --decode auto` explicitly adds it. Other explicit choices
+override the corresponding Full defaults. At least one source
 producer must remain selected. Translation never silently enables one, so a
 producerless configuration fails before bundle lookup, output creation, or
 evidence access.
@@ -177,6 +182,10 @@ evidence access.
   --native-extraction off --recover-executable-strings off `
   --ocr force --translation off -o D:\results\ocr
 
+# Native extraction plus bounded Base64 text-child decoding
+.\bstrings.exe analyze -f D:\evidence\memory.raw `
+  --decode auto --translation off -o D:\results\decoded
+
 # Translate selected OCR records without native or FLOSS parents
 .\bstrings.exe analyze -d D:\evidence\documents `
   --native-extraction off --recover-executable-strings off `
@@ -188,6 +197,21 @@ for that specialist. A selected specialist with no applicable input or zero
 records is a valid completed result. When native is off, FLOSS-only output
 includes FLOSS static strings. When native is on, those static FLOSS records
 remain omitted to avoid duplicating native coverage.
+
+`--decode auto` requires a whole-record canonical standard-Base64 candidate
+(apart from defined outer ASCII whitespace) or one exact contextual PowerShell
+EncodedCommand. `force` broadens discovery but never relaxes canonicality or
+resource bounds. Successful binary or unsupported-text decodes are assessment
+outcomes, not fabricated string children. The encoded parent is always kept.
+Decoded children are matched after raw translation work and are not sent to
+language detection or translation in this release.
+
+Advanced bounds default to `--decode-max-characters 16384`,
+`--decode-max-bytes-per-record 12288`, `--decode-max-candidates 100000`, and
+`--decode-max-total-bytes 67108864`. Safe maxima are respectively 2,097,152,
+1,572,864, 1,000,000, and 2,147,483,647. `force` cannot bypass them. Effective
+values and bounded work outcomes are recorded in decoder artifacts and the
+run projections.
 
 Pattern matching and report projection are not engines in this contract. They
 remain mandatory finalization stages, so every successful specialist-only run
@@ -215,6 +239,8 @@ and these review surfaces:
 - specialist `engine-status.jsonl`, which records terminal native/FLOSS/OCR
   coverage of every input, including engines explicitly disabled by the user,
   plus `content-routing.jsonl` to explain each route;
+- `decoded-strings.jsonl`, `decoder-assessments.jsonl`, and
+  `decoder-work-stats.json` when decoding is selected;
 - `findings.tsv`, suitable for Timeline Explorer and spreadsheet filtering,
   including a dedicated `TranslationIntegrity` column;
 - `pattern-histogram.tsv`, including zero-count requested patterns;

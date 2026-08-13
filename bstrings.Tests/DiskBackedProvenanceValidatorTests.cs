@@ -99,6 +99,36 @@ public sealed class DiskBackedProvenanceValidatorTests
     }
 
     [Fact]
+    public void Validate_AcceptsDecodingChildWithExactRawParentLineage()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        using var validator = new DiskBackedProvenanceValidator(scope.DirectoryPath, 1, 1024);
+        var identity = Identity("0x10");
+        validator.AddOriginal("raw-1", identity);
+        validator.AddDecoding("decoded-1", "raw-1", identity);
+
+        validator.Validate(cancellationToken);
+    }
+
+    [Fact]
+    public void Validate_RejectsDecodingChildWithMissingRawParent()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        using var validator = new DiskBackedProvenanceValidator(scope.DirectoryPath, 1, 1024);
+        validator.AddOriginal("raw-1", Identity("0x10"));
+        validator.AddDecoding("decoded-1", "raw-10", Identity("0x10"));
+
+        var error = Assert.Throws<InvalidDataException>(() =>
+            validator.Validate(cancellationToken)
+        );
+
+        Assert.Contains("raw-10", error.Message, StringComparison.Ordinal);
+        Assert.Contains("does not exist", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Validate_ExactCoverageRejectsACandidateWithoutAChild()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

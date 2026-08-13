@@ -15,17 +15,19 @@ internal readonly record struct AnalysisEngineModes(
     NativeExtractionMode Native,
     ExecutableRecoveryMode Floss,
     OcrWorkflowMode Ocr,
-    TranslationWorkflowMode Translation
+    TranslationWorkflowMode Translation,
+    DecoderWorkflowMode Decode = DecoderWorkflowMode.Off
 );
 
 internal readonly record struct AnalysisEngineExclusions(
     bool Native,
     bool Floss,
     bool Ocr,
+    bool Decode,
     bool Translation
 )
 {
-    internal bool Any => Native || Floss || Ocr || Translation;
+    internal bool Any => Native || Floss || Ocr || Decode || Translation;
 }
 
 internal static class AnalysisCli
@@ -34,9 +36,19 @@ internal static class AnalysisCli
     internal const string TranslationPolicyHelp =
         "Automatic translation gate used by --translation auto: high-recall keeps uncertain detections; balanced uses the configured confidence and margin; high-precision applies floors of 0.65 confidence and 0.15 margin";
     internal const string FullProfileHelp =
-        "Run the single Full profile: hash inputs, classify each input in one early shared pass, extract native strings, route applicable files to FLOSS/OCR, then fail-open shadow translation-worthiness routing and language triage, pinned 7B Q4_K_M offline translation (validated sm89 CUDA p2 or pre-evidence CPU selection), all patterns, and reports; shadow routing does not yet remove candidates. An explicit engine selector overrides its default; repeat -e/--exclude-engine to subtract named engines, but do not combine both controls for the same engine";
+        "Run the single Full profile: hash inputs, classify each input in one early shared pass, extract native strings, route applicable files to FLOSS/OCR, then fail-open shadow translation-worthiness routing and language triage, pinned 7B Q4_K_M offline translation (validated sm89 CUDA p2 or pre-evidence CPU selection), all patterns, and reports; shadow routing does not yet remove candidates. Bounded Base64 decoding remains explicit opt-in because its preregistered performance gate did not pass. An explicit engine selector overrides its default; repeat -e/--exclude-engine to subtract named engines, but do not combine both controls for the same engine";
     internal const string TranslationDeviceHelp =
         "Translation hardware: auto, cpu, cuda, or hybrid; separate from native --processor (the quality kit promotes only validated compute capability 8.9 to full-offload CUDA p2, otherwise auto selects CPU before evidence inference; explicit cuda fails closed)";
+    internal const int DefaultDecoderMaximumCandidateCharacters = 16_384;
+    internal const int DefaultDecoderMaximumBytesPerRecord = 12_288;
+    internal const long DefaultDecoderMaximumCandidates = 100_000;
+    internal const long DefaultDecoderMaximumTotalBytes = 64L * 1024 * 1024;
+    internal const int MaximumDecoderCandidateCharacters =
+        EnrichmentRegexPipelineCore.MaxNativeTextCharacters;
+    internal const int MaximumDecoderBytesPerRecord =
+        MaximumDecoderCandidateCharacters / 4 * 3;
+    internal const long MaximumDecoderCandidates = 1_000_000;
+    internal const long MaximumDecoderTotalBytes = int.MaxValue;
 
     internal static async Task<int> RunAsync(string[] args)
     {
@@ -68,7 +80,7 @@ internal static class AnalysisCli
         var excludeEngineOption = new Option<string[]>("--exclude-engine", "-e")
         {
             Description =
-                "Subtract native, floss, ocr, or translation from --full. Repeat the option or use a comma-separated value. Cannot be combined with that engine's direct selector; tuning options for an excluded engine are inert but still syntax-checked",
+                "Subtract native, floss, ocr, decode, or translation from --full. Repeat the option or use a comma-separated value. Cannot be combined with that engine's direct selector; tuning options for an excluded engine are inert but still syntax-checked",
             AllowMultipleArgumentsPerToken = false,
             Arity = ArgumentArity.OneOrMore,
         };
@@ -106,6 +118,36 @@ internal static class AnalysisCli
         var translationOption = new Option<string?>("--translation")
         {
             Description = "Language/translation workflow: off, auto (policy-selected), all eligible text, or detect-only",
+        };
+        var decoderOption = new Option<string?>("--decode")
+        {
+            Description = "Bounded Base64 text-child decoding: off (default), auto (strict low-ambiguity), or force (strict broader discovery); decoded content is never executed or translated",
+        };
+        var decoderMaximumCharactersOption = new Option<int>("--decode-max-characters")
+        {
+            Description =
+                $"Maximum encoded candidate characters, from 8 through {MaximumDecoderCandidateCharacters:N0}",
+            DefaultValueFactory = _ => DefaultDecoderMaximumCandidateCharacters,
+        };
+        var decoderMaximumCandidatesOption = new Option<long>("--decode-max-candidates")
+        {
+            Description =
+                $"Maximum attempted decode candidates, from 1 through {MaximumDecoderCandidates:N0}",
+            DefaultValueFactory = _ => DefaultDecoderMaximumCandidates,
+        };
+        var decoderMaximumBytesPerRecordOption = new Option<int>(
+            "--decode-max-bytes-per-record"
+        )
+        {
+            Description =
+                $"Maximum decoded bytes per record, from 1 through {MaximumDecoderBytesPerRecord:N0}",
+            DefaultValueFactory = _ => DefaultDecoderMaximumBytesPerRecord,
+        };
+        var decoderMaximumTotalBytesOption = new Option<long>("--decode-max-total-bytes")
+        {
+            Description =
+                $"Maximum total successfully decoded bytes, from 1 through {MaximumDecoderTotalBytes:N0}",
+            DefaultValueFactory = _ => DefaultDecoderMaximumTotalBytes,
         };
         var detectionOption = new Option<string>("--language-detection")
         {
@@ -223,6 +265,11 @@ internal static class AnalysisCli
             ocrProviderOption,
             ocrThreadsOption,
             recoveryOption,
+            decoderOption,
+            decoderMaximumCharactersOption,
+            decoderMaximumBytesPerRecordOption,
+            decoderMaximumCandidatesOption,
+            decoderMaximumTotalBytesOption,
             translationOption,
             detectionOption,
             policyOption,
@@ -249,6 +296,8 @@ internal static class AnalysisCli
             "Run the provenance-preserving workflow and write JSONL evidence, findings.tsv, exact histograms, and an HTML chart.\n\n"
             + "Examples:\n"
             + "  bstrings.exe analyze -d C:\\evidence\\carved --full -o C:\\results\\case-01\n"
+            + "  bstrings.exe analyze -f C:\\evidence\\memory.raw --decode auto --translation off --lr all -o C:\\results\\decoded\n"
+            + "  bstrings.exe analyze -d C:\\evidence\\carved --full -e ocr,translation -o C:\\results\\without-ai\n"
             + "  bstrings.exe analyze -f C:\\evidence\\memory.raw --ocr off --translation off --lr all -o C:\\results\\memory\n\n"
             + "The results directory must be new or empty. Failures retain .incomplete and diagnostic logs. "
             + "Long-running stages print measured percentage completion; percentages are work units, not an ETA. "
@@ -275,6 +324,7 @@ internal static class AnalysisCli
                     nativeSelectorSpecified: result.GetResult(nativeExtractionOption) is not null,
                     flossSelectorSpecified: result.GetResult(recoveryOption) is not null,
                     ocrSelectorSpecified: result.GetResult(ocrOption) is not null,
+                    decoderSelectorSpecified: result.GetResult(decoderOption) is not null,
                     translationSelectorSpecified: result.GetResult(translationOption) is not null
                 );
             }
@@ -297,7 +347,8 @@ internal static class AnalysisCli
                         result.GetValue(recoveryOption),
                         result.GetValue(ocrOption),
                         result.GetValue(translationOption),
-                        result.GetValue(excludeEngineOption)
+                        result.GetValue(excludeEngineOption),
+                        result.GetValue(decoderOption)
                     );
                     var nativeExtractionMode = modes.Native;
                     var ocrMode = modes.Ocr;
@@ -306,6 +357,7 @@ internal static class AnalysisCli
                         full
                     );
                     var recoveryMode = modes.Floss;
+                    var decoderMode = modes.Decode;
                     var translationMode = modes.Translation;
                     string? error;
                     if (
@@ -334,6 +386,24 @@ internal static class AnalysisCli
                     ValidateStringLengthBounds(minimumStringLength, maximumStringLength);
                     var ocrThreads = result.GetValue(ocrThreadsOption);
                     OcrCompletionCore.ValidateRequestedThreads(ocrThreads);
+                    var decoderMaximumCandidateCharacters = result.GetValue(
+                        decoderMaximumCharactersOption
+                    );
+                    var decoderMaximumCandidates = result.GetValue(
+                        decoderMaximumCandidatesOption
+                    );
+                    var decoderMaximumBytesPerRecord = result.GetValue(
+                        decoderMaximumBytesPerRecordOption
+                    );
+                    var decoderMaximumTotalBytes = result.GetValue(
+                        decoderMaximumTotalBytesOption
+                    );
+                    ValidateDecoderLimits(
+                        decoderMaximumCandidateCharacters,
+                        decoderMaximumBytesPerRecord,
+                        decoderMaximumCandidates,
+                        decoderMaximumTotalBytes
+                    );
 
                     var options = new AnalysisOptions(
                         result.GetValue(fileOption),
@@ -366,7 +436,12 @@ internal static class AnalysisCli
                         result.GetValue(translationMaximumOption),
                         result.GetValue(bundleRootOption),
                         result.GetValue(airgapOption),
-                        nativeExtractionMode
+                        nativeExtractionMode,
+                        decoderMode,
+                        decoderMaximumCandidateCharacters,
+                        decoderMaximumBytesPerRecord,
+                        decoderMaximumCandidates,
+                        decoderMaximumTotalBytes
                     );
 
                     using var cancellation = new CancellationTokenSource();
@@ -465,7 +540,8 @@ internal static class AnalysisCli
         string? flossValue,
         string? ocrValue,
         string? translationValue,
-        IReadOnlyList<string>? rawExclusions
+        IReadOnlyList<string>? rawExclusions,
+        string? decoderValue = null
     )
     {
         var exclusions = ParseEngineExclusions(rawExclusions);
@@ -475,6 +551,7 @@ internal static class AnalysisCli
             nativeSelectorSpecified: nativeValue is not null,
             flossSelectorSpecified: flossValue is not null,
             ocrSelectorSpecified: ocrValue is not null,
+            decoderSelectorSpecified: decoderValue is not null,
             translationSelectorSpecified: translationValue is not null
         );
 
@@ -491,6 +568,15 @@ internal static class AnalysisCli
             floss = ExecutableRecoveryMode.Off;
         }
         var ocr = exclusions.Ocr ? OcrWorkflowMode.Off : ResolveOcrMode(ocrValue, full);
+        var decoderText = decoderValue ?? "off";
+        if (!TryParseDecoderMode(decoderText, out var decoder, out error))
+        {
+            throw new ArgumentException(error);
+        }
+        if (exclusions.Decode)
+        {
+            decoder = DecoderWorkflowMode.Off;
+        }
         var translationText = translationValue ?? (full ? "auto" : "off");
         if (!TryParseTranslationMode(translationText, out var translation, out error))
         {
@@ -500,7 +586,7 @@ internal static class AnalysisCli
         {
             translation = TranslationWorkflowMode.Off;
         }
-        return new AnalysisEngineModes(native, floss, ocr, translation);
+        return new AnalysisEngineModes(native, floss, ocr, translation, decoder);
     }
 
     internal static AnalysisEngineExclusions ParseEngineExclusions(
@@ -572,10 +658,14 @@ internal static class AnalysisCli
             {
                 flag = 8;
             }
+            else if (ascii && name.Equals("decode", StringComparison.OrdinalIgnoreCase))
+            {
+                flag = 16;
+            }
             if (flag == 0)
             {
                 error =
-                    $"Unknown excluded engine '{name.ToString()}'. Expected native, floss, ocr, or translation.";
+                    $"Unknown excluded engine '{name.ToString()}'. Expected native, floss, ocr, decode, or translation.";
                 return false;
             }
             if ((flags & flag) != 0)
@@ -598,6 +688,7 @@ internal static class AnalysisCli
             Native: (flags & 1) != 0,
             Floss: (flags & 2) != 0,
             Ocr: (flags & 4) != 0,
+            Decode: (flags & 16) != 0,
             Translation: (flags & 8) != 0
         );
 
@@ -619,6 +710,7 @@ internal static class AnalysisCli
         bool nativeSelectorSpecified,
         bool flossSelectorSpecified,
         bool ocrSelectorSpecified,
+        bool decoderSelectorSpecified,
         bool translationSelectorSpecified
     )
     {
@@ -650,6 +742,49 @@ internal static class AnalysisCli
         {
             throw new ArgumentException(
                 "--exclude-engine translation cannot be combined with --translation."
+            );
+        }
+        if (exclusions.Decode && decoderSelectorSpecified)
+        {
+            throw new ArgumentException(
+                "--exclude-engine decode cannot be combined with --decode."
+            );
+        }
+    }
+
+    internal static void ValidateDecoderLimits(
+        int maximumCandidateCharacters,
+        int maximumBytesPerRecord,
+        long maximumCandidates,
+        long maximumTotalBytes
+    )
+    {
+        if (maximumCandidateCharacters is < 8 or > MaximumDecoderCandidateCharacters)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumCandidateCharacters),
+                $"Decoder maximum candidate characters must be from 8 through {MaximumDecoderCandidateCharacters:N0}."
+            );
+        }
+        if (maximumBytesPerRecord is < 1 or > MaximumDecoderBytesPerRecord)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumBytesPerRecord),
+                $"Decoder maximum bytes per record must be from 1 through {MaximumDecoderBytesPerRecord:N0}."
+            );
+        }
+        if (maximumCandidates is < 1 or > MaximumDecoderCandidates)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumCandidates),
+                $"Decoder maximum candidates must be from 1 through {MaximumDecoderCandidates:N0}."
+            );
+        }
+        if (maximumTotalBytes is < 1 or > MaximumDecoderTotalBytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumTotalBytes),
+                $"Decoder maximum total bytes must be from 1 through {MaximumDecoderTotalBytes:N0}."
             );
         }
     }
@@ -776,6 +911,33 @@ internal static class AnalysisCli
             default:
                 mode = ExecutableRecoveryMode.Off;
                 error = "Executable recovery must be off, auto, or force.";
+                return false;
+        }
+    }
+
+    private static bool TryParseDecoderMode(
+        string value,
+        out DecoderWorkflowMode mode,
+        out string? error
+    )
+    {
+        switch (value.Trim().ToLowerInvariant())
+        {
+            case "off":
+                mode = DecoderWorkflowMode.Off;
+                error = null;
+                return true;
+            case "auto":
+                mode = DecoderWorkflowMode.Auto;
+                error = null;
+                return true;
+            case "force":
+                mode = DecoderWorkflowMode.Force;
+                error = null;
+                return true;
+            default:
+                mode = DecoderWorkflowMode.Off;
+                error = "Decoding must be off, auto, or force.";
                 return false;
         }
     }

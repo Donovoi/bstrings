@@ -453,6 +453,15 @@ internal sealed class DiskBackedProvenanceValidator : IDisposable
         );
     }
 
+    internal void AddDecoding(
+        string recordId,
+        string parentRecordId,
+        TranslationLineageIdentity? lineage
+    )
+    {
+        AddTranslation(recordId, parentRecordId, lineage);
+    }
+
     private static string EncodeLineage(TranslationLineageIdentity? lineage)
     {
         if (lineage is null)
@@ -619,7 +628,7 @@ internal sealed class DiskBackedProvenanceValidator : IDisposable
 
     private static InvalidDataException MissingParent(string value) =>
         new(
-            $"Translated enrichment record references parentRecordId '{value}', which does not exist among the original records."
+            $"Derived enrichment record references parentRecordId '{value}', which does not exist among the original records."
         );
 
     private static InvalidDataException MissingTranslationChild(string value) =>
@@ -634,7 +643,7 @@ internal sealed class DiskBackedProvenanceValidator : IDisposable
 
     private static InvalidDataException LineageMismatch(string parent, string? child) =>
         new(
-            $"Translated enrichment record '{child ?? "<unknown>"}' does not retain the exact sourceFile, location, and origin lineage of parentRecordId '{parent}'."
+            $"Derived enrichment record '{child ?? "<unknown>"}' does not retain the exact sourceFile, location, and origin lineage of parentRecordId '{parent}'."
         );
 
     private enum IndexKind
