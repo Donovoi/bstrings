@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -19,6 +20,10 @@ internal static class EnrichmentRegexPipelineCore
     internal const int MaxJsonLineCharacters = 16 * 1024 * 1024;
     internal const int MaxNativeTextCharacters = 2 * 1024 * 1024;
     internal const int MatchContextCharacters = 160;
+    internal const int MaxDecoderCandidateCharacters = 2 * 1024 * 1024;
+    internal const int MaxDecoderBytesPerRecord = 1_572_864;
+    internal const int MaxDecoderCandidates = 1_000_000;
+    internal const long MaxDecoderTotalBytes = int.MaxValue;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -121,6 +126,7 @@ internal static class EnrichmentRegexPipelineCore
 
         long inputRecords = 0;
         long translatedRecords = 0;
+        long decodedRecords = 0;
         long matchRecords = 0;
         long preservationFallbackRecords = 0;
         var seenRecordIds = trustedParentFirstInput
@@ -141,7 +147,7 @@ internal static class EnrichmentRegexPipelineCore
                     : Path.GetDirectoryName(outputFullPath)!,
                 fallbackIndexDeleteDirectory
             );
-        var translatedSectionStarted = false;
+        var trustedSection = TrustedRecordSection.Originals;
         try
         {
             if (fallbackTextValidator is not null)
@@ -200,14 +206,15 @@ internal static class EnrichmentRegexPipelineCore
 
                 ValidateRecord(record, lineNumber);
                 var isTranslation = IsTranslation(record);
+                var isDecoding = IsDecoding(record);
                 if (
                     seenRecordIds is not null
-                    && isTranslation
+                    && (isTranslation || isDecoding)
                     && !seenRecordIds.Contains(record.ParentRecordId!)
                 )
                 {
                     throw new InvalidDataException(
-                        $"Translated enrichment record at line {lineNumber:N0} references parentRecordId "
+                        $"Derived enrichment record at line {lineNumber:N0} references parentRecordId "
                             + $"'{record.ParentRecordId}', which has not appeared earlier in the stream."
                     );
                 }
@@ -221,7 +228,13 @@ internal static class EnrichmentRegexPipelineCore
                 {
                     if (isTranslation)
                     {
-                        translatedSectionStarted = true;
+                        if (trustedSection == TrustedRecordSection.Decoding)
+                        {
+                            throw new InvalidDataException(
+                                $"Enrichment JSONL line {lineNumber:N0} places a translated record after decoding children."
+                            );
+                        }
+                        trustedSection = TrustedRecordSection.Translations;
                         var integrity = ValidateTranslationRequirements(
                             record,
                             translationRequirements,
@@ -242,10 +255,19 @@ internal static class EnrichmentRegexPipelineCore
                             CreateLineageIdentity(record)
                         );
                     }
-                    else if (translatedSectionStarted)
+                    else if (isDecoding)
+                    {
+                        trustedSection = TrustedRecordSection.Decoding;
+                        provenanceValidator!.AddDecoding(
+                            record.RecordId,
+                            record.ParentRecordId!,
+                            CreateLineageIdentity(record)
+                        );
+                    }
+                    else if (trustedSection != TrustedRecordSection.Originals)
                     {
                         throw new InvalidDataException(
-                            $"Enrichment JSONL line {lineNumber:N0} places an original record after translated children."
+                            $"Enrichment JSONL line {lineNumber:N0} places an original record after derived children."
                         );
                     }
                     else
@@ -261,6 +283,10 @@ internal static class EnrichmentRegexPipelineCore
                 if (isTranslation)
                 {
                     translatedRecords++;
+                }
+                else if (isDecoding)
+                {
+                    decodedRecords++;
                 }
 
                 var parsedHit = new ParsedHit(record.Text!, record.Text!, record.Location?.Value ?? string.Empty);
@@ -341,7 +367,8 @@ internal static class EnrichmentRegexPipelineCore
                 inputRecords,
                 translatedRecords,
                 matchRecords,
-                preservationFallbackRecords
+                preservationFallbackRecords,
+                decodedRecords
             );
         }
         finally
@@ -534,13 +561,17 @@ internal static class EnrichmentRegexPipelineCore
                 $"Enrichment JSONL line {lineNumber:N0} has an incomplete location."
             );
         }
-        if (record.Transform is not null && !IsTranslation(record))
+        if (record.Transform is not null && !IsTranslation(record) && !IsDecoding(record))
         {
             throw new InvalidDataException(
                 $"Enrichment JSONL line {lineNumber:N0} uses unsupported transform kind '{record.Transform.Kind}'."
             );
         }
-        if (!IsTranslation(record) && !string.IsNullOrWhiteSpace(record.ParentRecordId))
+        if (
+            !IsTranslation(record)
+            && !IsDecoding(record)
+            && !string.IsNullOrWhiteSpace(record.ParentRecordId)
+        )
         {
             throw new InvalidDataException(
                 $"Enrichment JSONL line {lineNumber:N0} names a parentRecordId without a supported transform."
@@ -573,10 +604,336 @@ internal static class EnrichmentRegexPipelineCore
                 $"Translated enrichment record at line {lineNumber:N0} must name its parentRecordId, engine, engineVersion, model, revision, modelSha256, and targetLanguage."
             );
         }
+        if (
+            IsDecoding(record)
+            && (
+                string.IsNullOrWhiteSpace(record.ParentRecordId)
+                || string.IsNullOrWhiteSpace(record.Transform?.Engine)
+                || string.IsNullOrWhiteSpace(record.Transform?.EngineVersion)
+                || string.IsNullOrWhiteSpace(record.Transform?.Profile)
+                || string.IsNullOrWhiteSpace(record.Transform?.PolicyVersion)
+                || !string.Equals(record.Transform?.Outcome, "decoded-text", StringComparison.Ordinal)
+            )
+        )
+        {
+            throw new InvalidDataException(
+                $"Decoding enrichment record at line {lineNumber:N0} must name its parentRecordId, engine, engineVersion, profile, policyVersion, and decoded-text outcome."
+            );
+        }
+        if (IsDecoding(record))
+        {
+            ValidateDecodingRequirements(record, lineNumber);
+        }
     }
 
     internal static bool IsTranslation(EnrichmentStringRecord record) =>
         string.Equals(record.Transform?.Kind, "translation", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsDecoding(EnrichmentStringRecord record) =>
+        string.Equals(record.Transform?.Kind, "decoding", StringComparison.Ordinal);
+
+    private static void ValidateDecodingRequirements(EnrichmentStringRecord record, long lineNumber)
+    {
+        var transform = record.Transform!;
+        if (!string.Equals(transform.Engine, "bstrings", StringComparison.Ordinal))
+        {
+            throw InvalidDecodingRecord(lineNumber, "transform.engine must be 'bstrings'");
+        }
+        if (
+            !Version.TryParse(transform.EngineVersion, out var engineVersion)
+            || engineVersion.Build < 0
+            || engineVersion.Revision >= 0
+            || !string.Equals(
+                transform.EngineVersion,
+                $"{engineVersion.Major}.{engineVersion.Minor}.{engineVersion.Build}",
+                StringComparison.Ordinal
+            )
+        )
+        {
+            throw InvalidDecodingRecord(
+                lineNumber,
+                "transform.engineVersion must be a canonical major.minor.patch version"
+            );
+        }
+        if (
+            transform.Profile is not ("powershell-encoded-command-v1" or "rfc4648-base64-text-v1")
+        )
+        {
+            throw InvalidDecodingRecord(lineNumber, "transform.profile is not supported");
+        }
+        if (!string.Equals(transform.PolicyVersion, "decoder-policy-v1", StringComparison.Ordinal))
+        {
+            throw InvalidDecodingRecord(
+                lineNumber,
+                "transform.policyVersion must be 'decoder-policy-v1'"
+            );
+        }
+        if (
+            !string.IsNullOrWhiteSpace(transform.Model)
+            || !string.IsNullOrWhiteSpace(transform.Revision)
+            || !string.IsNullOrWhiteSpace(transform.ModelSha256)
+            || !string.IsNullOrWhiteSpace(transform.SourceLanguage)
+            || !string.IsNullOrWhiteSpace(transform.TargetLanguage)
+        )
+        {
+            throw InvalidDecodingRecord(
+                lineNumber,
+                "decoding transforms cannot claim model or language provenance"
+            );
+        }
+
+        var attributes = record.Attributes
+            ?? throw InvalidDecodingRecord(lineNumber, "attributes are required");
+        RequireDecodingString(attributes, "decoder", lineNumber, value => value == "base64");
+        RequireDecodingString(
+            attributes,
+            "decoderProfile",
+            lineNumber,
+            value => string.Equals(value, transform.Profile, StringComparison.Ordinal)
+        );
+        RequireDecodingString(
+            attributes,
+            "decoderPolicyVersion",
+            lineNumber,
+            value => string.Equals(value, transform.PolicyVersion, StringComparison.Ordinal)
+        );
+        var candidateStart = RequireDecodingInt32(attributes, "candidateStart", lineNumber, 0, int.MaxValue);
+        var candidateLength = RequireDecodingInt32(
+            attributes,
+            "candidateLength",
+            lineNumber,
+            1,
+            MaxDecoderCandidateCharacters
+        );
+        var outerWhitespaceTreatment = RequireDecodingString(
+            attributes,
+            "outerWhitespaceTreatment",
+            lineNumber,
+            value => value is "none" or "ascii-trim"
+        );
+        var leadingWhitespace = RequireDecodingInt32(
+            attributes,
+            "leadingWhitespaceCharacters",
+            lineNumber,
+            0,
+            MaxDecoderCandidateCharacters
+        );
+        var trailingWhitespace = RequireDecodingInt32(
+            attributes,
+            "trailingWhitespaceCharacters",
+            lineNumber,
+            0,
+            MaxDecoderCandidateCharacters
+        );
+        if (
+            transform.Profile == "rfc4648-base64-text-v1"
+            && candidateStart != leadingWhitespace
+        )
+        {
+            throw InvalidDecodingRecord(
+                lineNumber,
+                "the whole-record profile requires candidateStart to equal leadingWhitespaceCharacters"
+            );
+        }
+        if (outerWhitespaceTreatment == "none" && (leadingWhitespace != 0 || trailingWhitespace != 0))
+        {
+            throw InvalidDecodingRecord(
+                lineNumber,
+                "attributes.outerWhitespaceTreatment 'none' requires zero outer whitespace"
+            );
+        }
+
+        var decodedByteLength = RequireDecodingInt32(
+            attributes,
+            "decodedByteLength",
+            lineNumber,
+            1,
+            MaxDecoderBytesPerRecord
+        );
+        var decodedSha256 = RequireDecodingString(
+            attributes,
+            "decodedSha256",
+            lineNumber,
+            IsLowercaseSha256
+        );
+        var charset = RequireDecodingString(
+            attributes,
+            "decodedCharset",
+            lineNumber,
+            value =>
+                value
+                    is "utf-8"
+                        or "utf-8-bom"
+                        or "utf-16le-bom"
+                        or "utf-16be-bom"
+                        or "utf-16le-powershell"
+        );
+        if (
+            transform.Profile == "powershell-encoded-command-v1"
+            && charset != "utf-16le-powershell"
+        )
+        {
+            throw InvalidDecodingRecord(
+                lineNumber,
+                "the PowerShell profile requires decodedCharset 'utf-16le-powershell'"
+            );
+        }
+        if (
+            transform.Profile == "rfc4648-base64-text-v1"
+            && charset == "utf-16le-powershell"
+        )
+        {
+            throw InvalidDecodingRecord(
+                lineNumber,
+                "the generic Base64 profile cannot claim the PowerShell-only charset"
+            );
+        }
+        _ = RequireDecodingInt32(attributes, "decodeDepth", lineNumber, 1, 1);
+        var maxCandidateCharacters = RequireDecodingInt32(
+            attributes,
+            "maxCandidateCharacters",
+            lineNumber,
+            1,
+            MaxDecoderCandidateCharacters
+        );
+        var maxDecodedBytesPerRecord = RequireDecodingInt32(
+            attributes,
+            "maxDecodedBytesPerRecord",
+            lineNumber,
+            1,
+            MaxDecoderBytesPerRecord
+        );
+        _ = RequireDecodingInt32(
+            attributes,
+            "maxAttemptedCandidates",
+            lineNumber,
+            1,
+            MaxDecoderCandidates
+        );
+        var maxTotalDecodedBytes = RequireDecodingInt64(
+            attributes,
+            "maxTotalDecodedBytes",
+            lineNumber,
+            1,
+            MaxDecoderTotalBytes
+        );
+        if (candidateLength > maxCandidateCharacters)
+        {
+            throw InvalidDecodingRecord(lineNumber, "candidateLength exceeds its recorded limit");
+        }
+        if (decodedByteLength > maxDecodedBytesPerRecord || decodedByteLength > maxTotalDecodedBytes)
+        {
+            throw InvalidDecodingRecord(lineNumber, "decodedByteLength exceeds its recorded limit");
+        }
+
+        var reconstructedBytes = EncodeDecodedText(record.Text!, charset);
+        if (reconstructedBytes.Length != decodedByteLength)
+        {
+            throw InvalidDecodingRecord(
+                lineNumber,
+                "decodedByteLength does not match the decoded child text"
+            );
+        }
+        var actualSha256 = Convert.ToHexString(SHA256.HashData(reconstructedBytes)).ToLowerInvariant();
+        if (!string.Equals(actualSha256, decodedSha256, StringComparison.Ordinal))
+        {
+            throw InvalidDecodingRecord(lineNumber, "decodedSha256 does not match the decoded child text");
+        }
+    }
+
+    private static byte[] EncodeDecodedText(string text, string charset)
+    {
+        Encoding encoding = charset switch
+        {
+            "utf-8" or "utf-8-bom" => new UTF8Encoding(false, true),
+            "utf-16le-bom" or "utf-16le-powershell" => new UnicodeEncoding(false, false, true),
+            "utf-16be-bom" => new UnicodeEncoding(true, false, true),
+            _ => throw new InvalidOperationException("The decoded charset was not validated."),
+        };
+        var content = encoding.GetBytes(text);
+        byte[] preamble = charset switch
+        {
+            "utf-8-bom" => new byte[] { 0xEF, 0xBB, 0xBF },
+            "utf-16le-bom" => new byte[] { 0xFF, 0xFE },
+            "utf-16be-bom" => new byte[] { 0xFE, 0xFF },
+            _ => [],
+        };
+        if (preamble.Length == 0)
+        {
+            return content;
+        }
+        var result = new byte[preamble.Length + content.Length];
+        preamble.CopyTo(result, 0);
+        content.CopyTo(result, preamble.Length);
+        return result;
+    }
+
+    private static string RequireDecodingString(
+        IReadOnlyDictionary<string, JsonElement> attributes,
+        string name,
+        long lineNumber,
+        Func<string, bool> predicate
+    )
+    {
+        if (
+            !attributes.TryGetValue(name, out var element)
+            || element.ValueKind != JsonValueKind.String
+            || element.GetString() is not { } value
+            || !predicate(value)
+        )
+        {
+            throw InvalidDecodingRecord(lineNumber, $"attributes.{name} is missing or invalid");
+        }
+        return value;
+    }
+
+    private static int RequireDecodingInt32(
+        IReadOnlyDictionary<string, JsonElement> attributes,
+        string name,
+        long lineNumber,
+        int minimum,
+        int maximum
+    )
+    {
+        if (
+            !attributes.TryGetValue(name, out var element)
+            || element.ValueKind != JsonValueKind.Number
+            || !element.TryGetInt32(out var value)
+            || value < minimum
+            || value > maximum
+        )
+        {
+            throw InvalidDecodingRecord(lineNumber, $"attributes.{name} is missing or out of range");
+        }
+        return value;
+    }
+
+    private static long RequireDecodingInt64(
+        IReadOnlyDictionary<string, JsonElement> attributes,
+        string name,
+        long lineNumber,
+        long minimum,
+        long maximum
+    )
+    {
+        if (
+            !attributes.TryGetValue(name, out var element)
+            || element.ValueKind != JsonValueKind.Number
+            || !element.TryGetInt64(out var value)
+            || value < minimum
+            || value > maximum
+        )
+        {
+            throw InvalidDecodingRecord(lineNumber, $"attributes.{name} is missing or out of range");
+        }
+        return value;
+    }
+
+    private static bool IsLowercaseSha256(string value) =>
+        value.Length == 64 && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static InvalidDataException InvalidDecodingRecord(long lineNumber, string reason) =>
+        new($"Decoding enrichment record at line {lineNumber:N0} is invalid: {reason}.");
 
     internal static TranslationLineageIdentity CreateLineageIdentity(
         EnrichmentStringRecord record
@@ -776,6 +1133,10 @@ internal static class EnrichmentRegexPipelineCore
         {
             return "derived-translation";
         }
+        if (IsDecoding(record))
+        {
+            return "derived-decoding";
+        }
         if (
             string.Equals(record.Location?.Kind, "file_offset", StringComparison.OrdinalIgnoreCase)
             && (
@@ -788,5 +1149,12 @@ internal static class EnrichmentRegexPipelineCore
             return "byte-native";
         }
         return "derived-extractor";
+    }
+
+    private enum TrustedRecordSection
+    {
+        Originals,
+        Translations,
+        Decoding,
     }
 }

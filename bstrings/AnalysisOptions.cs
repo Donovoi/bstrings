@@ -18,6 +18,13 @@ internal enum OcrWorkflowMode
     Force,
 }
 
+internal enum DecoderWorkflowMode
+{
+    Off,
+    Auto,
+    Force,
+}
+
 internal enum NativeExtractionMode
 {
     On,
@@ -77,5 +84,15 @@ internal sealed record AnalysisOptions(
     int TranslationMaximumCharacters,
     string? BundleRoot,
     bool Airgap,
-    NativeExtractionMode NativeExtractionMode = NativeExtractionMode.On
+    NativeExtractionMode NativeExtractionMode = NativeExtractionMode.On,
+    [property: JsonIgnore]
+    DecoderWorkflowMode DecoderMode = DecoderWorkflowMode.Off,
+    [property: JsonIgnore]
+    int DecoderMaximumCandidateCharacters = 16_384,
+    [property: JsonIgnore]
+    int DecoderMaximumBytesPerRecord = 12_288,
+    [property: JsonIgnore]
+    long DecoderMaximumCandidates = 100_000,
+    [property: JsonIgnore]
+    long DecoderMaximumTotalBytes = 64L * 1024 * 1024
 );

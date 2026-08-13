@@ -21,6 +21,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ForensicReportBenchmark", "
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LanguageTriageBenchmark", "benchmarks\LanguageTriageBenchmark\LanguageTriageBenchmark.csproj", "{E1A610A2-4C3F-49E8-9A0D-5B8F4D6C23A1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DecoderPipelineBenchmark", "benchmarks\DecoderPipelineBenchmark\DecoderPipelineBenchmark.csproj", "{DEC0DE10-5A64-4B64-8A10-001000000001}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -59,6 +61,10 @@ Global
 		{E1A610A2-4C3F-49E8-9A0D-5B8F4D6C23A1}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E1A610A2-4C3F-49E8-9A0D-5B8F4D6C23A1}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E1A610A2-4C3F-49E8-9A0D-5B8F4D6C23A1}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DEC0DE10-5A64-4B64-8A10-001000000001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DEC0DE10-5A64-4B64-8A10-001000000001}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DEC0DE10-5A64-4B64-8A10-001000000001}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DEC0DE10-5A64-4B64-8A10-001000000001}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -70,6 +76,7 @@ Global
 		{1E29580F-99FB-492D-99B8-12C20E521C3B} = {66320409-64EC-F7C5-3DEF-65E7510DAAD1}
 		{6A25E34B-7505-45C5-A116-590A7BA7820E} = {66320409-64EC-F7C5-3DEF-65E7510DAAD1}
 		{E1A610A2-4C3F-49E8-9A0D-5B8F4D6C23A1} = {66320409-64EC-F7C5-3DEF-65E7510DAAD1}
+		{DEC0DE10-5A64-4B64-8A10-001000000001} = {66320409-64EC-F7C5-3DEF-65E7510DAAD1}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8DE07C57-A85F-4068-B8F2-3D281BF2911A}

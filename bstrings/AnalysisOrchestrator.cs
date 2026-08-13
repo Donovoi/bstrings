@@ -363,6 +363,8 @@ internal static class AnalysisOrchestrator
         EngineStatusStats? engineStatuses = null;
         LanguageTriageStats? triage = null;
         TranslationWorkStats? translationWork = null;
+        DecoderPipelineStats? decoderWork = null;
+        DecoderCompletionStats? decoderCompletion = null;
         long completedMatchCount = 0;
         long completedStringCount = 0;
 
@@ -379,6 +381,15 @@ internal static class AnalysisOrchestrator
             var translationWorkStatsPath = Path.Combine(
                 outputDirectory,
                 "translation-work-stats.json"
+            );
+            var decodedPath = Path.Combine(outputDirectory, "decoded-strings.jsonl");
+            var decoderAssessmentsPath = Path.Combine(
+                outputDirectory,
+                "decoder-assessments.jsonl"
+            );
+            var decoderWorkStatsPath = Path.Combine(
+                outputDirectory,
+                "decoder-work-stats.json"
             );
             var enrichedPath = Path.Combine(outputDirectory, "enriched-strings.jsonl");
             var matchesPath = Path.Combine(outputDirectory, "regex-matches.jsonl");
@@ -417,6 +428,8 @@ internal static class AnalysisOrchestrator
                 engineStatuses,
                 triage,
                 translationWork,
+                decoderWork,
+                decoderCompletion,
                 null,
                 null,
                 cancellationToken
@@ -1047,13 +1060,55 @@ internal static class AnalysisOrchestrator
                 );
             }
 
+            DecoderPipelineOptions? decoderOptions = null;
+            if (options.DecoderMode != DecoderWorkflowMode.Off)
+            {
+                decoderOptions = new DecoderPipelineOptions(
+                    options.DecoderMode,
+                    options.DecoderMaximumCandidateCharacters,
+                    options.DecoderMaximumBytesPerRecord,
+                    options.DecoderMaximumCandidates,
+                    options.DecoderMaximumTotalBytes
+                );
+                await RunStageAsync(
+                    "bounded decoding",
+                    stageSeconds,
+                    async () =>
+                        decoderWork = await DecoderPipelineCore.ProcessAsync(
+                            rawPath,
+                            decodedPath,
+                            decoderAssessmentsPath,
+                            decoderWorkStatsPath,
+                            decoderOptions,
+                            cancellationToken,
+                            static (completed, total) =>
+                                ActiveAnalysisProgress.Value?.Report(completed, total)
+                        )
+                );
+                await RunStageAsync(
+                    "decoder provenance validation",
+                    stageSeconds,
+                    async () =>
+                        decoderCompletion = await DecoderCompletionCore.ValidateAsync(
+                            rawPath,
+                            decodedPath,
+                            decoderAssessmentsPath,
+                            decoderWorkStatsPath,
+                            decoderOptions,
+                            cancellationToken
+                        )
+                );
+            }
+
             EnrichmentMergeStats enrichedMerge = default;
             await RunStageAsync(
                 "enriched record merge",
                 stageSeconds,
                 async () =>
                     enrichedMerge = await EnrichmentMergeCore.ConcatenateAsync(
-                        [rawPath, translationsPath],
+                        options.DecoderMode == DecoderWorkflowMode.Off
+                            ? [rawPath, translationsPath]
+                            : [rawPath, translationsPath, decodedPath],
                         enrichedPath,
                         cancellationToken
                     )
@@ -1089,7 +1144,9 @@ internal static class AnalysisOrchestrator
                         featureHistogramPath,
                         visualizationPath,
                         patterns,
-                        cancellationToken
+                        cancellationToken: cancellationToken,
+                        includeDecodingEvidence:
+                            options.DecoderMode != DecoderWorkflowMode.Off
                     )
             );
 
@@ -1205,7 +1262,12 @@ internal static class AnalysisOrchestrator
                 translatedStrings = enrichedMerge.InputRecords.Count > 1
                     ? enrichedMerge.InputRecords[1]
                     : 0,
+                decodedStrings = options.DecoderMode != DecoderWorkflowMode.Off
+                    && enrichedMerge.InputRecords.Count > 2
+                        ? (long?)enrichedMerge.InputRecords[2]
+                        : null,
                 translationWork,
+                decoder = CreateDecoderSummary(options, decoderWork, decoderCompletion),
                 enrichedStrings = enrichedMerge.OutputRecords,
                 regexPatterns = patterns.Count,
                 regexMatches = matches.MatchRecords,
@@ -1239,6 +1301,8 @@ internal static class AnalysisOrchestrator
                 engineStatuses,
                 triage,
                 translationWork,
+                decoderWork,
+                decoderCompletion,
                 matches,
                 null,
                 cancellationToken
@@ -1265,6 +1329,8 @@ internal static class AnalysisOrchestrator
                     engineStatuses,
                     triage,
                     translationWork,
+                    decoderWork,
+                    decoderCompletion,
                     null,
                     ex.Message,
                     CancellationToken.None
@@ -2054,6 +2120,7 @@ internal static class AnalysisOrchestrator
             || !Enum.IsDefined(options.OcrMode)
             || !Enum.IsDefined(options.OcrProvider)
             || !Enum.IsDefined(options.RecoveryMode)
+            || !Enum.IsDefined(options.DecoderMode)
             || !Enum.IsDefined(options.TranslationMode)
         )
         {
@@ -2083,6 +2150,12 @@ internal static class AnalysisOrchestrator
         AnalysisCli.ValidateStringLengthBounds(
             options.MinimumStringLength,
             options.MaximumStringLength
+        );
+        AnalysisCli.ValidateDecoderLimits(
+            options.DecoderMaximumCandidateCharacters,
+            options.DecoderMaximumBytesPerRecord,
+            options.DecoderMaximumCandidates,
+            options.DecoderMaximumTotalBytes
         );
         if (
             options.TranslationMinimumCharacters < 1
@@ -2440,6 +2513,10 @@ internal static class AnalysisOrchestrator
         {
             count += 4;
         }
+        if (options.DecoderMode != DecoderWorkflowMode.Off)
+        {
+            count += 2;
+        }
         count += options.TranslationMode switch
         {
             TranslationWorkflowMode.Auto or TranslationWorkflowMode.All => 3,
@@ -2461,6 +2538,8 @@ internal static class AnalysisOrchestrator
         EngineStatusStats? engineStatuses,
         LanguageTriageStats? triage,
         TranslationWorkStats? translationWork,
+        DecoderPipelineStats? decoderWork,
+        DecoderCompletionStats? decoderCompletion,
         EnrichmentPipelineStats? enrichmentStats,
         string? error,
         CancellationToken cancellationToken
@@ -2499,11 +2578,42 @@ internal static class AnalysisOrchestrator
             engineStatuses = CreateEngineStatusSummary(engineStatuses),
             translationRouting = CreateTranslationRoutingSummary(options.TranslationMode, triage),
             translationWork,
+            decoder = CreateDecoderSummary(options, decoderWork, decoderCompletion),
             preservationFallbacks = enrichmentStats?.PreservationFallbackRecords,
             options,
             error,
         };
         await WriteJsonAtomicAsync(path, record, cancellationToken);
+    }
+
+    private static object? CreateDecoderSummary(
+        AnalysisOptions options,
+        DecoderPipelineStats? work,
+        DecoderCompletionStats? completion
+    )
+    {
+        if (options.DecoderMode == DecoderWorkflowMode.Off)
+        {
+            return null;
+        }
+        return new
+        {
+            mode = options.DecoderMode.ToString().ToLowerInvariant(),
+            depth = 1,
+            input = "raw-strings.jsonl",
+            decodedStrings = "decoded-strings.jsonl",
+            assessments = "decoder-assessments.jsonl",
+            workStats = "decoder-work-stats.json",
+            limits = new
+            {
+                maximumCandidateCharacters = options.DecoderMaximumCandidateCharacters,
+                maximumBytesPerRecord = options.DecoderMaximumBytesPerRecord,
+                maximumCandidates = options.DecoderMaximumCandidates,
+                maximumTotalBytes = options.DecoderMaximumTotalBytes,
+            },
+            work,
+            validation = completion,
+        };
     }
 
     internal static TranslationRoutingSummary? CreateTranslationRoutingSummary(

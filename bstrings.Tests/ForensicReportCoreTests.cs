@@ -148,6 +148,95 @@ public sealed class ForensicReportCoreTests
     }
 
     [Fact]
+    public async Task WriteAsync_ReportsDerivedDecodingAndDecoderChainWhenEnabled()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var matchesPath = scope.PathFor("decoded-matches.jsonl");
+        var record = new EnrichmentRegexMatchRecord
+        {
+            PatternName = "email",
+            Pattern = BuiltInPatternCatalog.Patterns["email"],
+            Match = "decoded@example.test",
+            MatchStart = 0,
+            MatchLength = 20,
+            MatchLine = 1,
+            SourceRecordId = "decoded-1",
+            ParentRecordId = "raw-1",
+            SourceFile = "synthetic.bin",
+            Location = new EnrichmentLocation { Kind = "file_offset", Value = "0x10" },
+            Origin = new EnrichmentOrigin
+            {
+                Extractor = "bstrings",
+                Version = "test",
+                Kind = "static",
+            },
+            Transform = new EnrichmentTransform
+            {
+                Kind = "decoding",
+                Engine = "bstrings",
+                EngineVersion = "1.0.0",
+                Profile = "rfc4648-base64-text-v1",
+                PolicyVersion = "decoder-policy-v1",
+                Outcome = "decoded-text",
+            },
+            EvidenceClass = "derived-decoding",
+            Attributes = new Dictionary<string, JsonElement>
+            {
+                ["decoder"] = JsonSerializer.SerializeToElement("base64"),
+                ["decoderProfile"] = JsonSerializer.SerializeToElement("rfc4648-base64-text-v1"),
+            },
+        };
+        await File.WriteAllTextAsync(
+            matchesPath,
+            JsonSerializer.Serialize(
+                record,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
+            ),
+            cancellationToken
+        );
+        var findingsPath = scope.PathFor("findings.tsv");
+        var histogramPath = scope.PathFor("pattern-histogram.tsv");
+
+        var disabledError = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            ForensicReportCore.WriteAsync(
+                matchesPath,
+                scope.PathFor("disabled-findings.tsv"),
+                scope.PathFor("disabled-pattern-histogram.tsv"),
+                scope.PathFor("disabled-feature-histogram.tsv"),
+                scope.PathFor("disabled-pattern-histogram.html"),
+                [("email", BuiltInPatternCatalog.Patterns["email"])],
+                cancellationToken
+            )
+        );
+        Assert.Contains("decoder report projection is disabled", disabledError.Message);
+
+        await ForensicReportCore.WriteAsync(
+            matchesPath,
+            findingsPath,
+            histogramPath,
+            scope.PathFor("feature-histogram.tsv"),
+            scope.PathFor("pattern-histogram.html"),
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            cancellationToken,
+            includeDecodingEvidence: true
+        );
+
+        var findings = await File.ReadAllLinesAsync(findingsPath, cancellationToken);
+        var header = findings[0].Split('\t');
+        var row = findings[1].Split('\t');
+        Assert.Equal("derived-decoding", row[Array.IndexOf(header, "EvidenceClass")]);
+        Assert.Contains(
+            "base64 -> bstrings:rfc4648-base64-text-v1",
+            row[Array.IndexOf(header, "DecoderChain")]
+        );
+        var histogram = await File.ReadAllLinesAsync(histogramPath, cancellationToken);
+        var histogramHeader = histogram[0].Split('\t');
+        var histogramRow = histogram[1].Split('\t');
+        Assert.Equal("1", histogramRow[Array.IndexOf(histogramHeader, "DerivedDecodingCount")]);
+    }
+
+    [Fact]
     public async Task WriteAsync_MergesRepeatedFeaturesAcrossSpilledHistogramChunks()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

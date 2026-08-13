@@ -10,11 +10,12 @@ public sealed class FullEngineExclusionTests
     private const int FlossBit = 2;
     private const int OcrBit = 4;
     private const int TranslationBit = 8;
+    private const int DecodeBit = 16;
 
     public static IEnumerable<object[]> NonEmptyExclusionSubsets()
     {
-        var names = new[] { "native", "floss", "ocr", "translation" };
-        for (var mask = 1; mask < 16; mask++)
+        var names = new[] { "native", "floss", "ocr", "translation", "decode" };
+        for (var mask = 1; mask < 32; mask++)
         {
             var excluded = names.Where((_, index) => (mask & (1 << index)) != 0);
             yield return new object[] { mask, string.Join(',', excluded) };
@@ -27,6 +28,7 @@ public sealed class FullEngineExclusionTests
         yield return new object[] { "floss", "--recover-executable-strings", "off" };
         yield return new object[] { "ocr", "--ocr", "off" };
         yield return new object[] { "translation", "--translation", "off" };
+        yield return new object[] { "decode", "--decode", "off" };
     }
 
     public static IEnumerable<object[]> AcceptedCliForms()
@@ -84,7 +86,8 @@ public sealed class FullEngineExclusionTests
             NativeExtractionMode.On,
             ExecutableRecoveryMode.Auto,
             OcrWorkflowMode.Auto,
-            TranslationWorkflowMode.Auto
+            TranslationWorkflowMode.Auto,
+            DecoderWorkflowMode.Off
         );
 
         Assert.Equal(expected, ResolveFull());
@@ -128,18 +131,20 @@ public sealed class FullEngineExclusionTests
                 : TranslationWorkflowMode.Off,
             modes.Translation
         );
+        Assert.Equal(DecoderWorkflowMode.Off, modes.Decode);
     }
 
     [Fact]
     public void CommaRepeatCaseAndSingleTokenWhitespaceFormsCanonicalize()
     {
         var exclusions = AnalysisCli.ParseEngineExclusions(
-            [" NATIVE , FLOSS ", "oCr", "TRANSLATION"]
+            [" NATIVE , FLOSS ", "oCr,decode", "TRANSLATION"]
         );
 
         Assert.True(exclusions.Native);
         Assert.True(exclusions.Floss);
         Assert.True(exclusions.Ocr);
+        Assert.True(exclusions.Decode);
         Assert.True(exclusions.Translation);
         Assert.True(exclusions.Any);
     }
@@ -191,16 +196,18 @@ public sealed class FullEngineExclusionTests
     }
 
     [Theory]
-    [InlineData("native", "off", null, null, null, "--native-extraction")]
-    [InlineData("floss", null, "off", null, null, "--recover-executable-strings")]
-    [InlineData("ocr", null, null, "off", null, "--ocr")]
-    [InlineData("translation", null, null, null, "off", "--translation")]
+    [InlineData("native", "off", null, null, null, null, "--native-extraction")]
+    [InlineData("floss", null, "off", null, null, null, "--recover-executable-strings")]
+    [InlineData("ocr", null, null, "off", null, null, "--ocr")]
+    [InlineData("translation", null, null, null, "off", null, "--translation")]
+    [InlineData("decode", null, null, null, null, "off", "--decode")]
     public void MatchingDirectSelectorsConflictEvenWhenTheyAlsoSayOff(
         string excluded,
         string? native,
         string? floss,
         string? ocr,
         string? translation,
+        string? decode,
         string selector
     )
     {
@@ -211,7 +218,8 @@ public sealed class FullEngineExclusionTests
                 floss,
                 ocr,
                 translation,
-                [excluded]
+                [excluded],
+                decode
             )
         );
 
@@ -393,7 +401,7 @@ public sealed class FullEngineExclusionTests
         var excluded = await RunAnalyzeAsync(
             scope.Input,
             excludedOutput,
-            new[] { "-e", "floss,ocr,translation" }.Concat(common)
+            new[] { "-e", "floss,ocr,decode,translation" }.Concat(common)
         );
         var explicitOff = await RunAnalyzeAsync(
             scope.Input,
@@ -405,6 +413,8 @@ public sealed class FullEngineExclusionTests
                 "--ocr",
                 "off",
                 "--translation",
+                "off",
+                "--decode",
                 "off",
             }.Concat(common)
         );
@@ -458,6 +468,8 @@ public sealed class FullEngineExclusionTests
                 excludedRun.RootElement.GetProperty("options").GetProperty(property).GetRawText()
             );
         }
+        Assert.False(File.Exists(Path.Combine(excludedOutput, "decoded-strings.jsonl")));
+        Assert.False(File.Exists(Path.Combine(explicitOutput, "decoded-strings.jsonl")));
         Assert.DoesNotContain("content routing", excluded.StandardError, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("offline translation", excluded.StandardError, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("offline OCR", excluded.StandardError, StringComparison.OrdinalIgnoreCase);
@@ -516,6 +528,10 @@ public sealed class FullEngineExclusionTests
         {
             expected += 4;
         }
+        if (modes.Decode != DecoderWorkflowMode.Off)
+        {
+            expected += 2;
+        }
         if (modes.Translation is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All)
         {
             expected += 3;
@@ -556,6 +572,7 @@ public sealed class FullEngineExclusionTests
             OcrProvider: OcrProvider.Auto,
             OcrThreads: 0,
             RecoveryMode: modes.Floss,
+            DecoderMode: modes.Decode,
             TranslationMode: modes.Translation,
             LanguageDetectionMode: LanguageDetectionMode.Adaptive,
             TranslationPolicy: LanguageTriagePolicy.HighRecall,

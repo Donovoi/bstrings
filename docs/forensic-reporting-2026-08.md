@@ -4,7 +4,9 @@ Date: 7 August 2026
 
 Availability note: these projections are in current source and the complete
 v1.9.17 quality release, including runs that also use FLOSS, OCR, and
-translation. See [download and installation](download-and-install.md).
+translation. Current source also projects bounded decoded text children; see
+[ADR-0010](architecture/adr-0010-bounded-reversible-decoding.md). See
+[download and installation](download-and-install.md).
 
 ## Outcome
 
@@ -31,6 +33,11 @@ compatibility path. A native-only report run is:
   -o D:\results\memory-strings `
   --recover-executable-strings off --ocr off --translation off --lr all
 ```
+
+To include strict Base64 and contextual PowerShell text children without
+translation, add `--decode auto`. The encoded parent remains in the evidence
+graph; decoded children are appended after raw and translation records and use
+the same matcher and report projection.
 
 ## Why this shape
 
@@ -67,7 +74,9 @@ putting tab-separated data in a misleading `.csv` file.
   `TranslationIntegrity` column;
 - decoder: only an actual decoded/deobfuscated origin, explicit decoder
   attribute, or non-translation transform is named as a decoder; detecting a
-  Base64-shaped value is not falsely reported as decoding it; and
+  Base64-shaped value is not falsely reported as decoding it. A decoded child
+  binds its parent, covered span, named profile/policy, charset, exact byte hash,
+  outcome, depth, and effective limits; and
 - identity: source/parent record IDs, encoding, confidence, and the complete
   attributes object.
 
@@ -88,6 +97,14 @@ private-key boundaries in clear text even when the source artifact was access
 controlled. Protect, transfer, and dispose of the whole result directory as
 sensitive case material. The HTML visualization contains aggregate pattern
 counts/descriptions, not matched feature values.
+
+Decoder outputs are sensitive too. `decoded-strings.jsonl` contains published
+text, `decoder-assessments.jsonl` records bounded attempted occurrences and
+binary/invalid/limit outcomes, and `decoder-work-stats.json` reconciles their
+counts and hashes. Binary assessment does not imply malformed input: RFC 4648
+Base64 represents arbitrary bytes. This release does not carve, decompress, or
+recursively decode those bytes, and it never sends decoded children to the
+language detector or translator.
 
 ## Pattern coverage and interpretation boundaries
 

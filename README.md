@@ -9,12 +9,17 @@ Windows kit runs offline through one interface: `bstrings.exe`.
 ## Why use it?
 
 - One recursive workflow combines native CPU/Rust/CUDA/hybrid extraction,
-  validated patterns, FLOSS, OCR, language triage, offline translation, and
-  provenance.
+  validated patterns, FLOSS, OCR, bounded Base64 text-child decoding, language
+  triage, offline translation, and provenance.
 - Native extraction, FLOSS, and OCR are independently selectable source
   producers. Native stays on by default and in Full; an explicit
   `--native-extraction off` permits FLOSS-only or OCR-only analysis without
   starting the native scanner. The published v1.9.17 kit includes this option.
+- Current source adds independently selectable `--decode off|auto|force`.
+  Ordinary and Full analysis keep it off after its preregistered automatic-mode
+  performance gate failed. Enable it explicitly with `--decode auto`; decoding
+  is offline, bounded, depth one, and never executes or translates recovered
+  content.
 - Completed analysis writes a filterable `findings.tsv`, exact pattern and
   feature histograms, and a self-contained HTML pattern visualization while
   retaining the authoritative JSONL evidence graph.
@@ -60,7 +65,8 @@ Your first run has three steps:
 3. analyze one file or directory into a new results directory.
 
 The commands in these three steps work with the published v1.9.17 release.
-`-e`/`--exclude-engine` was added to current source after v1.9.17 and is not in
+`--decode` and `-e`/`--exclude-engine` were added to current source after
+v1.9.17 and are not in
 the public v1.9.17 binary. Stable-release users can make the same selection with
 the explicit `--ocr off`, `--translation off`,
 `--recover-executable-strings off`, and `--native-extraction off` controls.
@@ -208,6 +214,8 @@ creates and verifies a fresh sibling replacement on every run.
   report directory.
 - Use `--native-extraction off` with one or both specialist producers for a
   deliberate FLOSS-only or OCR-only run.
+- In current source, use `--decode auto` to add strict canonical Base64 and
+  contextual PowerShell EncodedCommand text children without translation.
 - Use the root `-f`/`-d` options only for the legacy single-file output.
 - Use `bundle verify` before examination and after copying the kit offline.
 
@@ -228,12 +236,17 @@ The source-producer controls are orthogonal:
 .\bstrings-quality\bstrings.exe analyze -d D:\evidence\documents `
   --native-extraction off --recover-executable-strings off `
   --ocr force --translation off -o D:\results\ocr
+
+# Native strings plus bounded decoding; decoded children are matched, not translated
+.\bstrings-quality\bstrings.exe analyze -f D:\evidence\memory.raw `
+  --decode auto --translation off -o D:\results\decoded
 ```
 
-Native extraction, FLOSS, and OCR produce source records. Translation is a
-transform over records produced by one or more of them, so `auto`, `all`, and
-`detect-only` never substitute for a producer. Disabling every producer is
-invalid for any `analyze` run. Pattern matching and the JSONL/TSV/histogram
+Native extraction, FLOSS, and OCR produce source records. Decoding and
+translation are transforms over records produced by one or more of them, so
+they never substitute for a producer. Decoded children enter pattern matching
+but not language triage or translation. Disabling every producer is invalid
+for any `analyze` run. Pattern matching and the JSONL/TSV/histogram
 reports remain mandatory finalization for every `analyze` run; “only” refers to
 the selected source producer, not to removing integrity checks or reports.
 FLOSS-only output includes FLOSS static strings, while native-plus-FLOSS keeps
@@ -258,8 +271,8 @@ existing explicit `off` modes:
 ```
 
 `--exclude-engine`/`-e` requires `--full`. Each occurrence consumes one token,
-which may contain a comma-separated list of `native`, `floss`, `ocr`, and
-`translation`; repeat and comma forms may be combined. Names are
+which may contain a comma-separated list of `native`, `floss`, `ocr`, `decode`,
+and `translation`; repeat and comma forms may be combined. Names are
 case-insensitive and surrounding whitespace is trimmed, but empty, unknown,
 duplicate (including case-duplicate), or whitespace-separated values fail.
 Excluding an engine also conflicts with explicitly setting that engine's main
@@ -288,8 +301,10 @@ not a universal CUDA claim. The accepted placement still reported a
 residency. Hybrid and p4 remain deferred.
 
 `--full` freezes input hashes and defaults native extraction on, routes
-applicable files to FLOSS/OCR, then performs language assessment, local
-translation, all 77 built-in patterns, and the TSV/histogram reporting stage.
+applicable files to FLOSS/OCR, performs language assessment and local
+translation over raw records, then applies all 77 built-in patterns and the
+TSV/histogram reporting stage. Add `--decode auto` explicitly when bounded
+decoded text children are worth the additional passes and evidence output.
 An explicit engine option still overrides its Full default. Specialist runs
 retain `content-routing.jsonl` and the three-rows-per-input
 `engine-status.jsonl` terminal coverage ledger with its hash/count summary,
@@ -332,6 +347,9 @@ fallback, and release falsifiers are recorded in
 Independent runtime engine selection and its unchanged atomic-bundle boundary
 are recorded in
 [ADR-0008](docs/architecture/adr-0008-independent-engine-execution.md).
+The bounded Base64 text-child profiles, resource limits, provenance contract,
+and deliberately deferred recursion are recorded in
+[ADR-0010](docs/architecture/adr-0010-bounded-reversible-decoding.md).
 
 The project remains under its upstream terms in [LICENSE.md](LICENSE.md), with
 component attribution in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

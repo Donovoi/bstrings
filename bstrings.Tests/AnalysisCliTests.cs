@@ -46,18 +46,20 @@ public sealed class AnalysisCliTests
         Assert.Contains("fails closed", AnalysisCli.TranslationDeviceHelp, StringComparison.Ordinal);
         Assert.Contains("--exclude-engine", AnalysisCli.FullProfileHelp, StringComparison.Ordinal);
         Assert.Contains("-e", AnalysisCli.FullProfileHelp, StringComparison.Ordinal);
+        Assert.Contains("Base64", AnalysisCli.FullProfileHelp, StringComparison.Ordinal);
     }
 
     [Fact]
     public void ParseEngineExclusions_AcceptsRepeatedCommaSeparatedAndAsciiCaseInsensitiveNames()
     {
         var exclusions = AnalysisCli.ParseEngineExclusions(
-            ["Native,FLOSS", "OCR", "translation"]
+            ["Native,FLOSS", "OCR,decode", "translation"]
         );
 
         Assert.True(exclusions.Native);
         Assert.True(exclusions.Floss);
         Assert.True(exclusions.Ocr);
+        Assert.True(exclusions.Decode);
         Assert.True(exclusions.Translation);
     }
 
@@ -79,6 +81,7 @@ public sealed class AnalysisCliTests
     [InlineData("floss", 0, 0, 1, 1)]
     [InlineData("ocr", 0, 1, 0, 1)]
     [InlineData("translation", 0, 1, 1, 0)]
+    [InlineData("decode", 0, 1, 1, 1)]
     public void ResolveEngineModes_SubtractsOneEngineFromFullDefaults(
         string excluded,
         int native,
@@ -100,6 +103,7 @@ public sealed class AnalysisCliTests
         Assert.Equal((ExecutableRecoveryMode)floss, modes.Floss);
         Assert.Equal((OcrWorkflowMode)ocr, modes.Ocr);
         Assert.Equal((TranslationWorkflowMode)translation, modes.Translation);
+        Assert.Equal(DecoderWorkflowMode.Off, modes.Decode);
     }
 
     [Fact]
@@ -117,6 +121,7 @@ public sealed class AnalysisCliTests
         Assert.Equal(NativeExtractionMode.On, modes.Native);
         Assert.Equal(ExecutableRecoveryMode.Auto, modes.Floss);
         Assert.Equal(OcrWorkflowMode.Auto, modes.Ocr);
+        Assert.Equal(DecoderWorkflowMode.Off, modes.Decode);
         Assert.Equal(TranslationWorkflowMode.Auto, modes.Translation);
     }
 
@@ -135,6 +140,7 @@ public sealed class AnalysisCliTests
         Assert.Equal(NativeExtractionMode.Off, modes.Native);
         Assert.Equal(ExecutableRecoveryMode.Force, modes.Floss);
         Assert.Equal(OcrWorkflowMode.Force, modes.Ocr);
+        Assert.Equal(DecoderWorkflowMode.Off, modes.Decode);
         Assert.Equal(TranslationWorkflowMode.Off, modes.Translation);
     }
 
@@ -176,6 +182,7 @@ public sealed class AnalysisCliTests
             new[] { "--full", "-e", "floss", "--recover-executable-strings", "off" },
             new[] { "--full", "-e", "ocr", "--ocr", "off" },
             new[] { "--full", "-e", "translation", "--translation", "off" },
+            new[] { "--full", "-e", "decode", "--decode", "off" },
         };
 
     [Theory]
@@ -235,6 +242,105 @@ public sealed class AnalysisCliTests
         );
 
         Assert.Contains("off, auto, or force", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(8, 1, 1, 1)]
+    [InlineData(
+        AnalysisCli.DefaultDecoderMaximumCandidateCharacters,
+        AnalysisCli.DefaultDecoderMaximumBytesPerRecord,
+        AnalysisCli.DefaultDecoderMaximumCandidates,
+        AnalysisCli.DefaultDecoderMaximumTotalBytes
+    )]
+    [InlineData(
+        AnalysisCli.MaximumDecoderCandidateCharacters,
+        AnalysisCli.MaximumDecoderBytesPerRecord,
+        AnalysisCli.MaximumDecoderCandidates,
+        AnalysisCli.MaximumDecoderTotalBytes
+    )]
+    public void ValidateDecoderLimits_AcceptsDocumentedBounds(
+        int characters,
+        int bytesPerRecord,
+        long candidates,
+        long totalBytes
+    )
+    {
+        AnalysisCli.ValidateDecoderLimits(
+            characters,
+            bytesPerRecord,
+            candidates,
+            totalBytes
+        );
+    }
+
+    [Theory]
+    [InlineData(7, 1, 1, 1)]
+    [InlineData(8, 0, 1, 1)]
+    [InlineData(8, 1, 0, 1)]
+    [InlineData(8, 1, 1, 0)]
+    public void ValidateDecoderLimits_RejectsValuesBelowSafeBounds(
+        int characters,
+        int bytesPerRecord,
+        long candidates,
+        long totalBytes
+    )
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AnalysisCli.ValidateDecoderLimits(
+                characters,
+                bytesPerRecord,
+                candidates,
+                totalBytes
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData(
+        AnalysisCli.MaximumDecoderCandidateCharacters + 1,
+        1,
+        1,
+        1
+    )]
+    [InlineData(8, AnalysisCli.MaximumDecoderBytesPerRecord + 1, 1, 1)]
+    [InlineData(8, 1, AnalysisCli.MaximumDecoderCandidates + 1, 1)]
+    [InlineData(8, 1, 1, AnalysisCli.MaximumDecoderTotalBytes + 1)]
+    public void ValidateDecoderLimits_RejectsValuesAboveSafeBounds(
+        int characters,
+        int bytesPerRecord,
+        long candidates,
+        long totalBytes
+    )
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AnalysisCli.ValidateDecoderLimits(
+                characters,
+                bytesPerRecord,
+                candidates,
+                totalBytes
+            )
+        );
+    }
+
+    [Theory]
+    [InlineData("--decode", "sometimes")]
+    [InlineData("--decode-max-characters", "7")]
+    [InlineData("--decode-max-bytes-per-record", "0")]
+    [InlineData("--decode-max-candidates", "0")]
+    [InlineData("--decode-max-total-bytes", "0")]
+    public async Task DecodeCli_RejectsUnknownModeAndUnsafeLimitsBeforeOutput(
+        string option,
+        string value
+    )
+    {
+        using var scope = new AnalyzeCliFixture();
+
+        var exitCode = await AnalysisCli.RunAsync(
+            ["-f", scope.InputPath, "-o", scope.OutputPath, option, value]
+        );
+
+        Assert.NotEqual(0, exitCode);
+        Assert.False(Directory.Exists(scope.OutputPath));
     }
 
     [Theory]
