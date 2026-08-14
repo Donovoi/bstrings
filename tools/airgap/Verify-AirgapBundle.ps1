@@ -418,13 +418,16 @@ if ($TranslationSmoke) {
                 }
                 Start-Sleep -Milliseconds 5
             }
-            Stop-Process -Id $analysisProcess.Id -Force
+            & taskkill.exe /PID $analysisProcess.Id /T /F | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to stop the bundled Full smoke process: $LASTEXITCODE"
+            }
             $analysisProcess.WaitForExit()
         }
         finally {
             $analysisProcess.Refresh()
             if (-not $analysisProcess.HasExited) {
-                Stop-Process -Id $analysisProcess.Id -Force -ErrorAction SilentlyContinue
+                & taskkill.exe /PID $analysisProcess.Id /T /F 2>$null | Out-Null
                 $analysisProcess.WaitForExit()
             }
             $analysisProcess.Dispose()

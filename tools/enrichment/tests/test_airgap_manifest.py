@@ -195,7 +195,7 @@ class AirgapManifestTests(unittest.TestCase):
 
         checkpoint = ".bstrings-resume\\checkpoints\\0007-translation-selection.json"
         self.assertIn(checkpoint, verifier)
-        self.assertIn("Stop-Process -Id $analysisProcess.Id -Force", verifier)
+        self.assertIn("& taskkill.exe /PID $analysisProcess.Id /T /F", verifier)
         self.assertIn(
             "& $bstrings analyze -r -o $resultsPath --bundle-root $PSScriptRoot", verifier
         )
