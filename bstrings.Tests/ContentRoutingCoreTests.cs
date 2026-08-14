@@ -79,6 +79,79 @@ public sealed class ContentRoutingCoreTests
     }
 
     [Fact]
+    public async Task ValidateAndProjectAsync_ReadOnlyReuseAcceptsLockedProjections()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var text = scope.PathFor("evidence.txt");
+        await File.WriteAllTextAsync(text, "plain text", cancellationToken);
+        var fixture = await CreateFixtureAsync(
+            scope,
+            [text],
+            [["floss", "native"]],
+            cancellationToken
+        );
+        var expected = await ValidateAsync(
+            scope,
+            fixture.Info,
+            fixture.Manifest,
+            fixture.Routing,
+            cancellationToken
+        );
+
+        var leases = new[]
+        {
+            new FileStream(
+                scope.PathFor("floss-input-files.txt"),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read
+            ),
+            new FileStream(
+                scope.PathFor("floss-input-manifest.jsonl"),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read
+            ),
+            new FileStream(
+                scope.PathFor("ocr-input-files.txt"),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read
+            ),
+            new FileStream(
+                scope.PathFor("ocr-input-manifest.jsonl"),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read
+            ),
+        };
+        try
+        {
+            var actual = await ContentRoutingCore.ValidateAndProjectAsync(
+                fixture.Manifest,
+                fixture.Info,
+                fixture.Routing,
+                scope.PathFor("floss-input-files.txt"),
+                scope.PathFor("floss-input-manifest.jsonl"),
+                scope.PathFor("ocr-input-files.txt"),
+                scope.PathFor("ocr-input-manifest.jsonl"),
+                expectedNativeSelected: true,
+                cancellationToken,
+                writeProjections: false
+            );
+            Assert.Equal(expected, actual);
+        }
+        finally
+        {
+            foreach (var lease in leases)
+            {
+                await lease.DisposeAsync();
+            }
+        }
+    }
+
+    [Fact]
     public async Task ValidateAndProjectAsync_RejectsNativeSuppression()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

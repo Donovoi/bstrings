@@ -658,7 +658,8 @@ internal static partial class AnalysisOrchestrator
                             expectedNativeSelected:
                                 options.NativeExtractionMode == NativeExtractionMode.On,
                             cancellationToken,
-                            expectedClassifierExecutable: toolchain!.MagikaExecutable
+                            expectedClassifierExecutable: toolchain!.MagikaExecutable,
+                            writeProjections: false
                         ),
                     cancellationToken
                 );
