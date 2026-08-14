@@ -366,25 +366,82 @@ if ($TranslationSmoke) {
     try {
         $inputPath = Resolve-BundlePath $config.smokeEvidence
         $resultsPath = Join-Path $smokeRoot 'results'
-        & $bstrings analyze `
-            -f $inputPath `
-            --full `
-            --bundle-root $PSScriptRoot `
-            --airgap `
-            --language-detection accurate `
-            --translation-policy high-recall `
-            --translation-target en `
-            --translation-device cpu `
-            --translation-parallelism 1 `
-            --translation-threads 1 `
-            --processor cpu `
-            --cpu-engine rust `
-            --maximum-length 4096 `
-            --translation-max-characters 512 `
-            --lr email `
-            -o $resultsPath
+        $analysisArguments = @(
+            'analyze'
+            '-f', $inputPath
+            '--full'
+            '--bundle-root', $PSScriptRoot
+            '--airgap'
+            '--language-detection', 'accurate'
+            '--translation-policy', 'high-recall'
+            '--translation-target', 'en'
+            '--translation-device', 'cpu'
+            '--translation-parallelism', '1'
+            '--translation-threads', '1'
+            '--processor', 'cpu'
+            '--cpu-engine', 'rust'
+            '--maximum-length', '4096'
+            '--translation-max-characters', '512'
+            '--lr', 'email'
+            '-o', $resultsPath
+        )
+        $quotedArguments = @($analysisArguments | ForEach-Object {
+            $value = [string]$_
+            if ($value.IndexOfAny([char[]]@(' ', "`t", '"')) -ge 0) {
+                '"' + $value.Replace('"', '\"') + '"'
+            }
+            else {
+                $value
+            }
+        })
+        $smokeStdout = Join-Path $smokeRoot 'interrupted.stdout.log'
+        $smokeStderr = Join-Path $smokeRoot 'interrupted.stderr.log'
+        $analysisProcess = Start-Process `
+            -FilePath $bstrings `
+            -ArgumentList $quotedArguments `
+            -RedirectStandardOutput $smokeStdout `
+            -RedirectStandardError $smokeStderr `
+            -PassThru `
+            -NoNewWindow
+        try {
+            $selectionCheckpoint = Join-Path `
+                $resultsPath `
+                '.bstrings-resume\checkpoints\0007-translation-selection.json'
+            $deadline = [DateTimeOffset]::UtcNow.AddMinutes(10)
+            while (-not [IO.File]::Exists($selectionCheckpoint)) {
+                $analysisProcess.Refresh()
+                if ($analysisProcess.HasExited) {
+                    throw 'Bundled Full smoke completed before its resume checkpoint could be interrupted.'
+                }
+                if ([DateTimeOffset]::UtcNow -ge $deadline) {
+                    throw 'Timed out waiting for the bundled Full resume checkpoint.'
+                }
+                Start-Sleep -Milliseconds 5
+            }
+            & taskkill.exe /PID $analysisProcess.Id /T /F | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to stop the bundled Full smoke process: $LASTEXITCODE"
+            }
+            $analysisProcess.WaitForExit()
+        }
+        finally {
+            $analysisProcess.Refresh()
+            if (-not $analysisProcess.HasExited) {
+                & taskkill.exe /PID $analysisProcess.Id /T /F 2>$null | Out-Null
+                $analysisProcess.WaitForExit()
+            }
+            $analysisProcess.Dispose()
+        }
+        if (
+            -not [IO.File]::Exists((Join-Path $resultsPath '.incomplete')) -or
+            [IO.File]::Exists((Join-Path $resultsPath 'summary.json'))
+        ) {
+            throw 'Interrupted bundled Full smoke did not retain an incomplete resumable boundary.'
+        }
+
+        & $bstrings analyze -r -o $resultsPath --bundle-root $PSScriptRoot
         if ($LASTEXITCODE -ne 0) {
-            throw "Bundled bstrings.exe analyze --full smoke failed with exit code $LASTEXITCODE."
+            throw "Bundled bstrings.exe analyze resume smoke failed with exit code $LASTEXITCODE."
         }
 
         $run = Get-Content -LiteralPath (Join-Path $resultsPath 'run.json') -Raw |
@@ -393,6 +450,22 @@ if ($TranslationSmoke) {
             ConvertFrom-Json
         if ($run.status -ne 'complete' -or $summary.status -ne 'complete') {
             throw 'Integrated smoke did not produce complete run and summary records.'
+        }
+        $expectedReusedStages = @(
+            'input-inventory'
+            'content-routing'
+            'native-extraction'
+            'floss-recovery'
+            'ocr'
+            'raw-merge'
+            'translation-selection'
+        )
+        $actualReusedStages = @($run.resume.reusedStages | ForEach-Object { [string]$_ })
+        if (
+            [string]$run.resume.attemptMode -cne 'resume' -or
+            ($actualReusedStages -join "`n") -cne ($expectedReusedStages -join "`n")
+        ) {
+            throw 'Integrated smoke did not resume the exact committed Full-analysis stage prefix.'
         }
         if ($run.preservationFallbacks -ne 0 -or $summary.preservationFallbacks -ne 0) {
             throw 'Integrated smoke unexpectedly required a translation preservation fallback.'

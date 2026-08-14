@@ -7,18 +7,19 @@ installer components, not separate product choices.
 
 ## Public asset set
 
-The next major release uses these public names:
+The current release uses these public names:
 
 - `Install-Bstrings.ps1`
 - `bstrings-win-x64.zip`
-- `bstrings-offline-base.zip`
-- `bstrings-offline-ocr.zip`
-- `bstrings-offline-llama-cuda.zip`
+- `bstrings-win-x64-offline-base.zip`
+- `bstrings-win-x64-offline-cuda.zip`
 - `airgap-config.json`
 - `airgap-manifest.json`
 - `bundle-packs.json`
 - `Hy-MT2-Apache-2.0.txt`
 - `SHA256SUMS.txt`
+
+`SHA256SUMS.txt` covers every public asset except itself.
 
 The exact workflow inventory is authoritative. Update this list when the
 accepted workflow changes it.
@@ -224,6 +225,20 @@ Do not publish until all gates pass:
 
 Create the release as a draft. Attach all assets before publication. Publish it
 once, then confirm that GitHub reports the release as immutable.
+
+The successful master build stages the version tag and preliminary draft. It
+does not start another tag workflow automatically. Start the complete tagged
+lane explicitly:
+
+```powershell
+gh workflow run dotnet-desktop.yml `
+  --repo Donovoi/bstrings `
+  --ref v2.1.0 `
+  -f full_offline=true
+```
+
+Use the exact prepared tag. If the tagged candidate fails, do not move or reuse
+the tag. Fix the problem and prepare a new patch version.
 
 ## Privacy check
 

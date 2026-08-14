@@ -60,7 +60,33 @@ internal sealed record TranslationRoutingSummary(
     long? DetectorReuseHits
 );
 
-internal static class AnalysisOrchestrator
+internal sealed record AnalysisResumeRecordCount(long Records);
+internal sealed record AnalysisResumeFlossStats(
+    FlossCompletionStats? Completion,
+    long OutputRecords
+);
+internal sealed record AnalysisResumeOcrStats(
+    OcrCompletionStats? Completion,
+    OcrValidationRequirements? Requirements,
+    long OutputRecords,
+    long AssessmentRecords
+);
+internal sealed record AnalysisResumeTranslationSelectionStats(
+    LanguageTriageStats? Triage,
+    long CandidateRecords
+);
+internal sealed record AnalysisResumeTranslationStats(
+    TranslationWorkStats? Work,
+    long CandidateRecords,
+    long OutputRecords
+);
+internal sealed record AnalysisResumeDecoderStats(
+    DecoderPipelineStats? Work,
+    DecoderCompletionStats? Completion
+);
+internal sealed record AnalysisResumeEngineStats(EngineStatusStats? Stats);
+
+internal static partial class AnalysisOrchestrator
 {
     private const string TranslationCachePrefix = ".bstrings-translation-cache-";
     private const string TranslationCacheDatabaseSuffix = ".sqlite3";
@@ -128,6 +154,21 @@ internal static class AnalysisOrchestrator
                 _currentStage = name;
                 ReportLocked(100, $"complete in {elapsedSeconds:N2} s", force: true);
                 _completedStages++;
+                _currentStage = null;
+            }
+        }
+
+        internal void Reuse(string name, int workUnits = 1)
+        {
+            if (workUnits < 1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(workUnits));
+            }
+            lock (_gate)
+            {
+                _currentStage = name;
+                ReportLocked(100, "reused from validated checkpoint", force: true);
+                _completedStages = Math.Min(_totalStages, _completedStages + workUnits);
                 _currentStage = null;
             }
         }
@@ -247,7 +288,10 @@ internal static class AnalysisOrchestrator
         LanguageDetectorAvailability? verifyLanguageDetector = null,
         string? executingExecutablePath = null,
         Func<string, CancellationToken, Task>? afterInputInventoryCreated = null,
-        Func<CancellationToken, Task>? beforeFinalInputVerification = null
+        Func<CancellationToken, Task>? beforeFinalInputVerification = null,
+        AnalysisResumeCore.AnalysisResumeSession? existingResumeSession = null,
+        bool resumeRequested = false,
+        Func<AnalysisResumeStage, CancellationToken, Task>? afterResumeStageCommitted = null
     )
     {
         ValidateOptions(options);
@@ -334,16 +378,37 @@ internal static class AnalysisOrchestrator
         }
         OcrValidationRequirements? ocrRequirements = null;
 
-        PrepareOutputDirectory(outputDirectory);
-        var logsDirectory = Path.Combine(outputDirectory, "logs");
-        Directory.CreateDirectory(logsDirectory);
-        var incompleteMarker = Path.Combine(outputDirectory, ".incomplete");
-        await File.WriteAllTextAsync(
-            incompleteMarker,
-            $"bstrings analysis is incomplete; processing started {DateTimeOffset.UtcNow:O}.{Environment.NewLine}",
-            new UTF8Encoding(false),
-            cancellationToken
+        var resumeSpecification = AnalysisResumeSpecification.Create(
+            options,
+            patterns,
+            bundleIntegrity,
+            executingExecutablePath
         );
+        var resumeProgress = new ConsolePercentageProgress();
+        var resumeSession = existingResumeSession
+            ?? (resumeRequested
+                ? await AnalysisResumeCore.OpenExistingAsync(
+                    outputDirectory,
+                    resumeSpecification,
+                    (completed, total) =>
+                        resumeProgress.Report(
+                            "resume verification",
+                            completed,
+                            total,
+                            "bytes"
+                        ),
+                    cancellationToken
+                )
+                : await AnalysisResumeCore.InitializeNewAsync(
+                    outputDirectory,
+                    resumeSpecification,
+                    cancellationToken
+                ));
+        resumeSession.RequireMatchingSpecification(resumeSpecification);
+        resumeSession.AfterStageCommittedAsync = afterResumeStageCommitted;
+        await using var resumeSessionScope = resumeSession;
+        var logsDirectory = await PrepareAttemptOutputAsync(outputDirectory, cancellationToken);
+        var incompleteMarker = Path.Combine(outputDirectory, ".incomplete");
 
         var started = DateTimeOffset.UtcNow;
         var stageSeconds = new Dictionary<string, double>(StringComparer.Ordinal);
@@ -398,20 +463,78 @@ internal static class AnalysisOrchestrator
             var featureHistogramPath = Path.Combine(outputDirectory, "feature-histogram.tsv");
             var visualizationPath = Path.Combine(outputDirectory, "pattern-histogram.html");
 
-            await RunStageAsync(
+            if (resumeSession.Mode != AnalysisResumeAttemptMode.New)
+            {
+                var savedInput = await resumeSession.TryReuseStageAsync<InputManifestInfo>(
+                    AnalysisResumeStage.InputInventory,
+                    cancellationToken
+                );
+                if (
+                    savedInput.Reused
+                    && !resumeSession.IsPrevalidatedLegacyImportStage(
+                        AnalysisResumeStage.InputInventory
+                    )
+                )
+                {
+                    await InputEvidenceManifest.VerifySelectionAsync(
+                        inventoryPath,
+                        EnumerateInputFiles(options),
+                        cancellationToken
+                    );
+                    await InputEvidenceManifest.VerifyInventoryAsync(
+                        inventoryPath,
+                        savedInput.Stats!,
+                        cancellationToken
+                    );
+                    await InputEvidenceManifest.VerifyAsync(
+                        inputManifestPath,
+                        savedInput.Stats!,
+                        cancellationToken
+                    );
+                }
+            }
+
+            await QuarantineUncommittedArtifactsAsync(
+                resumeSession,
+                logsDirectory,
+                cancellationToken
+            );
+
+            inputManifest = await RunResumableStageAsync(
+                resumeSession,
+                AnalysisResumeStage.InputInventory,
                 "input inventory",
                 stageSeconds,
-                async () =>
-                {
-                    inputManifest = await InputEvidenceManifest.CreateAsync(
+                [Path.GetFileName(inventoryPath), Path.GetFileName(inputManifestPath)],
+                () =>
+                    InputEvidenceManifest.CreateAsync(
                         inventoryPath,
                         inputManifestPath,
                         EnumerateInputFiles(options),
                         cancellationToken
+                    ),
+                async recorded =>
+                {
+                    await InputEvidenceManifest.VerifySelectionAsync(
+                        inventoryPath,
+                        EnumerateInputFiles(options),
+                        cancellationToken
                     );
-                    inputFileCount = inputManifest.FileCount;
-                }
+                    await InputEvidenceManifest.VerifyInventoryAsync(
+                        inventoryPath,
+                        recorded,
+                        cancellationToken
+                    );
+                    await InputEvidenceManifest.VerifyAsync(
+                        inputManifestPath,
+                        recorded,
+                        cancellationToken
+                    );
+                    return recorded;
+                },
+                cancellationToken
             );
+            inputFileCount = inputManifest.FileCount;
             if (afterInputInventoryCreated is not null)
             {
                 await afterInputInventoryCreated(inventoryPath, cancellationToken);
@@ -432,6 +555,7 @@ internal static class AnalysisOrchestrator
                 decoderCompletion,
                 null,
                 null,
+                resumeSession,
                 cancellationToken
             );
 
@@ -452,9 +576,18 @@ internal static class AnalysisOrchestrator
 
             if (needsContentRouting)
             {
-                await RunStageAsync(
+                routing = await RunResumableStageAsync(
+                    resumeSession,
+                    AnalysisResumeStage.ContentRouting,
                     "content routing",
                     stageSeconds,
+                    [
+                        Path.GetFileName(routingManifestPath),
+                        Path.GetFileName(flossInventoryPath),
+                        Path.GetFileName(flossManifestPath),
+                        Path.GetFileName(ocrInventoryPath),
+                        Path.GetFileName(ocrInputManifestPath),
+                    ],
                     async () =>
                     {
                         await InputEvidenceManifest.VerifyInventoryAsync(
@@ -488,7 +621,7 @@ internal static class AnalysisOrchestrator
                             inputManifest!,
                             cancellationToken
                         );
-                        routing = await ContentRoutingCore.ValidateAndProjectAsync(
+                        return await ContentRoutingCore.ValidateAndProjectAsync(
                             inputManifestPath,
                             inputManifest!,
                             routingManifestPath,
@@ -501,87 +634,168 @@ internal static class AnalysisOrchestrator
                             cancellationToken,
                             expectedClassifierExecutable: toolchain!.MagikaExecutable
                         );
-                    }
+                    },
+                    _ =>
+                        ContentRoutingCore.ValidateAndProjectAsync(
+                            inputManifestPath,
+                            inputManifest!,
+                            routingManifestPath,
+                            flossInventoryPath,
+                            flossManifestPath,
+                            ocrInventoryPath,
+                            ocrInputManifestPath,
+                            expectedNativeSelected:
+                                options.NativeExtractionMode == NativeExtractionMode.On,
+                            cancellationToken,
+                            expectedClassifierExecutable: toolchain!.MagikaExecutable,
+                            writeProjections: false
+                        ),
+                    cancellationToken
                 );
-            }
-
-            if (options.NativeExtractionMode == NativeExtractionMode.Off)
-            {
-                await CreateEmptyFileAtomicAsync(nativePath, cancellationToken);
             }
             else
             {
-                FileStream? nativeInventoryLease = null;
-                FileStream? nativeManifestLease = null;
-                try
-                {
-                    await RunStageAsync(
-                        "pre-native input inventory verification",
-                        stageSeconds,
-                        async () =>
-                        {
-                            nativeInventoryLease = await InputEvidenceManifest
-                                .AcquireVerifiedInventoryLeaseAsync(
-                                    inventoryPath,
-                                    inputManifest!,
-                                    cancellationToken
-                                );
-                            nativeManifestLease = await ContentRoutingCore
-                                .AcquireVerifiedFileLeaseAsync(
-                                    inputManifestPath,
-                                    inputManifest!.ManifestSha256,
-                                    "evidence content manifest",
-                                    cancellationToken
-                                );
-                        }
-                    );
-                    await RunStageAsync(
-                        "native extraction",
-                        stageSeconds,
-                        () =>
-                            RunNativeExtractionAsync(
-                                options,
-                                inventoryPath,
-                                inputManifestPath,
-                                nativePath,
-                                outputDirectory,
-                                logsDirectory,
-                                executingExecutablePath,
-                                cancellationToken
-                            )
-                    );
-                }
-                finally
-                {
-                    if (nativeInventoryLease is not null)
-                    {
-                        await nativeInventoryLease.DisposeAsync();
-                    }
-                    if (nativeManifestLease is not null)
-                    {
-                        await nativeManifestLease.DisposeAsync();
-                    }
-                }
-                await RunStageAsync(
-                    "post-native input verification",
-                    stageSeconds,
-                    async () =>
-                    {
-                        await InputEvidenceManifest.VerifyInventoryAsync(
-                            inventoryPath,
-                            inputManifest!,
-                            cancellationToken
-                        );
-                        await InputEvidenceManifest.VerifyAsync(
-                            inputManifestPath,
-                            inputManifest!,
-                            cancellationToken
-                        );
-                    }
+                var disabledRouting = await resumeSession.TryReuseStageAsync<string>(
+                    AnalysisResumeStage.ContentRouting,
+                    cancellationToken
                 );
+                if (disabledRouting.Reused)
+                {
+                    RequireMatchingResumeStats(
+                        AnalysisResumeStage.ContentRouting,
+                        disabledRouting.Stats!,
+                        "disabled"
+                    );
+                }
+                else
+                {
+                    await resumeSession.CommitStageAsync(
+                        AnalysisResumeStage.ContentRouting,
+                        [Path.GetFileName(inputManifestPath)],
+                        "disabled",
+                        0,
+                        cancellationToken: cancellationToken
+                    );
+                }
             }
 
-            if (options.RecoveryMode == ExecutableRecoveryMode.Off)
+            await RunResumableStageAsync(
+                resumeSession,
+                AnalysisResumeStage.Native,
+                "native extraction",
+                stageSeconds,
+                [Path.GetFileName(nativePath)],
+                async () =>
+                {
+                    if (options.NativeExtractionMode == NativeExtractionMode.Off)
+                    {
+                        await CreateEmptyFileAtomicAsync(nativePath, cancellationToken);
+                        return await NativeEnrichmentCompletionCore.ValidateAsync(
+                            nativePath,
+                            inputManifestPath,
+                            outputDirectory,
+                            cancellationToken
+                        );
+                    }
+                    FileStream? nativeInventoryLease = null;
+                    FileStream? nativeManifestLease = null;
+                    try
+                    {
+                        nativeInventoryLease = await InputEvidenceManifest
+                            .AcquireVerifiedInventoryLeaseAsync(
+                                inventoryPath,
+                                inputManifest!,
+                                cancellationToken
+                            );
+                        nativeManifestLease = await ContentRoutingCore
+                            .AcquireVerifiedFileLeaseAsync(
+                                inputManifestPath,
+                                inputManifest!.ManifestSha256,
+                                "evidence content manifest",
+                                cancellationToken
+                            );
+                        await RunNativeExtractionAsync(
+                            options,
+                            inventoryPath,
+                            inputManifestPath,
+                            nativePath,
+                            outputDirectory,
+                            logsDirectory,
+                            executingExecutablePath,
+                            cancellationToken
+                        );
+                    }
+                    finally
+                    {
+                        if (nativeInventoryLease is not null)
+                        {
+                            await nativeInventoryLease.DisposeAsync();
+                        }
+                        if (nativeManifestLease is not null)
+                        {
+                            await nativeManifestLease.DisposeAsync();
+                        }
+                    }
+                    await InputEvidenceManifest.VerifyInventoryAsync(
+                        inventoryPath,
+                        inputManifest!,
+                        cancellationToken
+                    );
+                    await InputEvidenceManifest.VerifyAsync(
+                        inputManifestPath,
+                        inputManifest!,
+                        cancellationToken
+                    );
+                    return await NativeEnrichmentCompletionCore.ValidateAsync(
+                        nativePath,
+                        inputManifestPath,
+                        outputDirectory,
+                        cancellationToken
+                    );
+                },
+                _ =>
+                    NativeEnrichmentCompletionCore.ValidateAsync(
+                        nativePath,
+                        inputManifestPath,
+                        outputDirectory,
+                        cancellationToken
+                    ),
+                cancellationToken,
+                reusedWorkUnits:
+                    options.NativeExtractionMode == NativeExtractionMode.On ? 3 : 0
+            );
+
+            var flossResume = await resumeSession.TryReuseStageAsync<AnalysisResumeFlossStats>(
+                AnalysisResumeStage.Floss,
+                cancellationToken
+            );
+            if (flossResume.Reused)
+            {
+                if (!resumeSession.IsPrevalidatedLegacyImportStage(AnalysisResumeStage.Floss))
+                {
+                    var validatedFloss = await ValidateFlossCheckpointAsync(
+                        recoveredPath,
+                        flossInventoryPath,
+                        flossManifestPath,
+                        routingManifestPath,
+                        routing,
+                        logsDirectory,
+                        cancellationToken
+                    );
+                    RequireMatchingResumeStats(
+                        AnalysisResumeStage.Floss,
+                        flossResume.Stats!,
+                        validatedFloss
+                    );
+                }
+                stageSeconds["FLOSS recovery"] = 0;
+                Console.Error.WriteLine("Stage reused: FLOSS recovery (validated checkpoint).");
+                if (options.RecoveryMode != ExecutableRecoveryMode.Off)
+                {
+                    ActiveAnalysisProgress.Value?.Reuse("FLOSS recovery", workUnits: 3);
+                }
+            }
+            else if (options.RecoveryMode == ExecutableRecoveryMode.Off)
             {
                 await CreateEmptyFileAtomicAsync(recoveredPath, cancellationToken);
             }
@@ -728,8 +942,90 @@ internal static class AnalysisOrchestrator
                 );
             }
 
+            if (!flossResume.Reused)
+            {
+                var flossStats = await ValidateFlossCheckpointAsync(
+                    recoveredPath,
+                    flossInventoryPath,
+                    flossManifestPath,
+                    routingManifestPath,
+                    routing,
+                    logsDirectory,
+                    cancellationToken
+                );
+                await resumeSession.CommitStageAsync(
+                    AnalysisResumeStage.Floss,
+                    [Path.GetFileName(recoveredPath)],
+                    flossStats,
+                    stageSeconds.GetValueOrDefault("routed FLOSS recovery"),
+                    cancellationToken: cancellationToken
+                );
+            }
+
             OcrCompletionStats? ocr = null;
-            if (options.OcrMode == OcrWorkflowMode.Off)
+            var ocrResume = await resumeSession.TryReuseStageAsync<AnalysisResumeOcrStats>(
+                AnalysisResumeStage.Ocr,
+                cancellationToken
+            );
+            if (ocrResume.Reused)
+            {
+                if (resumeSession.IsPrevalidatedLegacyImportStage(AnalysisResumeStage.Ocr))
+                {
+                    ocr = ocrResume.Stats!.Completion;
+                    ocrRequirements = ocrResume.Stats.Requirements;
+                }
+                else
+                {
+                    var outputCount = await CountStrictJsonlRecordsAsync(
+                        ocrPath,
+                        "OCR string output",
+                        cancellationToken
+                    );
+                    var assessmentCount = await CountStrictJsonlRecordsAsync(
+                        ocrAssessmentsPath,
+                        "OCR assessment output",
+                        cancellationToken
+                    );
+                    if (options.OcrMode != OcrWorkflowMode.Off && routing!.Value.OcrCandidates > 0)
+                    {
+                        ocrRequirements = OcrCompletionCore.CreateValidationRequirements(
+                            toolchain!,
+                            options.OcrMode,
+                            options.OcrProvider,
+                            options.OcrThreads
+                        );
+                        ocr = await OcrCompletionCore.ValidateAsync(
+                            ocrInventoryPath,
+                            ocrInputManifestPath,
+                            routing.Value.OcrInput,
+                            ocrPath,
+                            ocrAssessmentsPath,
+                            outputDirectory,
+                            routing.Value.OcrCandidates,
+                            ocrRequirements,
+                            cancellationToken
+                        );
+                    }
+                    var validatedOcr = new AnalysisResumeOcrStats(
+                        ocr,
+                        ocrRequirements,
+                        outputCount.Records,
+                        assessmentCount.Records
+                    );
+                    RequireMatchingResumeStats(
+                        AnalysisResumeStage.Ocr,
+                        ocrResume.Stats!,
+                        validatedOcr
+                    );
+                }
+                stageSeconds["offline OCR"] = 0;
+                Console.Error.WriteLine("Stage reused: offline OCR (validated checkpoint).");
+                if (options.OcrMode != OcrWorkflowMode.Off)
+                {
+                    ActiveAnalysisProgress.Value?.Reuse("offline OCR", workUnits: 4);
+                }
+            }
+            else if (options.OcrMode == OcrWorkflowMode.Off)
             {
                 await CreateEmptyFileAtomicAsync(ocrPath, cancellationToken);
                 await CreateEmptyFileAtomicAsync(ocrAssessmentsPath, cancellationToken);
@@ -897,20 +1193,144 @@ internal static class AnalysisOrchestrator
                 );
             }
 
-            EnrichmentMergeStats rawMerge = default;
-            await RunStageAsync(
+            if (!ocrResume.Reused)
+            {
+                var ocrOutputCount = await CountStrictJsonlRecordsAsync(
+                    ocrPath,
+                    "OCR string output",
+                    cancellationToken
+                );
+                var ocrAssessmentCount = await CountStrictJsonlRecordsAsync(
+                    ocrAssessmentsPath,
+                    "OCR assessment output",
+                    cancellationToken
+                );
+                await resumeSession.CommitStageAsync(
+                    AnalysisResumeStage.Ocr,
+                    [Path.GetFileName(ocrPath), Path.GetFileName(ocrAssessmentsPath)],
+                    new AnalysisResumeOcrStats(
+                        ocr,
+                        ocrRequirements,
+                        ocrOutputCount.Records,
+                        ocrAssessmentCount.Records
+                    ),
+                    stageSeconds.GetValueOrDefault("offline OCR"),
+                    cancellationToken: cancellationToken
+                );
+            }
+
+            var rawMerge = await RunResumableStageAsync(
+                resumeSession,
+                AnalysisResumeStage.RawMerge,
                 "raw record merge",
                 stageSeconds,
-                async () =>
-                    rawMerge = await EnrichmentMergeCore.ConcatenateAsync(
+                [Path.GetFileName(rawPath)],
+                () =>
+                    EnrichmentMergeCore.ConcatenateAsync(
                         [nativePath, recoveredPath, ocrPath],
                         rawPath,
                         cancellationToken
-                    )
+                    ),
+                _ =>
+                    EnrichmentMergeCore.ValidateConcatenationAsync(
+                        [nativePath, recoveredPath, ocrPath],
+                        rawPath,
+                        cancellationToken
+                    ),
+                cancellationToken
             );
 
             long translationCandidateCount = 0;
-            if (
+            var triageOptions = new LanguageTriageOptions(
+                options.TranslationTarget,
+                options.LanguageDetectionMode,
+                options.TranslationPolicy,
+                options.LanguageConfidence,
+                options.LanguageMargin,
+                options.TranslationMinimumCharacters,
+                options.TranslationMaximumCharacters,
+                BatchSize: 2048,
+                MaxDegreeOfParallelism: Math.Max(1, Environment.ProcessorCount)
+            );
+            var selectionResume = await resumeSession.TryReuseStageAsync<AnalysisResumeTranslationSelectionStats>(
+                AnalysisResumeStage.TranslationSelection,
+                cancellationToken
+            );
+            if (selectionResume.Reused)
+            {
+                if (
+                    resumeSession.IsPrevalidatedLegacyImportStage(
+                        AnalysisResumeStage.TranslationSelection
+                    )
+                )
+                {
+                    triage = selectionResume.Stats!.Triage;
+                    translationCandidateCount = selectionResume.Stats.CandidateRecords;
+                }
+                else
+                {
+                    if (
+                        options.TranslationMode
+                        is TranslationWorkflowMode.Auto or TranslationWorkflowMode.DetectOnly
+                    )
+                    {
+                        triage = await LanguageTriageCore.ValidateCompletedOutputsAsync(
+                            rawPath,
+                            candidatesPath,
+                            assessmentsPath,
+                            triageOptions,
+                            cancellationToken
+                        );
+                        translationCandidateCount = triage.Value.TranslationCandidates;
+                    }
+                    else if (options.TranslationMode == TranslationWorkflowMode.All)
+                    {
+                        var allCandidates = await ValidateAllTranslationCandidatesAsync(
+                            rawPath,
+                            candidatesPath,
+                            options.TranslationMinimumCharacters,
+                            options.TranslationMaximumCharacters,
+                            outputDirectory,
+                            cancellationToken
+                        );
+                        translationCandidateCount = allCandidates.CandidateRecords;
+                        await RequireEmptyFileAsync(
+                            assessmentsPath,
+                            "language assessment output",
+                            cancellationToken
+                        );
+                    }
+                    else
+                    {
+                        await RequireEmptyFileAsync(
+                            candidatesPath,
+                            "translation candidate output",
+                            cancellationToken
+                        );
+                        await RequireEmptyFileAsync(
+                            assessmentsPath,
+                            "language assessment output",
+                            cancellationToken
+                        );
+                    }
+                    var validatedSelection = new AnalysisResumeTranslationSelectionStats(
+                        triage,
+                        translationCandidateCount
+                    );
+                    RequireMatchingResumeStats(
+                        AnalysisResumeStage.TranslationSelection,
+                        selectionResume.Stats!,
+                        validatedSelection
+                    );
+                }
+                stageSeconds["offline language triage"] = 0;
+                Console.Error.WriteLine("Stage reused: translation selection (validated checkpoint).");
+                if (options.TranslationMode != TranslationWorkflowMode.Off)
+                {
+                    ActiveAnalysisProgress.Value?.Reuse("translation selection");
+                }
+            }
+            else if (
                 options.TranslationMode
                 is TranslationWorkflowMode.Auto
                     or TranslationWorkflowMode.DetectOnly
@@ -924,17 +1344,7 @@ internal static class AnalysisOrchestrator
                             rawPath,
                             candidatesPath,
                             assessmentsPath,
-                            new LanguageTriageOptions(
-                                options.TranslationTarget,
-                                options.LanguageDetectionMode,
-                                options.TranslationPolicy,
-                                options.LanguageConfidence,
-                                options.LanguageMargin,
-                                options.TranslationMinimumCharacters,
-                                options.TranslationMaximumCharacters,
-                                BatchSize: 2048,
-                                MaxDegreeOfParallelism: Math.Max(1, Environment.ProcessorCount)
-                            ),
+                            triageOptions,
                             cancellationToken,
                             detector: null,
                             progress: static (completed, total) =>
@@ -971,7 +1381,80 @@ internal static class AnalysisOrchestrator
                 }
             }
 
-            if (
+            if (!selectionResume.Reused)
+            {
+                await resumeSession.CommitStageAsync(
+                    AnalysisResumeStage.TranslationSelection,
+                    [Path.GetFileName(assessmentsPath), Path.GetFileName(candidatesPath)],
+                    new AnalysisResumeTranslationSelectionStats(triage, translationCandidateCount),
+                    stageSeconds.GetValueOrDefault("offline language triage")
+                        + stageSeconds.GetValueOrDefault("translation eligibility filtering"),
+                    cancellationToken: cancellationToken
+                );
+            }
+
+            var translationResume = await resumeSession.TryReuseStageAsync<AnalysisResumeTranslationStats>(
+                AnalysisResumeStage.Translation,
+                cancellationToken
+            );
+            if (translationResume.Reused)
+            {
+                if (
+                    options.TranslationMode
+                    is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
+                )
+                {
+                    translationWork = await TranslationWorkStatsCore.ValidateAsync(
+                        translationWorkStatsPath,
+                        translationCandidateCount,
+                        cancellationToken
+                    );
+                    await TranslationCompletionCore.ValidateAsync(
+                        candidatesPath,
+                        translationsPath,
+                        outputDirectory,
+                        translationCandidateCount,
+                        translationRequirements!,
+                        cancellationToken
+                    );
+                }
+                else
+                {
+                    await RequireEmptyFileAsync(
+                        translationsPath,
+                        "translated string output",
+                        cancellationToken
+                    );
+                }
+                var translatedCount = await CountStrictJsonlRecordsAsync(
+                    translationsPath,
+                    "Translated string output",
+                    cancellationToken
+                );
+                var validatedTranslation = new AnalysisResumeTranslationStats(
+                    translationWork,
+                    translationCandidateCount,
+                    translatedCount.Records
+                );
+                RequireMatchingResumeStats(
+                    AnalysisResumeStage.Translation,
+                    translationResume.Stats!,
+                    validatedTranslation
+                );
+                stageSeconds["offline translation"] = 0;
+                Console.Error.WriteLine("Stage reused: offline translation (validated checkpoint).");
+                if (
+                    options.TranslationMode
+                    is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
+                )
+                {
+                    ActiveAnalysisProgress.Value?.Reuse(
+                        "offline translation",
+                        workUnits: 2
+                    );
+                }
+            }
+            else if (
                 options.TranslationMode
                 is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
             )
@@ -1041,6 +1524,8 @@ internal static class AnalysisOrchestrator
             }
 
             if (
+                !translationResume.Reused
+                &&
                 options.TranslationMode
                 is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
             )
@@ -1060,8 +1545,81 @@ internal static class AnalysisOrchestrator
                 );
             }
 
+            if (!translationResume.Reused)
+            {
+                var translatedCount = await CountStrictJsonlRecordsAsync(
+                    translationsPath,
+                    "Translated string output",
+                    cancellationToken
+                );
+                var translationArtifacts = options.TranslationMode
+                    is TranslationWorkflowMode.Auto or TranslationWorkflowMode.All
+                    ? new[]
+                    {
+                        Path.GetFileName(translationsPath),
+                        Path.GetFileName(translationWorkStatsPath),
+                    }
+                    : [Path.GetFileName(translationsPath)];
+                await resumeSession.CommitStageAsync(
+                    AnalysisResumeStage.Translation,
+                    translationArtifacts,
+                    new AnalysisResumeTranslationStats(
+                        translationWork,
+                        translationCandidateCount,
+                        translatedCount.Records
+                    ),
+                    stageSeconds.GetValueOrDefault("offline translation")
+                        + stageSeconds.GetValueOrDefault("translation provenance validation"),
+                    cancellationToken: cancellationToken
+                );
+            }
+
             DecoderPipelineOptions? decoderOptions = null;
-            if (options.DecoderMode != DecoderWorkflowMode.Off)
+            var decoderResume = await resumeSession.TryReuseStageAsync<AnalysisResumeDecoderStats>(
+                AnalysisResumeStage.Decoder,
+                cancellationToken
+            );
+            if (decoderResume.Reused)
+            {
+                if (options.DecoderMode != DecoderWorkflowMode.Off)
+                {
+                    decoderOptions = new DecoderPipelineOptions(
+                        options.DecoderMode,
+                        options.DecoderMaximumCandidateCharacters,
+                        options.DecoderMaximumBytesPerRecord,
+                        options.DecoderMaximumCandidates,
+                        options.DecoderMaximumTotalBytes
+                    );
+                    decoderCompletion = await DecoderCompletionCore.ValidateAsync(
+                        rawPath,
+                        decodedPath,
+                        decoderAssessmentsPath,
+                        decoderWorkStatsPath,
+                        decoderOptions,
+                        cancellationToken
+                    );
+                    decoderWork = decoderResume.Stats!.Work;
+                }
+                var validatedDecoder = new AnalysisResumeDecoderStats(
+                    decoderWork,
+                    decoderCompletion
+                );
+                RequireMatchingResumeStats(
+                    AnalysisResumeStage.Decoder,
+                    decoderResume.Stats!,
+                    validatedDecoder
+                );
+                stageSeconds["bounded decoding"] = 0;
+                Console.Error.WriteLine("Stage reused: bounded decoding (validated checkpoint).");
+                if (options.DecoderMode != DecoderWorkflowMode.Off)
+                {
+                    ActiveAnalysisProgress.Value?.Reuse(
+                        "bounded decoding",
+                        workUnits: 2
+                    );
+                }
+            }
+            else if (options.DecoderMode != DecoderWorkflowMode.Off)
             {
                 decoderOptions = new DecoderPipelineOptions(
                     options.DecoderMode,
@@ -1100,26 +1658,58 @@ internal static class AnalysisOrchestrator
                 );
             }
 
-            EnrichmentMergeStats enrichedMerge = default;
-            await RunStageAsync(
+            if (!decoderResume.Reused)
+            {
+                var decoderArtifacts = options.DecoderMode == DecoderWorkflowMode.Off
+                    ? new[] { Path.GetFileName(translationsPath) }
+                    :
+                    [
+                        Path.GetFileName(decodedPath),
+                        Path.GetFileName(decoderAssessmentsPath),
+                        Path.GetFileName(decoderWorkStatsPath),
+                    ];
+                await resumeSession.CommitStageAsync(
+                    AnalysisResumeStage.Decoder,
+                    decoderArtifacts,
+                    new AnalysisResumeDecoderStats(decoderWork, decoderCompletion),
+                    stageSeconds.GetValueOrDefault("bounded decoding")
+                        + stageSeconds.GetValueOrDefault("decoder provenance validation"),
+                    cancellationToken: cancellationToken
+                );
+            }
+
+            var enrichedInputs = options.DecoderMode == DecoderWorkflowMode.Off
+                ? new[] { rawPath, translationsPath }
+                : [rawPath, translationsPath, decodedPath];
+            var enrichedMerge = await RunResumableStageAsync(
+                resumeSession,
+                AnalysisResumeStage.EnrichedMerge,
                 "enriched record merge",
                 stageSeconds,
-                async () =>
-                    enrichedMerge = await EnrichmentMergeCore.ConcatenateAsync(
-                        options.DecoderMode == DecoderWorkflowMode.Off
-                            ? [rawPath, translationsPath]
-                            : [rawPath, translationsPath, decodedPath],
+                [Path.GetFileName(enrichedPath)],
+                () =>
+                    EnrichmentMergeCore.ConcatenateAsync(
+                        enrichedInputs,
                         enrichedPath,
                         cancellationToken
-                    )
+                    ),
+                _ =>
+                    EnrichmentMergeCore.ValidateConcatenationAsync(
+                        enrichedInputs,
+                        enrichedPath,
+                        cancellationToken
+                    ),
+                cancellationToken
             );
 
-            EnrichmentPipelineStats matches = default;
-            await RunStageAsync(
+            var matches = await RunResumableStageAsync(
+                resumeSession,
+                AnalysisResumeStage.PatternMatching,
                 "pattern matching",
                 stageSeconds,
-                async () =>
-                    matches = await EnrichmentRegexPipelineCore.ProcessAsync(
+                [Path.GetFileName(matchesPath)],
+                () =>
+                    EnrichmentRegexPipelineCore.ProcessAsync(
                         enrichedPath,
                         matchesPath,
                         patterns,
@@ -1129,15 +1719,33 @@ internal static class AnalysisOrchestrator
                         translationIntegritySourcePath: translationRequirements is null
                             ? null
                             : translationsPath
-                    )
+                    ),
+                _ =>
+                    ValidatePatternMatchesAsync(
+                        enrichedPath,
+                        matchesPath,
+                        patterns,
+                        translationRequirements,
+                        translationsPath,
+                        outputDirectory,
+                        cancellationToken
+                    ),
+                cancellationToken
             );
 
-            ForensicReportStats report = default;
-            await RunStageAsync(
+            var report = await RunResumableStageAsync(
+                resumeSession,
+                AnalysisResumeStage.Reports,
                 "forensic report projection",
                 stageSeconds,
-                async () =>
-                    report = await ForensicReportCore.WriteAsync(
+                [
+                    Path.GetFileName(findingsPath),
+                    Path.GetFileName(patternHistogramPath),
+                    Path.GetFileName(featureHistogramPath),
+                    Path.GetFileName(visualizationPath),
+                ],
+                () =>
+                    ForensicReportCore.WriteAsync(
                         matchesPath,
                         findingsPath,
                         patternHistogramPath,
@@ -1147,10 +1755,55 @@ internal static class AnalysisOrchestrator
                         cancellationToken: cancellationToken,
                         includeDecodingEvidence:
                             options.DecoderMode != DecoderWorkflowMode.Off
-                    )
+                    ),
+                _ =>
+                    ValidateForensicReportsAsync(
+                        matchesPath,
+                        findingsPath,
+                        patternHistogramPath,
+                        featureHistogramPath,
+                        visualizationPath,
+                        patterns,
+                        options.DecoderMode != DecoderWorkflowMode.Off,
+                        outputDirectory,
+                        cancellationToken
+                    ),
+                cancellationToken
             );
 
-            if (routing is not null)
+            var engineResume = await resumeSession.TryReuseStageAsync<AnalysisResumeEngineStats>(
+                AnalysisResumeStage.EngineLedger,
+                cancellationToken
+            );
+            if (engineResume.Reused)
+            {
+                if (routing is not null)
+                {
+                    engineStatuses = await ValidateEngineLedgerAsync(
+                        routing.Value,
+                        options,
+                        nativePath,
+                        recoveredPath,
+                        ocrAssessmentsPath,
+                        engineStatusPath,
+                        outputDirectory,
+                        cancellationToken
+                    );
+                }
+                var validatedEngine = new AnalysisResumeEngineStats(engineStatuses);
+                RequireMatchingResumeStats(
+                    AnalysisResumeStage.EngineLedger,
+                    engineResume.Stats!,
+                    validatedEngine
+                );
+                stageSeconds["engine status ledger"] = 0;
+                Console.Error.WriteLine("Stage reused: engine status ledger (validated checkpoint).");
+                if (routing is not null)
+                {
+                    ActiveAnalysisProgress.Value?.Reuse("engine status ledger");
+                }
+            }
+            else if (routing is not null)
             {
                 await RunStageAsync(
                     "engine status ledger",
@@ -1171,6 +1824,19 @@ internal static class AnalysisOrchestrator
                 );
             }
 
+            if (!engineResume.Reused)
+            {
+                await resumeSession.CommitStageAsync(
+                    AnalysisResumeStage.EngineLedger,
+                    routing is null
+                        ? [Path.GetFileName(visualizationPath)]
+                        : [Path.GetFileName(engineStatusPath)],
+                    new AnalysisResumeEngineStats(engineStatuses),
+                    stageSeconds.GetValueOrDefault("engine status ledger"),
+                    cancellationToken: cancellationToken
+                );
+            }
+
             if (beforeFinalInputVerification is not null)
             {
                 await beforeFinalInputVerification(cancellationToken);
@@ -1180,6 +1846,11 @@ internal static class AnalysisOrchestrator
                 stageSeconds,
                 async () =>
                 {
+                    await InputEvidenceManifest.VerifySelectionAsync(
+                        inventoryPath,
+                        EnumerateInputFiles(options),
+                        cancellationToken
+                    );
                     await InputEvidenceManifest.VerifyInventoryAsync(
                         inventoryPath,
                         inputManifest!,
@@ -1198,6 +1869,16 @@ internal static class AnalysisOrchestrator
                             cancellationToken
                         );
                     }
+                    await resumeSession.VerifyCommittedStateAsync(
+                        (completed, total) =>
+                            resumeProgress.Report(
+                                "final checkpoint verification",
+                                completed,
+                                total,
+                                "bytes"
+                            ),
+                        cancellationToken
+                    );
                 }
             );
 
@@ -1282,6 +1963,7 @@ internal static class AnalysisOrchestrator
                     featureRows = report.FeatureRows,
                     visualization = Path.GetFileName(visualizationPath),
                 },
+                resume = resumeSession.CreatePublicEvidence(),
                 stageSeconds,
             };
             await WriteJsonAtomicAsync(
@@ -1305,15 +1987,21 @@ internal static class AnalysisOrchestrator
                 decoderCompletion,
                 matches,
                 null,
+                resumeSession,
                 cancellationToken
             );
+            EnsureNoReparsePoints(incompleteMarker, "analysis incomplete marker");
             File.Delete(incompleteMarker);
+            await resumeSession.RecordAttemptOutcomeAsync(
+                "complete",
+                cancellationToken: CancellationToken.None
+            );
             completedMatchCount = matches.MatchRecords;
             completedStringCount = enrichedMerge.OutputRecords;
         }
         catch (Exception ex)
         {
-            EnsureIncompleteMarker(incompleteMarker, started, ex.Message);
+            await EnsureIncompleteMarkerAsync(incompleteMarker, started, ex.Message);
             DeleteTemporaryFile(summaryPath);
             try
             {
@@ -1333,6 +2021,7 @@ internal static class AnalysisOrchestrator
                     decoderCompletion,
                     null,
                     ex.Message,
+                    resumeSession,
                     CancellationToken.None
                 );
             }
@@ -1341,6 +2030,22 @@ internal static class AnalysisOrchestrator
             )
             {
                 Console.Error.WriteLine($"Could not update run.json after failure: {writeError.Message}");
+            }
+            try
+            {
+                await resumeSession.RecordAttemptOutcomeAsync(
+                    ex is OperationCanceledException ? "cancelled" : "failed",
+                    ex.GetType().Name.ToLowerInvariant(),
+                    cancellationToken: CancellationToken.None
+                );
+            }
+            catch (Exception outcomeError) when (
+                outcomeError is IOException or UnauthorizedAccessException or JsonException
+            )
+            {
+                Console.Error.WriteLine(
+                    $"Could not record resume attempt outcome: {outcomeError.Message}"
+                );
             }
             throw;
         }
@@ -2362,10 +3067,20 @@ internal static class AnalysisOrchestrator
         {
             if (Directory.EnumerateFileSystemEntries(outputDirectory).Any())
             {
+                if (
+                    Directory.Exists(Path.Combine(outputDirectory, ".bstrings-resume"))
+                    && File.Exists(Path.Combine(outputDirectory, ".incomplete"))
+                )
+                {
+                    throw new IOException(
+                        $"Results directory contains an incomplete resumable analysis. Run 'bstrings.exe analyze -r -o \"{outputDirectory}\"'."
+                    );
+                }
                 throw new IOException(
-                    $"Results directory must be new or empty; refusing to overwrite '{outputDirectory}'."
+                    $"Results directory must be new or empty for a new analysis; refusing to overwrite '{outputDirectory}'. Use --resume only for a validated incomplete run."
                 );
             }
+
         }
         else
         {
@@ -2491,6 +3206,629 @@ internal static class AnalysisOrchestrator
         }
     }
 
+    private static async Task<T> RunStageAsync<T>(
+        string name,
+        IDictionary<string, double> timings,
+        Func<Task<T>> action
+    )
+    {
+        var progress = ActiveAnalysisProgress.Value;
+        progress?.Start(name);
+        Console.Error.WriteLine($"Stage: {name}...");
+        var started = Stopwatch.GetTimestamp();
+        try
+        {
+            var value = await action();
+            var elapsed = Stopwatch.GetElapsedTime(started).TotalSeconds;
+            timings[name] = elapsed;
+            Console.Error.WriteLine($"Stage complete: {name} ({elapsed:N2} s)");
+            progress?.Complete(name, elapsed);
+            return value;
+        }
+        catch
+        {
+            progress?.Fail(name);
+            throw;
+        }
+    }
+
+    private static async Task<T> RunResumableStageAsync<T>(
+        AnalysisResumeCore.AnalysisResumeSession session,
+        AnalysisResumeStage stage,
+        string name,
+        IDictionary<string, double> timings,
+        IReadOnlyList<string> artifactRelativePaths,
+        Func<Task<T>> execute,
+        Func<T, Task<T>> validate,
+        CancellationToken cancellationToken,
+        int reusedWorkUnits = 1
+    )
+    {
+        var checkpoint = await session.TryReuseStageAsync<T>(stage, cancellationToken);
+        if (checkpoint.Reused)
+        {
+            var validated = session.IsPrevalidatedLegacyImportStage(stage)
+                ? checkpoint.Stats!
+                : await validate(checkpoint.Stats!);
+            var recordedJson = JsonSerializer.Serialize(checkpoint.Stats, JsonOptions);
+            var validatedJson = JsonSerializer.Serialize(validated, JsonOptions);
+            if (!string.Equals(recordedJson, validatedJson, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    $"Validated statistics for checkpoint '{stage.Id}' do not match its committed statistics."
+                );
+            }
+            timings[name] = 0;
+            Console.Error.WriteLine($"Stage reused: {name} (validated checkpoint).");
+            if (reusedWorkUnits > 0)
+            {
+                ActiveAnalysisProgress.Value?.Reuse(name, reusedWorkUnits);
+            }
+            return validated;
+        }
+
+        var value = await RunStageAsync(name, timings, execute);
+        await session.CommitStageAsync(
+            stage,
+            artifactRelativePaths,
+            value,
+            timings[name],
+            cancellationToken: cancellationToken
+        );
+        return value;
+    }
+
+    private static async Task<AnalysisResumeRecordCount> CountStrictJsonlRecordsAsync(
+        string path,
+        string description,
+        CancellationToken cancellationToken
+    )
+    {
+        long records = 0;
+        await foreach (
+            var _ in StrictJsonlCompletionReader.ReadAsync(
+                path,
+                description,
+                EnrichmentRegexPipelineCore.MaxJsonLineCharacters,
+                cancellationToken
+            )
+        )
+        {
+            records = checked(records + 1);
+        }
+        return new AnalysisResumeRecordCount(records);
+    }
+
+    private static async Task<AnalysisResumeFlossStats> ValidateFlossCheckpointAsync(
+        string recoveredPath,
+        string flossInventoryPath,
+        string flossManifestPath,
+        string routingManifestPath,
+        ContentRoutingStats? routing,
+        string workingDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        if (routing is null)
+        {
+            var count = await CountStrictJsonlRecordsAsync(
+                recoveredPath,
+                "Recovered string output",
+                cancellationToken
+            );
+            if (count.Records != 0)
+            {
+                throw new InvalidDataException(
+                    "Recovered string output is not empty while FLOSS routing is disabled."
+                );
+            }
+            return new AnalysisResumeFlossStats(null, 0);
+        }
+        var completion = await FlossCompletionCore.ValidateAsync(
+            recoveredPath,
+            flossInventoryPath,
+            flossManifestPath,
+            routing.Value.FlossInput,
+            routingManifestPath,
+            routing.Value.ManifestSha256,
+            workingDirectory,
+            cancellationToken
+        );
+        return new AnalysisResumeFlossStats(completion, completion.OutputRecords);
+    }
+
+    private static void RequireMatchingResumeStats<T>(
+        AnalysisResumeStage stage,
+        T recorded,
+        T validated
+    )
+    {
+        var recordedJson = JsonSerializer.Serialize(recorded, JsonOptions);
+        var validatedJson = JsonSerializer.Serialize(validated, JsonOptions);
+        if (!string.Equals(recordedJson, validatedJson, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Validated statistics for checkpoint '{stage.Id}' do not match its committed statistics."
+            );
+        }
+    }
+
+    private static async Task RequireEmptyFileAsync(
+        string path,
+        string description,
+        CancellationToken cancellationToken
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var info = new FileInfo(path);
+        if (!info.Exists || info.Length != 0)
+        {
+            throw new InvalidDataException($"The committed {description} is not empty.");
+        }
+        await Task.CompletedTask;
+    }
+
+    private static async Task<TranslationCandidateStats> ValidateAllTranslationCandidatesAsync(
+        string rawPath,
+        string candidatesPath,
+        int minimumCharacters,
+        int maximumCharacters,
+        string workingDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var temporaryPath = Path.Combine(
+            workingDirectory,
+            ".resume-candidate-validation-" + Guid.NewGuid().ToString("N") + ".jsonl"
+        );
+        try
+        {
+            var stats = await TranslationCandidateCore.FilterEligibleAsync(
+                rawPath,
+                temporaryPath,
+                minimumCharacters,
+                maximumCharacters,
+                cancellationToken
+            );
+            if (!await FilesEqualAsync(temporaryPath, candidatesPath, cancellationToken))
+            {
+                throw new InvalidDataException(
+                    "The committed translation candidate output is not the exact ordered eligibility projection."
+                );
+            }
+            return stats;
+        }
+        finally
+        {
+            DeleteTemporaryFile(temporaryPath);
+        }
+    }
+
+    private static async Task<bool> FilesEqualAsync(
+        string leftPath,
+        string rightPath,
+        CancellationToken cancellationToken
+    )
+    {
+        var leftInfo = new FileInfo(leftPath);
+        var rightInfo = new FileInfo(rightPath);
+        if (!leftInfo.Exists || !rightInfo.Exists || leftInfo.Length != rightInfo.Length)
+        {
+            return false;
+        }
+        await using var left = new FileStream(leftPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        await using var right = new FileStream(rightPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var leftBuffer = new byte[1024 * 1024];
+        var rightBuffer = new byte[leftBuffer.Length];
+        while (true)
+        {
+            var leftRead = await left.ReadAsync(leftBuffer, cancellationToken);
+            var rightRead = await right.ReadAsync(rightBuffer, cancellationToken);
+            if (leftRead != rightRead)
+            {
+                return false;
+            }
+            if (leftRead == 0)
+            {
+                return true;
+            }
+            if (!leftBuffer.AsSpan(0, leftRead).SequenceEqual(rightBuffer.AsSpan(0, rightRead)))
+            {
+                return false;
+            }
+        }
+    }
+
+    private static async Task<EnrichmentPipelineStats> ValidatePatternMatchesAsync(
+        string enrichedPath,
+        string matchesPath,
+        IReadOnlyList<(string name, string pattern)> patterns,
+        TranslationValidationRequirements? translationRequirements,
+        string translationsPath,
+        string workingDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var temporaryPath = Path.Combine(
+            workingDirectory,
+            ".resume-match-validation-" + Guid.NewGuid().ToString("N") + ".jsonl"
+        );
+        try
+        {
+            var stats = await EnrichmentRegexPipelineCore.ProcessAsync(
+                enrichedPath,
+                temporaryPath,
+                patterns,
+                cancellationToken: cancellationToken,
+                trustedParentFirstInput: true,
+                translationRequirements: translationRequirements,
+                translationIntegritySourcePath: translationRequirements is null
+                    ? null
+                    : translationsPath
+            );
+            if (!await FilesEqualAsync(temporaryPath, matchesPath, cancellationToken))
+            {
+                throw new InvalidDataException(
+                    "The committed pattern-match output is not the exact ordered projection of the enriched records."
+                );
+            }
+            return stats;
+        }
+        finally
+        {
+            DeleteTemporaryFile(temporaryPath);
+        }
+    }
+
+    private static async Task<ForensicReportStats> ValidateForensicReportsAsync(
+        string matchesPath,
+        string findingsPath,
+        string patternHistogramPath,
+        string featureHistogramPath,
+        string visualizationPath,
+        IReadOnlyList<(string name, string pattern)> patterns,
+        bool includeDecodingEvidence,
+        string workingDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var suffix = ".resume-report-validation-" + Guid.NewGuid().ToString("N");
+        var temporaryFindings = Path.Combine(workingDirectory, suffix + "-findings.tsv");
+        var temporaryPatterns = Path.Combine(workingDirectory, suffix + "-patterns.tsv");
+        var temporaryFeatures = Path.Combine(workingDirectory, suffix + "-features.tsv");
+        var temporaryVisualization = Path.Combine(workingDirectory, suffix + "-visualization.html");
+        try
+        {
+            var stats = await ForensicReportCore.WriteAsync(
+                matchesPath,
+                temporaryFindings,
+                temporaryPatterns,
+                temporaryFeatures,
+                temporaryVisualization,
+                patterns,
+                cancellationToken: cancellationToken,
+                includeDecodingEvidence: includeDecodingEvidence
+            );
+            foreach (
+                var pair in new[]
+                {
+                    (temporaryFindings, findingsPath),
+                    (temporaryPatterns, patternHistogramPath),
+                    (temporaryFeatures, featureHistogramPath),
+                    (temporaryVisualization, visualizationPath),
+                }
+            )
+            {
+                if (!await FilesEqualAsync(pair.Item1, pair.Item2, cancellationToken))
+                {
+                    throw new InvalidDataException(
+                        "A committed forensic report is not the exact projection of the pattern matches."
+                    );
+                }
+            }
+            return stats;
+        }
+        finally
+        {
+            DeleteTemporaryFile(temporaryFindings);
+            DeleteTemporaryFile(temporaryPatterns);
+            DeleteTemporaryFile(temporaryFeatures);
+            DeleteTemporaryFile(temporaryVisualization);
+        }
+    }
+
+    private static async Task<EngineStatusStats> ValidateEngineLedgerAsync(
+        ContentRoutingStats routing,
+        AnalysisOptions options,
+        string nativePath,
+        string recoveredPath,
+        string ocrAssessmentsPath,
+        string engineStatusPath,
+        string workingDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var temporaryPath = Path.Combine(
+            workingDirectory,
+            ".resume-engine-validation-" + Guid.NewGuid().ToString("N") + ".jsonl"
+        );
+        try
+        {
+            var stats = await EngineStatusCore.WriteAsync(
+                Path.Combine(workingDirectory, routing.Manifest),
+                routing.ManifestSha256,
+                routing.InputFiles,
+                nativePath,
+                recoveredPath,
+                ocrAssessmentsPath,
+                temporaryPath,
+                expectedNativeSelected:
+                    options.NativeExtractionMode == NativeExtractionMode.On,
+                cancellationToken: cancellationToken
+            );
+            if (!await FilesEqualAsync(temporaryPath, engineStatusPath, cancellationToken))
+            {
+                throw new InvalidDataException(
+                    "The committed engine-status ledger is not the exact projection of routed engine work."
+                );
+            }
+            return stats;
+        }
+        finally
+        {
+            DeleteTemporaryFile(temporaryPath);
+        }
+    }
+
+    private static async Task QuarantineUncommittedArtifactsAsync(
+        AnalysisResumeCore.AnalysisResumeSession session,
+        string logsDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        if (session.Mode == AnalysisResumeAttemptMode.New)
+        {
+            return;
+        }
+        var committedArtifacts = session.CommittedArtifactPaths;
+        var artifacts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["input-files.txt"] = 1,
+            ["input-manifest.jsonl"] = 1,
+            ["content-routing.jsonl"] = 2,
+            ["floss-input-files.txt"] = 2,
+            ["floss-input-manifest.jsonl"] = 2,
+            ["ocr-input-files.txt"] = 2,
+            ["ocr-input-manifest.jsonl"] = 2,
+            ["native-strings.jsonl"] = 3,
+            ["recovered-strings.jsonl"] = 4,
+            ["ocr-strings.jsonl"] = 5,
+            ["ocr-assessments.jsonl"] = 5,
+            ["raw-strings.jsonl"] = 6,
+            ["language-assessments.jsonl"] = 7,
+            ["translation-candidates.jsonl"] = 7,
+            ["translated-strings.jsonl"] = 8,
+            ["translation-work-stats.json"] = 8,
+            ["decoded-strings.jsonl"] = 9,
+            ["decoder-assessments.jsonl"] = 9,
+            ["decoder-work-stats.json"] = 9,
+            ["enriched-strings.jsonl"] = 10,
+            ["regex-matches.jsonl"] = 11,
+            ["findings.tsv"] = 12,
+            ["pattern-histogram.tsv"] = 12,
+            ["feature-histogram.tsv"] = 12,
+            ["pattern-histogram.html"] = 12,
+            ["engine-status.jsonl"] = 13,
+        };
+        var allowed = new HashSet<string>(artifacts.Keys, StringComparer.OrdinalIgnoreCase)
+        {
+            ".incomplete",
+            AnalysisResumeCore.ResumeDirectoryName,
+            AnalysisResumeCore.LockFileName,
+            "logs",
+            "run.json",
+        };
+        var move = new List<string>();
+        foreach (var path in Directory.EnumerateFileSystemEntries(session.OutputDirectory))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var name = Path.GetFileName(path);
+            if (artifacts.ContainsKey(name))
+            {
+                if (!committedArtifacts.Contains(name))
+                {
+                    move.Add(path);
+                }
+                continue;
+            }
+            if (string.Equals(name, "summary.json", StringComparison.OrdinalIgnoreCase))
+            {
+                move.Add(path);
+                continue;
+            }
+            if (
+                IsOwnedUncommittedArtifactName(name, artifacts.Keys)
+                || IsOwnedScratchArtifactName(name)
+            )
+            {
+                move.Add(path);
+                continue;
+            }
+            if (!allowed.Contains(name))
+            {
+                throw new InvalidDataException(
+                    $"Resume results contain unrecognized artifact '{name}'. No files were changed."
+                );
+            }
+        }
+        if (move.Count == 0)
+        {
+            return;
+        }
+        var quarantine = Path.Combine(
+            logsDirectory,
+            "resume-" + session.AttemptId,
+            "abandoned"
+        );
+        foreach (var source in move)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (
+                !string.Equals(
+                    Path.GetDirectoryName(source),
+                    session.OutputDirectory,
+                    FileSystemPathComparison
+                )
+            )
+            {
+                throw new InvalidDataException(
+                    "An uncommitted artifact escaped the exact result directory."
+                );
+            }
+            EnsureNoReparsePoints(source, "uncommitted analysis artifact");
+            var name = Path.GetFileName(source);
+            var expectsDirectory = IsOwnedScratchDirectoryName(name);
+            if (
+                expectsDirectory
+                    ? !Directory.Exists(source)
+                    : !File.Exists(source) || Directory.Exists(source)
+            )
+            {
+                throw new InvalidDataException(
+                    $"Uncommitted artifact '{name}' has an unexpected physical type."
+                );
+            }
+            if (expectsDirectory)
+            {
+                foreach (
+                    var child in Directory.EnumerateFileSystemEntries(
+                        source,
+                        "*",
+                        SearchOption.AllDirectories
+                    )
+                )
+                {
+                    EnsureNoReparsePoints(child, "uncommitted analysis scratch artifact");
+                }
+            }
+        }
+        var quarantineParent = Path.GetDirectoryName(quarantine)!;
+        if (Directory.Exists(quarantineParent))
+        {
+            EnsureNoReparsePoints(quarantineParent, "resume quarantine parent");
+        }
+        Directory.CreateDirectory(quarantine);
+        EnsureNoReparsePoints(quarantine, "resume quarantine path");
+        foreach (var source in move.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureNoReparsePoints(source, "uncommitted analysis artifact");
+            var destination = Path.Combine(quarantine, Path.GetFileName(source));
+            if (Directory.Exists(source) && IsOwnedScratchDirectoryName(Path.GetFileName(source)))
+            {
+                Directory.Move(source, destination);
+                continue;
+            }
+            if (!File.Exists(source) || Directory.Exists(source))
+            {
+                throw new IOException(
+                    $"Uncommitted artifact changed while it was being quarantined: '{source}'."
+                );
+            }
+            File.Move(source, destination, overwrite: false);
+        }
+        await Task.CompletedTask;
+    }
+
+    private static bool IsOwnedUncommittedArtifactName(
+        string name,
+        IEnumerable<string> artifactNames
+    )
+    {
+        foreach (var artifactName in artifactNames.Append("summary.json").Append("run.json"))
+        {
+            foreach (var marker in new[] { ".partial.", ".backup." })
+            {
+                var prefix = artifactName + marker;
+                if (
+                    name.StartsWith(prefix, StringComparison.Ordinal)
+                    && IsOwnedTemporaryToken(name[prefix.Length..])
+                )
+                {
+                    return true;
+                }
+            }
+        }
+        return IsResumeTranslationCacheArtifactName(name);
+    }
+
+    private static bool IsOwnedScratchArtifactName(string name) =>
+        IsOwnedScratchDirectoryName(name)
+        || TryMatchGuidWrappedName(name, ".bstrings-feature-histogram.", ".chunk");
+
+    private static bool IsOwnedScratchDirectoryName(string name) =>
+        TryMatchGuidWrappedName(name, ".bstrings-provenance.", string.Empty)
+        || TryMatchGuidWrappedName(name, ".bstrings-fallback-text.", string.Empty);
+
+    private static bool TryMatchGuidWrappedName(
+        string name,
+        string prefix,
+        string suffix
+    )
+    {
+        if (
+            !name.StartsWith(prefix, StringComparison.Ordinal)
+            || !name.EndsWith(suffix, StringComparison.Ordinal)
+            || name.Length != prefix.Length + 32 + suffix.Length
+        )
+        {
+            return false;
+        }
+        return Guid.TryParseExact(
+            name.AsSpan(prefix.Length, 32),
+            "N",
+            out _
+        );
+    }
+
+    private static bool IsOwnedTemporaryToken(string value) =>
+        Guid.TryParseExact(value, "N", out _)
+        || value.Length == 8
+            && value.All(character =>
+                character is >= 'a' and <= 'z'
+                || character is >= '0' and <= '9'
+                || character == '_'
+            );
+
+    private static bool IsResumeTranslationCacheArtifactName(string name)
+    {
+        var databaseName = name;
+        foreach (var suffix in TranslationCacheSidecarSuffixes)
+        {
+            if (databaseName.EndsWith(suffix, StringComparison.Ordinal))
+            {
+                databaseName = databaseName[..^suffix.Length];
+                break;
+            }
+        }
+        if (
+            !databaseName.StartsWith(TranslationCachePrefix, StringComparison.Ordinal)
+            || !databaseName.EndsWith(TranslationCacheDatabaseSuffix, StringComparison.Ordinal)
+        )
+        {
+            return false;
+        }
+        var token = databaseName[
+            TranslationCachePrefix.Length..^TranslationCacheDatabaseSuffix.Length
+        ];
+        return token.Length == 8
+            && token.All(character =>
+                character is >= 'a' and <= 'z'
+                || character is >= '0' and <= '9'
+                || character == '_'
+            );
+    }
+
     internal static int CountPlannedStages(AnalysisOptions options, bool needsExternalToolchain)
     {
         var count = options.NativeExtractionMode == NativeExtractionMode.On ? 9 : 6;
@@ -2526,6 +3864,28 @@ internal static class AnalysisOrchestrator
         return count;
     }
 
+    internal static async Task<string> PrepareAttemptOutputAsync(
+        string outputDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var incompleteMarker = Path.Combine(outputDirectory, ".incomplete");
+        await WriteIncompleteMarkerAtomicAsync(
+            incompleteMarker,
+            $"bstrings analysis is incomplete; processing started {DateTimeOffset.UtcNow:O}.{Environment.NewLine}",
+            cancellationToken
+        );
+
+        var logsDirectory = Path.Combine(outputDirectory, "logs");
+        if (Directory.Exists(logsDirectory))
+        {
+            EnsureNoReparsePoints(logsDirectory, "analysis logs path");
+        }
+        Directory.CreateDirectory(logsDirectory);
+        EnsureNoReparsePoints(logsDirectory, "analysis logs path");
+        return logsDirectory;
+    }
+
     private static async Task WriteRunAsync(
         string path,
         string status,
@@ -2542,6 +3902,7 @@ internal static class AnalysisOrchestrator
         DecoderCompletionStats? decoderCompletion,
         EnrichmentPipelineStats? enrichmentStats,
         string? error,
+        AnalysisResumeCore.AnalysisResumeSession resumeSession,
         CancellationToken cancellationToken
     )
     {
@@ -2580,6 +3941,7 @@ internal static class AnalysisOrchestrator
             translationWork,
             decoder = CreateDecoderSummary(options, decoderWork, decoderCompletion),
             preservationFallbacks = enrichmentStats?.PreservationFallbackRecords,
+            resume = resumeSession.CreatePublicEvidence(),
             options,
             error,
         };
@@ -2771,7 +4133,50 @@ internal static class AnalysisOrchestrator
         catch (UnauthorizedAccessException) { }
     }
 
-    private static void EnsureIncompleteMarker(
+    private static async Task WriteIncompleteMarkerAtomicAsync(
+        string path,
+        string content,
+        CancellationToken cancellationToken
+    )
+    {
+        if (File.Exists(path))
+        {
+            EnsureNoReparsePoints(path, "analysis incomplete marker");
+        }
+        var temporaryPath = path + ".partial." + Guid.NewGuid().ToString("N");
+        try
+        {
+            await using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.Asynchronous | FileOptions.WriteThrough
+            ))
+            {
+                var bytes = new UTF8Encoding(false).GetBytes(content);
+                await stream.WriteAsync(bytes, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+                stream.Flush(flushToDisk: true);
+            }
+            if (File.Exists(path))
+            {
+                EnsureNoReparsePoints(path, "analysis incomplete marker");
+            }
+            File.Move(temporaryPath, path, overwrite: true);
+            temporaryPath = string.Empty;
+        }
+        finally
+        {
+            if (temporaryPath.Length > 0)
+            {
+                DeleteTemporaryFile(temporaryPath);
+            }
+        }
+    }
+
+    private static async Task EnsureIncompleteMarkerAsync(
         string path,
         DateTimeOffset started,
         string error
@@ -2779,11 +4184,11 @@ internal static class AnalysisOrchestrator
     {
         try
         {
-            File.WriteAllText(
+            await WriteIncompleteMarkerAtomicAsync(
                 path,
                 $"bstrings analysis is incomplete; processing started {started:O}. "
                     + $"Failure: {error}{Environment.NewLine}",
-                new UTF8Encoding(false)
+                CancellationToken.None
             );
         }
         catch (IOException) { }

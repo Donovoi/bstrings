@@ -2,7 +2,7 @@
 param(
     [string]$DestinationDirectory = (Join-Path (Get-Location).Path 'bstrings-kit'),
     [string]$InstallerCacheDirectory,
-    [string]$ReleaseTag = 'v2.0.0',
+    [string]$ReleaseTag = 'v2.1.0',
     [switch]$KeepCache,
     [ValidateRange(1, 10)]
     [int]$AcquireAttempts = 3,
@@ -19,13 +19,16 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$expectedReleaseTag = 'v2.0.0'
+$expectedReleaseTag = 'v2.1.0'
 $repository = 'Donovoi/bstrings'
 $trustManifestName = 'bundle-packs.json'
 $coreArchiveName = 'bstrings-win-x64.zip'
 $checksumName = 'SHA256SUMS.txt'
 $installerName = 'Install-Bstrings.ps1'
 $compatiblePriorManifestSha256 = @(
+    # Immutable v2.0.0 complete-kit manifest. This identity permits an
+    # authenticated v2 installation to seed a v2.1 upgrade.
+    '4bf9c7eb16fa3da2c2a30436cca0427eed5e77442072eeb67c37fbd3056f9a01'
     # Immutable v1.9.17 complete-kit manifest. This private compatibility
     # identity permits a verified existing installation to seed one upgrade.
     '8685a859dbf3927e076f974f21290b62036e6be43c0b7238e32e76e4a1ed5142'

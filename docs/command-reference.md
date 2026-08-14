@@ -43,7 +43,60 @@ Use `-d` for a directory:
   --full
 ```
 
-The output directory must be new or empty.
+The output directory must be new or empty for a new analysis. Use explicit
+resume for a supported incomplete directory.
+
+## Resume an incomplete analysis
+
+Keep the incomplete output directory. Run:
+
+```powershell
+.\bstrings-kit\bstrings.exe analyze `
+  -r `
+  -o D:\results\memory
+```
+
+`-r` is the short form of `--resume`. A normal resume accepts only the output
+directory and an optional `--bundle-root`. It restores the saved input and
+effective analysis options. Do not add a new input or engine setting.
+
+Use `--bundle-root` only when the same verified kit moved to another path:
+
+```powershell
+.\bstrings-kit\bstrings.exe analyze `
+  -r `
+  -o D:\results\memory `
+  --bundle-root D:\tools\bstrings-kit
+```
+
+The kit bytes and identity must still match the saved run. The output directory
+must be on a physical local filesystem. Resume refuses a network result share.
+
+Before it reuses a completed stage, resume checks:
+
+- The input inventory and content hashes
+- The saved analysis options
+- The executable, kit, models, engines, and policies
+- Each completed stage and its checkpoint
+- The output file set
+- Exclusive access to the output directory
+
+A saved-contract or checkpoint identity mismatch stops before evidence output
+changes. Resume moves recognized but uncommitted files from the interrupted
+stage to that attempt's diagnostic log. It then reruns the whole stage. An
+unknown file causes refusal. A complete run cannot be resumed or overwritten.
+
+Resume works at whole-stage boundaries. It repeats the stage that was active
+when the run stopped. It does not reuse partial translation output or the
+temporary translation cache.
+
+A narrow compatibility path can import one supported incomplete v2.0.0 shape
+that predates checkpoints. It requires the exact published v2.0.0 executable
+and kit identities, the known artifact prefix, built-in `all` patterns, and
+full input and record validation. The saved routing must have no FLOSS or OCR
+candidates, and their outputs must be empty. It refuses translation or
+later-stage output. The import records decoding as `off` and starts translation
+again. Other old output is not supported.
 
 ## Use the complete preset
 
@@ -185,7 +238,7 @@ Long stages show percentage, rate, and other available progress data. A
 percentage shows completed work. It is not elapsed time.
 
 Press `Ctrl+C` once to request cancellation. Keep cancelled or failed output for
-diagnosis.
+diagnosis. Use `-r` only after the process has stopped.
 
 ## Confirm completion
 

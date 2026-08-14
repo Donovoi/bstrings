@@ -15,6 +15,8 @@ internal readonly record struct EnrichmentMergeStats(
 
 internal static class EnrichmentMergeCore
 {
+    private const int ValidationBufferBytes = 1024 * 1024;
+
     internal static async Task<EnrichmentMergeStats> ConcatenateAsync(
         IReadOnlyList<string> inputPaths,
         string outputPath,
@@ -107,6 +109,130 @@ internal static class EnrichmentMergeCore
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
             }
+        }
+    }
+
+    internal static async Task<EnrichmentMergeStats> ValidateConcatenationAsync(
+        IReadOnlyList<string> inputPaths,
+        string outputPath,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (inputPaths.Count == 0)
+        {
+            throw new ArgumentException("At least one enrichment input is required.");
+        }
+
+        var outputFullPath = Path.GetFullPath(outputPath);
+        if (!File.Exists(outputFullPath))
+        {
+            throw new FileNotFoundException("Enrichment merge output was not found.", outputFullPath);
+        }
+
+        var inputFullPaths = new List<string>(inputPaths.Count);
+        foreach (var inputPath in inputPaths)
+        {
+            var fullPath = Path.GetFullPath(inputPath);
+            if (!File.Exists(fullPath))
+            {
+                throw new FileNotFoundException("Enrichment merge input was not found.", fullPath);
+            }
+            if (string.Equals(fullPath, outputFullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("Enrichment merge input and output paths must differ.");
+            }
+            inputFullPaths.Add(fullPath);
+        }
+
+        var inputCounts = new long[inputFullPaths.Count];
+        long totalRecords = 0;
+        var inputBuffer = new byte[ValidationBufferBytes];
+        var outputBuffer = new byte[ValidationBufferBytes];
+        await using var output = new FileStream(
+            outputFullPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            ValidationBufferBytes,
+            FileOptions.Asynchronous | FileOptions.SequentialScan
+        );
+
+        for (var index = 0; index < inputFullPaths.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await using var input = new FileStream(
+                inputFullPaths[index],
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                ValidationBufferBytes,
+                FileOptions.Asynchronous | FileOptions.SequentialScan
+            );
+            var lastByte = -1;
+            while (true)
+            {
+                var read = await input.ReadAsync(inputBuffer, cancellationToken);
+                if (read == 0)
+                {
+                    break;
+                }
+                await ReadExactlyAsync(output, outputBuffer, read, cancellationToken);
+                if (!inputBuffer.AsSpan(0, read).SequenceEqual(outputBuffer.AsSpan(0, read)))
+                {
+                    throw new InvalidDataException(
+                        $"Enrichment merge output differs from input {index + 1:N0}."
+                    );
+                }
+                for (var offset = 0; offset < read; offset++)
+                {
+                    if (inputBuffer[offset] == (byte)'\n')
+                    {
+                        inputCounts[index]++;
+                    }
+                }
+                lastByte = inputBuffer[read - 1];
+            }
+
+            if (lastByte >= 0 && lastByte != (byte)'\n')
+            {
+                await ReadExactlyAsync(output, outputBuffer, 1, cancellationToken);
+                if (outputBuffer[0] != (byte)'\n')
+                {
+                    throw new InvalidDataException(
+                        $"Enrichment merge output is missing the normalized newline after input {index + 1:N0}."
+                    );
+                }
+                inputCounts[index]++;
+            }
+            totalRecords = checked(totalRecords + inputCounts[index]);
+        }
+
+        if (await output.ReadAsync(outputBuffer.AsMemory(0, 1), cancellationToken) != 0)
+        {
+            throw new InvalidDataException("Enrichment merge output has trailing bytes.");
+        }
+        return new EnrichmentMergeStats(totalRecords, inputCounts);
+    }
+
+    private static async Task ReadExactlyAsync(
+        Stream input,
+        byte[] buffer,
+        int count,
+        CancellationToken cancellationToken
+    )
+    {
+        var consumed = 0;
+        while (consumed < count)
+        {
+            var read = await input.ReadAsync(
+                buffer.AsMemory(consumed, count - consumed),
+                cancellationToken
+            );
+            if (read == 0)
+            {
+                throw new InvalidDataException("Enrichment merge output is truncated.");
+            }
+            consumed += read;
         }
     }
 }

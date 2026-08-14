@@ -55,6 +55,8 @@ public static partial class Program
         + @"bstrings.exe help analyze"
         + "\r\n\t "
         + @"bstrings.exe help bundle"
+        + "\r\n\t "
+        + @"bstrings.exe analyze -r -o ""C:\results\carved"""
         + "\r\n\r\nLegacy flat-output scanner:"
         + "\r\n\t "
         + @"bstrings.exe -f ""C:\evidence\image.bin"""
@@ -70,7 +72,8 @@ public static partial class Program
         + @"bstrings.exe --enrich-jsonl ""C:\results\enriched.jsonl"" --lr all -o ""C:\results\matches.jsonl"""
         + "\r\n"
         + "\r\n'analyze' writes a provenance-preserving result directory with TSV/JSONL reports and histograms."
-        + "\r\nIts output directory must be new or empty; a failed run remains marked .incomplete."
+        + "\r\nA new analysis needs a new or empty output directory. Use analyze -r -o <directory> to resume a validated incomplete run."
+        + "\r\nAn interrupted or failed run keeps .incomplete until final validation succeeds."
         + "\r\nLong-running operations print measured percentage completion; percentages are work units, not an ETA."
         + "\r\nFull analysis defaults native extraction on, classifies each input in one early shared pass, and records content-routing.jsonl plus engine-status.jsonl; use --native-extraction off only for an explicit FLOSS/OCR specialist run."
         + "\r\n--processor controls native extraction only. OCR and translation have separate hardware options."
@@ -3930,14 +3933,18 @@ public static partial class Program
     {
         return SearchCore.ParseRegexPatternsWithNames(
             lr,
-            RegExPatterns,
+            RegExPatterns.Count == 0 ? BuiltInPatternCatalog.Patterns : RegExPatterns,
             BuiltInPatternCatalog.Groups
         );
     }
 
     private static List<string> ParseRegexPatterns(string lr)
     {
-        return SearchCore.ParseRegexPatterns(lr, RegExPatterns, BuiltInPatternCatalog.Groups);
+        return SearchCore.ParseRegexPatterns(
+            lr,
+            RegExPatterns.Count == 0 ? BuiltInPatternCatalog.Patterns : RegExPatterns,
+            BuiltInPatternCatalog.Groups
+        );
     }
 
     internal static List<(string name, string pattern)> ResolveAnalysisPatterns(

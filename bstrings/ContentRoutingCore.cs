@@ -88,7 +88,8 @@ internal static class ContentRoutingCore
         string ocrManifestPath,
         bool expectedNativeSelected,
         CancellationToken cancellationToken = default,
-        string? expectedClassifierExecutable = null
+        string? expectedClassifierExecutable = null,
+        bool writeProjections = true
     )
     {
         var trustedEntries = await ReadTrustedEntriesAsync(
@@ -345,18 +346,32 @@ internal static class ContentRoutingCore
             throw new InvalidDataException("The content-routing manifest changed during validation.");
         }
 
-        var flossInput = await WriteProjectionAsync(
-            flossInventoryPath,
-            flossManifestPath,
-            flossEntries,
-            cancellationToken
-        );
-        var ocrInput = await WriteProjectionAsync(
-            ocrInventoryPath,
-            ocrManifestPath,
-            ocrEntries,
-            cancellationToken
-        );
+        var flossInput = writeProjections
+            ? await WriteProjectionAsync(
+                flossInventoryPath,
+                flossManifestPath,
+                flossEntries,
+                cancellationToken
+            )
+            : await ValidateProjectionAsync(
+                flossInventoryPath,
+                flossManifestPath,
+                flossEntries,
+                cancellationToken
+            );
+        var ocrInput = writeProjections
+            ? await WriteProjectionAsync(
+                ocrInventoryPath,
+                ocrManifestPath,
+                ocrEntries,
+                cancellationToken
+            )
+            : await ValidateProjectionAsync(
+                ocrInventoryPath,
+                ocrManifestPath,
+                ocrEntries,
+                cancellationToken
+            );
         return new ContentRoutingStats(
             Path.GetFileName(routingFullPath),
             routingSha256,
@@ -538,6 +553,75 @@ internal static class ContentRoutingCore
             DeleteTemporary(inventoryTemporaryPath);
             DeleteTemporary(manifestTemporaryPath);
         }
+    }
+
+    private static async Task<InputManifestInfo> ValidateProjectionAsync(
+        string inventoryPath,
+        string manifestPath,
+        IReadOnlyList<InputManifestEntry> entries,
+        CancellationToken cancellationToken
+    )
+    {
+        var inventoryFullPath = Path.GetFullPath(inventoryPath);
+        var manifestFullPath = Path.GetFullPath(manifestPath);
+        if (!File.Exists(inventoryFullPath) || !File.Exists(manifestFullPath))
+        {
+            throw new FileNotFoundException("A committed content-routing projection is missing.");
+        }
+        AnalysisOrchestrator.EnsureNoReparsePoints(
+            inventoryFullPath,
+            "content-routing inventory projection"
+        );
+        AnalysisOrchestrator.EnsureNoReparsePoints(
+            manifestFullPath,
+            "content-routing manifest projection"
+        );
+
+        var expectedInventorySha256 = ComputeProjectionSha256(entries, entry => entry.Path);
+        var expectedManifestSha256 = ComputeProjectionSha256(
+            entries,
+            entry => JsonSerializer.Serialize(entry, CompactJson)
+        );
+        var actualInventorySha256 = await HashFileAsync(inventoryFullPath, cancellationToken);
+        var actualManifestSha256 = await HashFileAsync(manifestFullPath, cancellationToken);
+        if (
+            !string.Equals(
+                actualInventorySha256,
+                expectedInventorySha256,
+                StringComparison.Ordinal
+            )
+            || !string.Equals(
+                actualManifestSha256,
+                expectedManifestSha256,
+                StringComparison.Ordinal
+            )
+        )
+        {
+            throw new InvalidDataException(
+                "A committed content-routing projection does not match the authenticated routing decisions."
+            );
+        }
+        return new InputManifestInfo(
+            entries.Count,
+            Path.GetFileName(inventoryFullPath),
+            actualInventorySha256,
+            Path.GetFileName(manifestFullPath),
+            actualManifestSha256
+        );
+    }
+
+    private static string ComputeProjectionSha256(
+        IReadOnlyList<InputManifestEntry> entries,
+        Func<InputManifestEntry, string> selectLine
+    )
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var entry in entries)
+        {
+            hash.AppendData(StrictUtf8.GetBytes(selectLine(entry)));
+            hash.AppendData("\n"u8);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
     private static void ValidateTopLevelProperties(JsonElement root, long lineNumber)
