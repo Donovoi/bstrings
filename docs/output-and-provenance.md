@@ -25,11 +25,10 @@ writes a result set from one command:
 bstrings.exe analyze -d carved-files --full -o results
 ```
 
-Treat the result directory as one examination artifact. It records effective
-analysis options, program version, per-input content hashes, optional-tool
-versions, model
-revision and hash, and completion status; preserve the directory together with
-the final process exit status.
+The result directory records effective analysis options, program version,
+per-input content hashes, optional-tool versions, model revision and hash, and
+completion status. The process exit status is reported separately by the
+calling shell.
 
 Console lines beginning `Progress: analysis:` report the overall completed
 stage fraction. Native extraction, model and bundle hashing, language triage,
@@ -38,7 +37,7 @@ record percentages. These are deterministic work-unit ratios rather than an
 estimated time remaining, so throughput changes can make equal percentage
 steps take different amounts of time.
 
-## Know when a run is complete
+## Completion status
 
 The existence of an output file is not proof that a scan finished.
 
@@ -49,11 +48,10 @@ The existence of an output file is not proof that a scan finished.
   into place only after every record, external-tool call, translation, and
   regex operation succeeds.
 - A nonzero exit, a remaining `.incomplete` marker, an adapter error, or a model
-  hash mismatch makes the affected result incomplete. Retain it for diagnosis,
-  but do not report it as a completed examination.
-- Copy or archive a completed integrated result directory as a unit so OCR
-  assessments, language assessments, parents, translated/decoded children, and
-  regex hits do not become separated.
+  hash mismatch makes the affected result incomplete. Incomplete output remains
+  available for diagnosis.
+- OCR assessments, language assessments, parents, translated or decoded
+  children, and regex hits are stored under the same result directory.
 
 The workflow writes `input-files.txt` and `input-manifest.jsonl` once, before
 extraction. The manifest records each canonical path, byte length, and SHA-256;
@@ -106,12 +104,10 @@ and other reparse points in the evidence or result path are refused, aliases
 are canonicalized, results inside the evidence or verified bundle are refused,
 and recursive inventory creation does not traverse reparse-point children.
 
-This protection assumes a controlled examination host. It does not attempt to
-defend against another local process that can replace already checked
-directories with junctions while a run is active. Run inside the isolated
-forensic VM and restrict write access to the evidence parent and result parent;
-hostile concurrent filesystem mutation requires operating-system
-handle-relative I/O beyond this workflow's threat model.
+This protection assumes no hostile local writer changes checked directories
+while a run is active. Concurrent junction replacement and other hostile
+filesystem mutation require operating-system handle-relative I/O beyond this
+workflow's threat model.
 
 ## Resume an incomplete run
 
@@ -165,13 +161,11 @@ old output.
 
 The `.bstrings-resume` metadata contains case paths, saved options, pattern
 settings, and content hashes. It does not copy extracted strings, decoded
-values, translations, or pattern hits. Protect it as part of the sensitive
-result directory.
+values, translations, or pattern hits.
 
-Checkpoint and import validation address accidental interruption on a
-controlled examination host. They do not authenticate unsigned result state
-against coordinated post-run tampering. If you cannot trust the incomplete
-directory, preserve it for diagnosis and start a new run.
+Checkpoint and import validation address accidental interruption. They do not
+authenticate unsigned result state against coordinated post-run tampering.
+Resume rejects state that fails its identity or integrity checks.
 
 Resume does not change the completion contract. Only exit code 0, complete
 `run.json`, complete `summary.json`, and no `.incomplete` marker prove that the
@@ -262,9 +256,9 @@ Normalized JSONL string records use schema version 1. A record carries a stable
 | `image_region` | A page/frame number and pixel-space OCR bounding box |
 | `page_region` | A PDF page and either PDF-point or rendered-pixel region |
 
-Do not present a program counter or virtual address as a raw file offset. A
-translated child inherits its parent's location for attribution; that does not
-mean the translated characters existed at that location in the evidence bytes.
+A program counter or virtual address is not a raw file offset. A translated
+child inherits its parent's location for attribution; that does not mean the
+translated characters existed at that location in the source bytes.
 
 ## Evidence classes
 
@@ -275,9 +269,9 @@ mean the translated characters existed at that location in the evidence bytes.
 | `derived-translation` | A local translation model produced the text from an identified parent record |
 | `derived-decoding` | The bounded bstrings decoder losslessly recovered text from an identified encoded parent |
 
-Derived evidence can create strong leads, but it is not interchangeable with a
-byte-native finding. Confirm consequential OCR, translated, and decoded matches
-against their page/parent and surrounding source evidence.
+Derived evidence is not interchangeable with a byte-native finding. OCR,
+translated, and decoded records retain links to their page, parent, and source
+context.
 
 ## Engine terminal statuses
 
@@ -474,8 +468,8 @@ IP addresses, hashes, paths, CVEs, GUIDs, host/port values, filenames,
 placeholders, underscore-bearing tokens, and all-uppercase ASCII code forms.
 Alphabetic hyphenation alone is advisory because ordinary language can use the
 same shape. This protects important identifiers but does not make machine
-translation authoritative. Review the parent whenever a finding matters to
-attribution or reporting.
+translation authoritative. Each translated finding retains its parent for
+attribution and reporting.
 
 Identifier-only records are retained as source evidence and classified as
 non-linguistic rather than being sent to the model. Mixed natural-language

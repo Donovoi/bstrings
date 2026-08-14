@@ -19,8 +19,8 @@ $bootstrap = $blocks[0].Groups['code'].Value
 if ($bootstrap -cnotmatch '^& \{\r?\n') {
     throw 'The README installer bootstrap must be one fail-fast script block.'
 }
-if ($bootstrap -cnotmatch '(?m)^  \$tag = ''v2\.1\.0''\r?$') {
-    throw 'The README installer bootstrap must pin v2.1.0.'
+if ($bootstrap -cnotmatch '(?m)^  \$tag = ''v2\.1\.1''\r?$') {
+    throw 'The README installer bootstrap must pin v2.1.1.'
 }
 if ($bootstrap -cnotmatch '(?m)^  \$name = ''Install-Bstrings\.ps1''\r?$') {
     throw 'The README installer bootstrap must pin Install-Bstrings.ps1.'
@@ -126,7 +126,7 @@ function Invoke-RestMethod {
     )
     $script:releaseLookups++
     return [pscustomobject]@{
-        tag_name = 'v2.1.0'
+        tag_name = 'v2.1.1'
         draft = $false
         prerelease = $false
         immutable = $true
@@ -135,7 +135,7 @@ function Invoke-RestMethod {
                 name = 'Install-Bstrings.ps1'
                 browser_download_url = (
                     'https://github.com/Donovoi/bstrings/releases/download/' +
-                    'v2.1.0/Install-Bstrings.ps1'
+                    'v2.1.1/Install-Bstrings.ps1'
                 )
                 digest = "sha256:$script:reportedDigest"
             }
@@ -253,7 +253,7 @@ try {
     }
     if (
         -not ($script:installerArguments -ccontains '-ReleaseTag') -or
-        -not ($script:installerArguments -ccontains 'v2.1.0')
+        -not ($script:installerArguments -ccontains 'v2.1.1')
     ) {
         throw 'The bootstrap did not launch the installer with the exact release tag.'
     }

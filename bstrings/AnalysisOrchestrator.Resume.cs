@@ -13,6 +13,8 @@ namespace bstrings;
 
 internal static partial class AnalysisOrchestrator
 {
+    private const string LegacyV200Version = "2.0.0";
+
     private sealed record LegacyInputIdentity(
         long FileCount,
         string Inventory,
@@ -131,7 +133,7 @@ internal static partial class AnalysisOrchestrator
     )
     {
         Console.Error.WriteLine(
-            "Resume preflight: validating a stopped bstrings 2.0.0 stage boundary. No output will change until validation succeeds."
+            $"Resume preflight: validating a stopped bstrings {LegacyV200Version} stage boundary. No output will change until validation succeeds."
         );
         EnsureNoReparsePoints(outputDirectory, "legacy analysis results path");
         RequireExactLegacyRootEntries(outputDirectory);
@@ -142,11 +144,15 @@ internal static partial class AnalysisOrchestrator
         if (
             RequiredLegacyInt32(root, "schemaVersion") != 1
             || !string.Equals(RequiredLegacyString(root, "status"), "incomplete", StringComparison.Ordinal)
-            || !string.Equals(RequiredLegacyString(root, "bstringsVersion"), "2.0.0", StringComparison.Ordinal)
+            || !string.Equals(
+                RequiredLegacyString(root, "bstringsVersion"),
+                LegacyV200Version,
+                StringComparison.Ordinal
+            )
         )
         {
             throw new InvalidDataException(
-                "Only an incomplete bstrings 2.0.0 run with the legacy schema can use this importer."
+                $"Only an incomplete bstrings {LegacyV200Version} run with the legacy schema can use this importer."
             );
         }
         if (
@@ -178,7 +184,7 @@ internal static partial class AnalysisOrchestrator
         )
         {
             throw new InvalidDataException(
-                "The legacy run does not match the immutable public bstrings 2.0.0 bundle and executable identities."
+                $"The legacy run does not match the immutable public bstrings {LegacyV200Version} bundle and executable identities."
             );
         }
 
@@ -267,7 +273,7 @@ internal static partial class AnalysisOrchestrator
                 )
                 || !string.Equals(
                     RequiredLegacyString(currentRoot, "bstringsVersion"),
-                    "2.0.0",
+                    LegacyV200Version,
                     StringComparison.Ordinal
                 )
                 || DeserializeLegacy<BundleIntegrity>(
@@ -444,7 +450,7 @@ internal static partial class AnalysisOrchestrator
         )
         {
             throw new InvalidDataException(
-                "The legacy importer supports only the exact stopped 2.0.0 Full analysis shape with built-in patterns."
+                $"The legacy importer supports only the exact stopped {LegacyV200Version} Full analysis shape with built-in patterns."
             );
         }
     }
@@ -541,6 +547,7 @@ internal static partial class AnalysisOrchestrator
                 nativePath,
                 inputManifestPath,
                 workingDirectory,
+                LegacyV200Version,
                 cancellationToken
             );
         }

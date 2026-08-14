@@ -150,6 +150,46 @@ public sealed class NativeEnrichmentCompletionCoreTests
     }
 
     [Fact]
+    public async Task ValidateAsync_AcceptsOnlyTheExplicitLegacyExtractorVersion()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var (manifest, output, line) = await CreateValidCaseAsync(scope, cancellationToken);
+        using var document = JsonDocument.Parse(line);
+        var currentVersion = document.RootElement
+            .GetProperty("origin")
+            .GetProperty("version")
+            .GetString()!;
+        const string legacyVersion = "2.0.0";
+        Assert.NotEqual(legacyVersion, currentVersion);
+        var legacyLine = line.Replace(
+            $"\"version\":{JsonSerializer.Serialize(currentVersion)}",
+            $"\"version\":{JsonSerializer.Serialize(legacyVersion)}",
+            StringComparison.Ordinal
+        );
+        await File.WriteAllLinesAsync(output, [legacyLine], cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            NativeEnrichmentCompletionCore.ValidateAsync(
+                output,
+                manifest,
+                scope.DirectoryPath,
+                cancellationToken
+            )
+        );
+
+        var stats = await NativeEnrichmentCompletionCore.ValidateAsync(
+            output,
+            manifest,
+            scope.DirectoryPath,
+            legacyVersion,
+            cancellationToken
+        );
+
+        Assert.Equal(1, stats.OutputRecords);
+    }
+
+    [Fact]
     public async Task ValidateAsync_RejectsTextThatDoesNotMatchTheClaimedSourceBytes()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

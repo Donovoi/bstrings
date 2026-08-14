@@ -2,7 +2,8 @@
 
 OCR is part of the bstrings kit. The commands in this guide require a verified,
 version-matched installation. See [download and installation](download-and-install.md).
-Do not copy OCR assets between releases.
+OCR assets are version-bound. Assets copied between releases fail kit
+verification.
 
 The integrated OCR stage turns text from supported images and PDFs into normal
 bstrings child records. Those records retain source hashes, page/frame numbers,
@@ -151,10 +152,9 @@ project's synthetic identifier gate. See the official
 and immutable [model card](https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/tree/50c7eacafc52fa7bcf4194e8cd08e46f8558504b).
 
 The upstream model describes Simplified Chinese, Traditional Chinese, English,
-Japanese, and 46 Latin-script languages. Do not turn that into a claim of universal Arabic,
-Cyrillic, Devanagari, or Korean coverage. For an unsupported script, retain the
-visual original and use a separately validated model/profile. Offline
-translation can only work with characters OCR recovered correctly.
+Japanese, and 46 Latin-script languages. This does not establish universal
+Arabic, Cyrillic, Devanagari, or Korean coverage. Offline translation can only
+process characters that OCR recovered.
 
 ## Current v3 calibration and test limits
 
@@ -195,8 +195,9 @@ Synthetic fixtures remain useful packaging tests, while release-specific
 DirectML acceptance remains hardware/runtime evidence. Neither substitutes for
 independent corpus quality evidence. A later DirectML run returned device-loss
 error `887A0006` while another model occupied roughly 6.2 of 8.2 GB graphics
-memory; the same OCR path passed after that process exited. Avoid competing GPU
-work or choose CPU. The integrated pipeline completes OCR before translation.
+memory; the same OCR path passed after that process exited. Concurrent GPU work
+can cause device loss; CPU does not use that GPU path. The integrated pipeline
+completes OCR before translation.
 
 The primary-source comparison with Microsoft, Google, OpenAI, PaddlePaddle,
 Hugging Face models, and independent document benchmarks is recorded in
@@ -227,9 +228,8 @@ hash, and resolved provider. The orchestrator independently validates record
 counts, identities, coordinates, provider selection, source attribution, and
 completion before merging OCR strings into downstream matching.
 
-OCR is interpretation, not a replacement for evidence. False recognition and
-missed text remain possible. Treat a regex hit on OCR or translated OCR as an
-investigative lead, then inspect the page image and original evidence.
+OCR can contain false recognition and missed text. Each OCR or translated OCR
+match retains its page, source, and parent links.
 
 ## Offline and release verification
 
@@ -254,10 +254,9 @@ This is per-path packaging smoke, not cross-provider parity or SROIE quality
 evidence.
 
 The default `-OcrSmoke` provider set is CPU, DirectML, and hybrid. A generic
-hosted runner must use `-OcrSmokeProviders cpu`; DirectML/hybrid release
-acceptance runs manually on the explicitly labeled self-hosted hardware
-workflow and produces a build-run-linked evidence artifact. Hosted CPU success
-must not be reported as GPU acceptance.
+hosted runner uses `-OcrSmokeProviders cpu`; DirectML and hybrid release
+acceptance runs on the labeled self-hosted hardware workflow and produces a
+build-run-linked evidence artifact. Hosted CPU success is not GPU acceptance.
 
 Maintainers build the OCR overlay on a connected host with:
 

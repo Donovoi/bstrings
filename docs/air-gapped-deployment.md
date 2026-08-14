@@ -27,7 +27,7 @@ Verify the staged kit:
 .\bstrings-kit\bstrings.exe bundle verify
 ```
 
-Do not transfer a kit that fails verification.
+A nonzero exit code means the staged kit failed verification.
 
 Run a small test before transfer:
 
@@ -38,18 +38,17 @@ Run a small test before transfer:
   --full
 ```
 
-Use synthetic or approved test evidence. Do not mix test output with case data.
+The example uses `D:\test-evidence` and `D:\test-results` as placeholder paths.
 
 ## Transfer the kit
 
 1. Close all bstrings processes.
-2. Copy the complete `bstrings-kit` directory to approved media.
+2. Copy the complete `bstrings-kit` directory to transfer media.
 3. Eject the media safely.
 4. Move the directory to the disconnected computer.
-5. Keep the directory contents unchanged.
+5. Leave the directory contents unchanged.
 
-Do not transfer only selected engines, models, or runtime files. The manifest
-describes one complete kit.
+The manifest describes one complete kit. A partial transfer fails verification.
 
 ## Verify on the disconnected computer
 
@@ -57,7 +56,8 @@ describes one complete kit.
 .\bstrings-kit\bstrings.exe bundle verify
 ```
 
-Do not analyze evidence if verification fails.
+Exit code 0 confirms a verified kit. Any other exit code means verification
+failed.
 
 Verification checks the manifest, exact file set, file sizes, SHA-256 values,
 configuration, licenses, runtimes, models, and tools.
@@ -73,11 +73,11 @@ Use a new or empty results directory:
   --full
 ```
 
-Confirm exit code 0, two complete status files, and no `.incomplete` file. Keep
-failed output for diagnosis.
+A complete run has exit code 0, two complete status files, and no `.incomplete`
+file. Failed output remains available for diagnosis.
 
-The result directory can contain sensitive case data. Store and transfer it as
-evidence.
+The result directory can contain source strings, decoded values, translations,
+paths, hashes, and pattern matches.
 
 ## What the kit contains
 
@@ -136,41 +136,38 @@ hardware.
 Native extraction can read a raw image as a byte stream. FLOSS and OCR need
 individual supported files.
 
-Mount or carve a disk or memory image before you expect file-level FLOSS or OCR
-coverage. Keep the carved files and tool logs with the case.
+FLOSS and OCR accept supported files, not files embedded inside raw disk or
+memory image containers. Mounted or carved files can be passed separately.
 
 ## Update an offline computer
 
 1. Install and verify the new kit on a connected staging computer.
 2. Transfer the complete new directory.
 3. Verify it on the disconnected computer.
-4. Keep the old verified kit until the new kit passes an approved test.
-5. Remove the old kit through your evidence-lab change process.
+4. The old and new kits remain separate during verification.
+5. The old kit can be removed after the new kit passes verification.
 
-Do not merge files from two kit versions.
+Files from two kit versions do not form a valid verified kit.
 
-## Acceptance checks
+## Technical acceptance signals
 
-Before operational use, confirm these facts:
+The release and offline workflow expose these signals:
 
-- The exact release tag is approved.
+- The installed version matches the immutable release tag.
 - The release is immutable.
 - The installer and assets match release checksums.
 - `bundle verify` succeeds after transfer.
 - A synthetic analysis completes.
 - The result has complete status records.
 - No network access occurs during the offline analysis.
-- Operators can preserve failed and cancelled output.
-
-Record the installed version and bundle identity in the case notes.
 
 ## Security boundary
 
 An old cache, filename, timestamp, or success report does not prove file
 integrity. Current manifest size and SHA-256 checks authorize the bytes.
 
-Do not modify, add, or remove files inside the installed kit. Any such change
-causes verification to fail.
+Any modified, added, or removed file inside the installed kit causes
+verification to fail.
 
 See [Download and install](download-and-install.md) and
 [Output and provenance](output-and-provenance.md) for related procedures.

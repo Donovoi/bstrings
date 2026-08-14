@@ -1,8 +1,8 @@
 # Enrichment pipeline
 
 This document describes the integrated workflow in current source. See
-[download and installation](download-and-install.md) before choosing a command,
-and never combine assets from different versions.
+[download and installation](download-and-install.md) for the supported kit and
+commands. Assets from different versions do not form a valid kit.
 
 The integrated workflow finds useful text through several complementary paths,
 then applies one pattern catalog without losing where each string came from:
@@ -58,7 +58,7 @@ complete physical file set is still verified as one unit.
 | Decoder | Publishes strict canonical Base64 or contextual PowerShell text children | Depth is one; binary outcomes are assessed but not carved, decompressed, or turned into strings |
 | Language assessment | Scores whether eligible text likely needs translation | Scores are ranking/gating signals, not calibrated certainty |
 | Hy-MT2 | Creates an offline English child while protecting structured identifiers | A translated token is not proof those bytes existed in the source |
-| Pattern matcher | Applies the same validated catalog/custom patterns to normalized parents and children | Consequential derived hits must be checked against source evidence |
+| Pattern matcher | Applies the same validated catalog/custom patterns to normalized parents and children | Derived hits retain their parent and source context |
 
 The orchestrator hashes and inventories inputs before extraction, holds a
 verified inventory lease around external stages, verifies inputs again after
@@ -195,10 +195,10 @@ unknown categories, duplicate JSON keys, missing required fields, invalid
 addresses/encodings, overlong items, malformed UTF-8/JSON, timeout, or
 unexpected process failure.
 
-Known 32- or 64-bit shellcode is not guessed from arbitrary data. Advanced
-users can deliberately force the corresponding FLOSS format through the
-source-tree adapter, but that is a custom workflow and must be documented in
-the case. The bundled normal route remains complete-file PE recovery.
+Known 32- or 64-bit shellcode is not guessed from arbitrary data. The
+source-tree adapter can force a FLOSS format, but that path is outside the
+bundled CLI and its normal provenance contract. The bundled route remains
+complete-file PE recovery.
 
 The functional integration gate used Mandiant's open
 [`flare-floss-testfiles`](https://github.com/mandiant/flare-floss-testfiles)
@@ -298,10 +298,10 @@ decision, model-result, fallback, and child cardinalities, then projects it as
 window/call, not a globally distinct-text count. Exact text repeated in a later
 window creates another decision; `runCacheHits` reports the resulting cross-
 window reuse. `translatorRequests` counts translator batch dispatches and
-`translatorInputTexts` counts submitted texts, so neither candidate occurrences
-nor the console's `modelInputs` display should be substituted for a different
-work unit. The artifact contains counters only, but private case aggregates and
-its SHA-256 still must not be published.
+`translatorInputTexts` counts submitted texts. Candidate occurrences and the
+console's `modelInputs` display are different work units. The artifact contains
+counters only; public release evidence excludes private-run aggregates and its
+SHA-256.
 
 These normalized confidences are not universally calibrated probabilities.
 Short strings, names, mixed-language text, OCR errors, and transliteration are
@@ -416,7 +416,7 @@ fallbacks rather than promising a fixed completion time.
 Hy-MT2's model card recommends stochastic decoding (`temperature 0.7`,
 `top-p 0.6`, `top-k 20`) for general use. Bstrings deliberately uses the
 forensic benchmark's greedy profile (`temperature 0`, `top-k 1`) to reduce
-run-to-run variation and protect evidence attribution; this is a project
+run-to-run variation and improve attribution stability; this is a project
 choice, not the upstream default.
 
 Parallel greedy inference is not promised to be byte-identical because
@@ -497,8 +497,8 @@ records fail the run.
 
 A translated match can normalize punctuation or create a token that resembles
 an email, path, hash, or wallet. An OCR match can contain recognition errors.
-Treat both as leads. Verify consequential results against the untranslated
-parent, page/executable context, and original evidence.
+Both are derived candidates and retain the untranslated parent, page or
+executable context, and source link.
 
 The important result files are:
 
@@ -535,10 +535,10 @@ separately installed capability sets are deferred by
 
 ## Maintainer and regression entry points
 
-Examiners should not call the Python adapters. Maintainers can inspect them
-under `tools/enrichment/`, and must use pinned disposable environments plus
-exact model/package/license records when changing them. Official acquisition
-links are:
+The Python adapters under `tools/enrichment/` are internal implementation
+surfaces. The supported user entry point is the C# command line. Experimental
+runs use pinned disposable environments and exact model, package, and license
+records. Official acquisition links are:
 
 - [CPython embeddable package](https://docs.python.org/3/using/windows.html#the-embeddable-package);
 - [Magika CLI](https://github.com/google/magika#command-line-tool);

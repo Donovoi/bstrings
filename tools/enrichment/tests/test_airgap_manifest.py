@@ -303,7 +303,7 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIsNotNone(default_tag_match)
         self.assertIsNotNone(expected_tag_match)
         self.assertEqual(default_tag_match.group(1), expected_tag_match.group(1))
-        self.assertEqual("v2.1.0", expected_tag_match.group(1))
+        self.assertEqual("v2.1.1", expected_tag_match.group(1))
         self.assertIn("Join-Path (Get-Location).Path 'bstrings-kit'", installer)
         self.assertIn("bundle-packs.json", installer)
         self.assertIn("SHA256SUMS.txt", installer)
@@ -366,13 +366,17 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn("## Install", readme)
         self.assertIn("## Run an analysis", readme)
         installer = (repo_root / "Scripts" / "Install-Bstrings.ps1").read_text(encoding="utf-8")
-        self.assertIn("$expectedReleaseTag = 'v2.1.0'", installer)
+        self.assertIn("$expectedReleaseTag = 'v2.1.1'", installer)
+        self.assertIn(
+            "8c7791a0a28810264a411f0ca32d48793eeb0b30e35cebeb4721106d284c7d56",
+            installer,
+        )
         self.assertIn(
             "4bf9c7eb16fa3da2c2a30436cca0427eed5e77442072eeb67c37fbd3056f9a01",
             installer,
         )
         self.assertIn("v1.9.17", readme)
-        self.assertIn("$tag = 'v2.1.0'", readme)
+        self.assertIn("$tag = 'v2.1.1'", readme)
         self.assertIn("$name = 'Install-Bstrings.ps1'", readme)
         self.assertIn("/releases/download/$tag/$name", readme)
         self.assertIn("-ReleaseTag $tag", readme)

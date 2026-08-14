@@ -13,18 +13,18 @@ There is no second kit to select.
 
 You do not need administrator rights.
 
-## Version 2.1.0
+## Version 2.1.1
 
-Version 2.1.0 uses:
+Version 2.1.1 uses:
 
 - `Install-Bstrings.ps1` for the installer;
 - `bstrings-kit` for the default installation; and
 - `.bstrings-installer-cache` for verified download bytes.
 
-## Install version 2.1.0
+## Install version 2.1.1
 
 Use the authenticated command in the main README. It gets
-`Install-Bstrings.ps1` from the immutable v2.1.0 release.
+`Install-Bstrings.ps1` from the immutable v2.1.1 release.
 
 Run the authenticated installer from the directory that will contain
 `bstrings-kit`:
@@ -53,7 +53,8 @@ installation if a replacement fails.
 .\bstrings-kit\bstrings.exe bundle verify
 ```
 
-Do not analyze evidence unless this command returns exit code 0.
+Exit code 0 confirms a verified kit. Any other exit code means verification
+failed.
 
 ## Run the first analysis
 
@@ -66,15 +67,15 @@ Use a new or empty output directory:
   --full
 ```
 
-Confirm all these results:
+A complete first run has all these results:
 
 - The command returns exit code 0.
 - `run.json` has `status: complete`.
 - `summary.json` has `status: complete`.
 - The output directory does not contain `.incomplete`.
 
-Keep failed output for diagnosis. Use another new or empty directory for a
-retry.
+Failed output remains available for diagnosis. A normal retry uses another new
+or empty directory.
 
 ## Upgrade safely
 
@@ -93,8 +94,8 @@ Migration occurs only when all these conditions are true:
 - Its files match the current release manifest where they are reused.
 - The complete new kit passes verification before the old path is removed.
 
-The installer stops if both old and new default directories exist. Select and
-verify the installation that you want to keep before you continue.
+The installer stops if both old and new default directories exist. It does not
+select or change either directory automatically.
 
 An explicit destination does not start automatic migration.
 
@@ -132,18 +133,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -DestinationDirectory C:\Tools\bstrings-kit
 ```
 
-The destination and cache must not overlap. Do not use a filesystem root.
+The destination and cache cannot overlap. The installer rejects a filesystem
+root.
 
 ## Transfer the kit offline
 
 1. Install and verify the kit on a connected staging computer.
-2. Copy the complete `bstrings-kit` directory to approved media.
+2. Copy the complete `bstrings-kit` directory to transfer media.
 3. Copy it to the disconnected computer.
 4. Run `bundle verify` on the disconnected computer.
-5. Analyze evidence only after verification succeeds.
 
-Do not copy individual engines or models into another installation. The
-manifest describes one complete authenticated kit.
+The manifest describes one complete authenticated kit. A copy with selected
+engines or models missing fails verification.
 
 See [Air-gapped deployment](air-gapped-deployment.md) for the full transfer
 procedure.
@@ -153,8 +154,8 @@ procedure.
 The release can contain a base archive, packs, manifests, and licenses. These
 files let the installer transfer and verify the kit.
 
-Do not run the base archive as a separate product. It does not contain every
-supported engine and model.
+The base archive is an installer component, not a separate product. It does not
+contain every supported engine and model.
 
 ## Security boundary
 
