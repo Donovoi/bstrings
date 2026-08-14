@@ -187,6 +187,29 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertLess(marker_index, rejection_index)
         self.assertLess(rejection_index, native_index)
 
+    def test_translation_smoke_interrupts_and_resumes_full_analysis(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        verifier = (repo_root / "tools" / "airgap" / "Verify-AirgapBundle.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        checkpoint = ".bstrings-resume\\checkpoints\\0007-translation-selection.json"
+        self.assertIn(checkpoint, verifier)
+        self.assertIn("Stop-Process -Id $analysisProcess.Id -Force", verifier)
+        self.assertIn(
+            "& $bstrings analyze -r -o $resultsPath --bundle-root $PSScriptRoot", verifier
+        )
+        for stage_id in (
+            "input-inventory",
+            "content-routing",
+            "native-extraction",
+            "floss-recovery",
+            "ocr",
+            "raw-merge",
+            "translation-selection",
+        ):
+            self.assertIn(f"'{stage_id}'", verifier)
+
     def test_tag_release_is_gated_on_bundle_acceptance(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]
         workflow = (repo_root / ".github" / "workflows" / "dotnet-desktop.yml").read_text(
@@ -280,7 +303,7 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIsNotNone(default_tag_match)
         self.assertIsNotNone(expected_tag_match)
         self.assertEqual(default_tag_match.group(1), expected_tag_match.group(1))
-        self.assertEqual("v2.0.0", expected_tag_match.group(1))
+        self.assertEqual("v2.1.0", expected_tag_match.group(1))
         self.assertIn("Join-Path (Get-Location).Path 'bstrings-kit'", installer)
         self.assertIn("bundle-packs.json", installer)
         self.assertIn("SHA256SUMS.txt", installer)
@@ -343,9 +366,13 @@ class AirgapManifestTests(unittest.TestCase):
         self.assertIn("## Install", readme)
         self.assertIn("## Run an analysis", readme)
         installer = (repo_root / "Scripts" / "Install-Bstrings.ps1").read_text(encoding="utf-8")
-        self.assertIn("$expectedReleaseTag = 'v2.0.0'", installer)
+        self.assertIn("$expectedReleaseTag = 'v2.1.0'", installer)
+        self.assertIn(
+            "4bf9c7eb16fa3da2c2a30436cca0427eed5e77442072eeb67c37fbd3056f9a01",
+            installer,
+        )
         self.assertIn("v1.9.17", readme)
-        self.assertIn("$tag = 'v2.0.0'", readme)
+        self.assertIn("$tag = 'v2.1.0'", readme)
         self.assertIn("$name = 'Install-Bstrings.ps1'", readme)
         self.assertIn("/releases/download/$tag/$name", readme)
         self.assertIn("-ReleaseTag $tag", readme)

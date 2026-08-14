@@ -11,14 +11,6 @@ for root in (ENRICHMENT_ROOT, BENCHMARK_ROOT):
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
 
-from translation_worthiness_corpus import (  # noqa: E402
-    DEFAULT_CORPUS,
-    DEFAULT_SPLITS,
-    CorpusRow,
-    Prediction,
-    ValidatedCorpus,
-    validate_corpus,
-)
 from translation_worthiness_falsifier import (  # noqa: E402
     DEFAULT_COUNTEREXAMPLES,
     HASH_NAMES,
@@ -33,6 +25,15 @@ from translation_worthiness_falsifier import (  # noqa: E402
     load_locked_predictions,
     locked_prediction_report,
     paired_fake_translator_report,
+)
+
+from translation_worthiness_corpus import (  # noqa: E402
+    DEFAULT_CORPUS,
+    DEFAULT_SPLITS,
+    CorpusRow,
+    Prediction,
+    ValidatedCorpus,
+    validate_corpus,
 )
 
 

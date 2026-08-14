@@ -981,7 +981,8 @@ $bundleBenchmarkResultNames = @(
 )
 $bundleReleaseDocumentNames = @(
     'v1.9.17.md',
-    'v2.0.0.md'
+    'v2.0.0.md',
+    'v2.1.0.md'
 )
 $bundleRootDocumentNames = @(
     'BASE_PACK_NOTICE.md',

@@ -10,7 +10,7 @@ The project uses `MAJOR.MINOR.PATCH`:
 
 ## Version 2 release contract
 
-Version 2.0.0 has one complete Windows kit. It uses these public names:
+Version 2 has one complete Windows kit. Version 2.1.0 uses these public names:
 
 - `Install-Bstrings.ps1`
 - `bstrings-kit`

@@ -13,18 +13,18 @@ There is no second kit to select.
 
 You do not need administrator rights.
 
-## Version 2.0.0
+## Version 2.1.0
 
-Version 2.0.0 uses:
+Version 2.1.0 uses:
 
 - `Install-Bstrings.ps1` for the installer;
 - `bstrings-kit` for the default installation; and
 - `.bstrings-installer-cache` for verified download bytes.
 
-## Install version 2.0.0
+## Install version 2.1.0
 
 Use the authenticated command in the main README. It gets
-`Install-Bstrings.ps1` from the immutable v2.0.0 release.
+`Install-Bstrings.ps1` from the immutable v2.1.0 release.
 
 Run the authenticated installer from the directory that will contain
 `bstrings-kit`:
