@@ -47,6 +47,14 @@ Before another timing run, the long fixture was frozen at 24 GiB. This change
 uses the measured scan rate to qualify the workload. It does not change the
 one-second, five-percent, 60-second, 50-percent, or 30-second margins.
 
+The preregistered 24 GiB acceptance run passed. Median added new-run time was
+0.306 seconds for sparse input and 0.484 seconds for match-heavy input. Both
+were below the 1.0-second allowance. Median reusable work was 104.863 seconds,
+or 80.48 percent of fresh time. Median resume saving was 58.947 seconds, above
+the required 52.432 seconds. Canonical parity and exact preservation of all
+reused checkpoint and artifact bytes passed. The accepted rows are in
+`analysis-resume-acceptance-2026-08.csv`.
+
 Run the corrected protocol from the repository root:
 
 ```powershell

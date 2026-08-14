@@ -6,7 +6,7 @@
 - **Decision type:** forensic completion, failure recovery, provenance, performance, and command-line behavior
 - **Review method:** Robin round under the [high-level decision policy](decision-review-policy.md)
 - **Perspectives:** primary-source external research; repository and stopped-run audit; adversarial forensic, concurrency, migration, and performance review
-- **Implementation state:** runtime and documentation implementation complete; the original performance gates failed twice and the first corrected long fixture failed qualification; performance acceptance, public-kit engine coverage, privacy, and public-kit acceptance remain release blockers
+- **Implementation state:** runtime, documentation, every-stage managed crash tests, outgoing privacy scan, and corrected performance acceptance complete; public-kit engine coverage and independent published-kit acceptance remain release blockers
 - **Supersedes:** only the broader run-resume deferral in [ADR-0005](adr-0005-translation-integrity-and-run-dedup.md) and [ADR-0006](adr-0006-q4-cuda-full-translation.md); their translation atomicity, cache, and integrity rules remain in force
 
 ## Context
@@ -54,6 +54,15 @@ the 30-second floor. It is failed workload-qualification evidence, not a resume
 failure or acceptance evidence. Before a new run, the long fixture was frozen
 at 24 GiB using the observed scan rate. All timing and correctness margins stay
 unchanged.
+
+The preregistered 24 GiB run then passed. Median sparse and match-heavy added
+new-run time was 0.306 and 0.484 seconds, below the 1.0-second allowance.
+Median reusable work was 104.863 seconds, or 80.48 percent of the fresh run.
+Median resume saving was 58.947 seconds, above the required 52.432 seconds.
+Canonical parity and exact preservation of every reused checkpoint and artifact
+byte passed. Existing fresh-run ordering nondeterminism remains recorded for
+five line-oriented outputs; it did not alter their canonical payloads or any
+reused committed bytes.
 
 ## Pre-registered claims and tests
 
@@ -246,6 +255,7 @@ import-time choice. Any decoder or later-stage artifact refuses import.
 | The stopped v2.0.0 run has a structurally valid candidate prefix | Read-only local audit on 2026-08-14 verified safe structural fields, boundary JSON parsing, known artifact names, and matching installed identities | Supports attempting the narrow importer | Private local evidence is not published and does not prove resistance to coordinated tampering |
 | Short-run percentages do not measure practical checkpoint cost | Three-pair match-heavy and sparse synthetic CSVs under `benchmarks/results` measured 23.39 and 15.61 percent median overhead but only about 1.28 and 0.45 seconds of added time; canonical parity passed | Falsifies the original eight-percent-only gate and supports an absolute-or-relative margin | The corrected five-pair run passed both overhead margins |
 | A fixed byte size does not prove one minute of reusable work | The first corrected 8 GiB run measured 34.820 reusable seconds, 79.40 percent of fresh work, and 19.354 seconds saved; parity and reused-byte identity passed | Fails workload qualification without weakening the 60-second or 30-second margins | Freeze 24 GiB before the next run, based on the measured scan rate |
+| Qualified long-workload resume must save material time | The preregistered 24 GiB five-pair run measured 104.863 reusable seconds and 58.947 seconds median saving; required saving was 52.432 seconds | Passes the corrected performance gate with canonical parity and exact reused bytes | Retain the accepted CSV and re-run only for later performance-affecting changes |
 | Stage count does not measure reusable work | The same CSVs measured only 5.23 and 15.94 percent median resume saving, about 0.33 and 0.52 seconds, after interruption at checkpoint 10 | Falsifies the original 65-percent promise and supports selecting an interruption by measured committed-stage time | Short synthetic runs do not prove that resume saves useful time on a long run |
 
 ## Strongest detractor and resolution
@@ -421,8 +431,8 @@ to every analysis.
 The first two performance runs passed correctness but failed their registered
 timing gates. The first corrected run passed overhead and correctness but its
 8 GiB long fixture did not contain the required minute of reusable work. The
-architecture remains accepted, but performance acceptance is pending a fresh
-run with the preregistered 24 GiB fixture and unchanged margins.
+preregistered 24 GiB run passed every corrected performance and correctness
+margin. The accepted and failed CSVs remain separate evidence.
 
 The narrow importer can recover one known v2.0.0 prefix without creating a
 general promise to repair old output. Its residual protection matches the
@@ -472,6 +482,11 @@ The first corrected run then passed both new-run overhead margins and all
 correctness checks. Its 8 GiB long fixture failed the registered work-duration
 qualification. The result was retained as failed evidence. The next 24 GiB
 fixture and the unchanged gates were recorded before another timing run.
+
+The 24 GiB run passed all unchanged gates. It also confirmed exact bytes for
+every reused checkpoint and artifact. Fresh reruns can reorder five
+line-oriented outputs, so the accepted evidence records both canonical parity
+and that existing limitation rather than claiming false byte determinism.
 
 ## Primary references
 
