@@ -343,6 +343,34 @@ public sealed class AnalysisCliTests
         Assert.False(Directory.Exists(scope.OutputPath));
     }
 
+    public static TheoryData<string[]> InvalidResumeArguments =>
+        new()
+        {
+            new[] { "-f", "input.bin" },
+            new[] { "-d", "evidence" },
+            new[] { "--full" },
+            new[] { "--translation", "off" },
+            new[] { "--decode", "off" },
+            new[] { "--lr", "all" },
+        };
+
+    [Theory]
+    [MemberData(nameof(InvalidResumeArguments))]
+    public async Task ResumeParser_RejectsNewRunSelectorsBeforeTouchingTheOutput(
+        string[] incompatibleArguments
+    )
+    {
+        using var scope = new AnalyzeCliFixture();
+        var arguments = new[] { "-r", "-o", scope.OutputPath }
+            .Concat(incompatibleArguments)
+            .ToArray();
+
+        var exitCode = await AnalysisCli.RunAsync(arguments);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.False(Directory.Exists(scope.OutputPath));
+    }
+
     [Theory]
     [InlineData(null, false, 0)]
     [InlineData(null, true, 0)]

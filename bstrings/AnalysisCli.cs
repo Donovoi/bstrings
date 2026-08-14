@@ -62,8 +62,12 @@ internal static class AnalysisCli
         };
         var outputOption = new Option<string>("-o")
         {
-            Description = "New or empty results directory outside the evidence tree and installed bundle",
+            Description = "New or empty results directory, or an existing incomplete results directory with --resume",
             Required = true,
+        };
+        var resumeOption = new Option<bool>("--resume", "-r")
+        {
+            Description = "Resume a validated incomplete analysis from its last committed stage. Use with -o and, if the same kit moved, optional --bundle-root; saved evidence, settings, patterns, and engine identities are rechecked",
         };
         var maskOption = new Option<string?>("--mask")
         {
@@ -257,6 +261,7 @@ internal static class AnalysisCli
             fileOption,
             directoryOption,
             outputOption,
+            resumeOption,
             maskOption,
             fullOption,
             excludeEngineOption,
@@ -298,12 +303,37 @@ internal static class AnalysisCli
             + "  bstrings.exe analyze -d C:\\evidence\\carved --full -o C:\\results\\case-01\n"
             + "  bstrings.exe analyze -f C:\\evidence\\memory.raw --decode auto --translation off --lr all -o C:\\results\\decoded\n"
             + "  bstrings.exe analyze -d C:\\evidence\\carved --full -e ocr,translation -o C:\\results\\without-ai\n"
+            + "  bstrings.exe analyze -r -o C:\\results\\case-01\n"
             + "  bstrings.exe analyze -f C:\\evidence\\memory.raw --ocr off --translation off --lr all -o C:\\results\\memory\n\n"
-            + "The results directory must be new or empty. Failures retain .incomplete and diagnostic logs. "
+            + "New analyses require a new or empty results directory. Use -r or --resume for a validated incomplete run. Failures retain .incomplete and diagnostic logs. "
             + "Long-running stages print measured percentage completion; percentages are work units, not an ETA. "
             + "Specialist runs record every routing signal and terminal per-input engine state. Native extraction is on by default and may be explicitly disabled for a specialist-only run.";
         command.Validators.Add(result =>
         {
+            if (result.GetValue(resumeOption))
+            {
+                var allowed = new HashSet<Option>
+                {
+                    outputOption,
+                    resumeOption,
+                    bundleRootOption,
+                };
+                var incompatible = result.Command.Options
+                    .Where(option => !allowed.Contains(option))
+                    .Where(option => result.GetResult(option) is not null)
+                    .Select(option => option.Name)
+                    .OrderBy(name => name, StringComparer.Ordinal)
+                    .ToArray();
+                if (incompatible.Length > 0)
+                {
+                    result.AddError(
+                        "--resume loads the saved analysis contract and cannot be combined with: "
+                            + string.Join(", ", incompatible.Select(name => $"--{name}"))
+                    );
+                }
+                return;
+            }
+
             var exclusionResult = result.GetResult(excludeEngineOption);
             if (
                 exclusionResult is null
@@ -340,6 +370,30 @@ internal static class AnalysisCli
             {
                 try
                 {
+                    if (result.GetValue(resumeOption))
+                    {
+                        using var resumeCancellation = new CancellationTokenSource();
+                        ConsoleCancelEventHandler resumeCancelHandler = (_, eventArgs) =>
+                        {
+                            eventArgs.Cancel = true;
+                            resumeCancellation.Cancel();
+                        };
+                        Console.CancelKeyPress += resumeCancelHandler;
+                        try
+                        {
+                            await AnalysisOrchestrator.ResumeAsync(
+                                result.GetValue(outputOption)!,
+                                result.GetValue(bundleRootOption),
+                                resumeCancellation.Token
+                            );
+                        }
+                        finally
+                        {
+                            Console.CancelKeyPress -= resumeCancelHandler;
+                        }
+                        return;
+                    }
+
                     var full = result.GetValue(fullOption);
                     var modes = ResolveEngineModes(
                         full,

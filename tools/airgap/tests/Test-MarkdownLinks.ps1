@@ -96,6 +96,7 @@ try {
         'adr-0009-bounded-forensic-pattern-expansion.md',
         'adr-0010-bounded-reversible-decoding.md',
         'adr-0011-single-windows-kit-and-plain-documentation.md',
+        'adr-0012-explicit-whole-stage-resume.md',
         'decision-review-policy.md'
     )
     if (($architectureDocuments -join '|') -cne ($expectedArchitectureDocuments -join '|')) {

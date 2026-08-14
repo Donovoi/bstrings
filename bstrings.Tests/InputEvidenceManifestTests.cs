@@ -125,6 +125,48 @@ public sealed class InputEvidenceManifestTests
     }
 
     [Fact]
+    public async Task VerifySelectionAsync_RejectsAddedOrRemovedInputsWithoutChangingTheInventory()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var first = scope.PathFor("first.bin");
+        var second = scope.PathFor("second.bin");
+        var inventory = scope.PathFor("input-files.txt");
+        var manifest = scope.PathFor("input-manifest.jsonl");
+        await File.WriteAllTextAsync(first, "alpha", cancellationToken);
+        await File.WriteAllTextAsync(second, "bravo", cancellationToken);
+        await InputEvidenceManifest.CreateAsync(
+            inventory,
+            manifest,
+            [first],
+            cancellationToken
+        );
+
+        await InputEvidenceManifest.VerifySelectionAsync(
+            inventory,
+            [first],
+            cancellationToken
+        );
+        var added = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            InputEvidenceManifest.VerifySelectionAsync(
+                inventory,
+                [first, second],
+                cancellationToken
+            )
+        );
+        var removed = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            InputEvidenceManifest.VerifySelectionAsync(
+                inventory,
+                Array.Empty<string>(),
+                cancellationToken
+            )
+        );
+
+        Assert.Contains("selection changed", added.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("selection changed", removed.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ReadInputInventory_MaterializesOneImmutableSequence()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -143,7 +185,7 @@ public sealed class InputEvidenceManifestTests
     }
 
     [Fact]
-    public async Task Analyze_InventoryDriftFailsClosedBeforeNativeExtraction()
+    public async Task Analyze_CommittedInventoryCannotBeChangedBeforeNativeExtraction()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         using var scope = new TemporaryDirectory();
@@ -153,7 +195,7 @@ public sealed class InputEvidenceManifestTests
         await File.WriteAllTextAsync(evidence, "analyst@example.com", cancellationToken);
         await File.WriteAllTextAsync(replacement, "replacement", cancellationToken);
 
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+        await Assert.ThrowsAsync<IOException>(() =>
             AnalysisOrchestrator.RunAsync(
                 CreateOptions(evidence, output),
                 cancellationToken,
@@ -162,7 +204,6 @@ public sealed class InputEvidenceManifestTests
             )
         );
 
-        Assert.Contains("inventory SHA-256 mismatch", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.True(File.Exists(Path.Combine(output, ".incomplete")));
         Assert.False(File.Exists(Path.Combine(output, "summary.json")));
         using var run = JsonDocument.Parse(

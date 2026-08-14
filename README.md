@@ -125,7 +125,7 @@ Do not analyze evidence if this command returns a nonzero exit code.
 
 ## Run an analysis
 
-Use a new or empty output directory:
+Use a new or empty output directory for a new analysis:
 
 ```powershell
 .\bstrings-kit\bstrings.exe analyze `
@@ -143,11 +143,32 @@ A complete run has all these results:
 - `summary.json` has `status: complete`.
 - The output directory does not contain `.incomplete`.
 
-Keep incomplete output for diagnosis. Use a different new or empty directory
-for the next attempt.
+Keep incomplete output for diagnosis. You can resume a supported run after an
+interruption.
 
 The output can contain sensitive case data. Protect the complete output
 directory.
+
+## Resume an analysis
+
+Use the same output directory with `-r`:
+
+```powershell
+.\bstrings-kit\bstrings.exe analyze `
+  -r `
+  -o D:\results\case-01
+```
+
+`--resume` is the long form of `-r`. Resume uses the saved input and settings.
+It verifies the input, kit, checkpoints, and completed stages before it reuses
+them. It refuses changed or damaged state and concurrent use.
+
+Resume keeps files from the unfinished stage in its diagnostic log. It starts
+that stage again. An interrupted translation stage starts again from the saved
+list of translation candidates.
+
+The final completion checks do not change. Do not use incomplete output as
+completed evidence.
 
 ## Select engines
 

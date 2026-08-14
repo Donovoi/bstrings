@@ -104,6 +104,26 @@ internal static class LanguageTriageCore
         bool DetectorReused
     );
 
+    private sealed record CompletedAssessment(
+        string Decision,
+        bool IsCandidate,
+        bool DetectorEligible,
+        bool DetectorSucceeded,
+        DetectionReplay? Detection,
+        string? RoutingCode
+    );
+
+    private readonly record struct DetectionReplay(
+        string Language,
+        double Confidence,
+        double TargetConfidence,
+        double SecondConfidence,
+        double TopLanguageMargin,
+        double TargetMargin,
+        bool ConfidenceGatePassed,
+        bool MarginGatePassed
+    );
+
     private sealed class LanguageAssessmentPayload
     {
         public int SchemaVersion { get; init; }
@@ -501,6 +521,268 @@ internal static class LanguageTriageCore
         );
     }
 
+    internal static async Task<LanguageTriageStats> ValidateCompletedOutputsAsync(
+        string inputPath,
+        string candidatesPath,
+        string assessmentsPath,
+        LanguageTriageOptions options,
+        CancellationToken cancellationToken = default,
+        bool reuseSuccessfulDetections = true,
+        bool includeTranslationRouting = true
+    )
+    {
+        ValidateOptions(options);
+        if (
+            !LanguageDetectionCore.TryNormalizeTargetLanguage(
+                options.TargetLanguage,
+                out var detectorTargetLanguage,
+                out var targetError
+            )
+        )
+        {
+            throw new ArgumentException(targetError, nameof(options));
+        }
+        options = options with { TargetLanguage = options.TargetLanguage.Trim() };
+
+        var inputFullPath = Path.GetFullPath(inputPath);
+        var candidatesFullPath = Path.GetFullPath(candidatesPath);
+        var assessmentsFullPath = Path.GetFullPath(assessmentsPath);
+        if (
+            string.Equals(inputFullPath, candidatesFullPath, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(inputFullPath, assessmentsFullPath, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(candidatesFullPath, assessmentsFullPath, StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            throw new ArgumentException("Language-triage input and output paths must be distinct.");
+        }
+
+        var effectiveMode = options.DetectionMode == LanguageDetectionMode.Adaptive
+            ? await ResolveAdaptiveModeAsync(inputFullPath, options, cancellationToken)
+            : options.DetectionMode;
+
+        long inputRecords = 0;
+        long targetRecords = 0;
+        long candidates = 0;
+        long ambiguous = 0;
+        long nonLinguistic = 0;
+        long failures = 0;
+        long routingRetained = 0;
+        long routingProspectiveBypasses = 0;
+        long routingUnknown = 0;
+        long routingEvaluations = 0;
+        long detectorEligibleRecords = 0;
+        long detectorExecutions = 0;
+        long detectorReuseHits = 0;
+        long pendingUtf8Bytes = 0;
+        var pending = new List<(PendingRecord Record, CompletedAssessment Assessment)>(
+            options.BatchSize
+        );
+
+        void FlushReplayBatch()
+        {
+            if (pending.Count == 0)
+            {
+                return;
+            }
+            if (includeTranslationRouting)
+            {
+                routingEvaluations = checked(
+                    routingEvaluations
+                        + pending.Select(item => item.Record.Text).Distinct(StringComparer.Ordinal).Count()
+                );
+            }
+
+            var successfulByText = new Dictionary<string, DetectionReplay>(StringComparer.Ordinal);
+            foreach (var item in pending)
+            {
+                var assessment = item.Assessment;
+                switch (assessment.Decision)
+                {
+                    case "target-language":
+                        targetRecords++;
+                        break;
+                    case "ambiguous":
+                        ambiguous++;
+                        break;
+                    case "non-linguistic":
+                    case "already-derived":
+                        nonLinguistic++;
+                        break;
+                    case "detector-failed":
+                        failures++;
+                        break;
+                }
+                if (assessment.IsCandidate)
+                {
+                    candidates++;
+                }
+
+                if (assessment.RoutingCode is { } routingCode)
+                {
+                    var category = TranslationWorthinessRouter.Codebook[routingCode];
+                    if (category == "unknown")
+                    {
+                        routingUnknown++;
+                    }
+                    else if (category == "prospective")
+                    {
+                        routingProspectiveBypasses++;
+                    }
+                    else
+                    {
+                        routingRetained++;
+                    }
+                }
+
+                if (!assessment.DetectorEligible)
+                {
+                    continue;
+                }
+                detectorEligibleRecords++;
+                if (
+                    reuseSuccessfulDetections
+                    && successfulByText.TryGetValue(item.Record.Text, out var reused)
+                )
+                {
+                    detectorReuseHits++;
+                    if (!assessment.DetectorSucceeded || assessment.Detection != reused)
+                    {
+                        throw new InvalidDataException(
+                            $"Language assessment for '{item.Record.RecordId}' does not match its batch-local reused detection."
+                        );
+                    }
+                    continue;
+                }
+
+                detectorExecutions++;
+                if (assessment.DetectorSucceeded && assessment.Detection is { } successful)
+                {
+                    successfulByText[item.Record.Text] = successful;
+                }
+            }
+            pending.Clear();
+            pendingUtf8Bytes = 0;
+        }
+
+        await using var candidateEnumerator = StrictJsonlCompletionReader
+            .ReadAsync(
+                candidatesFullPath,
+                "Language-triage candidate output",
+                EnrichmentRegexPipelineCore.MaxJsonLineCharacters,
+                cancellationToken
+            )
+            .GetAsyncEnumerator(cancellationToken);
+        await using var assessmentEnumerator = StrictJsonlCompletionReader
+            .ReadAsync(
+                assessmentsFullPath,
+                "Language-triage assessment output",
+                EnrichmentRegexPipelineCore.MaxJsonLineCharacters,
+                cancellationToken
+            )
+            .GetAsyncEnumerator(cancellationToken);
+
+        await foreach (
+            var inputLine in StrictJsonlCompletionReader.ReadAsync(
+                inputFullPath,
+                "Language-triage input",
+                EnrichmentRegexPipelineCore.MaxJsonLineCharacters,
+                cancellationToken
+            )
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var lineUtf8Bytes = Encoding.UTF8.GetByteCount(inputLine.Json);
+            if (
+                ShouldFlushBeforeAdding(
+                    pending.Count,
+                    pendingUtf8Bytes,
+                    lineUtf8Bytes,
+                    options.BatchSize,
+                    options.MaximumBatchUtf8Bytes
+                )
+            )
+            {
+                FlushReplayBatch();
+            }
+
+            var record = ParseRecord(inputLine.Json, inputLine.LineNumber);
+            if (!await assessmentEnumerator.MoveNextAsync())
+            {
+                throw new InvalidDataException(
+                    $"Language-triage assessments are truncated before input line {inputLine.LineNumber:N0}."
+                );
+            }
+            var assessment = ValidateCompletedAssessment(
+                record,
+                assessmentEnumerator.Current,
+                options,
+                effectiveMode,
+                detectorTargetLanguage,
+                includeTranslationRouting
+            );
+            if (assessment.IsCandidate)
+            {
+                if (!await candidateEnumerator.MoveNextAsync())
+                {
+                    throw new InvalidDataException(
+                        $"Language-triage candidates are truncated before input line {inputLine.LineNumber:N0}."
+                    );
+                }
+                if (
+                    !string.Equals(
+                        candidateEnumerator.Current.Json,
+                        record.OriginalLine,
+                        StringComparison.Ordinal
+                    )
+                )
+                {
+                    throw new InvalidDataException(
+                        $"Language-triage candidate projection differs from input line {inputLine.LineNumber:N0}."
+                    );
+                }
+            }
+
+            pending.Add((record, assessment));
+            pendingUtf8Bytes = checked(pendingUtf8Bytes + lineUtf8Bytes);
+            inputRecords++;
+            if (
+                pending.Count >= options.BatchSize
+                || pendingUtf8Bytes >= options.MaximumBatchUtf8Bytes
+            )
+            {
+                FlushReplayBatch();
+            }
+        }
+        FlushReplayBatch();
+
+        if (await assessmentEnumerator.MoveNextAsync())
+        {
+            throw new InvalidDataException("Language-triage assessments contain trailing records.");
+        }
+        if (await candidateEnumerator.MoveNextAsync())
+        {
+            throw new InvalidDataException("Language-triage candidates contain trailing records.");
+        }
+
+        return new LanguageTriageStats(
+            inputRecords,
+            targetRecords,
+            candidates,
+            ambiguous,
+            nonLinguistic,
+            failures,
+            effectiveMode,
+            includeTranslationRouting ? TranslationWorthinessRouter.PolicyVersion : "disabled",
+            routingRetained,
+            routingProspectiveBypasses,
+            routingUnknown,
+            routingEvaluations,
+            detectorEligibleRecords,
+            detectorExecutions,
+            detectorReuseHits
+        );
+    }
+
     private static AssessedRecord Assess(
         PendingRecord record,
         LanguageTriageOptions options,
@@ -805,12 +1087,485 @@ internal static class LanguageTriageCore
         return rounded == 0d ? 0d : rounded;
     }
 
+    private static CompletedAssessment ValidateCompletedAssessment(
+        PendingRecord source,
+        StrictJsonlCompletionLine line,
+        LanguageTriageOptions options,
+        LanguageDetectionMode effectiveMode,
+        string detectorTargetLanguage,
+        bool includeTranslationRouting
+    )
+    {
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(line.Json);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException(
+                $"Language-triage assessment line {line.LineNumber:N0} is invalid JSON: {ex.Message}",
+                ex
+            );
+        }
+        using (document)
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw InvalidAssessment(line.LineNumber, "is not a JSON object");
+            }
+            var expectedProperties = new HashSet<string>(
+                [
+                    "schemaVersion",
+                    "recordType",
+                    "sourceRecordId",
+                    "sourceFile",
+                    "location",
+                    "detector",
+                    "detectorVersion",
+                    "profile",
+                    "targetLanguage",
+                    "detectorTargetLanguage",
+                    "language",
+                    "confidence",
+                    "targetConfidence",
+                    "secondConfidence",
+                    "topLanguageMargin",
+                    "targetMargin",
+                    "scoreDecimalPlaces",
+                    "configuredMinimumConfidence",
+                    "configuredMinimumTargetMargin",
+                    "effectiveMinimumConfidence",
+                    "effectiveMinimumTargetMargin",
+                    "minimumConfidence",
+                    "minimumTargetMargin",
+                    "confidenceGatePassed",
+                    "marginGatePassed",
+                    "policy",
+                    "decision",
+                    "translationCandidate",
+                    "error",
+                ],
+                StringComparer.Ordinal
+            );
+            if (includeTranslationRouting)
+            {
+                expectedProperties.Add("translationRouting");
+            }
+            RequireExactProperties(root, expectedProperties, "Language assessment", line.LineNumber);
+
+            var (effectiveMinimumConfidence, effectiveMinimumTargetMargin) =
+                ResolveEffectiveThresholds(options);
+            if (
+                !RequiredInt32(root, "schemaVersion", out var schemaVersion)
+                || schemaVersion != 1
+                || !RequiredString(root, "recordType", out var recordType)
+                || recordType != "language-assessment"
+                || !RequiredString(root, "sourceRecordId", out var sourceRecordId)
+                || !string.Equals(sourceRecordId, source.RecordId, StringComparison.Ordinal)
+                || !RequiredString(root, "sourceFile", out var sourceFile)
+                || !string.Equals(sourceFile, source.SourceFile, StringComparison.Ordinal)
+                || !root.TryGetProperty("location", out var location)
+                || !JsonElement.DeepEquals(location, source.Location)
+                || !RequiredString(root, "detector", out var detector)
+                || detector != DetectorName
+                || !RequiredString(root, "detectorVersion", out var detectorVersion)
+                || detectorVersion != DetectorVersion
+                || !RequiredString(root, "profile", out var profile)
+                || profile != effectiveMode.ToString().ToLowerInvariant()
+                || !RequiredString(root, "targetLanguage", out var targetLanguage)
+                || targetLanguage != options.TargetLanguage
+                || !RequiredNullableString(
+                    root,
+                    "detectorTargetLanguage",
+                    out var recordedDetectorTarget
+                )
+                || recordedDetectorTarget != detectorTargetLanguage
+                || !RequiredInt32(root, "scoreDecimalPlaces", out var decimalPlaces)
+                || decimalPlaces != AssessmentScoreDecimalPlaces
+                || !RequiredDouble(root, "configuredMinimumConfidence", out var configuredConfidence)
+                || configuredConfidence != options.MinimumConfidence
+                || !RequiredDouble(root, "configuredMinimumTargetMargin", out var configuredMargin)
+                || configuredMargin != options.MinimumTargetMargin
+                || !RequiredDouble(root, "effectiveMinimumConfidence", out var effectiveConfidence)
+                || effectiveConfidence != effectiveMinimumConfidence
+                || !RequiredDouble(root, "effectiveMinimumTargetMargin", out var effectiveMargin)
+                || effectiveMargin != effectiveMinimumTargetMargin
+                || !RequiredDouble(root, "minimumConfidence", out var aliasConfidence)
+                || aliasConfidence != effectiveMinimumConfidence
+                || !RequiredDouble(root, "minimumTargetMargin", out var aliasMargin)
+                || aliasMargin != effectiveMinimumTargetMargin
+                || !RequiredString(root, "policy", out var policy)
+                || policy != PolicyName(options.Policy)
+                || !RequiredString(root, "decision", out var decision)
+                || !RequiredBoolean(root, "translationCandidate", out var isCandidate)
+                || !RequiredNullableString(root, "error", out var error)
+            )
+            {
+                throw InvalidAssessment(
+                    line.LineNumber,
+                    "does not bind to the exact source record and triage configuration"
+                );
+            }
+
+            var detectorEligible = !source.IsDerived
+                && IsLinguisticCandidate(
+                    source.Text,
+                    options.MinimumCharacters,
+                    options.MaximumCharacters
+                );
+            if (
+                !RequiredNullableString(root, "language", out var language)
+                || !RequiredNullableDouble(root, "confidence", out var confidence)
+                || !RequiredNullableDouble(root, "targetConfidence", out var targetConfidence)
+                || !RequiredNullableDouble(root, "secondConfidence", out var secondConfidence)
+                || !RequiredNullableDouble(root, "topLanguageMargin", out var topLanguageMargin)
+                || !RequiredNullableDouble(root, "targetMargin", out var targetMargin)
+                || !RequiredNullableBoolean(
+                    root,
+                    "confidenceGatePassed",
+                    out var confidenceGatePassed
+                )
+                || !RequiredNullableBoolean(root, "marginGatePassed", out var marginGatePassed)
+            )
+            {
+                throw InvalidAssessment(line.LineNumber, "has invalid detector result fields");
+            }
+
+            DetectionReplay? detection = null;
+            var detectorSucceeded = language is not null;
+            if (!detectorEligible)
+            {
+                var expectedDecision = source.IsDerived ? "already-derived" : "non-linguistic";
+                if (
+                    decision != expectedDecision
+                    || isCandidate
+                    || error is not null
+                    || !AllNull(
+                        language,
+                        confidence,
+                        targetConfidence,
+                        secondConfidence,
+                        topLanguageMargin,
+                        targetMargin,
+                        confidenceGatePassed,
+                        marginGatePassed
+                    )
+                )
+                {
+                    throw InvalidAssessment(
+                        line.LineNumber,
+                        "does not match its non-detector decision"
+                    );
+                }
+                detectorSucceeded = false;
+            }
+            else if (!detectorSucceeded)
+            {
+                if (
+                    decision != "detector-failed"
+                    || isCandidate != (options.Policy == LanguageTriagePolicy.HighRecall)
+                    || string.IsNullOrWhiteSpace(error)
+                    || !AllNull(
+                        confidence,
+                        targetConfidence,
+                        secondConfidence,
+                        topLanguageMargin,
+                        targetMargin,
+                        confidenceGatePassed,
+                        marginGatePassed
+                    )
+                )
+                {
+                    throw InvalidAssessment(line.LineNumber, "has invalid detector-failure metadata");
+                }
+            }
+            else
+            {
+                if (
+                    string.IsNullOrWhiteSpace(language)
+                    || error is not null
+                    || confidence is not { } confidenceValue
+                    || targetConfidence is not { } targetConfidenceValue
+                    || secondConfidence is not { } secondConfidenceValue
+                    || topLanguageMargin is not { } topLanguageMarginValue
+                    || targetMargin is not { } targetMarginValue
+                    || confidenceGatePassed is not { } confidenceGate
+                    || marginGatePassed is not { } marginGate
+                    || !IsProbability(confidenceValue)
+                    || !IsProbability(targetConfidenceValue)
+                    || !IsProbability(secondConfidenceValue)
+                    || !IsMargin(topLanguageMarginValue)
+                    || !IsMargin(targetMarginValue)
+                    || !ApproximatelyEqual(
+                        topLanguageMarginValue,
+                        confidenceValue - secondConfidenceValue
+                    )
+                    || !ApproximatelyEqual(
+                        targetMarginValue,
+                        confidenceValue - targetConfidenceValue
+                    )
+                    || !RoundedGateIsPlausible(
+                        confidenceValue,
+                        effectiveMinimumConfidence,
+                        confidenceGate
+                    )
+                )
+                {
+                    throw InvalidAssessment(line.LineNumber, "has inconsistent detector scores");
+                }
+                var targetDetected = string.Equals(
+                    language,
+                    detectorTargetLanguage,
+                    StringComparison.OrdinalIgnoreCase
+                );
+                var recordedMargin = targetDetected ? topLanguageMarginValue : targetMarginValue;
+                if (
+                    !RoundedGateIsPlausible(
+                        recordedMargin,
+                        effectiveMinimumTargetMargin,
+                        marginGate
+                    )
+                )
+                {
+                    throw InvalidAssessment(line.LineNumber, "has an inconsistent margin gate");
+                }
+
+                var clearsGate = confidenceGate && marginGate;
+                var expectedDecision = targetDetected
+                    ? clearsGate ? "target-language" : "ambiguous"
+                    : clearsGate || options.Policy == LanguageTriagePolicy.HighRecall
+                        ? "translate"
+                        : "ambiguous";
+                var expectedCandidate = targetDetected
+                    ? !clearsGate && options.Policy == LanguageTriagePolicy.HighRecall
+                    : clearsGate || options.Policy == LanguageTriagePolicy.HighRecall;
+                if (decision != expectedDecision || isCandidate != expectedCandidate)
+                {
+                    throw InvalidAssessment(line.LineNumber, "has an inconsistent decision or candidate flag");
+                }
+                detection = new DetectionReplay(
+                    language,
+                    confidenceValue,
+                    targetConfidenceValue,
+                    secondConfidenceValue,
+                    topLanguageMarginValue,
+                    targetMarginValue,
+                    confidenceGate,
+                    marginGate
+                );
+            }
+
+            string? routingCode = null;
+            if (includeTranslationRouting)
+            {
+                if (
+                    !root.TryGetProperty("translationRouting", out var routing)
+                    || routing.ValueKind != JsonValueKind.Object
+                )
+                {
+                    throw InvalidAssessment(line.LineNumber, "has no translation-routing object");
+                }
+                RequireExactProperties(
+                    routing,
+                    new HashSet<string>(["code"], StringComparer.Ordinal),
+                    "Translation routing",
+                    line.LineNumber
+                );
+                if (!RequiredString(routing, "code", out routingCode))
+                {
+                    throw InvalidAssessment(line.LineNumber, "has no translation-routing code");
+                }
+                var expectedCode = RoutingCode(TranslationWorthinessRouter.Assess(source.Text));
+                if (
+                    routingCode != expectedCode
+                    || !TranslationWorthinessRouter.Codebook.ContainsKey(routingCode)
+                )
+                {
+                    throw InvalidAssessment(line.LineNumber, "has an invalid translation-routing projection");
+                }
+            }
+
+            return new CompletedAssessment(
+                decision,
+                isCandidate,
+                detectorEligible,
+                detectorSucceeded,
+                detection,
+                routingCode
+            );
+        }
+    }
+
+    private static bool AllNull(params object?[] values) => values.All(value => value is null);
+
+    private static bool IsProbability(double value) =>
+        double.IsFinite(value) && value is >= 0 and <= 1;
+
+    private static bool IsMargin(double value) =>
+        double.IsFinite(value) && value is >= -1 and <= 1;
+
+    private static bool ApproximatelyEqual(double left, double right) =>
+        Math.Abs(left - right) <= 1.5e-12;
+
+    private static bool RoundedGateIsPlausible(double value, double threshold, bool passed)
+    {
+        const double roundingAmbiguity = 0.500001e-12;
+        return passed
+            ? value >= threshold - roundingAmbiguity
+            : value <= threshold + roundingAmbiguity;
+    }
+
+    private static InvalidDataException InvalidAssessment(long lineNumber, string reason) =>
+        new($"Language-triage assessment line {lineNumber:N0} {reason}.");
+
+    private static void RequireExactProperties(
+        JsonElement value,
+        HashSet<string> expected,
+        string description,
+        long lineNumber
+    )
+    {
+        var remaining = new HashSet<string>(expected, StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!remaining.Remove(property.Name))
+            {
+                throw new InvalidDataException(
+                    $"{description} at line {lineNumber:N0} has an unexpected or duplicate property '{property.Name}'."
+                );
+            }
+        }
+        if (remaining.Count != 0)
+        {
+            throw new InvalidDataException(
+                $"{description} at line {lineNumber:N0} is missing required properties."
+            );
+        }
+    }
+
+    private static bool RequiredString(JsonElement parent, string name, out string value)
+    {
+        value = string.Empty;
+        if (!parent.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+        value = property.GetString() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(value);
+    }
+
+    private static bool RequiredNullableString(
+        JsonElement parent,
+        string name,
+        out string? value
+    )
+    {
+        value = null;
+        if (!parent.TryGetProperty(name, out var property))
+        {
+            return false;
+        }
+        if (property.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+        value = property.GetString();
+        return value is not null;
+    }
+
+    private static bool RequiredInt32(JsonElement parent, string name, out int value)
+    {
+        value = 0;
+        return parent.TryGetProperty(name, out var property) && property.TryGetInt32(out value);
+    }
+
+    private static bool RequiredDouble(JsonElement parent, string name, out double value)
+    {
+        value = 0;
+        return parent.TryGetProperty(name, out var property)
+            && property.TryGetDouble(out value)
+            && double.IsFinite(value);
+    }
+
+    private static bool RequiredNullableDouble(
+        JsonElement parent,
+        string name,
+        out double? value
+    )
+    {
+        value = null;
+        if (!parent.TryGetProperty(name, out var property))
+        {
+            return false;
+        }
+        if (property.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+        if (!property.TryGetDouble(out var number) || !double.IsFinite(number))
+        {
+            return false;
+        }
+        value = number;
+        return true;
+    }
+
+    private static bool RequiredBoolean(JsonElement parent, string name, out bool value)
+    {
+        value = false;
+        if (!parent.TryGetProperty(name, out var property))
+        {
+            return false;
+        }
+        if (property.ValueKind == JsonValueKind.True)
+        {
+            value = true;
+            return true;
+        }
+        return property.ValueKind == JsonValueKind.False;
+    }
+
+    private static bool RequiredNullableBoolean(
+        JsonElement parent,
+        string name,
+        out bool? value
+    )
+    {
+        value = null;
+        if (!parent.TryGetProperty(name, out var property))
+        {
+            return false;
+        }
+        if (property.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+        if (property.ValueKind == JsonValueKind.True)
+        {
+            value = true;
+            return true;
+        }
+        if (property.ValueKind == JsonValueKind.False)
+        {
+            value = false;
+            return true;
+        }
+        return false;
+    }
+
     private static PendingRecord ParseRecord(string line, long lineNumber)
     {
         try
         {
             using var document = JsonDocument.Parse(line);
             var root = document.RootElement;
+            EnsureNoDuplicateProperties(root, $"Language-triage input line {lineNumber:N0}");
             if (
                 root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("schemaVersion", out var schemaVersion)
@@ -896,6 +1651,31 @@ internal static class LanguageTriageCore
                 $"Invalid language-triage JSONL at line {lineNumber:N0}: {ex.Message}",
                 ex
             );
+        }
+    }
+
+    private static void EnsureNoDuplicateProperties(JsonElement value, string description)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in value.EnumerateObject())
+            {
+                if (!names.Add(property.Name))
+                {
+                    throw new InvalidDataException(
+                        $"{description} duplicates JSON property '{property.Name}'."
+                    );
+                }
+                EnsureNoDuplicateProperties(property.Value, description);
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var element in value.EnumerateArray())
+            {
+                EnsureNoDuplicateProperties(element, description);
+            }
         }
     }
 

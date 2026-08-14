@@ -113,6 +113,71 @@ forensic VM and restrict write access to the evidence parent and result parent;
 hostile concurrent filesystem mutation requires operating-system
 handle-relative I/O beyond this workflow's threat model.
 
+## Resume an incomplete run
+
+Resume is explicit. It never starts because an output directory only looks
+incomplete.
+
+```powershell
+bstrings.exe analyze --resume -o results
+```
+
+`-r` is the short form of `--resume`. A normal resume accepts only the output
+directory and an optional `--bundle-root`. The optional path can locate the
+same verified kit after a move; it cannot change the saved kit identity. The
+output directory must be on a physical local filesystem.
+
+Resume restores the saved input inventory and effective options. It refuses a
+new input, changed options, a different kit, unsupported checkpoint state,
+damaged committed output, or a second live writer.
+
+The orchestrator checkpoints whole stages. It registers the exact output set
+for each stage. The feature validator checks schema, cardinality, ordering, and
+provenance. The shared resume core checks physical paths, sizes, SHA-256, and
+the checkpoint chain.
+
+A checkpoint names the committed stage. The contiguous checkpoint chain shows
+which stage comes next. A file, progress line, or log entry alone cannot
+authorize reuse.
+
+Resume validates the input bytes, saved configuration, kit and model identity,
+checkpoint chain, and every committed stage before it reuses them. It moves
+recognized, uncommitted stage files to
+`logs/resume-<attempt-id>/abandoned/`. Unknown output causes refusal. Resume
+then starts at the first uncommitted stage and repeats that whole stage.
+Interrupted translation starts again from `translation-candidates.jsonl`;
+partial translated output and the run-local translation cache are not reused.
+
+One process holds an exclusive result-directory lease. Each start or resume has
+a new attempt identifier. Attempt history records the last committed stage and
+terminal status. Progress shows reused stages and current work, but it remains
+advisory.
+
+The explicit resume command also contains one narrow importer for the supported
+pre-checkpoint v2.0.0 output shape. It requires the exact published v2.0.0
+executable and full kit identities, built-in `all` patterns, the known artifact
+prefix, full input rehashing, and complete routing, extraction, raw, language,
+and candidate validation. Routing must contain no FLOSS or OCR candidates, and
+their outputs must be empty. The importer refuses any translation, cache,
+partial, decoder, report, or unknown later artifact. It records decoding as
+`off` and restarts translation from zero. It is not a general repair path for
+old output.
+
+The `.bstrings-resume` metadata contains case paths, saved options, pattern
+settings, and content hashes. It does not copy extracted strings, decoded
+values, translations, or pattern hits. Protect it as part of the sensitive
+result directory.
+
+Checkpoint and import validation address accidental interruption on a
+controlled examination host. They do not authenticate unsigned result state
+against coordinated post-run tampering. If you cannot trust the incomplete
+directory, preserve it for diagnosis and start a new run.
+
+Resume does not change the completion contract. Only exit code 0, complete
+`run.json`, complete `summary.json`, and no `.incomplete` marker prove that the
+full run completed. See
+[ADR-0012](architecture/adr-0012-explicit-whole-stage-resume.md).
+
 ## Output formats
 
 | Format | Intended use | Important limitation |

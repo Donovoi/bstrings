@@ -1287,6 +1287,165 @@ public sealed class LanguageTriageCoreTests
         Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.backup.*"));
     }
 
+    [Fact]
+    public async Task ValidateCompletedOutputsAsync_ReconstructsExactStatsWithoutCallingDetector()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("input.jsonl");
+        var candidatesPath = scope.PathFor("candidates.jsonl");
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        var duplicateText = "Esta evidencia duplicada necesita traduccion.";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                CreateRecord("record-one", duplicateText),
+                CreateRecord("record-two", "Otra evidencia necesita traduccion."),
+                CreateRecord("record-three", duplicateText),
+            ],
+            cancellationToken
+        );
+        var detectorCalls = 0;
+        LanguageDetectionHandler detector = (
+            string text,
+            LanguageDetectionMode mode,
+            string targetLanguage,
+            out LanguageDetectionResult result,
+            out string? error
+        ) =>
+        {
+            Interlocked.Increment(ref detectorCalls);
+            return AlwaysSpanish(text, mode, targetLanguage, out result, out error);
+        };
+        var options = CreateOptions(batchSize: 4);
+        var expected = await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            candidatesPath,
+            assessmentsPath,
+            options,
+            cancellationToken,
+            detector,
+            reuseSuccessfulDetections: true
+        );
+        var callsAfterProcessing = detectorCalls;
+
+        var actual = await LanguageTriageCore.ValidateCompletedOutputsAsync(
+            inputPath,
+            candidatesPath,
+            assessmentsPath,
+            options,
+            cancellationToken,
+            reuseSuccessfulDetections: true
+        );
+
+        Assert.Equal(expected, actual);
+        Assert.Equal(2, callsAfterProcessing);
+        Assert.Equal(callsAfterProcessing, detectorCalls);
+    }
+
+    [Theory]
+    [InlineData("truncated")]
+    [InlineData("reordered")]
+    [InlineData("duplicate-property")]
+    [InlineData("same-length-tamper")]
+    [InlineData("unterminated")]
+    public async Task ValidateCompletedOutputsAsync_RejectsInvalidAssessments(string mutation)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var completed = await CreateCompletedOutputsAsync(scope, cancellationToken);
+        var lines = await File.ReadAllLinesAsync(completed.AssessmentsPath, cancellationToken);
+
+        switch (mutation)
+        {
+            case "truncated":
+                lines = lines[..^1];
+                break;
+            case "reordered":
+                Array.Reverse(lines);
+                break;
+            case "duplicate-property":
+                lines[0] = lines[0].Replace(
+                    "\"decision\":\"translate\"",
+                    "\"decision\":\"translate\",\"decision\":\"translate\"",
+                    StringComparison.Ordinal
+                );
+                break;
+            case "same-length-tamper":
+                lines[0] = lines[0].Replace("record-one", "record-xxx", StringComparison.Ordinal);
+                break;
+            case "unterminated":
+                await File.WriteAllTextAsync(
+                    completed.AssessmentsPath,
+                    string.Join(Environment.NewLine, lines),
+                    cancellationToken
+                );
+                break;
+            default:
+                throw new InvalidOperationException($"Unknown mutation '{mutation}'.");
+        }
+        if (mutation != "unterminated")
+        {
+            await File.WriteAllLinesAsync(completed.AssessmentsPath, lines, cancellationToken);
+        }
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            LanguageTriageCore.ValidateCompletedOutputsAsync(
+                completed.InputPath,
+                completed.CandidatesPath,
+                completed.AssessmentsPath,
+                completed.Options,
+                cancellationToken,
+                reuseSuccessfulDetections: true
+            )
+        );
+    }
+
+    [Fact]
+    public async Task ValidateCompletedOutputsAsync_RejectsMismatchedCandidateProjection()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var completed = await CreateCompletedOutputsAsync(scope, cancellationToken);
+        var candidates = await File.ReadAllLinesAsync(completed.CandidatesPath, cancellationToken);
+        (candidates[0], candidates[1]) = (candidates[1], candidates[0]);
+        await File.WriteAllLinesAsync(completed.CandidatesPath, candidates, cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            LanguageTriageCore.ValidateCompletedOutputsAsync(
+                completed.InputPath,
+                completed.CandidatesPath,
+                completed.AssessmentsPath,
+                completed.Options,
+                cancellationToken,
+                reuseSuccessfulDetections: true
+            )
+        );
+    }
+
+    [Fact]
+    public async Task ValidateCompletedOutputsAsync_HonorsCancellation()
+    {
+        using var scope = new TemporaryDirectory();
+        var completed = await CreateCompletedOutputsAsync(
+            scope,
+            TestContext.Current.CancellationToken
+        );
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            LanguageTriageCore.ValidateCompletedOutputsAsync(
+                completed.InputPath,
+                completed.CandidatesPath,
+                completed.AssessmentsPath,
+                completed.Options,
+                cancellation.Token,
+                reuseSuccessfulDetections: true
+            )
+        );
+    }
+
     [Theory]
     [InlineData("bstrings", "static", false, (int)TranslationRoutingProvenance.NativeStatic)]
     [InlineData(
@@ -1382,6 +1541,41 @@ public sealed class LanguageTriageCoreTests
                 },
             }
         );
+
+    private static async Task<(
+        string InputPath,
+        string CandidatesPath,
+        string AssessmentsPath,
+        LanguageTriageOptions Options
+    )> CreateCompletedOutputsAsync(
+        TemporaryDirectory scope,
+        CancellationToken cancellationToken
+    )
+    {
+        var inputPath = scope.PathFor("input.jsonl");
+        var candidatesPath = scope.PathFor("candidates.jsonl");
+        var assessmentsPath = scope.PathFor("assessments.jsonl");
+        var options = CreateOptions(batchSize: 4);
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                CreateRecord("record-one", "Esta evidencia necesita traduccion."),
+                CreateRecord("record-two", "Otra evidencia necesita traduccion."),
+                CreateRecord("record-three", "Una tercera evidencia necesita traduccion."),
+            ],
+            cancellationToken
+        );
+        await LanguageTriageCore.ProcessAsync(
+            inputPath,
+            candidatesPath,
+            assessmentsPath,
+            options,
+            cancellationToken,
+            AlwaysSpanish,
+            reuseSuccessfulDetections: true
+        );
+        return (inputPath, candidatesPath, assessmentsPath, options);
+    }
 
     private static async Task<string[]> ReadDecisionsAsync(
         string path,

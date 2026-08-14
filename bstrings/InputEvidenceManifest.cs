@@ -231,6 +231,68 @@ internal static class InputEvidenceManifest
         }
     }
 
+    internal static async Task VerifySelectionAsync(
+        string inventoryPath,
+        IEnumerable<string> currentInputs,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var expectedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var reader = new StreamReader(
+                Path.GetFullPath(inventoryPath),
+                StrictUtf8,
+                detectEncodingFromByteOrderMarks: false,
+                BufferSize
+            );
+            long lineNumber = 0;
+            while (await reader.ReadLineAsync(cancellationToken) is { } line)
+            {
+                lineNumber++;
+                ValidateInventoryEntry(line, lineNumber);
+                if (!expectedPaths.Add(line))
+                {
+                    throw new InvalidDataException(
+                        $"Evidence inventory line {lineNumber:N0} repeats a path."
+                    );
+                }
+            }
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new InvalidDataException(
+                "The evidence input inventory is not valid UTF-8.",
+                ex
+            );
+        }
+
+        var currentPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var input in currentInputs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var fullPath = Path.GetFullPath(input);
+            ValidateRepresentablePath(fullPath);
+            AnalysisOrchestrator.EnsureNoReparsePoints(
+                fullPath,
+                "current evidence selection path"
+            );
+            if (!currentPaths.Add(fullPath))
+            {
+                throw new InvalidDataException(
+                    $"The current evidence selection repeats '{fullPath}'."
+                );
+            }
+        }
+
+        if (!expectedPaths.SetEquals(currentPaths))
+        {
+            throw new InvalidDataException(
+                "The evidence selection changed after the run began. Start a new analysis for added, removed, or renamed inputs."
+            );
+        }
+    }
+
     internal static async Task VerifyAsync(
         string manifestPath,
         InputManifestInfo expected,
