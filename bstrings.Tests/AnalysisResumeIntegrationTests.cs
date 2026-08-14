@@ -7,6 +7,47 @@ namespace bstrings.Tests;
 public sealed class AnalysisResumeIntegrationTests
 {
     [Fact]
+    public async Task AttemptSetup_DoesNotCreateLogsWhenIncompleteMarkerPublicationFails()
+    {
+        using var scope = new TemporaryScope();
+        Directory.CreateDirectory(scope.OutputPath);
+        var incompleteMarker = Path.Combine(scope.OutputPath, ".incomplete");
+        await File.WriteAllTextAsync(
+            incompleteMarker,
+            "existing marker",
+            TestContext.Current.CancellationToken
+        );
+
+        await using (
+            var lease = new FileStream(
+                incompleteMarker,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.None
+            )
+        )
+        {
+            var error = await Record.ExceptionAsync(() =>
+                AnalysisOrchestrator.PrepareAttemptOutputAsync(
+                    scope.OutputPath,
+                    TestContext.Current.CancellationToken
+                )
+            );
+            Assert.True(
+                error is IOException or UnauthorizedAccessException,
+                $"Expected marker publication to fail, but got {error?.GetType().FullName ?? "no exception"}."
+            );
+        }
+
+        Assert.False(Directory.Exists(Path.Combine(scope.OutputPath, "logs")));
+        Assert.Equal(
+            "existing marker",
+            await File.ReadAllTextAsync(incompleteMarker, TestContext.Current.CancellationToken)
+        );
+        Assert.Empty(Directory.EnumerateFiles(scope.OutputPath, "*.partial.*"));
+    }
+
+    [Fact]
     public async Task Resume_ReusesValidatedWholeStagesAndCompletesWithoutChangingEvidence()
     {
         using var scope = new TemporaryScope();

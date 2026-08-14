@@ -407,19 +407,8 @@ internal static partial class AnalysisOrchestrator
         resumeSession.RequireMatchingSpecification(resumeSpecification);
         resumeSession.AfterStageCommittedAsync = afterResumeStageCommitted;
         await using var resumeSessionScope = resumeSession;
-        var logsDirectory = Path.Combine(outputDirectory, "logs");
-        if (Directory.Exists(logsDirectory))
-        {
-            EnsureNoReparsePoints(logsDirectory, "analysis logs path");
-        }
-        Directory.CreateDirectory(logsDirectory);
-        EnsureNoReparsePoints(logsDirectory, "analysis logs path");
+        var logsDirectory = await PrepareAttemptOutputAsync(outputDirectory, cancellationToken);
         var incompleteMarker = Path.Combine(outputDirectory, ".incomplete");
-        await WriteIncompleteMarkerAtomicAsync(
-            incompleteMarker,
-            $"bstrings analysis is incomplete; processing started {DateTimeOffset.UtcNow:O}.{Environment.NewLine}",
-            cancellationToken
-        );
 
         var started = DateTimeOffset.UtcNow;
         var stageSeconds = new Dictionary<string, double>(StringComparer.Ordinal);
@@ -3873,6 +3862,28 @@ internal static partial class AnalysisOrchestrator
             _ => 0,
         };
         return count;
+    }
+
+    internal static async Task<string> PrepareAttemptOutputAsync(
+        string outputDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var incompleteMarker = Path.Combine(outputDirectory, ".incomplete");
+        await WriteIncompleteMarkerAtomicAsync(
+            incompleteMarker,
+            $"bstrings analysis is incomplete; processing started {DateTimeOffset.UtcNow:O}.{Environment.NewLine}",
+            cancellationToken
+        );
+
+        var logsDirectory = Path.Combine(outputDirectory, "logs");
+        if (Directory.Exists(logsDirectory))
+        {
+            EnsureNoReparsePoints(logsDirectory, "analysis logs path");
+        }
+        Directory.CreateDirectory(logsDirectory);
+        EnsureNoReparsePoints(logsDirectory, "analysis logs path");
+        return logsDirectory;
     }
 
     private static async Task WriteRunAsync(
