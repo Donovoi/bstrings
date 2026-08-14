@@ -15,7 +15,10 @@ $ErrorActionPreference = 'Stop'
 # do not tune a fixture after observing its result.
 $sparseInputBytes = 64L * 1024 * 1024
 $matchHeavyInputBytes = 1L * 1024 * 1024
-$longSparseInputBytes = 8L * 1024 * 1024 * 1024
+# The first corrected run proved that 8 GiB contained only 34.820 seconds of
+# reusable work. Before this next acceptance run, freeze 24 GiB to exceed the
+# unchanged 60-second qualification without changing any timing margin.
+$longSparseInputBytes = 24L * 1024 * 1024 * 1024
 $resumeCheckpointOrdinal = 10
 $resumeCheckpointName = '0010-enriched-merge.json'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))

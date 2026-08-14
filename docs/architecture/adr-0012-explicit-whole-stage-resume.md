@@ -6,7 +6,7 @@
 - **Decision type:** forensic completion, failure recovery, provenance, performance, and command-line behavior
 - **Review method:** Robin round under the [high-level decision policy](decision-review-policy.md)
 - **Perspectives:** primary-source external research; repository and stopped-run audit; adversarial forensic, concurrency, migration, and performance review
-- **Implementation state:** runtime and documentation implementation in progress; the original performance gates failed twice and the corrected gates have not run; performance, every-stage crash, privacy, and public-kit acceptance evidence remain release blockers
+- **Implementation state:** runtime and documentation implementation complete; the original performance gates failed twice and the first corrected long fixture failed qualification; performance acceptance, public-kit engine coverage, privacy, and public-kit acceptance remain release blockers
 - **Supersedes:** only the broader run-resume deferral in [ADR-0005](adr-0005-translation-integrity-and-run-dedup.md) and [ADR-0006](adr-0006-q4-cuda-full-translation.md); their translation atomicity, cache, and integrity rules remain in force
 
 ## Context
@@ -44,6 +44,16 @@ in the protocol. A small fixed cost becomes a large percentage of a short run,
 and a checkpoint ordinal does not measure how much expensive work it can reuse.
 The corrected gates below use both absolute and relative significance and select
 the resume point by measured reusable work.
+
+The first corrected five-pair run kept those margins unchanged. Sparse and
+match-heavy new-run overhead passed at median additions of 0.275 and 0.431
+seconds. Canonical output parity and exact preservation of every reused byte
+also passed. The frozen 8 GiB long fixture contained only 34.820 seconds of
+reusable work, below the required 60 seconds, and saved 19.354 seconds, below
+the 30-second floor. It is failed workload-qualification evidence, not a resume
+failure or acceptance evidence. Before a new run, the long fixture was frozen
+at 24 GiB using the observed scan rate. All timing and correctness margins stay
+unchanged.
 
 ## Pre-registered claims and tests
 
@@ -234,7 +244,8 @@ import-time choice. Any decoder or later-stage artifact refuses import.
 | A durability request must include buffered intermediate data | [.NET `FileStream.Flush(Boolean)` documentation](https://learn.microsoft.com/en-us/dotnet/api/system.io.filestream.flush) distinguishes flushing intermediate buffers to disk | Supports flushing a temporary checkpoint before its same-directory move | Hardware and filesystem failure can still exceed application guarantees |
 | Current stages already use incomplete markers and atomic final publication | [Output and provenance](../output-and-provenance.md) and the audited `bstrings/AnalysisOrchestrator.cs` implementation describe current failure boundaries | Supports adding whole-stage checkpoints instead of record reuse | Existing output has no cross-run checkpoint contract |
 | The stopped v2.0.0 run has a structurally valid candidate prefix | Read-only local audit on 2026-08-14 verified safe structural fields, boundary JSON parsing, known artifact names, and matching installed identities | Supports attempting the narrow importer | Private local evidence is not published and does not prove resistance to coordinated tampering |
-| Short-run percentages do not measure practical checkpoint cost | Three-pair match-heavy and sparse synthetic CSVs under `benchmarks/results` measured 23.39 and 15.61 percent median overhead but only about 1.28 and 0.45 seconds of added time; canonical parity passed | Falsifies the original eight-percent-only gate and supports an absolute-or-relative margin | The match-heavy fixture still exceeds the corrected absolute margin and must be optimized or rejected after rerun |
+| Short-run percentages do not measure practical checkpoint cost | Three-pair match-heavy and sparse synthetic CSVs under `benchmarks/results` measured 23.39 and 15.61 percent median overhead but only about 1.28 and 0.45 seconds of added time; canonical parity passed | Falsifies the original eight-percent-only gate and supports an absolute-or-relative margin | The corrected five-pair run passed both overhead margins |
+| A fixed byte size does not prove one minute of reusable work | The first corrected 8 GiB run measured 34.820 reusable seconds, 79.40 percent of fresh work, and 19.354 seconds saved; parity and reused-byte identity passed | Fails workload qualification without weakening the 60-second or 30-second margins | Freeze 24 GiB before the next run, based on the measured scan rate |
 | Stage count does not measure reusable work | The same CSVs measured only 5.23 and 15.94 percent median resume saving, about 0.33 and 0.52 seconds, after interruption at checkpoint 10 | Falsifies the original 65-percent promise and supports selecting an interruption by measured committed-stage time | Short synthetic runs do not prove that resume saves useful time on a long run |
 
 ## Strongest detractor and resolution
@@ -408,8 +419,10 @@ injection, and performance gates. These mechanisms add code and validation I/O
 to every analysis.
 
 The first two performance runs passed correctness but failed their registered
-timing gates. The architecture remains accepted, but performance acceptance is
-pending optimization and a fresh run of the corrected protocol.
+timing gates. The first corrected run passed overhead and correctness but its
+8 GiB long fixture did not contain the required minute of reusable work. The
+architecture remains accepted, but performance acceptance is pending a fresh
+run with the preregistered 24 GiB fixture and unchanged margins.
 
 The narrow importer can recover one known v2.0.0 prefix without creating a
 general promise to repair old output. Its residual protection matches the
@@ -454,6 +467,11 @@ denominators exaggerated small absolute costs, while their fixed checkpoint did
 not prove reuse of expensive work. The external reviewer selected the corrected
 absolute-or-relative new-run margin and a work-normalized resume margin before
 another benchmark run. No failed result was reclassified as acceptance.
+
+The first corrected run then passed both new-run overhead margins and all
+correctness checks. Its 8 GiB long fixture failed the registered work-duration
+qualification. The result was retained as failed evidence. The next 24 GiB
+fixture and the unchanged gates were recorded before another timing run.
 
 ## Primary references
 
