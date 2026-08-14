@@ -462,7 +462,7 @@ if ($TranslationSmoke) {
         )
         $actualReusedStages = @($run.resume.reusedStages | ForEach-Object { [string]$_ })
         if (
-            [string]$run.resume.mode -cne 'resume' -or
+            [string]$run.resume.attemptMode -cne 'resume' -or
             ($actualReusedStages -join "`n") -cne ($expectedReusedStages -join "`n")
         ) {
             throw 'Integrated smoke did not resume the exact committed Full-analysis stage prefix.'
