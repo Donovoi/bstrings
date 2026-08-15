@@ -94,8 +94,9 @@ while keeping the file directly filterable.
 `findings.tsv` and `feature-histogram.tsv` intentionally contain the matched
 values. They can therefore repeat tokens, credential assignments, PII, and
 private-key boundaries in clear text even when the source artifact was access
-controlled. The HTML visualization contains aggregate pattern counts and
-descriptions, not matched feature values.
+controlled. The complete result directory is sensitive case material. The HTML
+visualization contains aggregate pattern counts and descriptions, not matched
+feature values.
 
 Decoder outputs are sensitive too. `decoded-strings.jsonl` contains published
 text, `decoder-assessments.jsonl` records bounded attempted occurrences and

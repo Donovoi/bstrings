@@ -179,4 +179,16 @@ foreach ($relativePath in $neutralGuidanceFiles) {
     }
 }
 
+$reportingGuide = [IO.File]::ReadAllText(
+    (Join-Path $repoRoot 'docs/forensic-reporting-2026-08.md')
+)
+if (
+    $reportingGuide.IndexOf(
+        'The complete result directory is sensitive case material.',
+        [StringComparison]::Ordinal
+    ) -lt 0
+) {
+    throw 'The reporting guide must retain its neutral sensitive-result classification.'
+}
+
 Write-Host "README plain-language, neutral guidance, and one-kit terminology checks passed ($wordCount words)."
