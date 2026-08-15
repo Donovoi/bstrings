@@ -821,7 +821,7 @@ public sealed class AnalysisResumeTranslationOffAdversarialTests
         using var scope = new TemporaryScope();
         var source = await CreateSyntheticSourceAsync(scope, checkpointCount: 7);
         using var gate = new ManualResetEventSlim(false);
-        var starters = Enumerable.Range(0, 16).Select(async _ =>
+        var starters = Enumerable.Range(0, 32).Select(async _ =>
         {
             await Task.Yield();
             gate.Wait(TestContext.Current.CancellationToken);

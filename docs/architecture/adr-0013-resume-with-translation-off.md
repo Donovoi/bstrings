@@ -288,7 +288,13 @@ The five-pair 24 GiB benchmark passed. Sparse median new-run overhead was 0.024
 seconds. Match-heavy overhead was 0.002 seconds. Median reusable work was
 112.102 seconds. Median resume saving was 61.339 seconds, above the 56.051-second
 gate. Canonical evidence and every reused checkpoint hash matched. Native output
-ordering was not byte-stable across fresh runs and remains recorded as a known
+was measured at candidate commit
+`76c3abe6c3c4214be1fcf60cb785eb2c6429cdd5`. The adjacent provenance file binds
+the tested `bstrings` tree to Git object
+`845d494aa75ecd4985fb30cfdefc996589c25f30` and the benchmark script to Git
+object `70c019086b3aeddf0efa5f22e6a65ad6b92fdcb4`. The release candidate must produce
+the same two objects before these results count as acceptance evidence.
+Ordering was not byte-stable across fresh runs and remains recorded as a known
 ordering limitation.
 
 The first ADR draft proposed comparing a derived run with a fresh Off run by a

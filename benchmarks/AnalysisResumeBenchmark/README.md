@@ -64,6 +64,12 @@ seconds. Median reusable work was 112.102 seconds. Median resume saving was
 reused-checkpoint hashes passed. The accepted rows are in
 `analysis-resume-2.1.2-acceptance-2026-08.csv`.
 
+The CSV records the measured candidate commit. Its adjacent provenance file
+binds the complete `bstrings` runtime tree and benchmark script to Git object
+IDs. A later candidate can use these results only when both object IDs still
+match. Run the two recorded `git rev-parse` commands from that candidate before
+accepting the evidence.
+
 Run the corrected protocol from the repository root:
 
 ```powershell
