@@ -137,4 +137,58 @@ foreach ($relativePath in $activeFiles) {
     }
 }
 
-Write-Host "README plain-language and one-kit terminology checks passed ($wordCount words)."
+$neutralGuidanceFiles = @(
+    'README.md',
+    'docs/command-reference.md',
+    'docs/download-and-install.md',
+    'docs/air-gapped-deployment.md',
+    'docs/enrichment-pipeline.md',
+    'docs/output-and-provenance.md',
+    'docs/ocr-and-document-analysis.md',
+    'docs/forensic-reporting-2026-08.md',
+    'docs/releases/v2.0.0.md',
+    'docs/releases/v2.1.0.md',
+    'docs/releases/v2.1.1.md'
+)
+$professionalPracticeDirectives = @(
+    'Do not analyze evidence',
+    'Do not use incomplete output',
+    'Do not treat partial reports',
+    'Protect the complete output directory',
+    'Keep incomplete output',
+    'Keep failed output',
+    'Keep cancelled or failed output',
+    'Store and transfer it as evidence',
+    'Treat the result directory as one examination artifact',
+    'Treat both as leads',
+    'Confirm consequential',
+    'Review the parent whenever',
+    'must be checked against source evidence',
+    'Protect, transfer, and dispose'
+)
+foreach ($relativePath in $neutralGuidanceFiles) {
+    $path = Join-Path $repoRoot $relativePath
+    if (-not [IO.File]::Exists($path)) {
+        throw "Neutral user-guidance file is missing: $relativePath"
+    }
+    $text = [IO.File]::ReadAllText($path)
+    foreach ($directive in $professionalPracticeDirectives) {
+        if ($text.IndexOf($directive, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            throw "Current user guidance contains professional-practice direction '$directive': $relativePath"
+        }
+    }
+}
+
+$reportingGuide = [IO.File]::ReadAllText(
+    (Join-Path $repoRoot 'docs/forensic-reporting-2026-08.md')
+)
+if (
+    $reportingGuide.IndexOf(
+        'The complete result directory is sensitive case material.',
+        [StringComparison]::Ordinal
+    ) -lt 0
+) {
+    throw 'The reporting guide must retain its neutral sensitive-result classification.'
+}
+
+Write-Host "README plain-language, neutral guidance, and one-kit terminology checks passed ($wordCount words)."

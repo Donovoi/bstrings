@@ -32,18 +32,18 @@ You do not need administrator rights.
 
 ## Install
 
-Version 2.1.0 uses `Install-Bstrings.ps1`. It installs the complete kit in
+Version 2.1.1 uses `Install-Bstrings.ps1`. It installs the complete kit in
 `bstrings-kit` by default.
 
 Open PowerShell in the directory that will contain `bstrings-kit`. Run this
-command after the v2.1.0 release is published:
+command from the v2.1.1 release:
 
 ```powershell
 & {
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v2.1.0'
+  $tag = 'v2.1.1'
   $repo = 'Donovoi/bstrings'
   $name = 'Install-Bstrings.ps1'
   $headers = @{
@@ -115,13 +115,14 @@ upgrade, cache, and rollback procedure.
 
 ## Verify
 
-Verify the kit before you analyze evidence:
+Verify the kit:
 
 ```powershell
 .\bstrings-kit\bstrings.exe bundle verify
 ```
 
-Do not analyze evidence if this command returns a nonzero exit code.
+Exit code 0 confirms a verified kit. Any other exit code means verification
+failed.
 
 ## Run an analysis
 
@@ -143,11 +144,11 @@ A complete run has all these results:
 - `summary.json` has `status: complete`.
 - The output directory does not contain `.incomplete`.
 
-Keep incomplete output for diagnosis. You can resume a supported run after an
-interruption.
+Incomplete output remains available for diagnosis. A supported run can resume
+after an interruption.
 
-The output can contain sensitive case data. Protect the complete output
-directory.
+Result files can include source strings, decoded values, translations, paths,
+hashes, and pattern matches.
 
 ## Resume an analysis
 
@@ -167,8 +168,8 @@ Resume keeps files from the unfinished stage in its diagnostic log. It starts
 that stage again. An interrupted translation stage starts again from the saved
 list of translation candidates.
 
-The final completion checks do not change. Do not use incomplete output as
-completed evidence.
+The same completion signals apply after resume: exit code 0, complete status
+files, and no `.incomplete` file.
 
 ## Select engines
 
@@ -263,8 +264,8 @@ Read these guides for more information:
 - [Output and provenance](docs/output-and-provenance.md)
 - [OCR and document analysis](docs/ocr-and-document-analysis.md)
 
-Disk and memory images can contain files that FLOSS and OCR cannot read
-directly. Mount or carve these images before you use file-level analysis.
+FLOSS and OCR accept supported files, not files embedded inside raw disk or
+memory image containers. Mounted or carved files can be passed separately.
 
 The project uses [LICENSE.md](LICENSE.md). Component notices are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

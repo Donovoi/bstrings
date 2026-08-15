@@ -37,7 +37,7 @@ internal static class NativeEnrichmentCompletionCore
     private static readonly string[] LocationProperties = ["kind", "value"];
     private static readonly string[] OriginProperties = ["extractor", "version", "kind"];
     private static readonly string[] AttributeProperties = ["encoding", "byteLength"];
-    private static readonly string ExpectedExtractorVersion =
+    private static readonly string CurrentExtractorVersion =
         Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "unknown";
     private static readonly Encoding CodePage1252 = CreateCodePage1252();
     private static readonly Encoding Utf16Le = new UnicodeEncoding(
@@ -46,14 +46,30 @@ internal static class NativeEnrichmentCompletionCore
         throwOnInvalidBytes: false
     );
 
-    internal static async Task<NativeEnrichmentCompletionStats> ValidateAsync(
+    internal static Task<NativeEnrichmentCompletionStats> ValidateAsync(
         string outputPath,
         string inputManifestPath,
         string workingDirectory,
         CancellationToken cancellationToken = default
+    ) =>
+        ValidateAsync(
+            outputPath,
+            inputManifestPath,
+            workingDirectory,
+            CurrentExtractorVersion,
+            cancellationToken
+        );
+
+    internal static async Task<NativeEnrichmentCompletionStats> ValidateAsync(
+        string outputPath,
+        string inputManifestPath,
+        string workingDirectory,
+        string expectedExtractorVersion,
+        CancellationToken cancellationToken = default
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedExtractorVersion);
         var sources = await ReadManifestAsync(inputManifestPath, cancellationToken);
         var counts = new Dictionary<string, long>(StringComparer.Ordinal);
         long outputRecords = 0;
@@ -112,7 +128,7 @@ internal static class NativeEnrichmentCompletionCore
                 || !RequiredString(origin, "version", out var extractorVersion)
                 || !string.Equals(
                     extractorVersion,
-                    ExpectedExtractorVersion,
+                    expectedExtractorVersion,
                     StringComparison.Ordinal
                 )
                 || !RequiredString(origin, "kind", out var originKind)

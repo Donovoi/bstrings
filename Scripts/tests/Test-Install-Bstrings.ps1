@@ -40,7 +40,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 if ($LASTEXITCODE -ne 0 -or @($zipArchiveProbe) -cnotcontains 'System.IO.Compression.ZipArchive') {
     throw 'A clean Windows PowerShell 5.1 process could not resolve ZipArchive.'
 }
-$releaseTag = 'v2.1.0'
+$releaseTag = 'v2.1.1'
 $testBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testRoot = Join-Path $testBase (
     'bstrings-installer-test-' + [Guid]::NewGuid().ToString('N')
@@ -361,9 +361,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         request_path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         with request_log.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(request_path + "\n")
-        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v2.1.0"):
+        if request_path.endswith("/repos/Donovoi/bstrings/releases/tags/v2.1.1"):
             candidate = root / "release.json"
-        elif "/Donovoi/bstrings/releases/download/v2.1.0/" in request_path:
+        elif "/Donovoi/bstrings/releases/download/v2.1.1/" in request_path:
             name = pathlib.PurePosixPath(request_path).name
             candidate = root / name
         else:

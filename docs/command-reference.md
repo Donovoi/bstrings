@@ -14,14 +14,15 @@ shown on its release page.
 
 ## Verify the kit
 
-Run this command before you analyze evidence. Run it again after you copy the
-kit to another computer.
+This command checks the installed kit. It can also check a copied kit on
+another computer.
 
 ```powershell
 .\bstrings-kit\bstrings.exe bundle verify
 ```
 
-A nonzero exit code means that you must not use the kit.
+Exit code 0 confirms a verified kit. Any other exit code means verification
+failed.
 
 ## Analyze a file or directory
 
@@ -48,7 +49,7 @@ resume for a supported incomplete directory.
 
 ## Resume an incomplete analysis
 
-Keep the incomplete output directory. Run:
+Resume reads the existing incomplete output directory:
 
 ```powershell
 .\bstrings-kit\bstrings.exe analyze `
@@ -58,7 +59,7 @@ Keep the incomplete output directory. Run:
 
 `-r` is the short form of `--resume`. A normal resume accepts only the output
 directory and an optional `--bundle-root`. It restores the saved input and
-effective analysis options. Do not add a new input or engine setting.
+effective analysis options. Additional input or engine settings are rejected.
 
 Use `--bundle-root` only when the same verified kit moved to another path:
 
@@ -132,8 +133,8 @@ You can repeat the option:
 
 Valid names are `native`, `floss`, `ocr`, `decode`, and `translation`.
 
-Do not set an engine option and exclude the same engine. Empty, unknown, or
-duplicate names cause an error.
+Combining an engine option with an exclusion for the same engine causes an
+error. Empty, unknown, or duplicate names also cause an error.
 
 ## Select engines directly
 
@@ -217,8 +218,8 @@ Select names or groups:
 
 You can also supply a custom .NET regular expression with `--lr`.
 
-Pattern matches are candidates. Validate each important result with other case
-evidence.
+Pattern matches are candidates. They do not establish identity, ownership,
+compromise, or malicious activity.
 
 ## Hardware controls
 
@@ -237,10 +238,10 @@ An explicit unsupported device fails closed.
 Long stages show percentage, rate, and other available progress data. A
 percentage shows completed work. It is not elapsed time.
 
-Press `Ctrl+C` once to request cancellation. Keep cancelled or failed output for
-diagnosis. Use `-r` only after the process has stopped.
+Press `Ctrl+C` once to request cancellation. Cancelled or failed output remains
+available for diagnosis. Resume starts only after the process has stopped.
 
-## Confirm completion
+## Completion status
 
 A complete run has all these results:
 
@@ -249,7 +250,7 @@ A complete run has all these results:
 - `summary.json` status `complete`
 - No `.incomplete` file
 
-Do not treat partial reports as complete evidence.
+Partial reports do not meet this completion contract.
 
 ## Legacy flat output
 

@@ -84,7 +84,7 @@ putting tab-separated data in a misleading `.csv` file.
 `source-retained-ambiguous`, or `preservation-fallback`. For ambiguous and
 fallback children, `AttributesJson` also retains the advisory count or fallback
 reason. A preservation fallback is exact source text after rejected model output;
-it is not a successful translation and should be reviewed with its parent.
+it is not a successful translation and remains linked to its parent.
 
 Every TSV record occupies exactly one physical line. Embedded tabs and line
 breaks are represented as visible escapes. Windows path separators remain
@@ -94,9 +94,9 @@ while keeping the file directly filterable.
 `findings.tsv` and `feature-histogram.tsv` intentionally contain the matched
 values. They can therefore repeat tokens, credential assignments, PII, and
 private-key boundaries in clear text even when the source artifact was access
-controlled. Protect, transfer, and dispose of the whole result directory as
-sensitive case material. The HTML visualization contains aggregate pattern
-counts/descriptions, not matched feature values.
+controlled. The complete result directory is sensitive case material. The HTML
+visualization contains aggregate pattern counts and descriptions, not matched
+feature values.
 
 Decoder outputs are sensitive too. `decoded-strings.jsonl` contains published
 text, `decoder-assessments.jsonl` records bounded attempted occurrences and
