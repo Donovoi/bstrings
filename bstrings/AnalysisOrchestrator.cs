@@ -291,7 +291,9 @@ internal static partial class AnalysisOrchestrator
         Func<CancellationToken, Task>? beforeFinalInputVerification = null,
         AnalysisResumeCore.AnalysisResumeSession? existingResumeSession = null,
         bool resumeRequested = false,
-        Func<AnalysisResumeStage, CancellationToken, Task>? afterResumeStageCommitted = null
+        Func<AnalysisResumeStage, CancellationToken, Task>? afterResumeStageCommitted = null,
+        bool skipExternalToolchainPreflight = false,
+        AnalysisToolchain? preverifiedToolchain = null
     )
     {
         ValidateOptions(options);
@@ -310,7 +312,7 @@ internal static partial class AnalysisOrchestrator
         var outputDirectory = Path.GetFullPath(options.OutputDirectory);
         ValidateOutputLocation(options, outputDirectory);
 
-        AnalysisToolchain? toolchain = null;
+        AnalysisToolchain? toolchain = preverifiedToolchain;
         var needsExternalToolchain =
             options.RecoveryMode != ExecutableRecoveryMode.Off
             || options.OcrMode != OcrWorkflowMode.Off
@@ -319,15 +321,21 @@ internal static partial class AnalysisOrchestrator
             options.RecoveryMode != ExecutableRecoveryMode.Off
             || options.OcrMode != OcrWorkflowMode.Off;
         var stageProgress = new AnalysisStageProgress(
-            CountPlannedStages(options, needsExternalToolchain)
+            CountPlannedStages(
+                options,
+                needsExternalToolchain && !skipExternalToolchainPreflight
+            )
         );
         using var progressScope = new AnalysisProgressScope(stageProgress);
         var hasImplicitBundle = AnalysisToolchainLocator.HasImplicitBundleConfiguration();
         if (
+            toolchain is null
+            && (
             needsExternalToolchain
             || !string.IsNullOrWhiteSpace(options.BundleRoot)
             || options.Airgap
             || hasImplicitBundle
+            )
         )
         {
             var bundleProgress = new ConsolePercentageProgress();
@@ -471,7 +479,8 @@ internal static partial class AnalysisOrchestrator
                 );
                 if (
                     savedInput.Reused
-                    && !resumeSession.IsPrevalidatedLegacyImportStage(
+                    && !IsSemanticallyPrevalidatedResumeStage(
+                        resumeSession,
                         AnalysisResumeStage.InputInventory
                     )
                 )
@@ -559,7 +568,7 @@ internal static partial class AnalysisOrchestrator
                 cancellationToken
             );
 
-            if (needsExternalToolchain)
+            if (needsExternalToolchain && !skipExternalToolchainPreflight)
             {
                 await RunStageAsync(
                     "bundled tool preflight",
@@ -771,7 +780,12 @@ internal static partial class AnalysisOrchestrator
             );
             if (flossResume.Reused)
             {
-                if (!resumeSession.IsPrevalidatedLegacyImportStage(AnalysisResumeStage.Floss))
+                if (
+                    !IsSemanticallyPrevalidatedResumeStage(
+                        resumeSession,
+                        AnalysisResumeStage.Floss
+                    )
+                )
                 {
                     var validatedFloss = await ValidateFlossCheckpointAsync(
                         recoveredPath,
@@ -969,7 +983,12 @@ internal static partial class AnalysisOrchestrator
             );
             if (ocrResume.Reused)
             {
-                if (resumeSession.IsPrevalidatedLegacyImportStage(AnalysisResumeStage.Ocr))
+                if (
+                    IsSemanticallyPrevalidatedResumeStage(
+                        resumeSession,
+                        AnalysisResumeStage.Ocr
+                    )
+                )
                 {
                     ocr = ocrResume.Stats!.Completion;
                     ocrRequirements = ocrResume.Stats.Requirements;
@@ -1259,7 +1278,8 @@ internal static partial class AnalysisOrchestrator
             if (selectionResume.Reused)
             {
                 if (
-                    resumeSession.IsPrevalidatedLegacyImportStage(
+                    IsSemanticallyPrevalidatedResumeStage(
+                        resumeSession,
                         AnalysisResumeStage.TranslationSelection
                     )
                 )
@@ -3247,7 +3267,7 @@ internal static partial class AnalysisOrchestrator
         var checkpoint = await session.TryReuseStageAsync<T>(stage, cancellationToken);
         if (checkpoint.Reused)
         {
-            var validated = session.IsPrevalidatedLegacyImportStage(stage)
+            var validated = IsSemanticallyPrevalidatedResumeStage(session, stage)
                 ? checkpoint.Stats!
                 : await validate(checkpoint.Stats!);
             var recordedJson = JsonSerializer.Serialize(checkpoint.Stats, JsonOptions);
@@ -3277,6 +3297,15 @@ internal static partial class AnalysisOrchestrator
         );
         return value;
     }
+
+    private static bool IsSemanticallyPrevalidatedResumeStage(
+        AnalysisResumeCore.AnalysisResumeSession session,
+        AnalysisResumeStage stage
+    ) =>
+        session.IsPrevalidatedLegacyImportStage(stage)
+        || session.Transition is not null
+            && stage.Ordinal >= AnalysisResumeStage.ContentRouting.Ordinal
+            && stage.Ordinal <= AnalysisResumeStage.RawMerge.Ordinal;
 
     private static async Task<AnalysisResumeRecordCount> CountStrictJsonlRecordsAsync(
         string path,

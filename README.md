@@ -32,18 +32,18 @@ You do not need administrator rights.
 
 ## Install
 
-Version 2.1.1 uses `Install-Bstrings.ps1`. It installs the complete kit in
+Version 2.1.2 uses `Install-Bstrings.ps1`. It installs the complete kit in
 `bstrings-kit` by default.
 
 Open PowerShell in the directory that will contain `bstrings-kit`. Run this
-command from the v2.1.1 release:
+command from the v2.1.2 release:
 
 ```powershell
 & {
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v2.1.1'
+  $tag = 'v2.1.2'
   $repo = 'Donovoi/bstrings'
   $name = 'Install-Bstrings.ps1'
   $headers = @{
@@ -167,6 +167,17 @@ them. It refuses changed or damaged state and concurrent use.
 Resume keeps files from the unfinished stage in its diagnostic log. It starts
 that stage again. An interrupted translation stage starts again from the saved
 list of translation candidates.
+
+A stopped v2.1.1 Full run can continue with translation off when stage 8 has
+not committed. Use the saved v2.1.1 kit as the source kit:
+
+```powershell
+.\bstrings-kit\bstrings.exe analyze -r -o D:\results\case-01 `
+  -e translation --bundle-root D:\tools\bstrings-kit-2.1.1
+```
+
+This reuses validated stages 1 through 6. It records the plan change and does
+not start the language detector or translation model.
 
 The same completion signals apply after resume: exit code 0, complete status
 files, and no `.incomplete` file.

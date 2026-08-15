@@ -148,7 +148,8 @@ $neutralGuidanceFiles = @(
     'docs/forensic-reporting-2026-08.md',
     'docs/releases/v2.0.0.md',
     'docs/releases/v2.1.0.md',
-    'docs/releases/v2.1.1.md'
+    'docs/releases/v2.1.1.md',
+    'docs/releases/v2.1.2.md'
 )
 $professionalPracticeDirectives = @(
     'Do not analyze evidence',

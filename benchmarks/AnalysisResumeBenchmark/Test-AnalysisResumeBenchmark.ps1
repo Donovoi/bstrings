@@ -2,8 +2,8 @@
 param(
     [ValidateRange(5, 15)]
     [int]$Rounds = 5,
-    [string]$BaselineCommit = 'v2.0.0',
-    [string]$ResultsPath = 'benchmarks/results/analysis-resume-acceptance-2026-08.csv',
+    [string]$BaselineCommit = 'v2.1.1',
+    [string]$ResultsPath = 'benchmarks/results/analysis-resume-2.1.2-acceptance-2026-08.csv',
     [switch]$KeepTemporary,
     [switch]$FixtureSmokeTest
 )
@@ -104,9 +104,45 @@ function Get-Sha256 {
 }
 
 function Get-CanonicalLineMultisetSha256 {
-    param([Parameter(Mandatory)][string]$Path)
-    $lines = @([IO.File]::ReadLines($Path) | Sort-Object -CaseSensitive)
-    $content = if ($lines.Count -eq 0) { '' } else { ($lines -join "`n") + "`n" }
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Artifact
+    )
+    $lines = [Collections.Generic.List[string]]::new()
+    $tsvHeader = $null
+    $engineIndex = -1
+    $versionIndex = -1
+    foreach ($rawLine in [IO.File]::ReadLines($Path)) {
+        $line = $rawLine
+        if ($Artifact.EndsWith('.jsonl', [StringComparison]::OrdinalIgnoreCase)) {
+            $line = [regex]::Replace(
+                $line,
+                '("origin":\{"extractor":"bstrings","version":")[^"]+',
+                '${1}<release-version>'
+            )
+        }
+        elseif ($Artifact -ceq 'findings.tsv') {
+            $fields = $line.Split([char]"`t")
+            if ($null -eq $tsvHeader) {
+                $tsvHeader = $fields
+                $engineIndex = [Array]::IndexOf($tsvHeader, 'ExtractionEngine')
+                $versionIndex = [Array]::IndexOf($tsvHeader, 'ExtractionEngineVersion')
+                if ($engineIndex -lt 0 -or $versionIndex -lt 0) {
+                    throw 'findings.tsv is missing the extraction engine version columns.'
+                }
+            }
+            elseif ($fields.Count -ne $tsvHeader.Count) {
+                throw 'findings.tsv contains an invalid field count.'
+            }
+            elseif ($fields[$engineIndex] -ceq 'bstrings') {
+                $fields[$versionIndex] = '<release-version>'
+                $line = $fields -join "`t"
+            }
+        }
+        $lines.Add($line)
+    }
+    $ordered = @($lines | Sort-Object -CaseSensitive)
+    $content = if ($ordered.Count -eq 0) { '' } else { ($ordered -join "`n") + "`n" }
     $bytes = [Text.Encoding]::UTF8.GetBytes($content)
     return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
@@ -139,7 +175,8 @@ function Assert-EvidenceParity {
         $canonicalLines = $artifact.EndsWith('.jsonl', [StringComparison]::OrdinalIgnoreCase) -or $artifact -eq 'findings.tsv'
         if (
             -not $canonicalLines -or
-            (Get-CanonicalLineMultisetSha256 $expected) -ne (Get-CanonicalLineMultisetSha256 $actual)
+            (Get-CanonicalLineMultisetSha256 $expected $artifact) -ne
+                (Get-CanonicalLineMultisetSha256 $actual $artifact)
         ) {
             throw "Canonical evidence parity failed for $artifact"
         }

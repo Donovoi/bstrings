@@ -1,7 +1,7 @@
 # Analysis resume benchmark
 
-This benchmark compares the resume implementation with the public v2.0.0
-new-run baseline. It uses a 64 MiB deterministic sparse-memory fixture. The
+This benchmark compares the resume implementation with the previous public
+v2.1.1 new-run baseline. It uses a 64 MiB deterministic sparse-memory fixture. The
 fixture exercises byte scanning without making report generation dominate the
 measurement.
 
@@ -25,7 +25,9 @@ uses at least five alternating pairs and these gates:
 - Median resume saving must be no less than the larger of 30 seconds or half of
   the measured reusable stage time.
 
-Every pair compares the evidence artifacts by SHA-256. Timing includes process
+Every pair compares the evidence artifacts by SHA-256. Cross-release comparisons
+normalize only the recorded bstrings release version; every other field remains
+exact. Timing includes process
 startup, input verification, stage validation, checkpoint hashing, and final
 completion checks.
 
@@ -55,12 +57,19 @@ the required 52.432 seconds. Canonical parity and exact preservation of all
 reused checkpoint and artifact bytes passed. The accepted rows are in
 `analysis-resume-acceptance-2026-08.csv`.
 
+The v2.1.2 rerun used the immutable v2.1.1 release as its baseline. Sparse
+median overhead was 0.024 seconds and match-heavy median overhead was 0.002
+seconds. Median reusable work was 112.102 seconds. Median resume saving was
+61.339 seconds, above the required 56.051 seconds. Canonical parity and exact
+reused-checkpoint hashes passed. The accepted rows are in
+`analysis-resume-2.1.2-acceptance-2026-08.csv`.
+
 Run the corrected protocol from the repository root:
 
 ```powershell
 pwsh -NoProfile -File benchmarks/AnalysisResumeBenchmark/Test-AnalysisResumeBenchmark.ps1
 ```
 
-The script builds the baseline from the immutable `v2.0.0` tag. It builds the
+The script builds the baseline from the immutable `v2.1.1` tag. It builds the
 candidate from the current source tree. Temporary evidence and results stay
 under a unique system temporary directory and are removed after the run.
