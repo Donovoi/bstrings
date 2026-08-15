@@ -250,7 +250,8 @@ internal sealed record AnalysisResumePublicEvidence(
     string AttemptMode,
     string? LastCommittedStage,
     IReadOnlyList<string> ReusedStages,
-    bool LegacyImported
+    bool LegacyImported,
+    AnalysisResumeTransitionEvidence? Transition = null
 );
 
 internal static class AnalysisResumeCore
@@ -258,10 +259,10 @@ internal static class AnalysisResumeCore
     internal const string ResumeDirectoryName = ".bstrings-resume";
     internal const string LockFileName = ".bstrings-run.lock";
     internal const string OwnerFileName = "owner.json";
-    private const string CheckpointsDirectoryName = "checkpoints";
-    private const string AttemptsDirectoryName = "attempts";
-    private const string PendingDirectoryName = "pending";
-    private const int MaximumMetadataBytes = 4 * 1024 * 1024;
+    internal const string CheckpointsDirectoryName = "checkpoints";
+    internal const string AttemptsDirectoryName = "attempts";
+    internal const string PendingDirectoryName = "pending";
+    internal const int MaximumMetadataBytes = 4 * 1024 * 1024;
     private const int MaximumAttemptFiles = 20_000;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
@@ -274,7 +275,7 @@ internal static class AnalysisResumeCore
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.KebabCaseLower) },
     };
 
-    private sealed record OwnerRecord(
+    internal sealed record OwnerRecord(
         int SchemaVersion,
         string RecordType,
         string RunId,
@@ -298,7 +299,7 @@ internal static class AnalysisResumeCore
         JsonElement Stats
     );
 
-    private sealed record AttemptRecord(
+    internal sealed record AttemptRecord(
         int SchemaVersion,
         string RecordType,
         string RunId,
@@ -320,6 +321,10 @@ internal static class AnalysisResumeCore
     internal static AnalysisResumeSpecification ReadSpecification(string outputDirectory)
     {
         var outputFullPath = CanonicalizeOutputDirectory(outputDirectory);
+        if (AnalysisResumeTranslationOffCore.HasTransitionState(outputFullPath))
+        {
+            return AnalysisResumeTranslationOffCore.ReadEffectiveSpecification(outputFullPath);
+        }
         var owner = ReadOwner(Path.Combine(outputFullPath, ResumeDirectoryName, OwnerFileName));
         return owner.Specification;
     }
@@ -440,6 +445,15 @@ internal static class AnalysisResumeCore
         var outputFullPath = CanonicalizeOutputDirectory(outputDirectory);
         RequireSpecificationOutputDirectory(expectedSpecification, outputFullPath);
         ValidateOwnedIncompleteDirectory(outputFullPath);
+        if (AnalysisResumeTranslationOffCore.HasTransitionState(outputFullPath))
+        {
+            return await AnalysisResumeTranslationOffCore.OpenExistingAsync(
+                outputFullPath,
+                expectedSpecification,
+                verificationProgress,
+                cancellationToken
+            );
+        }
         var ownerPath = Path.Combine(outputFullPath, ResumeDirectoryName, OwnerFileName);
         var ownerBeforeLease = ReadOwner(ownerPath);
         RequireMatchingSpecification(ownerBeforeLease.Specification, expectedSpecification);
@@ -724,7 +738,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static void ValidateMetadataLayout(string outputFullPath)
+    internal static void ValidateMetadataLayout(string outputFullPath)
     {
         var resumeDirectory = Path.Combine(outputFullPath, ResumeDirectoryName);
         AnalysisOrchestrator.EnsureNoReparsePoints(
@@ -769,7 +783,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static void RemoveInterruptedPublications(string outputFullPath)
+    internal static void RemoveInterruptedPublications(string outputFullPath)
     {
         var pendingDirectory = Path.Combine(
             outputFullPath,
@@ -882,6 +896,16 @@ internal static class AnalysisResumeCore
 
     private static bool IsPendingPublicationName(string? name)
     {
+        if (
+            string.Equals(
+                name,
+                AnalysisResumeTranslationOffCore.JournalPendingFileName,
+                StringComparison.Ordinal
+            )
+        )
+        {
+            return true;
+        }
         if (name is null || !name.EndsWith(".json", StringComparison.Ordinal))
         {
             return false;
@@ -953,7 +977,7 @@ internal static class AnalysisResumeCore
         );
     }
 
-    private static void ValidateAttemptRecords(string outputFullPath, OwnerRecord owner)
+    internal static void ValidateAttemptRecords(string outputFullPath, OwnerRecord owner)
     {
         var attemptsDirectory = Path.Combine(
             outputFullPath,
@@ -1039,7 +1063,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static bool TryParseAttemptFileName(
+    internal static bool TryParseAttemptFileName(
         string? fileName,
         out string attemptId,
         out bool isStart
@@ -1083,16 +1107,16 @@ internal static class AnalysisResumeCore
         return value.SequenceEqual(guid.ToString("N").AsSpan());
     }
 
-    private static void ValidateAttemptRecord(
+    internal static void ValidateAttemptRecord(
         AttemptRecord record,
         OwnerRecord owner,
         string attemptId,
         bool isStart
     )
     {
-        var validMode = record.Mode is "new" or "resume" or "legacy-import";
+        var validMode = record.Mode is "new" or "resume" or "legacy-import" or "legacyimport";
         var validOwnerMode = owner.LegacyImported
-            ? record.Mode is "legacy-import" or "resume"
+            ? record.Mode is "legacy-import" or "legacyimport" or "resume"
             : record.Mode is "new" or "resume";
         var validLastStage = record.LastCommittedStage is null
             || AnalysisResumeStage.All.Any(stage =>
@@ -1137,7 +1161,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static int StageOrdinal(string? stageId) =>
+    internal static int StageOrdinal(string? stageId) =>
         stageId is null
             ? 0
             : AnalysisResumeStage.All.Single(stage =>
@@ -1153,7 +1177,7 @@ internal static class AnalysisResumeCore
             )
         );
 
-    private static async Task<IReadOnlyList<(CheckpointRecord Record, string Sha256)>> ReadAndVerifyCheckpointsAsync(
+    internal static async Task<IReadOnlyList<(CheckpointRecord Record, string Sha256)>> ReadAndVerifyCheckpointsAsync(
         string outputFullPath,
         OwnerRecord owner,
         Action<long, long>? verificationProgress,
@@ -1270,7 +1294,7 @@ internal static class AnalysisResumeCore
         return results;
     }
 
-    private static void ValidateCheckpoint(
+    internal static void ValidateCheckpoint(
         CheckpointRecord record,
         OwnerRecord owner,
         AnalysisResumeStage stage,
@@ -1305,7 +1329,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static OwnerRecord ReadOwner(string path)
+    internal static OwnerRecord ReadOwner(string path)
     {
         var owner = ReadStrictJson<OwnerRecord>(path);
         if (
@@ -1320,7 +1344,7 @@ internal static class AnalysisResumeCore
         return owner;
     }
 
-    private static void ValidateSpecification(AnalysisResumeSpecification specification)
+    internal static void ValidateSpecification(AnalysisResumeSpecification specification)
     {
         if (
             specification.SchemaVersion != 1
@@ -1344,7 +1368,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static void RequireMatchingSpecification(
+    internal static void RequireMatchingSpecification(
         AnalysisResumeSpecification actual,
         AnalysisResumeSpecification expected
     )
@@ -1359,7 +1383,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static void RequireSpecificationOutputDirectory(
+    internal static void RequireSpecificationOutputDirectory(
         AnalysisResumeSpecification specification,
         string outputFullPath
     )
@@ -1378,7 +1402,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static void ValidateOwnedIncompleteDirectory(string outputFullPath)
+    internal static void ValidateOwnedIncompleteDirectory(string outputFullPath)
     {
         if (!Directory.Exists(outputFullPath))
         {
@@ -1417,7 +1441,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static FileStream AcquireLease(string outputFullPath, bool createIfMissing)
+    internal static FileStream AcquireLease(string outputFullPath, bool createIfMissing)
     {
         var lockPath = Path.Combine(outputFullPath, LockFileName);
         try
@@ -1529,7 +1553,7 @@ internal static class AnalysisResumeCore
         return records;
     }
 
-    private static async Task<string> HashArtifactWithOptionalLeaseAsync(
+    internal static async Task<string> HashArtifactWithOptionalLeaseAsync(
         string canonicalRelativePath,
         string fullPath,
         Dictionary<string, FileStream>? retainedArtifactLeases,
@@ -1579,7 +1603,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static string ResolveArtifactPath(string outputFullPath, string relativePath)
+    internal static string ResolveArtifactPath(string outputFullPath, string relativePath)
     {
         if (
             string.IsNullOrWhiteSpace(relativePath)
@@ -1604,7 +1628,7 @@ internal static class AnalysisResumeCore
         return fullPath;
     }
 
-    private static T ReadStrictJson<T>(string path)
+    internal static T ReadStrictJson<T>(string path)
     {
         AnalysisOrchestrator.EnsureNoReparsePoints(path, "analysis resume metadata");
         using var stream = new FileStream(
@@ -1671,7 +1695,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static async Task WriteNewJsonAsync<T>(
+    internal static async Task WriteNewJsonAsync<T>(
         string path,
         T value,
         CancellationToken cancellationToken
@@ -1698,7 +1722,7 @@ internal static class AnalysisResumeCore
         stream.Flush(flushToDisk: true);
     }
 
-    private static async Task<string> HashFileAsync(
+    internal static async Task<string> HashFileAsync(
         string path,
         Action<long, long>? progress,
         CancellationToken cancellationToken
@@ -1746,7 +1770,7 @@ internal static class AnalysisResumeCore
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
-    private static void DisposeArtifactLeases(
+    internal static void DisposeArtifactLeases(
         Dictionary<string, FileStream> artifactLeases
     )
     {
@@ -1757,10 +1781,10 @@ internal static class AnalysisResumeCore
         artifactLeases.Clear();
     }
 
-    private static string CheckpointFileName(AnalysisResumeStage stage) =>
+    internal static string CheckpointFileName(AnalysisResumeStage stage) =>
         $"{stage.Ordinal:D4}-{stage.Id}.json";
 
-    private static bool IsLowerSha256(string value)
+    internal static bool IsLowerSha256(string value)
     {
         if (value.Length != 64)
         {
@@ -1776,7 +1800,7 @@ internal static class AnalysisResumeCore
         return true;
     }
 
-    private static bool FixedEquals(string left, string right)
+    internal static bool FixedEquals(string left, string right)
     {
         if (!IsLowerSha256(left) || !IsLowerSha256(right))
         {
@@ -1796,7 +1820,7 @@ internal static class AnalysisResumeCore
         hash.AppendData(bytes);
     }
 
-    private static void RefuseNetworkFilesystem(string path)
+    internal static void RefuseNetworkFilesystem(string path)
     {
         var root = Path.GetPathRoot(path);
         if (string.IsNullOrEmpty(root) || new DriveInfo(root).DriveType == DriveType.Network)
@@ -1805,7 +1829,7 @@ internal static class AnalysisResumeCore
         }
     }
 
-    private static void RejectHardLinkedFile(FileStream stream, string description)
+    internal static void RejectHardLinkedFile(FileStream stream, string description)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -1887,7 +1911,9 @@ internal static class AnalysisResumeCore
             AnalysisResumeAttemptMode mode,
             FileStream lease,
             IReadOnlyList<(CheckpointRecord Record, string Sha256)> checkpoints,
-            Dictionary<string, FileStream> artifactLeases
+            Dictionary<string, FileStream> artifactLeases,
+            string? dependencySha256 = null,
+            AnalysisResumeTransitionEvidence? transition = null
         )
         {
             OutputDirectory = outputDirectory;
@@ -1902,13 +1928,14 @@ internal static class AnalysisResumeCore
                 item => AnalysisResumeStage.FromOrdinalAndId(item.Record.Ordinal, item.Record.StageId),
                 item => item
             );
-            _dependencySha256 = checkpoints.Count > 0
+            _dependencySha256 = dependencySha256 ?? (checkpoints.Count > 0
                 ? checkpoints[^1].Sha256
                 : HashFileAsync(
                     Path.Combine(OutputDirectory, ResumeDirectoryName, OwnerFileName),
                     null,
                     CancellationToken.None
-                ).GetAwaiter().GetResult();
+                ).GetAwaiter().GetResult());
+            Transition = transition;
         }
 
         internal string OutputDirectory { get; }
@@ -1917,6 +1944,7 @@ internal static class AnalysisResumeCore
         internal AnalysisResumeSpecification Specification { get; }
         internal bool LegacyImported { get; }
         internal AnalysisResumeAttemptMode Mode { get; }
+        internal AnalysisResumeTransitionEvidence? Transition { get; }
         internal IReadOnlyList<string> ReusedStages { get; private set; } = Array.Empty<string>();
         internal Func<AnalysisResumeStage, CancellationToken, Task>?
             AfterStageCommittedAsync
@@ -1941,6 +1969,18 @@ internal static class AnalysisResumeCore
             CancellationToken cancellationToken = default
         )
         {
+            if (Transition is not null)
+            {
+                var verifiedDerived = await AnalysisResumeTranslationOffCore.VerifyOpenSessionAsync(
+                    this,
+                    verificationProgress,
+                    cancellationToken,
+                    _artifactLeases,
+                    verifyArtifacts: false
+                );
+                RequireMatchingCheckpointHashes(verifiedDerived);
+                return;
+            }
             var owner = ReadOwner(
                 Path.Combine(OutputDirectory, ResumeDirectoryName, OwnerFileName)
             );
@@ -1965,6 +2005,13 @@ internal static class AnalysisResumeCore
                 _artifactLeases,
                 verifyArtifacts: false
             );
+            RequireMatchingCheckpointHashes(verified);
+        }
+
+        private void RequireMatchingCheckpointHashes(
+            IReadOnlyList<(CheckpointRecord Record, string Sha256)> verified
+        )
+        {
             var current = _checkpoints
                 .OrderBy(item => item.Key.Ordinal)
                 .Select(item => item.Value.Sha256)
@@ -2087,13 +2134,14 @@ internal static class AnalysisResumeCore
 
         internal AnalysisResumePublicEvidence CreatePublicEvidence() =>
             new(
-                $"{ResumeDirectoryName}/{OwnerFileName}",
+                Transition?.State ?? $"{ResumeDirectoryName}/{OwnerFileName}",
                 RunId,
                 AttemptId,
                 Mode.ToString().ToLowerInvariant(),
                 LastCommittedStage?.Id,
                 ReusedStages,
-                LegacyImported
+                LegacyImported,
+                Transition
             );
 
         internal async Task RecordAttemptOutcomeAsync(

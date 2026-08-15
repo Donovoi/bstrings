@@ -67,7 +67,7 @@ internal static class AnalysisCli
         };
         var resumeOption = new Option<bool>("--resume", "-r")
         {
-            Description = "Resume a validated incomplete analysis from its last committed stage. Use with -o and, if the same kit moved, optional --bundle-root; saved evidence, settings, patterns, and engine identities are rechecked",
+            Description = "Resume a validated incomplete analysis from its last committed stage. Version 2.1.2 also accepts -e translation for an exact stopped 2.1.1 Full plan at stage 7; identify that saved source kit with --bundle-root",
         };
         var maskOption = new Option<string?>("--mask")
         {
@@ -84,7 +84,7 @@ internal static class AnalysisCli
         var excludeEngineOption = new Option<string[]>("--exclude-engine", "-e")
         {
             Description =
-                "Subtract native, floss, ocr, decode, or translation from --full. Repeat the option or use a comma-separated value. Cannot be combined with that engine's direct selector; tuning options for an excluded engine are inert but still syntax-checked",
+                "Subtract native, floss, ocr, decode, or translation from --full. Repeat the option or use a comma-separated value. On resume, only translation can be excluded from the exact supported 2.1.1 stage-7 plan. Cannot be combined with that engine's direct selector; tuning options for an excluded engine are inert but still syntax-checked",
             AllowMultipleArgumentsPerToken = false,
             Arity = ArgumentArity.OneOrMore,
         };
@@ -304,6 +304,7 @@ internal static class AnalysisCli
             + "  bstrings.exe analyze -f C:\\evidence\\memory.raw --decode auto --translation off --lr all -o C:\\results\\decoded\n"
             + "  bstrings.exe analyze -d C:\\evidence\\carved --full -e ocr,translation -o C:\\results\\without-ai\n"
             + "  bstrings.exe analyze -r -o C:\\results\\case-01\n"
+            + "  bstrings.exe analyze -r -o C:\\results\\case-01 -e translation --bundle-root C:\\tools\\bstrings-kit-2.1.1\n"
             + "  bstrings.exe analyze -f C:\\evidence\\memory.raw --ocr off --translation off --lr all -o C:\\results\\memory\n\n"
             + "New analyses require a new or empty results directory. Use -r or --resume for a validated incomplete run. Failures retain .incomplete and diagnostic logs. "
             + "Long-running stages print measured percentage completion; percentages are work units, not an ETA. "
@@ -317,6 +318,7 @@ internal static class AnalysisCli
                     outputOption,
                     resumeOption,
                     bundleRootOption,
+                    excludeEngineOption,
                 };
                 var incompatible = result.Command.Options
                     .Where(option => !allowed.Contains(option))
@@ -328,7 +330,31 @@ internal static class AnalysisCli
                 {
                     result.AddError(
                         "--resume loads the saved analysis contract and cannot be combined with: "
-                            + string.Join(", ", incompatible.Select(name => $"--{name}"))
+                            + string.Join(
+                                ", ",
+                                incompatible.Select(name => "--" + name.TrimStart('-'))
+                            )
+                    );
+                }
+                var resumeExclusionResult = result.GetResult(excludeEngineOption);
+                if (
+                    resumeExclusionResult is not null
+                    && TryParseEngineExclusions(
+                        resumeExclusionResult.Tokens.Select(token => token.Value).ToArray(),
+                        out var resumeExclusions,
+                        out _
+                    )
+                    && (
+                        !resumeExclusions.Translation
+                        || resumeExclusions.Native
+                        || resumeExclusions.Floss
+                        || resumeExclusions.Ocr
+                        || resumeExclusions.Decode
+                    )
+                )
+                {
+                    result.AddError(
+                        "--resume supports only '-e translation'; no other saved engine can be changed."
                     );
                 }
                 return;
@@ -381,9 +407,13 @@ internal static class AnalysisCli
                         Console.CancelKeyPress += resumeCancelHandler;
                         try
                         {
+                            var resumeExclusions = ParseEngineExclusions(
+                                result.GetValue(excludeEngineOption)
+                            );
                             await AnalysisOrchestrator.ResumeAsync(
                                 result.GetValue(outputOption)!,
                                 result.GetValue(bundleRootOption),
+                                resumeExclusions.Translation,
                                 resumeCancellation.Token
                             );
                         }

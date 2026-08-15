@@ -14,6 +14,8 @@ namespace bstrings;
 internal static partial class AnalysisOrchestrator
 {
     private const string LegacyV200Version = "2.0.0";
+    private const string TranslationOffSourceVersion = "2.1.1";
+    private const string TranslationOffTargetVersion = "2.1.2";
 
     private sealed record LegacyInputIdentity(
         long FileCount,
@@ -92,6 +94,13 @@ internal static partial class AnalysisOrchestrator
         string outputDirectory,
         string? bundleRootOverride,
         CancellationToken cancellationToken = default
+    ) => ResumeAsync(outputDirectory, bundleRootOverride, false, cancellationToken);
+
+    internal static Task ResumeAsync(
+        string outputDirectory,
+        string? bundleRootOverride,
+        bool excludeTranslation,
+        CancellationToken cancellationToken = default
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
@@ -104,6 +113,12 @@ internal static partial class AnalysisOrchestrator
         }
         if (!AnalysisResumeCore.HasResumeMetadata(outputFullPath))
         {
+            if (excludeTranslation)
+            {
+                throw new InvalidDataException(
+                    $"Translation exclusion requires a saved bstrings {TranslationOffSourceVersion} resume plan at stage 7."
+                );
+            }
             return ResumeLegacyV200Async(
                 outputFullPath,
                 bundleRootOverride,
@@ -114,13 +129,26 @@ internal static partial class AnalysisOrchestrator
         }
 
         var saved = AnalysisResumeCore.ReadSpecification(outputFullPath);
+        if (excludeTranslation)
+        {
+            return ResumeWithTranslationOffAsync(
+                outputFullPath,
+                bundleRootOverride,
+                saved,
+                cancellationToken
+            );
+        }
         var options = saved.Options.ToOptions(outputFullPath, bundleRootOverride);
-        var executingPath = ResolveResumeExecutable(saved);
+        var executingPath = ResolveResumeExecutable(saved, bundleRootOverride);
+        var derivedTranslationOffResume = AnalysisResumeTranslationOffCore.HasTransitionState(
+            outputFullPath
+        );
         return RunAsync(
             options,
             cancellationToken,
             executingExecutablePath: executingPath,
-            resumeRequested: true
+            resumeRequested: true,
+            skipExternalToolchainPreflight: derivedTranslationOffResume
         );
     }
 
@@ -437,6 +465,389 @@ internal static partial class AnalysisOrchestrator
         );
     }
 
+    private static async Task ResumeWithTranslationOffAsync(
+        string outputDirectory,
+        string? bundleRootOverride,
+        AnalysisResumeSpecification saved,
+        CancellationToken cancellationToken
+    )
+    {
+        if (AnalysisResumeTranslationOffCore.HasTransitionState(outputDirectory))
+        {
+            throw new InvalidDataException(
+                "This resume plan already excludes translation. Resume it without '-e translation'."
+            );
+        }
+        if (
+            !string.Equals(
+                saved.BstringsVersion,
+                TranslationOffSourceVersion,
+                StringComparison.Ordinal
+            )
+            || !saved.Options.Full
+            || saved.Options.TranslationMode != TranslationWorkflowMode.Auto
+        )
+        {
+            throw new InvalidDataException(
+                $"Resume can exclude translation only from a saved bstrings {TranslationOffSourceVersion} Full analysis with translation set to Auto."
+            );
+        }
+        if (saved.BundleIntegrity is null)
+        {
+            throw new InvalidDataException(
+                "The saved Auto plan has no verified source-kit identity. Translation cannot be excluded safely."
+            );
+        }
+
+        Console.Error.WriteLine(
+            "Resume change preflight: verifying the saved Auto plan before excluding translation. No output will change until validation succeeds."
+        );
+        var sourceExecutable = ResolveResumeExecutable(saved, bundleRootOverride);
+        var sourceOptions = saved.Options.ToOptions(outputDirectory, bundleRootOverride);
+        var sourceProgress = new ConsolePercentageProgress();
+        var sourceToolchain = AnalysisToolchainLocator.Locate(
+            bundleRootOverride,
+            sourceOptions.Airgap || !string.IsNullOrWhiteSpace(bundleRootOverride),
+            requireRecovery: sourceOptions.RecoveryMode != ExecutableRecoveryMode.Off,
+            requireTranslation: true,
+            requireOcr: sourceOptions.OcrMode != OcrWorkflowMode.Off,
+            executingExecutablePath: sourceExecutable,
+            verificationProgress: (completed, total) =>
+                sourceProgress.Report("saved source-kit verification", completed, total, "bytes")
+        );
+        if (sourceToolchain.BundleIntegrity != saved.BundleIntegrity)
+        {
+            throw new InvalidDataException(
+                "The source kit does not match the exact bundle recorded by the saved Auto plan. Supply that kit with --bundle-root."
+            );
+        }
+
+        var targetExecutable = ResolveCurrentExecutable();
+        var targetBundleRoot = Path.GetFullPath(AppContext.BaseDirectory);
+        AnalysisToolchain targetToolchain;
+        if (
+            string.Equals(
+                Path.TrimEndingDirectorySeparator(sourceToolchain.BundleRoot),
+                Path.TrimEndingDirectorySeparator(targetBundleRoot),
+                StringComparison.OrdinalIgnoreCase
+            )
+            && string.Equals(
+                AnalysisResumeCore.HashExecutingExecutable(targetExecutable),
+                sourceToolchain.BundleIntegrity.ExecutableSha256,
+                StringComparison.Ordinal
+            )
+        )
+        {
+            targetToolchain = sourceToolchain;
+        }
+        else
+        {
+            var targetProgress = new ConsolePercentageProgress();
+            targetToolchain = AnalysisToolchainLocator.Locate(
+                targetBundleRoot,
+                requireExplicitBundle: true,
+                requireRecovery: sourceOptions.RecoveryMode != ExecutableRecoveryMode.Off,
+                requireTranslation: false,
+                requireOcr: sourceOptions.OcrMode != OcrWorkflowMode.Off,
+                executingExecutablePath: targetExecutable,
+                verificationProgress: (completed, total) =>
+                    targetProgress.Report("current target-kit verification", completed, total, "bytes")
+            );
+        }
+
+        var targetOptions = saved.Options.ToOptions(outputDirectory, targetToolchain.BundleRoot) with
+        {
+            TranslationMode = TranslationWorkflowMode.Off,
+        };
+        ValidateOptions(targetOptions);
+        ValidateInputSource(targetOptions);
+        var patterns = Program.ResolveAnalysisPatterns(
+            targetOptions.PatternSelection,
+            targetOptions.RegexFilePath
+        );
+        EnrichmentRegexPipelineCore.ValidatePatterns(patterns);
+        var targetSpecification = AnalysisResumeSpecification.Create(
+            targetOptions,
+            patterns,
+            targetToolchain.BundleIntegrity,
+            targetExecutable
+        );
+        if (
+            !string.Equals(
+                targetSpecification.BstringsVersion,
+                TranslationOffTargetVersion,
+                StringComparison.Ordinal
+            )
+        )
+        {
+            throw new InvalidDataException(
+                $"Translation exclusion must run from the bstrings {TranslationOffTargetVersion} kit."
+            );
+        }
+        var transitionProgress = new ConsolePercentageProgress();
+        var session = await AnalysisResumeTranslationOffCore.TransitionAsync(
+            outputDirectory,
+            saved,
+            targetSpecification,
+            (context, token) =>
+                ValidateTranslationOffParentAsync(
+                    context,
+                    sourceOptions,
+                    sourceToolchain,
+                    token
+                ),
+            (completed, total) =>
+                transitionProgress.Report(
+                    "saved checkpoint verification",
+                    completed,
+                    total,
+                    "bytes"
+                ),
+            cancellationToken: cancellationToken
+        );
+        Console.Error.WriteLine(
+            "Resume change complete: stages 1-6 are inherited; translation selection will be replaced for translation Off."
+        );
+        await RunAsync(
+            targetOptions,
+            cancellationToken,
+            executingExecutablePath: targetExecutable,
+            existingResumeSession: session,
+            resumeRequested: true,
+            skipExternalToolchainPreflight: true,
+            preverifiedToolchain: targetToolchain
+        );
+    }
+
+    internal static async Task ValidateTranslationOffParentAsync(
+        AnalysisResumeTranslationOffValidationContext context,
+        AnalysisOptions sourceOptions,
+        AnalysisToolchain sourceToolchain,
+        CancellationToken cancellationToken
+    )
+    {
+        var expectedStages = AnalysisResumeStage.All
+            .Take(AnalysisResumeStage.TranslationSelection.Ordinal)
+            .ToArray();
+        if (!context.Stages.SequenceEqual(expectedStages))
+        {
+            throw new InvalidDataException(
+                "Translation can be excluded only at the exact committed stage 7 boundary."
+            );
+        }
+
+        var outputDirectory = context.OutputDirectory;
+        var inventoryPath = Path.Combine(outputDirectory, "input-files.txt");
+        var inputManifestPath = Path.Combine(outputDirectory, "input-manifest.jsonl");
+        var routingManifestPath = Path.Combine(outputDirectory, "content-routing.jsonl");
+        var flossInventoryPath = Path.Combine(outputDirectory, "floss-input-files.txt");
+        var flossManifestPath = Path.Combine(outputDirectory, "floss-input-manifest.jsonl");
+        var ocrInventoryPath = Path.Combine(outputDirectory, "ocr-input-files.txt");
+        var ocrManifestPath = Path.Combine(outputDirectory, "ocr-input-manifest.jsonl");
+        var nativePath = Path.Combine(outputDirectory, "native-strings.jsonl");
+        var recoveredPath = Path.Combine(outputDirectory, "recovered-strings.jsonl");
+        var ocrPath = Path.Combine(outputDirectory, "ocr-strings.jsonl");
+        var ocrAssessmentsPath = Path.Combine(outputDirectory, "ocr-assessments.jsonl");
+        var rawPath = Path.Combine(outputDirectory, "raw-strings.jsonl");
+        var assessmentsPath = Path.Combine(outputDirectory, "language-assessments.jsonl");
+        var candidatesPath = Path.Combine(outputDirectory, "translation-candidates.jsonl");
+        var workingDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "bstrings-translation-off-validation-" + Guid.NewGuid().ToString("N")
+        );
+        Directory.CreateDirectory(workingDirectory);
+        try
+        {
+            Console.Error.WriteLine(
+                "Resume change preflight 1/7: verifying the input inventory and evidence hashes..."
+            );
+            var input = context.GetStats<InputManifestInfo>(AnalysisResumeStage.InputInventory);
+            await InputEvidenceManifest.VerifySelectionAsync(
+                inventoryPath,
+                EnumerateInputFiles(sourceOptions),
+                cancellationToken
+            );
+            await InputEvidenceManifest.VerifyInventoryAsync(
+                inventoryPath,
+                input,
+                cancellationToken
+            );
+            await InputEvidenceManifest.VerifyAsync(inputManifestPath, input, cancellationToken);
+
+            Console.Error.WriteLine("Resume change preflight 2/7: validating content routing...");
+            ContentRoutingStats? routing = null;
+            var needsRouting =
+                sourceOptions.RecoveryMode != ExecutableRecoveryMode.Off
+                || sourceOptions.OcrMode != OcrWorkflowMode.Off;
+            if (needsRouting)
+            {
+                routing = await ContentRoutingCore.ValidateAndProjectAsync(
+                    inputManifestPath,
+                    input,
+                    routingManifestPath,
+                    flossInventoryPath,
+                    flossManifestPath,
+                    ocrInventoryPath,
+                    ocrManifestPath,
+                    expectedNativeSelected:
+                        sourceOptions.NativeExtractionMode == NativeExtractionMode.On,
+                    cancellationToken,
+                    expectedClassifierExecutable: context.LegacyImported
+                        ? null
+                        : sourceToolchain.MagikaExecutable,
+                    writeProjections: false
+                );
+                RequireMatchingResumeStats(
+                    AnalysisResumeStage.ContentRouting,
+                    context.GetStats<ContentRoutingStats>(AnalysisResumeStage.ContentRouting),
+                    routing.Value
+                );
+            }
+            else
+            {
+                RequireMatchingResumeStats(
+                    AnalysisResumeStage.ContentRouting,
+                    context.GetStats<string>(AnalysisResumeStage.ContentRouting),
+                    "disabled"
+                );
+            }
+
+            Console.Error.WriteLine("Resume change preflight 3/7: validating native extraction...");
+            var native = await NativeEnrichmentCompletionCore.ValidateAsync(
+                nativePath,
+                inputManifestPath,
+                workingDirectory,
+                context.LegacyImported
+                    ? LegacyV200Version
+                    : context.Specification.BstringsVersion,
+                cancellationToken
+            );
+            RequireMatchingResumeStats(
+                AnalysisResumeStage.Native,
+                context.GetStats<NativeEnrichmentCompletionStats>(AnalysisResumeStage.Native),
+                native
+            );
+
+            Console.Error.WriteLine("Resume change preflight 4/7: validating FLOSS output...");
+            var floss = await ValidateFlossCheckpointAsync(
+                recoveredPath,
+                flossInventoryPath,
+                flossManifestPath,
+                routingManifestPath,
+                routing,
+                workingDirectory,
+                cancellationToken
+            );
+            RequireMatchingResumeStats(
+                AnalysisResumeStage.Floss,
+                context.GetStats<AnalysisResumeFlossStats>(AnalysisResumeStage.Floss),
+                floss
+            );
+
+            Console.Error.WriteLine("Resume change preflight 5/7: validating OCR output...");
+            var ocrOutputCount = await CountStrictJsonlRecordsAsync(
+                ocrPath,
+                "OCR string output",
+                cancellationToken
+            );
+            var ocrAssessmentCount = await CountStrictJsonlRecordsAsync(
+                ocrAssessmentsPath,
+                "OCR assessment output",
+                cancellationToken
+            );
+            OcrCompletionStats? ocr = null;
+            OcrValidationRequirements? ocrRequirements = null;
+            if (
+                sourceOptions.OcrMode != OcrWorkflowMode.Off
+                && routing is { } routed
+                && routed.OcrCandidates > 0
+            )
+            {
+                ocrRequirements = OcrCompletionCore.CreateValidationRequirements(
+                    sourceToolchain,
+                    sourceOptions.OcrMode,
+                    sourceOptions.OcrProvider,
+                    sourceOptions.OcrThreads
+                );
+                ocr = await OcrCompletionCore.ValidateAsync(
+                    ocrInventoryPath,
+                    ocrManifestPath,
+                    routed.OcrInput,
+                    ocrPath,
+                    ocrAssessmentsPath,
+                    workingDirectory,
+                    routed.OcrCandidates,
+                    ocrRequirements,
+                    cancellationToken
+                );
+            }
+            var ocrStats = new AnalysisResumeOcrStats(
+                ocr,
+                ocrRequirements,
+                ocrOutputCount.Records,
+                ocrAssessmentCount.Records
+            );
+            RequireMatchingResumeStats(
+                AnalysisResumeStage.Ocr,
+                context.GetStats<AnalysisResumeOcrStats>(AnalysisResumeStage.Ocr),
+                ocrStats
+            );
+
+            Console.Error.WriteLine("Resume change preflight 6/7: validating the raw merge...");
+            var raw = await EnrichmentMergeCore.ValidateConcatenationAsync(
+                [nativePath, recoveredPath, ocrPath],
+                rawPath,
+                cancellationToken
+            );
+            RequireMatchingResumeStats(
+                AnalysisResumeStage.RawMerge,
+                context.GetStats<EnrichmentMergeStats>(AnalysisResumeStage.RawMerge),
+                raw
+            );
+
+            Console.Error.WriteLine(
+                "Resume change preflight 7/7: replaying language assessments and candidate selection..."
+            );
+            var triageOptions = new LanguageTriageOptions(
+                sourceOptions.TranslationTarget,
+                sourceOptions.LanguageDetectionMode,
+                sourceOptions.TranslationPolicy,
+                sourceOptions.LanguageConfidence,
+                sourceOptions.LanguageMargin,
+                sourceOptions.TranslationMinimumCharacters,
+                sourceOptions.TranslationMaximumCharacters,
+                BatchSize: 2048,
+                MaxDegreeOfParallelism: Math.Max(1, Environment.ProcessorCount)
+            );
+            var triage = await LanguageTriageCore.ValidateCompletedOutputsAsync(
+                rawPath,
+                candidatesPath,
+                assessmentsPath,
+                triageOptions,
+                cancellationToken
+            );
+            RequireMatchingResumeStats(
+                AnalysisResumeStage.TranslationSelection,
+                context.GetStats<AnalysisResumeTranslationSelectionStats>(
+                    AnalysisResumeStage.TranslationSelection
+                ),
+                new AnalysisResumeTranslationSelectionStats(
+                    triage,
+                    triage.TranslationCandidates
+                )
+            );
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(workingDirectory, recursive: true);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
     internal static void ValidateLegacyResumeOptions(AnalysisOptions recordedOptions)
     {
         if (
@@ -689,14 +1100,37 @@ internal static partial class AnalysisOrchestrator
         }
     }
 
-    private static string ResolveResumeExecutable(AnalysisResumeSpecification saved)
+    private static string ResolveResumeExecutable(
+        AnalysisResumeSpecification saved,
+        string? bundleRootOverride
+    )
     {
-        foreach (
-            var candidate in new[]
+        var candidates = new List<string?>();
+        if (saved.BundleIntegrity is { } bundle && !string.IsNullOrWhiteSpace(bundleRootOverride))
+        {
+            var root = Path.GetFullPath(bundleRootOverride);
+            var relative = bundle.Executable.Replace('/', Path.DirectorySeparatorChar);
+            var candidate = Path.GetFullPath(Path.Combine(root, relative));
+            var containment = Path.GetRelativePath(root, candidate);
+            if (
+                Path.IsPathRooted(containment)
+                || containment.Equals("..", StringComparison.Ordinal)
+                || containment.StartsWith(
+                    ".." + Path.DirectorySeparatorChar,
+                    StringComparison.Ordinal
+                )
+            )
             {
-                Environment.ProcessPath,
-                Path.Combine(AppContext.BaseDirectory, "bstrings.exe"),
+                throw new InvalidDataException(
+                    "The saved executable path escapes the supplied source-kit root."
+                );
             }
+            candidates.Add(candidate);
+        }
+        candidates.Add(Environment.ProcessPath);
+        candidates.Add(Path.Combine(AppContext.BaseDirectory, "bstrings.exe"));
+        foreach (
+            var candidate in candidates
         )
         {
             if (
@@ -713,7 +1147,25 @@ internal static partial class AnalysisOrchestrator
             }
         }
         throw new InvalidDataException(
-            "The current bstrings executable does not match the saved resume identity."
+            "The saved bstrings executable is unavailable. Supply the complete source kit recorded by this analysis with --bundle-root."
+        );
+    }
+
+    private static string ResolveCurrentExecutable()
+    {
+        var executableName = OperatingSystem.IsWindows() ? "bstrings.exe" : "bstrings";
+        var adjacent = Path.Combine(AppContext.BaseDirectory, executableName);
+        if (File.Exists(adjacent))
+        {
+            return adjacent;
+        }
+        if (!string.IsNullOrWhiteSpace(Environment.ProcessPath) && File.Exists(Environment.ProcessPath))
+        {
+            return Environment.ProcessPath;
+        }
+        throw new FileNotFoundException(
+            "The current adjacent bstrings executable is unavailable.",
+            adjacent
         );
     }
 }

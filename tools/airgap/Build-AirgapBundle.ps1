@@ -970,6 +970,7 @@ $bundleArchitectureDocumentNames = @(
     'adr-0010-bounded-reversible-decoding.md',
     'adr-0011-single-windows-kit-and-plain-documentation.md',
     'adr-0012-explicit-whole-stage-resume.md',
+    'adr-0013-resume-with-translation-off.md',
     'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(
@@ -983,7 +984,8 @@ $bundleReleaseDocumentNames = @(
     'v1.9.17.md',
     'v2.0.0.md',
     'v2.1.0.md',
-    'v2.1.1.md'
+    'v2.1.1.md',
+    'v2.1.2.md'
 )
 $bundleRootDocumentNames = @(
     'BASE_PACK_NOTICE.md',

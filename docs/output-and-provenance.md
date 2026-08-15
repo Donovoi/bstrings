@@ -144,6 +144,21 @@ then starts at the first uncommitted stage and repeats that whole stage.
 Interrupted translation starts again from `translation-candidates.jsonl`;
 partial translated output and the run-local translation cache are not reused.
 
+Version 2.1.2 can derive a translation-off generation from an exact stopped
+v2.1.1 Full run when stage 8 has not committed:
+
+```powershell
+bstrings.exe analyze --resume -o results -e translation `
+  --bundle-root D:\tools\bstrings-kit-2.1.1
+```
+
+The source generation stays attributable. Its stage-7 checkpoint and artifacts
+move to a mapped superseded archive. Stages 1 through 6 retain exact source
+checkpoint references. The active generation creates new empty stage-7 and
+stage-8 artifacts and records `translationMode: off`. The resume evidence names
+the source run, target generation, transition, inherited stage, archive root,
+and excluded engine.
+
 One process holds an exclusive result-directory lease. Each start or resume has
 a new attempt identifier. Attempt history records the last committed stage and
 terminal status. Progress shows reused stages and current work, but it remains

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "resultFile": "analysis-resume-2.1.2-acceptance-2026-08.csv",
+  "measuredCandidateCommit": "76c3abe6c3c4214be1fcf60cb785eb2c6429cdd5",
+  "runtimeTree": {
+    "path": "bstrings",
+    "gitObject": "845d494aa75ecd4985fb30cfdefc996589c25f30"
+  },
+  "benchmarkHarness": {
+    "path": "benchmarks/AnalysisResumeBenchmark/Test-AnalysisResumeBenchmark.ps1",
+    "gitObject": "70c019086b3aeddf0efa5f22e6a65ad6b92fdcb4"
+  },
+  "verification": {
+    "runtimeCommand": "git rev-parse HEAD:bstrings",
+    "harnessCommand": "git rev-parse HEAD:benchmarks/AnalysisResumeBenchmark/Test-AnalysisResumeBenchmark.ps1",
+    "rule": "Both commands must equal the recorded Git object before these results can support a candidate."
+  }
+}
