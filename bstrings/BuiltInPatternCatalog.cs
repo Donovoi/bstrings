@@ -857,6 +857,26 @@ internal static class BuiltInPatternCatalog
             }
         );
 
+    internal static string GetValidationLabel(BuiltInPatternDefinition definition) =>
+        definition.Validation switch
+        {
+            BuiltInValidationKind.None => "regex-only",
+            BuiltInValidationKind.PaymentCard => "luhn",
+            BuiltInValidationKind.Base64 => "canonical-base64",
+            BuiltInValidationKind.BitLocker => "bitlocker-arithmetic",
+            BuiltInValidationKind.Jwt => "jwt-compact-structure",
+            BuiltInValidationKind.Iban => "iban-mod97",
+            BuiltInValidationKind.CanadianSin => "canadian-sin-luhn",
+            BuiltInValidationKind.DateOfBirth => "calendar-date",
+            BuiltInValidationKind.Cpe23 => "cpe23-binding",
+            BuiltInValidationKind.EmailMessageId => "rfc5322-message-id",
+            BuiltInValidationKind.Lei => "lei-mod97",
+            BuiltInValidationKind.Npi => "npi-luhn",
+            BuiltInValidationKind.Itin => "itin-published-range",
+            BuiltInValidationKind.UkNino => "hmrc-nino-syntax",
+            _ => definition.Validation.ToString(),
+        };
+
     internal static bool TryGetDefinition(
         string name,
         string pattern,

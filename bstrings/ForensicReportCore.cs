@@ -27,17 +27,7 @@ internal static class ForensicReportCore
     internal const int HistogramChunkEntryLimit = 100_000;
 
     internal const string FindingsHeader =
-        "PatternName\tPatternCategory\tPatternDescription\tPatternSource\tPatternExpression\tMatch\tContext"
-        + "\tSourceFile\tSourceDirectory\tFileName\tFileExtension\tArtifactType\tBrowser"
-        + "\tBrowserProfile\tLocationKind\tLocation\tMatchStart\tMatchLength"
-        + "\tSourceLineNumber\tRecordLineNumber\tPageNumber\tRegion\tEvidenceClass"
-        + "\tEngineChain\tExtractionEngine\tExtractionEngineVersion\tExtractionKind\tProvider"
-        + "\tOriginModel\tOriginRevision\tOriginModelSha256"
-        + "\tTransformKind\tTransformEngine\tTransformEngineVersion\tTransformModel"
-        + "\tTransformRevision\tTransformModelSha256\tSourceLanguage\tTargetLanguage\tTransformOutcome"
-        + "\tTranslationIntegrity"
-        + "\tDecoderChain\tValidation"
-        + "\tSourceRecordId\tParentRecordId\tEncoding\tConfidence\tAttributesJson";
+        "PatternName\tMatch\tContext\tSourceFile\tArtifactType\tLocation\tMatchStart\tAttributesJson";
 
     internal const string PatternHistogramHeader =
         "PatternName\tPatternCategory\tPatternDescription\tMatchCount\tPercentOfAllMatches"
@@ -185,7 +175,7 @@ internal static class ForensicReportCore
                             ex
                         );
                     }
-                    var metadata = ValidateMatchRecord(
+                    ValidateMatchRecord(
                         record,
                         lineNumber,
                         patternMetadata
@@ -220,7 +210,6 @@ internal static class ForensicReportCore
                     await WriteFindingsRowAsync(
                         findingsWriter,
                         record,
-                        metadata,
                         cancellationToken
                     );
                     findingRows++;
@@ -288,7 +277,7 @@ internal static class ForensicReportCore
                     definition.Description,
                     definition.Source,
                     GetCategory(definition.Name),
-                    GetValidationLabel(definition)
+                    BuiltInPatternCatalog.GetValidationLabel(definition)
                 );
             }
             else
@@ -302,100 +291,60 @@ internal static class ForensicReportCore
     private static async Task WriteFindingsRowAsync(
         StreamWriter writer,
         EnrichmentRegexMatchRecord record,
-        PatternMetadata metadata,
         CancellationToken cancellationToken
     )
     {
-        var source = ClassifySource(record.SourceFile);
-        var matchedArtifact = ClassifySource(record.Match);
-        var artifactType = source.ArtifactType.Length > 0
-            ? source.ArtifactType
-            : matchedArtifact.ArtifactType;
-        var browser = source.Browser.Length > 0 ? source.Browser : matchedArtifact.Browser;
-        var browserProfile = source.BrowserProfile.Length > 0
-            ? source.BrowserProfile
-            : matchedArtifact.BrowserProfile;
-        var attributes = record.Attributes;
-        var sourceLine = GetAttribute(attributes, "sourceLineNumber", "lineNumber", "line");
-        var page = GetAttribute(attributes, "pageNumber", "page")
-            ?? ExtractLocationComponent(record.Location?.Value, "page");
-        var confidence = GetAttribute(
-            attributes,
-            "confidence",
-            "ocrConfidence",
-            "languageConfidence"
-        );
-        var encoding = GetAttribute(attributes, "encoding");
-        var translationIntegrity = GetAttribute(attributes, "translationIntegrity");
-        var extractionEngine = record.Origin?.Extractor ?? string.Empty;
-        var extractionKind = record.Origin?.Kind ?? string.Empty;
-        var transformEngine = record.Transform?.Engine ?? string.Empty;
-        var transformKind = record.Transform?.Kind ?? string.Empty;
-        var engineChain = JoinChain(
-            extractionEngine,
-            transformEngine.Length == 0
-                ? string.Empty
-                : $"{transformEngine}:{transformKind}"
-        );
-        var decoderChain = CreateDecoderChain(record, attributes);
-        var attributesJson = attributes is null
-            ? string.Empty
-            : JsonSerializer.Serialize(attributes, JsonOptions);
+        var artifactType = ClassifySourceArtifact(record.SourceFile);
+        if (artifactType.Length == 0)
+        {
+            artifactType = ClassifySourceArtifact(record.Match);
+        }
+        var attributesJson = CreateFindingsAttributesJson(record);
 
         await WriteTsvRowAsync(
             writer,
             [
                 record.PatternName,
-                metadata.Category,
-                metadata.Description,
-                metadata.Source,
-                record.Pattern,
                 record.Match,
                 record.Context ?? string.Empty,
                 record.SourceFile,
-                source.Directory,
-                source.FileName,
-                source.Extension,
                 artifactType,
-                browser,
-                browserProfile,
-                record.Location?.Kind ?? string.Empty,
                 record.Location?.Value ?? string.Empty,
-                record.MatchStart >= 0 ? record.MatchStart.ToString(CultureInfo.InvariantCulture) : string.Empty,
-                record.MatchLength.ToString(CultureInfo.InvariantCulture),
-                sourceLine ?? string.Empty,
-                record.MatchLine > 0 ? record.MatchLine.ToString(CultureInfo.InvariantCulture) : string.Empty,
-                page ?? string.Empty,
-                record.Location?.Value ?? string.Empty,
-                record.EvidenceClass,
-                engineChain,
-                extractionEngine,
-                record.Origin?.Version ?? string.Empty,
-                extractionKind,
-                record.Origin?.Provider ?? string.Empty,
-                record.Origin?.Model ?? string.Empty,
-                record.Origin?.Revision ?? string.Empty,
-                record.Origin?.ModelSha256 ?? string.Empty,
-                transformKind,
-                transformEngine,
-                record.Transform?.EngineVersion ?? string.Empty,
-                record.Transform?.Model ?? string.Empty,
-                record.Transform?.Revision ?? string.Empty,
-                record.Transform?.ModelSha256 ?? string.Empty,
-                record.Transform?.SourceLanguage ?? string.Empty,
-                record.Transform?.TargetLanguage ?? string.Empty,
-                record.Transform?.Outcome ?? string.Empty,
-                translationIntegrity ?? string.Empty,
-                decoderChain,
-                metadata.Validation,
-                record.SourceRecordId,
-                record.ParentRecordId ?? string.Empty,
-                encoding ?? string.Empty,
-                confidence ?? string.Empty,
+                record.MatchStart.ToString(CultureInfo.InvariantCulture),
                 attributesJson,
             ],
             cancellationToken
         );
+    }
+
+    private static string CreateFindingsAttributesJson(EnrichmentRegexMatchRecord record)
+    {
+        if (record.Attributes?.ContainsKey("sourceRecordId") == true)
+        {
+            throw new InvalidDataException(
+                "Regex match attributes use reserved projection key 'sourceRecordId'."
+            );
+        }
+        var encodedRecordId = EncodeJsonStringContent(record.SourceRecordId);
+        if (record.Attributes is null || record.Attributes.Count == 0)
+        {
+            return $"{{\"sourceRecordId\":\"{encodedRecordId}\"}}";
+        }
+
+        var serializedAttributes = JsonSerializer.Serialize(record.Attributes, JsonOptions);
+        return $"{{\"sourceRecordId\":\"{encodedRecordId}\",{serializedAttributes[1..]}";
+    }
+
+    private static string EncodeJsonStringContent(string value)
+    {
+        foreach (var character in value)
+        {
+            if (character is '"' or '\\' || character < ' ')
+            {
+                return JsonEncodedText.Encode(value).ToString();
+            }
+        }
+        return value;
     }
 
     private static async Task WritePatternHistogramAsync(
@@ -698,6 +647,9 @@ internal static class ForensicReportCore
             record.SchemaVersion != EnrichmentRegexPipelineCore.CurrentSchemaVersion
             || !string.Equals(record.RecordType, "regex-match", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(record.PatternName)
+            || string.IsNullOrWhiteSpace(record.PatternDescription)
+            || string.IsNullOrWhiteSpace(record.PatternSource)
+            || string.IsNullOrWhiteSpace(record.PatternValidation)
             || string.IsNullOrWhiteSpace(record.SourceRecordId)
             || string.IsNullOrWhiteSpace(record.SourceFile)
             || record.Match is null
@@ -728,6 +680,16 @@ internal static class ForensicReportCore
         {
             throw new InvalidDataException(
                 $"Regex match JSONL line {lineNumber:N0} contains an invalid match range."
+            );
+        }
+        if (
+            !string.Equals(record.PatternDescription, metadata.Description, StringComparison.Ordinal)
+            || !string.Equals(record.PatternSource, metadata.Source, StringComparison.Ordinal)
+            || !string.Equals(record.PatternValidation, metadata.Validation, StringComparison.Ordinal)
+        )
+        {
+            throw new InvalidDataException(
+                $"Regex match JSONL line {lineNumber:N0} pattern metadata does not match selected pattern '{record.PatternName}'."
             );
         }
         var isDecoding = string.Equals(
@@ -784,26 +746,6 @@ internal static class ForensicReportCore
         return $"sha256:{digest}:preview:{preview}";
     }
 
-    private static string GetValidationLabel(BuiltInPatternDefinition definition) =>
-        definition.Validation switch
-        {
-            BuiltInValidationKind.None => "regex-only",
-            BuiltInValidationKind.PaymentCard => "luhn",
-            BuiltInValidationKind.Base64 => "canonical-base64",
-            BuiltInValidationKind.BitLocker => "bitlocker-arithmetic",
-            BuiltInValidationKind.Jwt => "jwt-compact-structure",
-            BuiltInValidationKind.Iban => "iban-mod97",
-            BuiltInValidationKind.CanadianSin => "canadian-sin-luhn",
-            BuiltInValidationKind.DateOfBirth => "calendar-date",
-            BuiltInValidationKind.Cpe23 => "cpe23-binding",
-            BuiltInValidationKind.EmailMessageId => "rfc5322-message-id",
-            BuiltInValidationKind.Lei => "lei-mod97",
-            BuiltInValidationKind.Npi => "npi-luhn",
-            BuiltInValidationKind.Itin => "itin-published-range",
-            BuiltInValidationKind.UkNino => "hmrc-nino-syntax",
-            _ => definition.Validation.ToString(),
-        };
-
     private static string GetCategory(string name)
     {
         if (BuiltInPatternCatalog.Groups.TryGetValue("pii", out var pii) && Contains(pii, name))
@@ -847,91 +789,9 @@ internal static class ForensicReportCore
     private static bool Contains(IReadOnlyList<string> values, string value) =>
         values.Any(candidate => string.Equals(candidate, value, StringComparison.OrdinalIgnoreCase));
 
-    private static string? GetAttribute(
-        IReadOnlyDictionary<string, JsonElement>? attributes,
-        params string[] names
-    )
-    {
-        if (attributes is null)
-        {
-            return null;
-        }
-        foreach (var name in names)
-        {
-            foreach (var pair in attributes)
-            {
-                if (!string.Equals(pair.Key, name, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-                return pair.Value.ValueKind == JsonValueKind.String
-                    ? pair.Value.GetString()
-                    : pair.Value.GetRawText();
-            }
-        }
-        return null;
-    }
-
-    private static string? ExtractLocationComponent(string? location, string name)
-    {
-        if (string.IsNullOrEmpty(location))
-        {
-            return null;
-        }
-        foreach (var component in location.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries))
-        {
-            var separator = component.IndexOf('=');
-            if (
-                separator > 0
-                && string.Equals(component[..separator], name, StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                return component[(separator + 1)..];
-            }
-        }
-        return null;
-    }
-
-    private static string CreateDecoderChain(
-        EnrichmentRegexMatchRecord record,
-        IReadOnlyDictionary<string, JsonElement>? attributes
-    )
-    {
-        var values = new List<string>(capacity: 3);
-        var kind = record.Origin?.Kind ?? string.Empty;
-        if (
-            kind.Equals("decoded", StringComparison.OrdinalIgnoreCase)
-            || kind.Equals("deobfuscated", StringComparison.OrdinalIgnoreCase)
-        )
-        {
-            values.Add($"{record.Origin!.Extractor}:{kind}");
-        }
-        var attributeDecoder = GetAttribute(attributes, "decoder", "decoderChain", "encodingTransform");
-        if (!string.IsNullOrWhiteSpace(attributeDecoder))
-        {
-            values.Add(attributeDecoder);
-        }
-        if (
-            record.Transform is not null
-            && !record.Transform.Kind.Equals("translation", StringComparison.OrdinalIgnoreCase)
-        )
-        {
-            values.Add(
-                record.Transform.Kind.Equals("decoding", StringComparison.OrdinalIgnoreCase)
-                    ? $"{record.Transform.Engine}:{record.Transform.Profile}"
-                    : $"{record.Transform.Engine}:{record.Transform.Kind}"
-            );
-        }
-        return string.Join(" -> ", values.Distinct(StringComparer.OrdinalIgnoreCase));
-    }
-
-    private static string JoinChain(params string[] values) =>
-        string.Join(" -> ", values.Where(value => !string.IsNullOrWhiteSpace(value)));
-
-    private static SourceClassification ClassifySource(string sourceFile)
+    private static string ClassifySourceArtifact(string sourceFile)
     {
         var separator = sourceFile.LastIndexOfAny(['\\', '/']);
-        var directory = separator > 0 ? sourceFile[..separator] : string.Empty;
         var fileName = separator >= 0 ? sourceFile[(separator + 1)..] : sourceFile;
         string extension;
         try
@@ -967,16 +827,7 @@ internal static class ForensicReportCore
             browser = "Mozilla Firefox";
         }
 
-        var browserProfile = ExtractProfile(normalized, browser);
-        var artifactType = ClassifyArtifact(fileName, extension, browser);
-        return new SourceClassification(
-            directory,
-            fileName,
-            extension,
-            artifactType,
-            browser,
-            browserProfile
-        );
+        return ClassifyArtifact(fileName, extension, browser);
     }
 
     private static string ClassifyArtifact(string fileName, string extension, string browser)
@@ -1027,32 +878,6 @@ internal static class ForensicReportCore
         return string.Empty;
     }
 
-    private static string ExtractProfile(string normalizedPath, string browser)
-    {
-        string marker;
-        if (browser.Equals("Mozilla Firefox", StringComparison.Ordinal))
-        {
-            marker = "\\Profiles\\";
-        }
-        else if (browser.Length > 0)
-        {
-            marker = "\\User Data\\";
-        }
-        else
-        {
-            return string.Empty;
-        }
-
-        var markerIndex = normalizedPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-        if (markerIndex < 0)
-        {
-            return string.Empty;
-        }
-        var start = markerIndex + marker.Length;
-        var end = normalizedPath.IndexOf('\\', start);
-        return end < 0 ? normalizedPath[start..] : normalizedPath[start..end];
-    }
-
     private static string CreateBar(long value, long maximum, int width)
     {
         if (value <= 0 || maximum <= 0)
@@ -1083,7 +908,14 @@ internal static class ForensicReportCore
     )
     {
         internal static PatternMetadata CreateCustom(string name, string pattern) =>
-            new(name, pattern, "User-supplied regular expression", string.Empty, "custom", "custom-regex");
+            new(
+                name,
+                pattern,
+                "User-supplied regular expression",
+                "user-supplied",
+                "custom",
+                "custom-regex"
+            );
     }
 
     private sealed class PatternStatistics(PatternMetadata metadata)
@@ -1121,15 +953,6 @@ internal static class ForensicReportCore
             }
         }
     }
-
-    private readonly record struct SourceClassification(
-        string Directory,
-        string FileName,
-        string Extension,
-        string ArtifactType,
-        string Browser,
-        string BrowserProfile
-    );
 
     private readonly record struct HistogramKey(string PatternName, string Feature);
 

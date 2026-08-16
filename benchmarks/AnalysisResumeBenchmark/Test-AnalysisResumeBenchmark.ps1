@@ -110,8 +110,18 @@ function Get-CanonicalLineMultisetSha256 {
     )
     $lines = [Collections.Generic.List[string]]::new()
     $tsvHeader = $null
-    $engineIndex = -1
-    $versionIndex = -1
+    $compactFindingsColumns = @(
+        'PatternName',
+        'Match',
+        'Context',
+        'SourceFile',
+        'ArtifactType',
+        'Location',
+        'MatchStart',
+        'AttributesJson'
+    )
+    $compactFindingsIndexes = @()
+    $sourceRecordIdIndex = -1
     foreach ($rawLine in [IO.File]::ReadLines($Path)) {
         $line = $rawLine
         if ($Artifact.EndsWith('.jsonl', [StringComparison]::OrdinalIgnoreCase)) {
@@ -125,18 +135,39 @@ function Get-CanonicalLineMultisetSha256 {
             $fields = $line.Split([char]"`t")
             if ($null -eq $tsvHeader) {
                 $tsvHeader = $fields
-                $engineIndex = [Array]::IndexOf($tsvHeader, 'ExtractionEngine')
-                $versionIndex = [Array]::IndexOf($tsvHeader, 'ExtractionEngineVersion')
-                if ($engineIndex -lt 0 -or $versionIndex -lt 0) {
-                    throw 'findings.tsv is missing the extraction engine version columns.'
+                $compactFindingsIndexes = @($compactFindingsColumns | ForEach-Object {
+                    [Array]::IndexOf($tsvHeader, $_)
+                })
+                $sourceRecordIdIndex = [Array]::IndexOf($tsvHeader, 'SourceRecordId')
+                if (@($compactFindingsIndexes | Where-Object { $_ -lt 0 }).Count -ne 0) {
+                    throw 'findings.tsv is missing a compact investigator column.'
                 }
+                $line = @($compactFindingsColumns + '__CanonicalSourceRecordId') -join "`t"
             }
             elseif ($fields.Count -ne $tsvHeader.Count) {
                 throw 'findings.tsv contains an invalid field count.'
             }
-            elseif ($fields[$engineIndex] -ceq 'bstrings') {
-                $fields[$versionIndex] = '<release-version>'
-                $line = $fields -join "`t"
+            else {
+                $projected = @($compactFindingsIndexes | ForEach-Object { $fields[$_] })
+                $attributes = $projected[7]
+                $sourceRecordId = if ($sourceRecordIdIndex -ge 0) {
+                    $fields[$sourceRecordIdIndex]
+                }
+                else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($attributes)) {
+                    $attributeMap = $attributes | ConvertFrom-Json -AsHashtable
+                    if ($attributeMap.ContainsKey('sourceRecordId')) {
+                        $sourceRecordId = [string]$attributeMap['sourceRecordId']
+                        $attributeMap.Remove('sourceRecordId')
+                    }
+                    $projected[7] = if ($attributeMap.Count -eq 0) {
+                        ''
+                    }
+                    else {
+                        $attributeMap | ConvertTo-Json -Compress -Depth 20
+                    }
+                }
+                $line = @($projected + $sourceRecordId) -join "`t"
             }
         }
         $lines.Add($line)

@@ -2,10 +2,9 @@
 
 Date: 7 August 2026
 
-Availability note: these projections are in current source and the complete
-v1.9.17 quality release, including runs that also use FLOSS, OCR, and
-translation. Current source also projects bounded decoded text children; see
-[ADR-0010](architecture/adr-0010-bounded-reversible-decoding.md). See
+These projections are in current source. They work with native extraction,
+FLOSS, OCR, translation, and bounded decoded text. See
+[ADR-0010](architecture/adr-0010-bounded-reversible-decoding.md) and
 [download and installation](download-and-install.md).
 
 ## Outcome
@@ -15,7 +14,7 @@ authoritative evidence graph and also writes four review-oriented projections:
 
 | File | Purpose |
 | --- | --- |
-| `findings.tsv` | Wide, one-row-per-match table for Timeline Explorer, spreadsheet, or dataframe filtering |
+| `findings.tsv` | Compact, one-row-per-match table for Timeline Explorer, spreadsheet, or dataframe filtering |
 | `pattern-histogram.tsv` | Counts for every requested pattern, including zero-count patterns and evidence-class splits |
 | `feature-histogram.tsv` | Exact counts for each distinct `(pattern, matched value)` pair |
 | `pattern-histogram.html` | Self-contained visual bar chart for rapid triage |
@@ -48,7 +47,8 @@ recursively exposes data found through scanners/transformations. Its
 also demonstrates the value of separate account, telephone, PII, SIN, and
 credit-card feature families. Bstrings adopts those useful reporting ideas,
 but does not claim byte-for-byte compatibility with bulk_extractor feature
-files: its richer engine and parent/child lineage needs more columns.
+files. Bstrings keeps richer engine and parent/child lineage in
+`regex-matches.jsonl`.
 
 The official [Timeline Explorer page](https://ericzimmerman.github.io/) says it is intended for viewing,
 filtering, grouping, and sorting CSV/Excel data. For this review, the official
@@ -61,45 +61,50 @@ putting tab-separated data in a misleading `.csv` file.
 
 ## Findings contract
 
-`findings.tsv` contains the following column families:
+`findings.tsv` uses one fixed header:
 
-- pattern: name, category, description, primary source, expression, exact
-  match, bounded context, and semantic validation label;
-- source: full path, directory, filename, extension, artifact type, browser,
-  and browser profile;
-- location: typed location, match start/length, extractor-supplied source line,
-  record-relative line, page, region, and evidence class;
-- engine: ordered extraction/transform chain, extractor/runtime/provider,
-  model revision/hash, languages, transform outcome, and the dedicated
-  `TranslationIntegrity` column;
-- decoder: only an actual decoded/deobfuscated origin, explicit decoder
-  attribute, or non-translation transform is named as a decoder; detecting a
-  Base64-shaped value is not falsely reported as decoding it. A decoded child
-  binds its parent, covered span, named profile/policy, charset, exact byte hash,
-  outcome, depth, and effective limits; and
-- identity: source/parent record IDs, encoding, confidence, and the complete
-  attributes object.
+| Column | Meaning |
+| --- | --- |
+| `PatternName` | Name of the built-in or custom pattern that matched |
+| `Match` | Exact value matched by the pattern |
+| `Context` | Bounded text around the match |
+| `SourceFile` | Full source path stored in the match record |
+| `ArtifactType` | Review hint derived from the source path or matched value |
+| `Location` | Source location, such as a file offset or page region |
+| `MatchStart` | Zero-based character position inside the extracted string |
+| `AttributesJson` | Source-record ID plus extra record attributes as one JSON object |
 
-`TranslationIntegrity` is filterable as `verified`,
-`source-retained-ambiguous`, or `preservation-fallback`. For ambiguous and
-fallback children, `AttributesJson` also retains the advisory count or fallback
-reason. A preservation fallback is exact source text after rejected model output;
-it is not a successful translation and remains linked to its parent.
+See [built-in pattern validity](pattern-validity-review-2026-08.md) for pattern
+definitions, sources, validation checks, and interpretation limits.
 
-Every TSV record occupies exactly one physical line. Embedded tabs and line
-breaks are represented as visible escapes. Windows path separators remain
-ordinary backslashes. This makes row counts and header widths deterministic
-while keeping the file directly filterable.
+The header stays the same for every run. A cell can be empty. Tabs and line
+breaks inside values use visible escapes, so each finding stays on one physical
+line. Windows path separators remain ordinary backslashes.
 
-`findings.tsv` and `feature-histogram.tsv` intentionally contain the matched
-values. They can therefore repeat tokens, credential assignments, PII, and
-private-key boundaries in clear text even when the source artifact was access
-controlled. The complete result directory is sensitive case material. The HTML
-visualization contains aggregate pattern counts and descriptions, not matched
-feature values.
+`SourceDirectory`, `FileName`, and `FileExtension` are not separate columns.
+They were derived from `SourceFile` and repeated the same path information.
 
-Decoder outputs are sensitive too. `decoded-strings.jsonl` contains published
-text, `decoder-assessments.jsonl` records bounded attempted occurrences and
+Every `AttributesJson` object has `sourceRecordId`. This value links the compact
+row to the source record named by the authoritative match record.
+
+Use `regex-matches.jsonl` for the complete match record. Each match includes the
+pattern expression, description, source, validation method, evidence class,
+typed location, origin, transform, model, language, source and parent record
+IDs, encoding, confidence, and other provenance.
+
+Translation integrity remains in `AttributesJson` and
+`regex-matches.jsonl`. Values include `verified`,
+`source-retained-ambiguous`, and `preservation-fallback`. Decoder profile,
+policy, byte hash, charset, depth, and limits also remain in the JSONL and the
+decoded child's attributes.
+
+`findings.tsv` and `feature-histogram.tsv` contain matched values. This can
+include tokens, credential assignments, personal information, and private-key
+boundaries. The HTML visualization contains only aggregate pattern counts and
+descriptions.
+
+Decoder outputs can contain matched text. `decoded-strings.jsonl` contains
+published text, `decoder-assessments.jsonl` records bounded attempted occurrences and
 binary/invalid/limit outcomes, and `decoder-work-stats.json` reconciles their
 counts and hashes. Binary assessment does not imply malformed input: RFC 4648
 Base64 represents arbitrary bytes. This release does not carve, decompress, or

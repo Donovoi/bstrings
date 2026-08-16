@@ -203,13 +203,11 @@ surrounding string. Parallel extraction may change row order, so compare
 canonical records and offsets rather than assuming two valid runs will have
 byte-identical line ordering.
 
-In current source and v1.9.17, every completed integrated `analyze` run
-also projects these review files:
+Every completed integrated `analyze` run also projects these review files:
 
-- `findings.tsv`: one physical row per regex match with pattern metadata,
-  match and bounded context, source path, artifact/browser classification,
-  typed location, record-relative line, engine/model lineage, decoder chain,
-  evidence class, validation method, IDs, and retained attributes;
+- `findings.tsv`: one physical row per regex match with pattern name, match,
+  bounded context, full source path, artifact type, location, match start, and
+  retained attributes;
 - `pattern-histogram.tsv`: one row for every requested pattern, including
   zero-count patterns, with evidence-class and source-file counts;
 - `feature-histogram.tsv`: exact `(pattern, matched feature)` counts using a
@@ -223,8 +221,9 @@ returns, line feeds, and other C0 controls inside values are escaped as `\t`,
 line. Ordinary backslashes are preserved, which keeps Windows paths readable.
 The `.tsv` extension is intentional: the current Timeline Explorer generic
 CSV/TSV plugin selects a tab delimiter for that extension. JSONL remains the
-authoritative parent/child evidence graph; TSV is the denormalized filtering
-surface.
+authoritative parent/child evidence graph; TSV is the compact filtering
+surface. See the [findings column guide](forensic-reporting-2026-08.md#findings-contract)
+for every column and the JSONL fields that are not repeated in the TSV.
 
 The legacy direct form (`bstrings.exe -f ... --lr ... -o <file>`) still writes
 one flat extraction file for scripting compatibility. To obtain the enriched
@@ -533,10 +532,12 @@ then all decoding children. A decoding child can reference only a raw original,
 not a translation or another decoding child. Exact record-ID uniqueness,
 parent existence, and source/location/origin equality are checked with the same
 bounded disk-backed index used for translations. Hashes select partitions but
-never decide identity. Decoded findings are labelled `derived-decoding`;
-decoder-enabled pattern histograms add `DerivedDecodingCount`, and
-`findings.tsv` renders the decoder profile in `DecoderChain`. Decoder-off keeps
-the pre-decoding report header and existing output bytes unchanged.
+never decide identity. Decoded matches keep the `derived-decoding` evidence
+class and decoder profile in `regex-matches.jsonl`. `findings.tsv` keeps decoder
+attributes and the stable `sourceRecordId` link in `AttributesJson`.
+`regex-matches.jsonl` also records the selected pattern's
+description, source, and validation method. Decoder-enabled pattern histograms add
+`DerivedDecodingCount`.
 
 ## Related guides
 

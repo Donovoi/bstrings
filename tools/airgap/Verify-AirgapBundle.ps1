@@ -569,10 +569,41 @@ if ($TranslationSmoke) {
         if ($matches.Count -lt 1 -or $summary.regexMatches -lt $matches.Count) {
             throw 'Integrated smoke did not retain and match the synthetic evidence email.'
         }
+        if (@($matches | Where-Object {
+            $_.schemaVersion -ne 1 -or
+            [string]::IsNullOrWhiteSpace([string]$_.patternDescription) -or
+            [string]::IsNullOrWhiteSpace([string]$_.patternSource) -or
+            [string]::IsNullOrWhiteSpace([string]$_.patternValidation) -or
+            [string]::IsNullOrWhiteSpace([string]$_.sourceRecordId)
+        }).Count -ne 0) {
+            throw 'Integrated smoke regex matches are missing pattern metadata or source-record identity.'
+        }
 
         $findingsHeader = Get-Content -LiteralPath (Join-Path $resultsPath 'findings.tsv') -TotalCount 1
-        if ($findingsHeader -notmatch '(^|\t)TranslationIntegrity(\t|$)') {
-            throw 'Integrated smoke findings report is missing the TranslationIntegrity column.'
+        $expectedFindingsHeader = @(
+            'PatternName',
+            'Match',
+            'Context',
+            'SourceFile',
+            'ArtifactType',
+            'Location',
+            'MatchStart',
+            'AttributesJson'
+        ) -join "`t"
+        if ($findingsHeader -cne $expectedFindingsHeader) {
+            throw 'Integrated smoke findings report does not use the compact reviewed schema.'
+        }
+        $findingRows = @(Import-Csv -LiteralPath (Join-Path $resultsPath 'findings.tsv') -Delimiter "`t")
+        $integrityRows = @($findingRows | Where-Object {
+            $_.AttributesJson -match '"translationIntegrity":"[^" ]+"'
+        })
+        if ($integrityRows.Count -lt 1) {
+            throw 'Integrated smoke findings report did not retain translation integrity in AttributesJson.'
+        }
+        if (@($findingRows | Where-Object {
+            $_.AttributesJson -match '"sourceRecordId":"[^" ]+"'
+        }).Count -ne $findingRows.Count) {
+            throw 'Integrated smoke findings report did not retain source-record identity in AttributesJson.'
         }
         $translationLog = Get-Content -LiteralPath (
             Join-Path $resultsPath 'logs\translation.stderr.log'

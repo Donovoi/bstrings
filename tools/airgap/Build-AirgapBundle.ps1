@@ -971,11 +971,13 @@ $bundleArchitectureDocumentNames = @(
     'adr-0011-single-windows-kit-and-plain-documentation.md',
     'adr-0012-explicit-whole-stage-resume.md',
     'adr-0013-resume-with-translation-off.md',
+    'adr-0014-compact-investigator-findings.md',
     'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(
     'forensic-pattern-catalog-2026-08.csv',
     'forensic-pattern-catalog-v6-2026-08.csv',
+    'forensic-report-compact-schema-2026-08.csv',
     'forensic-report-projection-2026-08.csv',
     'language-triage-routing-shadow-2026-08.csv',
     'language-triage-reuse-2026-08.csv'

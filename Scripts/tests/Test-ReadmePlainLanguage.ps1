@@ -185,11 +185,11 @@ $reportingGuide = [IO.File]::ReadAllText(
 )
 if (
     $reportingGuide.IndexOf(
-        'The complete result directory is sensitive case material.',
+        '`findings.tsv` and `feature-histogram.tsv` contain matched values.',
         [StringComparison]::Ordinal
     ) -lt 0
 ) {
-    throw 'The reporting guide must retain its neutral sensitive-result classification.'
+    throw 'The reporting guide must state that the review files contain matched values.'
 }
 
 Write-Host "README plain-language, neutral guidance, and one-kit terminology checks passed ($wordCount words)."

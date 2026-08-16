@@ -273,6 +273,7 @@ Read these guides for more information:
 - [Air-gapped deployment](docs/air-gapped-deployment.md)
 - [Analysis stages](docs/enrichment-pipeline.md)
 - [Output and provenance](docs/output-and-provenance.md)
+- [Findings columns](docs/forensic-reporting-2026-08.md#findings-contract)
 - [OCR and document analysis](docs/ocr-and-document-analysis.md)
 
 FLOSS and OCR accept supported files, not files embedded inside raw disk or
