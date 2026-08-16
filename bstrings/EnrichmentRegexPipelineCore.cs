@@ -291,8 +291,11 @@ internal static class EnrichmentRegexPipelineCore
 
                 var parsedHit = new ParsedHit(record.Text!, record.Text!, record.Location?.Value ?? string.Empty);
                 int[]? lineStarts = null;
-                foreach (var (name, pattern, regex) in compiledPatterns)
+                foreach (var compiledPattern in compiledPatterns)
                 {
+                    var name = compiledPattern.Name;
+                    var pattern = compiledPattern.Pattern;
+                    var regex = compiledPattern.Regex;
                     IEnumerable<RegexOutputRecord> matches;
                     try
                     {
@@ -315,6 +318,9 @@ internal static class EnrichmentRegexPipelineCore
                             {
                                 PatternName = name,
                                 Pattern = pattern,
+                                PatternDescription = compiledPattern.Description,
+                                PatternSource = compiledPattern.Source,
+                                PatternValidation = compiledPattern.Validation,
                                 Match = match.DataFound,
                                 MatchStart = match.DataStart,
                                 MatchLength = match.DataLength,
@@ -464,11 +470,11 @@ internal static class EnrichmentRegexPipelineCore
         return found >= 0 ? found + 1 : ~found;
     }
 
-    private static List<(string name, string pattern, Regex regex)> CompilePatterns(
+    private static List<CompiledPattern> CompilePatterns(
         IReadOnlyList<(string name, string pattern)> patterns
     )
     {
-        var compiled = new List<(string name, string pattern, Regex regex)>(patterns.Count);
+        var compiled = new List<CompiledPattern>(patterns.Count);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (name, pattern) in patterns)
         {
@@ -476,7 +482,32 @@ internal static class EnrichmentRegexPipelineCore
             {
                 continue;
             }
-            compiled.Add((name, pattern, RegexOutputCore.GetOrCreateRegex(name, pattern)));
+            if (BuiltInPatternCatalog.TryGetDefinition(name, pattern, out var definition))
+            {
+                compiled.Add(
+                    new CompiledPattern(
+                        name,
+                        pattern,
+                        RegexOutputCore.GetOrCreateRegex(name, pattern),
+                        definition.Description,
+                        definition.Source,
+                        BuiltInPatternCatalog.GetValidationLabel(definition)
+                    )
+                );
+            }
+            else
+            {
+                compiled.Add(
+                    new CompiledPattern(
+                        name,
+                        pattern,
+                        RegexOutputCore.GetOrCreateRegex(name, pattern),
+                        "User-supplied regular expression",
+                        "user-supplied",
+                        "custom-regex"
+                    )
+                );
+            }
         }
         if (compiled.Count == 0)
         {
@@ -488,6 +519,15 @@ internal static class EnrichmentRegexPipelineCore
     internal static void ValidatePatterns(
         IReadOnlyList<(string name, string pattern)> patterns
     ) => _ = CompilePatterns(patterns);
+
+    private sealed record CompiledPattern(
+        string Name,
+        string Pattern,
+        Regex Regex,
+        string Description,
+        string Source,
+        string Validation
+    );
 
     internal static void ValidateRecord(EnrichmentStringRecord record, long lineNumber)
     {

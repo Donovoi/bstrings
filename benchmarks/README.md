@@ -392,9 +392,11 @@ the exactness result.
 
 The [compact findings comparison](results/forensic-report-compact-schema-2026-08.csv)
 uses the same 100,000-row fixture and five-round command for the v2.1.2 wide
-baseline and the compact candidate. Median elapsed time fell from 0.653 seconds
-to 0.431 seconds. Per-round output fell from 69,787,696 bytes to 15,704,582
-bytes. Every round passed the exact row and histogram checks.
+baseline and the reviewed compact candidate. The common input includes pattern
+description, source, validation, and source-record identity. Median elapsed
+time fell from 1.018 seconds to 0.831 seconds. Per-round output fell from
+69,787,696 bytes to 19,704,582 bytes. Every round passed the exact row and
+histogram checks.
 
 ## Pattern-by-pattern benchmark
 

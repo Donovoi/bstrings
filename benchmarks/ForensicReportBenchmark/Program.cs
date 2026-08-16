@@ -137,13 +137,19 @@ static async Task WriteFixtureAsync(
         new UTF8Encoding(false),
         1024 * 1024
     );
+    var emailPattern = BuiltInPatternCatalog.ByName["email"];
     for (var index = 0; index < recordCount; index++)
     {
         var feature = $"user-{index % distinctFeatures:D8}@example.test";
-        var record = new EnrichmentRegexMatchRecord
+        var record = new
         {
+            SchemaVersion = EnrichmentRegexPipelineCore.CurrentSchemaVersion,
+            RecordType = "regex-match",
             PatternName = "email",
             Pattern = BuiltInPatternCatalog.Patterns["email"],
+            PatternDescription = emailPattern.Description,
+            PatternSource = emailPattern.Source,
+            PatternValidation = "Email",
             Match = feature,
             MatchStart = 16,
             MatchLength = feature.Length,
@@ -152,12 +158,12 @@ static async Task WriteFixtureAsync(
             Context = $"account active {feature} source=synthetic",
             SourceRecordId = $"record-{index:D12}",
             SourceFile = $@"C:\Synthetic\Profiles\profile-{index % 256:D3}\Login Data",
-            Location = new EnrichmentLocation
+            Location = new
             {
                 Kind = "file_offset",
                 Value = $"0x{index * 64L:X}",
             },
-            Origin = new EnrichmentOrigin
+            Origin = new
             {
                 Extractor = "bstrings",
                 Version = "benchmark",

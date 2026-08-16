@@ -34,6 +34,18 @@ public sealed class EnrichmentRegexPipelineCoreTests
         Assert.Equal(new EnrichmentPipelineStats(2, 0, 1, 0, 1), stats);
         using var row = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath, cancellationToken));
         Assert.Equal("derived-decoding", row.RootElement.GetProperty("evidenceClass").GetString());
+        Assert.Equal(
+            BuiltInPatternCatalog.ByName["email"].Description,
+            row.RootElement.GetProperty("patternDescription").GetString()
+        );
+        Assert.Equal(
+            BuiltInPatternCatalog.ByName["email"].Source,
+            row.RootElement.GetProperty("patternSource").GetString()
+        );
+        Assert.Equal(
+            BuiltInPatternCatalog.GetValidationLabel(BuiltInPatternCatalog.ByName["email"]),
+            row.RootElement.GetProperty("patternValidation").GetString()
+        );
         Assert.Equal("raw-1", row.RootElement.GetProperty("parentRecordId").GetString());
         Assert.Equal(
             "decoding",

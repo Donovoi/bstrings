@@ -72,7 +72,7 @@ putting tab-separated data in a misleading `.csv` file.
 | `ArtifactType` | Review hint derived from the source path or matched value |
 | `Location` | Source location, such as a file offset or page region |
 | `MatchStart` | Zero-based character position inside the extracted string |
-| `AttributesJson` | Extra record attributes as one JSON object; empty when no attributes exist |
+| `AttributesJson` | Source-record ID plus extra record attributes as one JSON object |
 
 See [built-in pattern validity](pattern-validity-review-2026-08.md) for pattern
 definitions, sources, validation checks, and interpretation limits.
@@ -84,10 +84,13 @@ line. Windows path separators remain ordinary backslashes.
 `SourceDirectory`, `FileName`, and `FileExtension` are not separate columns.
 They were derived from `SourceFile` and repeated the same path information.
 
-Use `regex-matches.jsonl` for the complete match record. It includes the
-pattern expression and description, validation method, evidence class, typed
-location, origin, transform, model, language, source and parent record IDs,
-encoding, confidence, and other provenance.
+Every `AttributesJson` object has `sourceRecordId`. This value links the compact
+row to the source record named by the authoritative match record.
+
+Use `regex-matches.jsonl` for the complete match record. Each match includes the
+pattern expression, description, source, validation method, evidence class,
+typed location, origin, transform, model, language, source and parent record
+IDs, encoding, confidence, and other provenance.
 
 Translation integrity remains in `AttributesJson` and
 `regex-matches.jsonl`. Values include `verified`,

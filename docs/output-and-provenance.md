@@ -534,7 +534,9 @@ parent existence, and source/location/origin equality are checked with the same
 bounded disk-backed index used for translations. Hashes select partitions but
 never decide identity. Decoded matches keep the `derived-decoding` evidence
 class and decoder profile in `regex-matches.jsonl`. `findings.tsv` keeps decoder
-attributes in `AttributesJson`. Decoder-enabled pattern histograms add
+attributes and the stable `sourceRecordId` link in `AttributesJson`.
+`regex-matches.jsonl` also records the selected pattern's
+description, source, and validation method. Decoder-enabled pattern histograms add
 `DerivedDecodingCount`.
 
 ## Related guides

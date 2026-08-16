@@ -569,6 +569,15 @@ if ($TranslationSmoke) {
         if ($matches.Count -lt 1 -or $summary.regexMatches -lt $matches.Count) {
             throw 'Integrated smoke did not retain and match the synthetic evidence email.'
         }
+        if (@($matches | Where-Object {
+            $_.schemaVersion -ne 1 -or
+            [string]::IsNullOrWhiteSpace([string]$_.patternDescription) -or
+            [string]::IsNullOrWhiteSpace([string]$_.patternSource) -or
+            [string]::IsNullOrWhiteSpace([string]$_.patternValidation) -or
+            [string]::IsNullOrWhiteSpace([string]$_.sourceRecordId)
+        }).Count -ne 0) {
+            throw 'Integrated smoke regex matches are missing pattern metadata or source-record identity.'
+        }
 
         $findingsHeader = Get-Content -LiteralPath (Join-Path $resultsPath 'findings.tsv') -TotalCount 1
         $expectedFindingsHeader = @(
@@ -590,6 +599,11 @@ if ($TranslationSmoke) {
         })
         if ($integrityRows.Count -lt 1) {
             throw 'Integrated smoke findings report did not retain translation integrity in AttributesJson.'
+        }
+        if (@($findingRows | Where-Object {
+            $_.AttributesJson -match '"sourceRecordId":"[^" ]+"'
+        }).Count -ne $findingRows.Count) {
+            throw 'Integrated smoke findings report did not retain source-record identity in AttributesJson.'
         }
         $translationLog = Get-Content -LiteralPath (
             Join-Path $resultsPath 'logs\translation.stderr.log'

@@ -121,6 +121,7 @@ function Get-CanonicalLineMultisetSha256 {
         'AttributesJson'
     )
     $compactFindingsIndexes = @()
+    $sourceRecordIdIndex = -1
     foreach ($rawLine in [IO.File]::ReadLines($Path)) {
         $line = $rawLine
         if ($Artifact.EndsWith('.jsonl', [StringComparison]::OrdinalIgnoreCase)) {
@@ -137,16 +138,36 @@ function Get-CanonicalLineMultisetSha256 {
                 $compactFindingsIndexes = @($compactFindingsColumns | ForEach-Object {
                     [Array]::IndexOf($tsvHeader, $_)
                 })
+                $sourceRecordIdIndex = [Array]::IndexOf($tsvHeader, 'SourceRecordId')
                 if (@($compactFindingsIndexes | Where-Object { $_ -lt 0 }).Count -ne 0) {
                     throw 'findings.tsv is missing a compact investigator column.'
                 }
-                $line = $compactFindingsColumns -join "`t"
+                $line = @($compactFindingsColumns + '__CanonicalSourceRecordId') -join "`t"
             }
             elseif ($fields.Count -ne $tsvHeader.Count) {
                 throw 'findings.tsv contains an invalid field count.'
             }
             else {
-                $line = @($compactFindingsIndexes | ForEach-Object { $fields[$_] }) -join "`t"
+                $projected = @($compactFindingsIndexes | ForEach-Object { $fields[$_] })
+                $attributes = $projected[7]
+                $sourceRecordId = if ($sourceRecordIdIndex -ge 0) {
+                    $fields[$sourceRecordIdIndex]
+                }
+                else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($attributes)) {
+                    $attributeMap = $attributes | ConvertFrom-Json -AsHashtable
+                    if ($attributeMap.ContainsKey('sourceRecordId')) {
+                        $sourceRecordId = [string]$attributeMap['sourceRecordId']
+                        $attributeMap.Remove('sourceRecordId')
+                    }
+                    $projected[7] = if ($attributeMap.Count -eq 0) {
+                        ''
+                    }
+                    else {
+                        $attributeMap | ConvertTo-Json -Compress -Depth 20
+                    }
+                }
+                $line = @($projected + $sourceRecordId) -join "`t"
             }
         }
         $lines.Add($line)

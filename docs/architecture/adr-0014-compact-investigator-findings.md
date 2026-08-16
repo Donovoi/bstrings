@@ -18,9 +18,10 @@ The report also repeats path data. `SourceDirectory`, `FileName`, and
 `FileExtension` are calculated from `SourceFile` immediately before each row is
 written. They do not identify separate evidence.
 
-The authoritative `regex-matches.jsonl` record already retains the complete
-pattern, location, origin, transform, parent, evidence-class, and attribute
-data. `findings.tsv` is a projection for filtering and review.
+The authoritative `regex-matches.jsonl` record already retains the pattern
+expression, location, origin, transform, parent, evidence-class, and attribute
+data. Before this decision, it did not retain the pattern description, source,
+or validation label. `findings.tsv` is a projection for filtering and review.
 
 The requested review fields are:
 
@@ -80,14 +81,15 @@ as a fixed schema. It rejected combining `Location` and `MatchStart` because
 they describe different coordinate systems.
 
 The synthetic pre-change benchmark at commit `577529b` used 100,000 attributed
-matches, 10,000 distinct features, and five rounds. Its median elapsed time was
-0.653 seconds. Each round wrote 69,787,696 output bytes. The first round was a
-warm-up outlier and remains included in the
+matches, 10,000 distinct features, and five rounds. The common input includes
+the added pattern metadata and source-record identity so both projections read
+the same bytes. Baseline median elapsed time was 1.018 seconds. Each round wrote
+69,787,696 output bytes. The first round was a warm-up outlier and remains included in the
 [raw result](../../benchmarks/results/forensic-report-compact-schema-2026-08.csv).
 
 The compact candidate used the same command and fixture. Its median elapsed
-time was 0.431 seconds, about 34 percent lower. Each round wrote 15,704,582
-bytes, about 77.5 percent less. Every baseline and candidate round passed the
+time was 0.831 seconds, about 18.4 percent lower. Each round wrote 19,704,582
+bytes, about 71.8 percent less. Every baseline and candidate round passed the
 exact row and histogram checks.
 
 ### Adversarial detractor
@@ -100,6 +102,8 @@ as a replacement for complete provenance.
 The detractor required:
 
 - an exact, fixed header test;
+- a stable source-record link inside the retained `AttributesJson` cell;
+- pattern description, source, and validation in the authoritative JSONL;
 - a plain-language column reference;
 - a clear link to `regex-matches.jsonl` for omitted details;
 - unchanged match validation and histogram counts;
@@ -117,6 +121,11 @@ The runtime review challenged direct adoption of `bulk_extractor` feature-file
 shape. Bstrings has parent-child and engine provenance that `bulk_extractor`
 feature files do not represent. The synthesis keeps that provenance in the
 authoritative JSONL instead of claiming that the TSV is complete evidence.
+
+The detractor also found that eight visible cells could be identical for two
+different source records. The synthesis adds `sourceRecordId` to every
+`AttributesJson` object. This keeps the requested eight-column header while
+providing a stable join to `regex-matches.jsonl`.
 
 The detractor challenged both reviews on compatibility. Existing scripts can
 depend on the 48-column header. The first release containing this schema must
@@ -154,11 +163,16 @@ or disappear based on the selected engines or the input.
 value. `Location` keeps the typed location value. `MatchStart` keeps the
 zero-based character position inside the extracted string.
 
-`AttributesJson` keeps the record's attribute object. It is not a replacement
-for origin, transform, evidence-class, validation, or record-ID fields.
+`AttributesJson` keeps the record's attribute object and always adds the exact
+`sourceRecordId`. It is not a replacement for origin, transform,
+evidence-class, validation, or the complete record.
 
-`regex-matches.jsonl` remains the authoritative match record. Histograms and
-the HTML chart keep their current schemas and counts.
+`regex-matches.jsonl` remains the authoritative match record. The additive
+fields `patternDescription`, `patternSource`, and `patternValidation` preserve
+the catalog metadata on each match. Report
+projection validates those values against the selected pattern catalog before
+publication. Histograms and the HTML chart keep their current schemas and
+counts.
 
 Documentation defines every compact column and points to the JSONL for pattern
 expressions, descriptions, sources, validation, origin, transform, parent,
@@ -172,10 +186,12 @@ artifacts and documentation remain unchanged.
 1. The compact header and order are exact and stable.
 2. Every physical row has the same number of cells as the header.
 3. Tabs, line breaks, and control characters remain escaped.
-4. `SourceFile`, `Location`, `MatchStart`, and `AttributesJson` retain their
-   existing values and meaning.
+4. `SourceFile`, `Location`, and `MatchStart` retain their existing values and
+   meaning. `AttributesJson` retains record attributes and adds the stable
+   `sourceRecordId` join field.
 5. Match validation runs before projection.
-6. `regex-matches.jsonl` retains complete provenance.
+6. `regex-matches.jsonl` retains complete provenance and exact
+   selected-pattern metadata.
 7. Pattern and feature histogram counts do not change.
 8. Translation and decoding details remain in JSONL even when they are not TSV
    columns.
@@ -187,9 +203,11 @@ artifacts and documentation remain unchanged.
 - **Schema gate:** Assert the exact eight-column header and exact row width for
   native, OCR, translation, and decoding records.
 - **Value gate:** Assert every retained field, including escaped context,
-  location, match start, artifact type, and attributes JSON.
+  location, match start, artifact type, and attributes JSON with the exact
+  source-record ID.
 - **Provenance gate:** Assert that omitted origin, transform, validation,
-  evidence class, and IDs remain unchanged in `regex-matches.jsonl`.
+  evidence class, and IDs remain in `regex-matches.jsonl`; require exact pattern
+  description, source, and validation metadata.
 - **Count gate:** Assert finding, pattern-histogram, and feature-histogram row
   counts before and after the projection change.
 - **Package gate:** Run the integrated kit smoke and require the exact compact
@@ -209,17 +227,19 @@ A wide TSV lets a user filter engine, model, evidence class, validation, and
 record IDs without parsing JSON. Removing those columns adds a second step for
 deep provenance review.
 
-That objection is valid. It does not outweigh the stated first-pass filtering
-problem because the same complete fields remain in `regex-matches.jsonl`.
-Documentation must make the boundary clear. If users need a second tabular
-provenance view, it should have a distinct name and a separate measured design;
-it should not silently widen `findings.tsv` again.
+That objection is valid. The compact row now carries `sourceRecordId` inside
+`AttributesJson`, and match schema 2 carries the pattern description, source,
+and validation label. The remaining rich fields stay in
+`regex-matches.jsonl`. If users need a second tabular provenance view, it
+should have a distinct name and a separate measured design; it should not
+silently widen `findings.tsv` again.
 
 ## Falsifiers and revisit triggers
 
-Stop publication if any retained value changes, row widths vary, a JSONL field
-is removed, histogram counts drift, the packaged smoke loses translation
-integrity, or the performance gate fails.
+Stop publication if any retained value changes, row widths vary, the stable
+source-record join is absent, pattern metadata is missing or inconsistent, a
+JSONL field is removed, histogram counts drift, the packaged smoke loses
+translation integrity, or the performance gate fails.
 
 Before publication, roll back by restoring the wide header and row writer. Do
 not publish the compact schema under version 2.

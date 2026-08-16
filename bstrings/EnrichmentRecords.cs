@@ -98,10 +98,13 @@ internal sealed record EnrichmentStringRecord
 
 internal sealed record EnrichmentRegexMatchRecord
 {
-    public int SchemaVersion { get; init; } = 1;
+    public int SchemaVersion { get; init; } = EnrichmentRegexPipelineCore.CurrentSchemaVersion;
     public string RecordType { get; init; } = "regex-match";
     public string PatternName { get; init; } = string.Empty;
     public string Pattern { get; init; } = string.Empty;
+    public string PatternDescription { get; init; } = string.Empty;
+    public string PatternSource { get; init; } = string.Empty;
+    public string PatternValidation { get; init; } = string.Empty;
     public string Match { get; init; } = string.Empty;
     public int MatchStart { get; init; } = -1;
     public int MatchLength { get; init; }

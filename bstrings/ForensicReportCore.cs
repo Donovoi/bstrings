@@ -275,7 +275,9 @@ internal static class ForensicReportCore
                     definition.Name,
                     definition.Pattern,
                     definition.Description,
-                    GetCategory(definition.Name)
+                    definition.Source,
+                    GetCategory(definition.Name),
+                    BuiltInPatternCatalog.GetValidationLabel(definition)
                 );
             }
             else
@@ -297,10 +299,7 @@ internal static class ForensicReportCore
         {
             artifactType = ClassifySourceArtifact(record.Match);
         }
-        var attributes = record.Attributes;
-        var attributesJson = attributes is null
-            ? string.Empty
-            : JsonSerializer.Serialize(attributes, JsonOptions);
+        var attributesJson = CreateFindingsAttributesJson(record);
 
         await WriteTsvRowAsync(
             writer,
@@ -316,6 +315,36 @@ internal static class ForensicReportCore
             ],
             cancellationToken
         );
+    }
+
+    private static string CreateFindingsAttributesJson(EnrichmentRegexMatchRecord record)
+    {
+        if (record.Attributes?.ContainsKey("sourceRecordId") == true)
+        {
+            throw new InvalidDataException(
+                "Regex match attributes use reserved projection key 'sourceRecordId'."
+            );
+        }
+        var encodedRecordId = EncodeJsonStringContent(record.SourceRecordId);
+        if (record.Attributes is null || record.Attributes.Count == 0)
+        {
+            return $"{{\"sourceRecordId\":\"{encodedRecordId}\"}}";
+        }
+
+        var serializedAttributes = JsonSerializer.Serialize(record.Attributes, JsonOptions);
+        return $"{{\"sourceRecordId\":\"{encodedRecordId}\",{serializedAttributes[1..]}";
+    }
+
+    private static string EncodeJsonStringContent(string value)
+    {
+        foreach (var character in value)
+        {
+            if (character is '"' or '\\' || character < ' ')
+            {
+                return JsonEncodedText.Encode(value).ToString();
+            }
+        }
+        return value;
     }
 
     private static async Task WritePatternHistogramAsync(
@@ -618,6 +647,9 @@ internal static class ForensicReportCore
             record.SchemaVersion != EnrichmentRegexPipelineCore.CurrentSchemaVersion
             || !string.Equals(record.RecordType, "regex-match", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(record.PatternName)
+            || string.IsNullOrWhiteSpace(record.PatternDescription)
+            || string.IsNullOrWhiteSpace(record.PatternSource)
+            || string.IsNullOrWhiteSpace(record.PatternValidation)
             || string.IsNullOrWhiteSpace(record.SourceRecordId)
             || string.IsNullOrWhiteSpace(record.SourceFile)
             || record.Match is null
@@ -648,6 +680,16 @@ internal static class ForensicReportCore
         {
             throw new InvalidDataException(
                 $"Regex match JSONL line {lineNumber:N0} contains an invalid match range."
+            );
+        }
+        if (
+            !string.Equals(record.PatternDescription, metadata.Description, StringComparison.Ordinal)
+            || !string.Equals(record.PatternSource, metadata.Source, StringComparison.Ordinal)
+            || !string.Equals(record.PatternValidation, metadata.Validation, StringComparison.Ordinal)
+        )
+        {
+            throw new InvalidDataException(
+                $"Regex match JSONL line {lineNumber:N0} pattern metadata does not match selected pattern '{record.PatternName}'."
             );
         }
         var isDecoding = string.Equals(
@@ -860,11 +902,20 @@ internal static class ForensicReportCore
         string Name,
         string Pattern,
         string Description,
-        string Category
+        string Source,
+        string Category,
+        string Validation
     )
     {
         internal static PatternMetadata CreateCustom(string name, string pattern) =>
-            new(name, pattern, "User-supplied regular expression", "custom");
+            new(
+                name,
+                pattern,
+                "User-supplied regular expression",
+                "user-supplied",
+                "custom",
+                "custom-regex"
+            );
     }
 
     private sealed class PatternStatistics(PatternMetadata metadata)

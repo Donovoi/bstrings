@@ -5,6 +5,8 @@ namespace bstrings.Tests;
 
 public sealed class ForensicReportCoreTests
 {
+    private static readonly BuiltInPatternDefinition EmailPattern = BuiltInPatternCatalog.ByName["email"];
+
     [Fact]
     public async Task WriteAsync_ProducesLineSafeTimelineExplorerReportsAndZeroCountPatterns()
     {
@@ -22,13 +24,16 @@ public sealed class ForensicReportCoreTests
             {
                 PatternName = "email",
                 Pattern = BuiltInPatternCatalog.Patterns["email"],
+                PatternDescription = EmailPattern.Description,
+                PatternSource = EmailPattern.Source,
+                PatternValidation = BuiltInPatternCatalog.GetValidationLabel(EmailPattern),
                 Match = "analyst@example.com",
                 MatchStart = 6,
                 MatchLength = 19,
                 MatchLine = 1,
                 ContextStart = 0,
                 Context = "login analyst@example.com\tactive",
-                SourceRecordId = "native-1",
+                SourceRecordId = "native-\"\\1",
                 SourceFile = @"C:\Users\Case\AppData\Local\Google\Chrome\User Data\Default\Login Data",
                 Location = new EnrichmentLocation { Kind = "file_offset", Value = "0x2A" },
                 Origin = new EnrichmentOrigin
@@ -47,6 +52,9 @@ public sealed class ForensicReportCoreTests
             {
                 PatternName = "email",
                 Pattern = BuiltInPatternCatalog.Patterns["email"],
+                PatternDescription = EmailPattern.Description,
+                PatternSource = EmailPattern.Source,
+                PatternValidation = BuiltInPatternCatalog.GetValidationLabel(EmailPattern),
                 Match = "owner@example.net",
                 MatchStart = 5,
                 MatchLength = 17,
@@ -134,6 +142,15 @@ public sealed class ForensicReportCoreTests
             "\"encoding\":\"UTF-8\"",
             nativeRow[Array.IndexOf(header, "AttributesJson")]
         );
+        using (var projectedAttributes = JsonDocument.Parse(
+            nativeRow[Array.IndexOf(header, "AttributesJson")]
+        ))
+        {
+            Assert.Equal(
+                records[0].SourceRecordId,
+                projectedAttributes.RootElement.GetProperty("sourceRecordId").GetString()
+            );
+        }
         Assert.Equal("pdf", translatedRow[Array.IndexOf(header, "ArtifactType")]);
         Assert.Equal(
             "page=3;x=10;y=20;w=30;h=10",
@@ -178,6 +195,9 @@ public sealed class ForensicReportCoreTests
         {
             PatternName = "email",
             Pattern = BuiltInPatternCatalog.Patterns["email"],
+            PatternDescription = EmailPattern.Description,
+            PatternSource = EmailPattern.Source,
+            PatternValidation = BuiltInPatternCatalog.GetValidationLabel(EmailPattern),
             Match = "decoded@example.test",
             MatchStart = 0,
             MatchLength = 20,
@@ -271,6 +291,9 @@ public sealed class ForensicReportCoreTests
             {
                 PatternName = "email",
                 Pattern = BuiltInPatternCatalog.Patterns["email"],
+                PatternDescription = EmailPattern.Description,
+                PatternSource = EmailPattern.Source,
+                PatternValidation = BuiltInPatternCatalog.GetValidationLabel(EmailPattern),
                 Match = match,
                 MatchStart = 0,
                 MatchLength = match.Length,
@@ -307,6 +330,10 @@ public sealed class ForensicReportCoreTests
     [Theory]
     [InlineData("unselected-pattern")]
     [InlineData("expression-mismatch")]
+    [InlineData("description-mismatch")]
+    [InlineData("source-mismatch")]
+    [InlineData("validation-mismatch")]
+    [InlineData("reserved-source-record-id")]
     [InlineData("negative-range")]
     [InlineData("length-mismatch")]
     public async Task WriteAsync_RejectsRecordsThatDoNotMatchSelectedPatternAndRange(
@@ -320,6 +347,9 @@ public sealed class ForensicReportCoreTests
         {
             PatternName = "email",
             Pattern = BuiltInPatternCatalog.Patterns["email"],
+            PatternDescription = EmailPattern.Description,
+            PatternSource = EmailPattern.Source,
+            PatternValidation = BuiltInPatternCatalog.GetValidationLabel(EmailPattern),
             Match = "analyst@example.test",
             MatchStart = 4,
             MatchLength = 20,
@@ -332,6 +362,16 @@ public sealed class ForensicReportCoreTests
         {
             "unselected-pattern" => record with { PatternName = "jwt" },
             "expression-mismatch" => record with { Pattern = "not-the-selected-expression" },
+            "description-mismatch" => record with { PatternDescription = "wrong" },
+            "source-mismatch" => record with { PatternSource = "wrong" },
+            "validation-mismatch" => record with { PatternValidation = "wrong" },
+            "reserved-source-record-id" => record with
+            {
+                Attributes = new Dictionary<string, JsonElement>
+                {
+                    ["sourceRecordId"] = JsonSerializer.SerializeToElement("wrong"),
+                },
+            },
             "negative-range" => record with { MatchStart = -1 },
             "length-mismatch" => record with { MatchLength = record.Match.Length - 1 },
             _ => throw new ArgumentOutOfRangeException(nameof(defect)),
