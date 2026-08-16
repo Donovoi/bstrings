@@ -571,8 +571,25 @@ if ($TranslationSmoke) {
         }
 
         $findingsHeader = Get-Content -LiteralPath (Join-Path $resultsPath 'findings.tsv') -TotalCount 1
-        if ($findingsHeader -notmatch '(^|\t)TranslationIntegrity(\t|$)') {
-            throw 'Integrated smoke findings report is missing the TranslationIntegrity column.'
+        $expectedFindingsHeader = @(
+            'PatternName',
+            'Match',
+            'Context',
+            'SourceFile',
+            'ArtifactType',
+            'Location',
+            'MatchStart',
+            'AttributesJson'
+        ) -join "`t"
+        if ($findingsHeader -cne $expectedFindingsHeader) {
+            throw 'Integrated smoke findings report does not use the compact reviewed schema.'
+        }
+        $findingRows = @(Import-Csv -LiteralPath (Join-Path $resultsPath 'findings.tsv') -Delimiter "`t")
+        $integrityRows = @($findingRows | Where-Object {
+            $_.AttributesJson -match '"translationIntegrity":"[^" ]+"'
+        })
+        if ($integrityRows.Count -lt 1) {
+            throw 'Integrated smoke findings report did not retain translation integrity in AttributesJson.'
         }
         $translationLog = Get-Content -LiteralPath (
             Join-Path $resultsPath 'logs\translation.stderr.log'
