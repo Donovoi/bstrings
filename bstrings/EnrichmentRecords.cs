@@ -126,5 +126,20 @@ internal readonly record struct EnrichmentPipelineStats(
     long TranslatedRecords,
     long MatchRecords,
     long PreservationFallbackRecords = 0,
-    long DecodedRecords = 0
+    long DecodedRecords = 0,
+    long MatchCacheHits = 0,
+    long MatchCacheMisses = 0,
+    long MatchCacheProbationObservations = 0,
+    long MatchCacheProbationBypasses = 0,
+    long MatchCachePreLookupBypasses = 0,
+    long MatchCachePostComputationBypasses = 0,
+    long MatchCacheStores = 0,
+    long MatchCacheEvictions = 0,
+    long ReusedPatternEvaluations = 0,
+    long MatchRowsServedFromCache = 0,
+    long MatchRowsComputed = 0,
+    long MatchCacheCurrentLogicalBytes = 0,
+    int MatchCacheCurrentEntries = 0,
+    long MatchCachePeakLogicalBytes = 0,
+    int MatchCachePeakEntries = 0
 );

@@ -34,6 +34,21 @@ telephone allocations, issuer tables, account balances, ownership, and network
 reachability may be useful corroboration in a case-specific second pass, but
 they are not safe reasons to suppress raw forensic hits.
 
+## Current Base64 policy
+
+The current default `b64` pattern is narrower than the historical 33-pattern
+snapshot below. It requires 24 through 16,384 encoded characters, canonical
+RFC 4648 padding and pad bits, exact decode and re-encode, and either supported
+publishable text or a recognised binary signature. Pure hexadecimal values,
+NUL/control-heavy text, opaque bytes, short values, and oversized values do not
+appear as default `b64` findings.
+
+`b64_candidate` is the opt-in shape-only partition. It contains canonical
+legacy-shaped candidates that do not pass `b64`. Selecting
+`--lr "all,b64_candidate"` retains the earlier broad discovery surface while
+keeping the default findings focused. See
+[ADR-0015](architecture/adr-0015-high-confidence-base64-and-bounded-match-reuse.md).
+
 ## Pattern-by-pattern decision
 
 | Pattern | Default decision | What the hit proves | What it does not prove |

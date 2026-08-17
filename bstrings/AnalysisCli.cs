@@ -208,7 +208,7 @@ internal static class AnalysisCli
         };
         var patternOption = new Option<string>("--lr")
         {
-            Description = "Pattern names, groups (pii, credentials, browser, registry, wallets), a custom regex, or all",
+            Description = "Pattern names, groups (pii, credentials, browser, registry, wallets), a custom regex, or all default patterns. Add b64_candidate for broad Base64-shaped values",
             DefaultValueFactory = _ => "all",
         };
         var regexFileOption = new Option<string?>("--fr")

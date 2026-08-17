@@ -211,7 +211,8 @@ Every completed integrated `analyze` run also projects these review files:
 - `pattern-histogram.tsv`: one row for every requested pattern, including
   zero-count patterns, with evidence-class and source-file counts;
 - `feature-histogram.tsv`: exact `(pattern, matched feature)` counts using a
-  bulk_extractor-style `n=<count>` display column; and
+  bulk_extractor-style `n=<count>` display column. Values above 512 characters
+  use a SHA-256 digest and bounded preview in the grouping key; and
 - `pattern-histogram.html`: a self-contained visual comparison of requested
   pattern volume.
 
@@ -224,6 +225,10 @@ CSV/TSV plugin selects a tab delimiter for that extension. JSONL remains the
 authoritative parent/child evidence graph; TSV is the compact filtering
 surface. See the [findings column guide](forensic-reporting-2026-08.md#findings-contract)
 for every column and the JSONL fields that are not repeated in the TSV.
+
+The experimental exact-text match cache is disabled because its release-scale
+overhead gate did not pass. It creates no artifact and adds no field to
+`run.json` or `summary.json`.
 
 The legacy direct form (`bstrings.exe -f ... --lr ... -o <file>`) still writes
 one flat extraction file for scripting compatibility. To obtain the enriched

@@ -27,6 +27,8 @@ public sealed class AnalysisBundleIntegrityTests
         var runInput = run.RootElement.GetProperty("input");
         var summaryInput = summary.RootElement.GetProperty("inputIdentity");
         Assert.Equal(runIntegrity.GetRawText(), summaryIntegrity.GetRawText());
+        Assert.False(run.RootElement.TryGetProperty("matchReuse", out _));
+        Assert.False(summary.RootElement.TryGetProperty("matchReuse", out _));
         Assert.Equal(0, run.RootElement.GetProperty("preservationFallbacks").GetInt64());
         Assert.Equal(0, summary.RootElement.GetProperty("preservationFallbacks").GetInt64());
         Assert.Equal(

@@ -97,9 +97,10 @@ try {
         'adr-0010-bounded-reversible-decoding.md',
         'adr-0011-single-windows-kit-and-plain-documentation.md',
         'adr-0012-explicit-whole-stage-resume.md',
-        'adr-0013-resume-with-translation-off.md',
-        'adr-0014-compact-investigator-findings.md',
-        'decision-review-policy.md'
+          'adr-0013-resume-with-translation-off.md',
+          'adr-0014-compact-investigator-findings.md',
+          'adr-0015-high-confidence-base64-and-bounded-match-reuse.md',
+          'decision-review-policy.md'
     )
     if (($architectureDocuments -join '|') -cne ($expectedArchitectureDocuments -join '|')) {
         throw 'The bundle architecture-document fixture differs from its exact reviewed inventory.'

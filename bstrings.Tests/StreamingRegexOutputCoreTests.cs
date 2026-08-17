@@ -26,7 +26,7 @@ public class StreamingRegexOutputCoreTests
             {
                 "b64",
                 BuiltInPatternCatalog.Patterns["b64"],
-                "bstrings separate QWxwaGExMjM="
+                "value VGhpcyBpcyBhIHRlc3QgbWVzc2FnZS4="
             },
             {
                 "cc",
@@ -255,7 +255,7 @@ public class StreamingRegexOutputCoreTests
     public void TransformMainBatch_PreservesRepeatedMatchesWithinOneExtractedString()
     {
         var processor = new StreamingRegexOutputCore(
-            [("b64", BuiltInPatternCatalog.Patterns["b64"])],
+            [("b64_candidate", BuiltInPatternCatalog.Patterns["b64_candidate"])],
             regexOnly: true,
             includeOffset: true,
             isCsvOutput: true,
@@ -266,7 +266,7 @@ public class StreamingRegexOutputCoreTests
         var rows = processor.TransformMainBatch(hits);
 
         Assert.Equal(2, rows.Count);
-        Assert.All(rows, row => Assert.Contains("\"b64\",\"bstrings\"", row));
+        Assert.All(rows, row => Assert.Contains("\"b64_candidate\",\"bstrings\"", row));
     }
 
     [Fact]

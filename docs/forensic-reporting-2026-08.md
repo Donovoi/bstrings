@@ -22,6 +22,11 @@ authoritative evidence graph and also writes four review-oriented projections:
 All four files are produced before the result transaction is marked complete.
 `summary.json` records their names and row counts.
 
+`findings.tsv` contains every occurrence and its source context.
+`feature-histogram.tsv` is the smaller counted view for repeated values.
+Matched values above 512 characters use a SHA-256 digest and bounded preview
+in the histogram key.
+
 These projections belong to the integrated `analyze` workflow because that is
 the path that has OCR, PDF, FLOSS, translation, parent/child, and engine
 lineage. The legacy direct `-f/-d -o <file>` interface remains a flat-output
@@ -37,6 +42,11 @@ To include strict Base64 and contextual PowerShell text children without
 translation, add `--decode auto`. The encoded parent remains in the evidence
 graph; decoded children are appended after raw and translation records and use
 the same matcher and report projection.
+
+The default `b64` finding is separate from decoding. It requires canonical
+standard Base64 and either validated decoded text or a recognised binary
+signature. `--lr "all,b64_candidate"` adds the broader shape-only partition.
+The two pattern names do not report the same span.
 
 ## Why this shape
 

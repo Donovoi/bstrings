@@ -66,10 +66,16 @@ internal static class RegexOutputCore
             );
             if (
                 isBuiltIn
-                && string.Equals(definition.Name, "b64", StringComparison.OrdinalIgnoreCase)
+                && UsesLinearBase64Matcher(definition)
             )
             {
-                foreach (var candidate in EnumerateBase64Candidates(parsedHit.Data))
+                foreach (
+                    var candidate in EnumerateBase64Candidates(
+                        parsedHit.Data,
+                        GetMinimumBase64CandidateLength(definition),
+                        GetMaximumBase64CandidateLength(definition)
+                    )
+                )
                 {
                     if (
                         !BuiltInSemanticValidator.IsValid(
@@ -307,10 +313,16 @@ internal static class RegexOutputCore
 
         if (
             definition is not null
-            && string.Equals(definition.Name, "b64", StringComparison.OrdinalIgnoreCase)
+            && UsesLinearBase64Matcher(definition)
         )
         {
-            foreach (var candidate in EnumerateBase64Candidates(data))
+            foreach (
+                var candidate in EnumerateBase64Candidates(
+                    data,
+                    GetMinimumBase64CandidateLength(definition),
+                    GetMaximumBase64CandidateLength(definition)
+                )
+            )
             {
                 if (!BuiltInSemanticValidator.IsValid(definition, data.AsSpan(candidate.Start, candidate.Length)))
                 {
@@ -619,9 +631,13 @@ internal static class RegexOutputCore
             )
         )
         {
-            if (string.Equals(definition.Name, "b64", StringComparison.OrdinalIgnoreCase))
+            if (UsesLinearBase64Matcher(definition))
             {
-                return EnumerateBase64Candidates(data)
+                return EnumerateBase64Candidates(
+                        data,
+                        GetMinimumBase64CandidateLength(definition),
+                        GetMaximumBase64CandidateLength(definition)
+                    )
                     .Any(candidate =>
                         BuiltInSemanticValidator.IsValid(
                             definition,
@@ -837,7 +853,11 @@ internal static class RegexOutputCore
         return values;
     }
 
-    private static IEnumerable<CandidateRange> EnumerateBase64Candidates(string data)
+    private static IEnumerable<CandidateRange> EnumerateBase64Candidates(
+        string data,
+        int minimumLength,
+        int maximumLength
+    )
     {
         var index = 0;
         while (index < data.Length)
@@ -877,13 +897,19 @@ internal static class RegexOutputCore
 
             if (!hasForbiddenTrailingCharacter)
             {
-                if (paddingLength == 0 && baseLength >= 8 && baseLength % 4 == 0)
+                if (
+                    paddingLength == 0
+                    && baseLength >= minimumLength
+                    && baseLength <= maximumLength
+                    && baseLength % 4 == 0
+                )
                 {
                     validLength = baseLength;
                 }
                 else if (
                     paddingLength == 1
-                    && baseLength >= 7
+                    && baseLength + 1 >= minimumLength
+                    && baseLength + 1 <= maximumLength
                     && baseLength % 4 == 3
                 )
                 {
@@ -891,7 +917,8 @@ internal static class RegexOutputCore
                 }
                 else if (
                     paddingLength == 2
-                    && baseLength >= 6
+                    && baseLength + 2 >= minimumLength
+                    && baseLength + 2 <= maximumLength
                     && baseLength % 4 == 2
                 )
                 {
@@ -907,6 +934,24 @@ internal static class RegexOutputCore
             index = Math.Max(afterCandidate, start + 1);
         }
     }
+
+    private static bool UsesLinearBase64Matcher(BuiltInPatternDefinition definition) =>
+        definition.Validation
+        is BuiltInValidationKind.Base64 or BuiltInValidationKind.Base64Candidate;
+
+    private static int GetMinimumBase64CandidateLength(
+        BuiltInPatternDefinition definition
+    ) =>
+        definition.Validation == BuiltInValidationKind.Base64
+            ? Base64ContentCore.MinimumHighConfidenceEncodedCharacters
+            : 8;
+
+    private static int GetMaximumBase64CandidateLength(
+        BuiltInPatternDefinition definition
+    ) =>
+        definition.Validation == BuiltInValidationKind.Base64
+            ? Base64ContentCore.MaximumHighConfidenceEncodedCharacters
+            : int.MaxValue;
 
     private static bool IsBase64Character(char value)
     {
