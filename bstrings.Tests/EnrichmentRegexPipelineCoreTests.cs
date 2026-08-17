@@ -18,7 +18,7 @@ public sealed class EnrichmentRegexPipelineCoreTests
             inputPath,
             [
                 RawRecord("raw-1", "encoded parent"),
-                DecodingRecord("decoded-1", "raw-1", "contact decoded@example.test"),
+                DecodingRecord("decoded-1", "raw-1", "contact decoded@example.com"),
             ],
             cancellationToken
         );
@@ -71,7 +71,7 @@ public sealed class EnrichmentRegexPipelineCoreTests
                 DecodingRecord(
                     "decoded-1",
                     "raw-1",
-                    "contact decoded@example.test",
+                    "contact decoded@example.com",
                     location: "0x11"
                 ),
             ],
@@ -106,8 +106,8 @@ public sealed class EnrichmentRegexPipelineCoreTests
             inputPath,
             [
                 RawRecord("raw-1", "encoded parent"),
-                DecodingRecord("decoded-1", "raw-1", "contact decoded@example.test"),
-                CreateRecord("translated-1", "contact translated@example.test", "raw-1"),
+                DecodingRecord("decoded-1", "raw-1", "contact decoded@example.com"),
+                CreateRecord("translated-1", "contact translated@example.com", "raw-1"),
             ],
             cancellationToken
         );
@@ -134,7 +134,7 @@ public sealed class EnrichmentRegexPipelineCoreTests
     [InlineData("profile-copy-mismatch")]
     public void ValidateRecord_RejectsIncompleteOrTamperedDecodingProvenance(string defect)
     {
-        const string text = "contact decoded@example.test";
+        const string text = "contact decoded@example.com";
         var decodedBytes = Encoding.UTF8.GetBytes(text);
         var attributes = new Dictionary<string, JsonElement>
         {
@@ -792,7 +792,7 @@ public sealed class EnrichmentRegexPipelineCoreTests
                         schemaVersion = 1,
                         recordType = "string",
                         recordId = "raw-1",
-                        text = "contact analyst@example.test",
+                        text = "contact analyst@example.com",
                         sourceFile = "first.bin",
                         location = new { kind = "file_offset", value = "0x10" },
                         origin = new { extractor = "bstrings", version = "test", kind = "static" },
@@ -805,7 +805,7 @@ public sealed class EnrichmentRegexPipelineCoreTests
                         schemaVersion = 1,
                         recordType = "string",
                         recordId = "raw-2",
-                        text = "contact analyst@example.test",
+                        text = "contact analyst@example.com",
                         sourceFile = "second.exe",
                         location = new { kind = "virtual_address", value = "0x402000" },
                         origin = new { extractor = "floss", version = "test", kind = "decoded" },
@@ -814,7 +814,7 @@ public sealed class EnrichmentRegexPipelineCoreTests
                 ),
                 CreateRecord(
                     "translated-1",
-                    "contact analyst@example.test",
+                    "contact analyst@example.com",
                     "raw-1"
                 ),
             ],
@@ -927,7 +927,7 @@ public sealed class EnrichmentRegexPipelineCoreTests
         var cancellationToken = TestContext.Current.CancellationToken;
         using var scope = new TemporaryDirectory();
         var inputPath = scope.PathFor("overflow.jsonl");
-        const string text = "first@example.test second@example.test";
+        const string text = "first@example.com second@example.com";
         await File.WriteAllLinesAsync(
             inputPath,
             [
@@ -960,7 +960,7 @@ public sealed class EnrichmentRegexPipelineCoreTests
         var cancellationToken = TestContext.Current.CancellationToken;
         using var scope = new TemporaryDirectory();
         var inputPath = scope.PathFor("mixed-cacheability.jsonl");
-        const string text = "analyst@example.test DOB: 01/01/2000";
+        const string text = "analyst@example.com DOB: 01/01/2000";
         await File.WriteAllLinesAsync(
             inputPath,
             [
@@ -999,7 +999,7 @@ public sealed class EnrichmentRegexPipelineCoreTests
         var outputPath = scope.PathFor("matches.jsonl");
         await File.WriteAllTextAsync(
             inputPath,
-            RawRecord("raw-1", "analyst@example.test"),
+            RawRecord("raw-1", "analyst@example.com"),
             cancellationToken
         );
         await File.WriteAllTextAsync(outputPath, "previous-result", cancellationToken);

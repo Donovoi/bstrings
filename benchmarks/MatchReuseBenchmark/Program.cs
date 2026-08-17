@@ -136,11 +136,11 @@ static async Task WriteFixtureAsync(string path, string workload, int records)
         var text = normalized switch
         {
             "unique-no-match" => $"ordinary phrase item {Alpha(index)} punctuation",
-            "unique-match-heavy" => $"contact user{index:D8}@example.test",
-            "hot-repeat" => $"contact shared{index % 16:D2}@example.test",
-            "cold-repeat" => $"contact cold{index % coldDistinct:D8}@example.test",
+            "unique-match-heavy" => $"contact user{index:D8}@example.com",
+            "hot-repeat" => $"contact shared{index % 16:D2}@example.com",
+            "cold-repeat" => $"contact cold{index % coldDistinct:D8}@example.com",
             "repeated-feature-unique-context" =>
-                $"event {Alpha(index)} contact shared@example.test",
+                $"event {Alpha(index)} contact shared@example.com",
             "base64" => (index % 4) switch
             {
                 0 => "token SoftwareDistribution",
@@ -148,7 +148,7 @@ static async Task WriteFixtureAsync(string path, string workload, int records)
                 2 => "token 0123456789ABCDEF0123456789ABCDEF",
                 _ => "token SGVsbG8=",
             },
-            "oversized" => new string('Q', 65_537) + " contact shared@example.test",
+            "oversized" => new string('Q', 65_537) + " contact shared@example.com",
             _ => throw new UnreachableException(),
         };
         var record = new

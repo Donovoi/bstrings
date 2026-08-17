@@ -55,11 +55,24 @@ public class BuiltInPatternCatalogTests
             ["email"] = new(
                 [
                     "mail user.name+tag@example.technology now",
-                    "mail #@example.com now",
-                    "mail !foo@example.com now",
-                    "mail string@g.com now",
+                    "mail security@example.net now",
+                    "mail a@sample.com now",
                 ],
-                ["mail user@-example.com", "mail " + new string('a', 65) + "@g.com"]
+                [
+                    "mail user@-example.com",
+                    "mail " + new string('a', 65) + "@g.com",
+                    "mail user@component.dll",
+                    "mail user@package.org.xpi",
+                    "mail user@host.x",
+                ]
+            ),
+            ["email_candidate"] = new(
+                [
+                    "mail #@example.com now",
+                    "mail label=security@example.net now",
+                    "mail user@component.dll now",
+                ],
+                ["mail a..b@example.com", "mail user@-example.com"]
             ),
             ["zip"] = new("Sydney mirror 90210-1234 ready", "code 1234 ready"),
             ["urlUser"] = new(
@@ -818,8 +831,8 @@ public class BuiltInPatternCatalogTests
             ),
             (
                 Name: "email",
-                Input: "mail !foo@example.com now",
-                Expected: "!foo@example.com"
+                Input: "mail foo+tag@example.com now",
+                Expected: "foo+tag@example.com"
             ),
             (
                 Name: "win_path",

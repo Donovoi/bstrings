@@ -168,11 +168,15 @@ public class BuiltInSemanticValidatorTests
     }
 
     [Fact]
-    public void EmailUsesStableSmtpLimitsWithoutRejectingShortOrOfflineDomains()
+    public void EmailUsesStableSmtpLimitsAndCurrentIanaRootZone()
     {
-        AssertValid("email", "string@g.com");
-        AssertValid("email", new string('a', 64) + "@g.com");
-        AssertInvalid("email", new string('a', 65) + "@g.com");
+        AssertValid("email", "string@example.com");
+        AssertValid("email", new string('a', 64) + "@example.com");
+        AssertInvalid("email", new string('a', 65) + "@example.com");
+        AssertInvalid("email", "string@host.invalidtld");
+        AssertInvalid("email", "string@-host.com");
+        AssertValid("email_candidate", "string@host.invalidtld");
+        AssertInvalid("email_candidate", "string@example.com");
 
         var labels = string.Join('.', Enumerable.Repeat(new string('a', 63), 4));
         Assert.True(labels.Length > 253);

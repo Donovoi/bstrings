@@ -49,6 +49,18 @@ legacy-shaped candidates that do not pass `b64`. Selecting
 keeping the default findings focused. See
 [ADR-0015](architecture/adr-0015-high-confidence-base64-and-bounded-match-reuse.md).
 
+## Current email policy
+
+The default `email` pattern uses a common ASCII mailbox form, SMTP length
+limits, and the bundled IANA root-zone top-level-domain snapshot. This removes
+resource strings, package extensions, single-letter suffixes, and undelegated
+suffixes from the default findings.
+
+`email_candidate` is the opt-in RFC dot-atom partition. It retains uncommon
+mailbox punctuation and internal, historic, or undelegated suffixes that do
+not pass `email`. Select `--lr "all,email_candidate"` for that wider surface.
+See [ADR-0016](architecture/adr-0016-high-confidence-email-candidates.md).
+
 ## Pattern-by-pattern decision
 
 | Pattern | Default decision | What the hit proves | What it does not prove |
@@ -62,7 +74,7 @@ keeping the default findings focused. See
 | `cc` | **Semantic** | A 13-to-19 digit candidate with a valid Luhn checksum | Issuer allocation, active account, or ownership |
 | `ipv4` | Shape and octet ranges | Four decimal octets in the IPv4 range | Assignment, routability, or observation |
 | `ipv6` | Shape | A full, compressed, or IPv4-embedded IPv6 candidate | Assignment or routability |
-| `email` | **Semantic** | A practical RFC-style address within SMTP local/domain limits | DNS, deliverability, mailbox existence, or ownership |
+| `email` | **Semantic** | A common mailbox form within SMTP limits whose suffix is in the bundled IANA root-zone snapshot | DNS, deliverability, mailbox existence, historic delegation, or ownership |
 | `zip` | Shape | A US ZIP or ZIP+4 candidate | Current USPS allocation or location |
 | `urlUser` | **Semantic** | A username-shaped URL userinfo field with valid percent escapes | Identity, password validity, or URL reachability |
 | `url3986` | **Semantic** | An absolute hierarchical URI with valid percent escapes and bracketed IP literals | DNS, reachability, safety, or resource existence |

@@ -268,6 +268,13 @@ or a recognised binary signature. The broad shape-only pattern is opt-in:
 `findings.tsv` keeps every occurrence. `feature-histogram.tsv` groups each
 pattern and matched value and gives its occurrence count.
 
+The default `email` pattern uses common mailbox syntax and an IANA root-zone
+top-level domain. Add the broader RFC-shaped partition when required:
+
+```powershell
+--lr "all,email_candidate"
+```
+
 ## Get help
 
 ```powershell

@@ -222,7 +222,7 @@ function New-DeterministicEvidence {
         [Parameter(Mandatory)][long]$Bytes,
         [Parameter(Mandatory)][ValidateSet('sparse', 'match-heavy')][string]$Kind
     )
-    $line = [Text.Encoding]::UTF8.GetBytes('analyst@example.test')
+    $line = [Text.Encoding]::UTF8.GetBytes('analyst@example.com')
     $block = [byte[]]::new(1024 * 1024)
     if ($Kind -eq 'match-heavy') {
         for ($offset = 128; $offset + $line.Length -lt $block.Length; $offset += 256) {

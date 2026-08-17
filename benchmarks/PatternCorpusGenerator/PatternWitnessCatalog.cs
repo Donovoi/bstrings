@@ -37,6 +37,11 @@ internal static class PatternWitnessCatalog
                 new string('a', 65) + "@g.com",
                 "string@g.com"
             ),
+            ["email_candidate"] = new(
+                "label=security@example.net",
+                "a..b@example.com",
+                "label=security@example.net"
+            ),
             ["zip"] = new("90210-1234", "1234", "90210-1234"),
             ["urlUser"] = new(
                 "https://analyst:secret@example.com/path",

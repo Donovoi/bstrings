@@ -12,6 +12,7 @@ internal enum BuiltInValidationKind
 {
     None,
     Email,
+    EmailCandidate,
     PaymentCard,
     Base64,
     Base64Candidate,
@@ -166,13 +167,24 @@ internal static class BuiltInPatternCatalog
         ),
         new(
             "email",
-            "Finds practical RFC-style email address candidates, including long TLDs, within SMTP length limits",
+            "Finds high-confidence Internet email addresses with common mailbox syntax, SMTP length limits, and an IANA root-zone top-level domain",
+            @"(?<![A-Za-z0-9._+\-])[A-Za-z0-9_+\-]+(?:\.[A-Za-z0-9_+\-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?![A-Za-z0-9.-])",
+            "https://data.iana.org/TLD/tlds-alpha-by-domain.txt",
+            UseNonBacktracking: false,
+            RapidsSupersetPattern: @"[A-Za-z0-9._+\-]+@[A-Za-z0-9.-]+\.[A-Za-z0-9-]+",
+            BoundedRetryOverlap: 384,
+            Validation: BuiltInValidationKind.Email
+        ),
+        new(
+            "email_candidate",
+            "Finds broad RFC dot-atom email-shaped candidates that do not qualify as high-confidence email evidence; opt-in and not selected by all",
             @"(?<![A-Za-z0-9!#$%&'*+/=?^_`{|}~.-])[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?![A-Za-z0-9.-])",
             "https://www.rfc-editor.org/rfc/rfc5322#section-3.4.1",
             UseNonBacktracking: false,
             RapidsSupersetPattern: @"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+@[A-Za-z0-9.-]+\.[A-Za-z0-9-]+",
             BoundedRetryOverlap: 384,
-            Validation: BuiltInValidationKind.Email
+            Validation: BuiltInValidationKind.EmailCandidate,
+            SelectedByAll: false
         ),
         new(
             "zip",
@@ -887,6 +899,8 @@ internal static class BuiltInPatternCatalog
             BuiltInValidationKind.PaymentCard => "luhn",
             BuiltInValidationKind.Base64 => "base64-content-v1",
             BuiltInValidationKind.Base64Candidate => "canonical-base64-candidate",
+            BuiltInValidationKind.Email => "smtp-iana-high-confidence-v1",
+            BuiltInValidationKind.EmailCandidate => "rfc5322-dot-atom-candidate",
             BuiltInValidationKind.BitLocker => "bitlocker-arithmetic",
             BuiltInValidationKind.Jwt => "jwt-compact-structure",
             BuiltInValidationKind.Iban => "iban-mod97",
