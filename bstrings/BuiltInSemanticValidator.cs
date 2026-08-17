@@ -44,6 +44,8 @@ internal static class BuiltInSemanticValidator
         {
             BuiltInValidationKind.None => true,
             BuiltInValidationKind.Email => IsValidEmail(candidate),
+            BuiltInValidationKind.EmailCandidate =>
+                IsValidEmailCandidate(candidate) && !IsValidEmail(candidate),
             BuiltInValidationKind.PaymentCard => HasValidLuhnChecksum(candidate),
             BuiltInValidationKind.Base64 => Base64ContentCore.IsHighConfidence(candidate),
             BuiltInValidationKind.Base64Candidate =>
@@ -427,15 +429,170 @@ internal static class BuiltInSemanticValidator
 
     private static bool IsValidEmail(ReadOnlySpan<char> candidate)
     {
-        var at = candidate.LastIndexOf('@');
-        if (at is < 1 or > 64)
+        if (
+            !TryValidateEmailCandidate(candidate, out var at, out var lastDomainDot)
+            || !IsCommonEmailLocalPart(candidate[..at])
+        )
         {
             return false;
         }
 
-        var domainLength = candidate.Length - at - 1;
-        return domainLength is > 0 and <= 253 && candidate.Length <= 254;
+        return IanaTopLevelDomains.Contains(candidate[(lastDomainDot + 1)..]);
     }
+
+    private static bool IsValidEmailCandidate(ReadOnlySpan<char> candidate) =>
+        TryValidateEmailCandidate(candidate, out _, out _);
+
+    private static bool TryValidateEmailCandidate(
+        ReadOnlySpan<char> candidate,
+        out int at,
+        out int lastDomainDot
+    )
+    {
+        at = candidate.IndexOf('@');
+        lastDomainDot = -1;
+        if (
+            at is < 1 or > 64
+            || at != candidate.LastIndexOf('@')
+            || candidate.Length > 254
+        )
+        {
+            return false;
+        }
+
+        var domain = candidate[(at + 1)..];
+        if (domain.Length is < 3 or > 253 || !IsRfcDotAtom(candidate[..at]))
+        {
+            return false;
+        }
+
+        var labelStart = 0;
+        var labelCount = 0;
+        for (var index = 0; index <= domain.Length; index++)
+        {
+            if (index < domain.Length && domain[index] != '.')
+            {
+                continue;
+            }
+
+            var label = domain[labelStart..index];
+            if (
+                label.Length is < 1 or > 63
+                || !IsAsciiAlphaNumeric(label[0])
+                || !IsAsciiAlphaNumeric(label[^1])
+            )
+            {
+                return false;
+            }
+
+            for (var labelIndex = 1; labelIndex < label.Length - 1; labelIndex++)
+            {
+                if (!IsAsciiAlphaNumeric(label[labelIndex]) && label[labelIndex] != '-')
+                {
+                    return false;
+                }
+            }
+
+            labelCount++;
+            if (index < domain.Length)
+            {
+                lastDomainDot = at + 1 + index;
+            }
+            labelStart = index + 1;
+        }
+
+        return labelCount >= 2 && lastDomainDot > at + 1;
+    }
+
+    private static bool IsRfcDotAtom(ReadOnlySpan<char> localPart)
+    {
+        var previousWasDot = true;
+        foreach (var character in localPart)
+        {
+            if (character == '.')
+            {
+                if (previousWasDot)
+                {
+                    return false;
+                }
+                previousWasDot = true;
+                continue;
+            }
+
+            if (!IsRfcAtext(character))
+            {
+                return false;
+            }
+            previousWasDot = false;
+        }
+
+        return !previousWasDot;
+    }
+
+    private static bool IsCommonEmailLocalPart(ReadOnlySpan<char> localPart)
+    {
+        if (
+            localPart.IsEmpty
+            || !IsAsciiAlphaNumeric(localPart[0])
+            || !IsAsciiAlphaNumeric(localPart[^1])
+        )
+        {
+            return false;
+        }
+
+        for (var index = 0; index < localPart.Length; index++)
+        {
+            var character = localPart[index];
+            if (
+                !IsAsciiAlphaNumeric(character)
+                && character is not '_' and not '+' and not '-' and not '.'
+            )
+            {
+                return false;
+            }
+
+            if (
+                character == '.'
+                && (
+                    index == 0
+                    || index + 1 == localPart.Length
+                    || !IsAsciiAlphaNumeric(localPart[index - 1])
+                    || !IsAsciiAlphaNumeric(localPart[index + 1])
+                )
+            )
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsRfcAtext(char value) =>
+        IsAsciiAlphaNumeric(value)
+        || value
+            is '!'
+                or '#'
+                or '$'
+                or '%'
+                or '&'
+                or '\''
+                or '*'
+                or '+'
+                or '-'
+                or '/'
+                or '='
+                or '?'
+                or '^'
+                or '_'
+                or '`'
+                or '{'
+                or '|'
+                or '}'
+                or '~';
+
+    private static bool IsAsciiAlphaNumeric(char value) =>
+        value is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9';
 
     private static bool HasValidLuhnChecksum(ReadOnlySpan<char> candidate) =>
         HasValidLuhnChecksum(candidate, 13, 19);

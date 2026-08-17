@@ -236,6 +236,17 @@ Add the broad Base64-shaped candidate pattern when required:
 `b64_candidate` is disjoint from `b64`. It can include short, hexadecimal,
 opaque, and oversized values that only satisfy the canonical Base64 shape.
 
+The default `email` pattern uses common mailbox syntax, SMTP length limits,
+and the bundled IANA root-zone snapshot. Add broader RFC dot-atom candidates,
+including internal or undelegated suffixes, when required:
+
+```powershell
+--lr "all,email_candidate"
+```
+
+`email_candidate` is opt-in and disjoint from an identical strict match. It
+does not establish DNS resolution, delivery, mailbox existence, or ownership.
+
 Select names or groups:
 
 ```powershell

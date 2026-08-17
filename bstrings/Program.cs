@@ -546,7 +546,7 @@ public static partial class Program
         var lrOpt = new Option<string>("--lr")
         {
             Description =
-                "Only return regex matches. Accepts built-in names, groups (pii, credentials, browser, registry, wallets), a custom regex, or 'all' default patterns. Add b64_candidate for broad Base64-shaped values",
+                "Only return regex matches. Accepts built-in names, groups (pii, credentials, browser, registry, wallets), a custom regex, or 'all' default patterns. Add b64_candidate or email_candidate for broader shape-only values",
         };
         var fsOpt = new Option<string>("--fs")
         {

@@ -973,6 +973,7 @@ $bundleArchitectureDocumentNames = @(
       'adr-0013-resume-with-translation-off.md',
       'adr-0014-compact-investigator-findings.md',
       'adr-0015-high-confidence-base64-and-bounded-match-reuse.md',
+      'adr-0016-high-confidence-email-candidates.md',
       'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(

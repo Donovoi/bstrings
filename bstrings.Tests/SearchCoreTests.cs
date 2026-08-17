@@ -828,8 +828,8 @@ public class SearchCoreTests
     [Fact]
     public void BuiltInPatternCatalog_ContainsExpectedInventory()
     {
-        Assert.Equal(78, BuiltInPatternCatalog.Descriptions.Count);
-        Assert.Equal(78, BuiltInPatternCatalog.Patterns.Count);
+        Assert.Equal(79, BuiltInPatternCatalog.Descriptions.Count);
+        Assert.Equal(79, BuiltInPatternCatalog.Patterns.Count);
         Assert.Equal(77, BuiltInPatternCatalog.DefaultPatterns.Count);
         Assert.Equal(
             BuiltInPatternCatalog.Descriptions.Keys.OrderBy(key => key),
@@ -846,25 +846,27 @@ public class SearchCoreTests
             BuiltInPatternCatalog.Groups,
             BuiltInPatternCatalog.DefaultPatterns
         );
-        var withCandidate = SearchCore.ParseRegexPatternsWithNames(
-            "all,b64_candidate",
+        var withCandidates = SearchCore.ParseRegexPatternsWithNames(
+            "all,b64_candidate,email_candidate",
             BuiltInPatternCatalog.Patterns,
             BuiltInPatternCatalog.Groups,
             BuiltInPatternCatalog.DefaultPatterns
         );
 
         Assert.DoesNotContain(defaults, pattern => pattern.name == "b64_candidate");
+        Assert.DoesNotContain(defaults, pattern => pattern.name == "email_candidate");
         Assert.Contains(defaults, pattern => pattern.name == "b64");
+        Assert.Contains(defaults, pattern => pattern.name == "email");
         Assert.Equal(BuiltInPatternCatalog.DefaultPatterns.Count, defaults.Count);
-        Assert.Equal(BuiltInPatternCatalog.Patterns.Count, withCandidate.Count);
-        Assert.Equal("b64_candidate", withCandidate[^1].name);
+        Assert.Equal(BuiltInPatternCatalog.Patterns.Count, withCandidates.Count);
+        Assert.Equal("email_candidate", withCandidates[^1].name);
     }
 
     [Fact]
     public void BuiltInPatternCatalog_ContainsRepresentativeEntries()
     {
         Assert.Equal("Finds GUIDs", BuiltInPatternCatalog.Descriptions["guid"]);
-        Assert.Contains("long TLDs", BuiltInPatternCatalog.Descriptions["email"]);
+        Assert.Contains("IANA root-zone", BuiltInPatternCatalog.Descriptions["email"]);
         Assert.Contains("{0,61}", BuiltInPatternCatalog.Patterns["email"]);
         Assert.Contains("IPv6 candidate", BuiltInPatternCatalog.Patterns["url3986"]);
     }

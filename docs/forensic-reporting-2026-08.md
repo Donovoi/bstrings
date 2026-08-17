@@ -48,6 +48,11 @@ standard Base64 and either validated decoded text or a recognised binary
 signature. `--lr "all,b64_candidate"` adds the broader shape-only partition.
 The two pattern names do not report the same span.
 
+The default `email` finding uses a common mailbox form and a top-level domain
+in the bundled IANA root-zone snapshot. `--lr "all,email_candidate"` adds the
+broader RFC dot-atom partition for uncommon, internal, historic, or currently
+undelegated suffixes. Neither pattern verifies DNS or mailbox state.
+
 ## Why this shape
 
 [bulk_extractor](https://github.com/simsong/bulk_extractor) separates feature
