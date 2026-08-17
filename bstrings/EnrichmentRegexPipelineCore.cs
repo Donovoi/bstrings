@@ -41,7 +41,9 @@ internal static class EnrichmentRegexPipelineCore
         bool trustedParentFirstInput = false,
         TranslationValidationRequirements? translationRequirements = null,
         string? translationIntegritySourcePath = null,
-        Action<string>? fallbackIndexDeleteDirectory = null
+        Action<string>? fallbackIndexDeleteDirectory = null,
+        MatchResultCacheOptions? matchCacheOptions = null,
+        IEqualityComparer<string>? matchCacheComparer = null
     )
     {
         if (string.IsNullOrWhiteSpace(inputPath))
@@ -94,6 +96,10 @@ internal static class EnrichmentRegexPipelineCore
         }
 
         var compiledPatterns = CompilePatterns(patterns);
+        var effectiveCacheOptions = matchCacheOptions ?? MatchResultCacheOptions.Default;
+        effectiveCacheOptions.Validate();
+        var matchCache = new ExactTextMatchCache(effectiveCacheOptions, matchCacheComparer);
+        var hasCacheablePatterns = compiledPatterns.Any(pattern => pattern.Cacheable);
         string? temporaryOutputPath = null;
         StreamWriter? ownedWriter = null;
         TextWriter writer;
@@ -129,6 +135,17 @@ internal static class EnrichmentRegexPipelineCore
         long decodedRecords = 0;
         long matchRecords = 0;
         long preservationFallbackRecords = 0;
+        long matchCacheHits = 0;
+        long matchCacheMisses = 0;
+        long matchCacheProbationObservations = 0;
+        long matchCacheProbationBypasses = 0;
+        long matchCachePreLookupBypasses = 0;
+        long matchCachePostComputationBypasses = 0;
+        long matchCacheStores = 0;
+        long matchCacheEvictions = 0;
+        long reusedPatternEvaluations = 0;
+        long matchRowsServedFromCache = 0;
+        long matchRowsComputed = 0;
         var seenRecordIds = trustedParentFirstInput
             ? null
             : new HashSet<string>(StringComparer.Ordinal);
@@ -289,71 +306,144 @@ internal static class EnrichmentRegexPipelineCore
                     decodedRecords++;
                 }
 
-                var parsedHit = new ParsedHit(record.Text!, record.Text!, record.Location?.Value ?? string.Empty);
-                int[]? lineStarts = null;
-                foreach (var compiledPattern in compiledPatterns)
+                var text = record.Text!;
+                var parsedHit = new ParsedHit(
+                    text,
+                    text,
+                    record.Location?.Value ?? string.Empty
+                );
+                var lineMap = new RecordLineMap(text);
+                if (
+                    !effectiveCacheOptions.Enabled
+                    || !hasCacheablePatterns
+                    || text.Length > effectiveCacheOptions.MaximumTextCharacters
+                )
                 {
-                    var name = compiledPattern.Name;
-                    var pattern = compiledPattern.Pattern;
-                    var regex = compiledPattern.Regex;
-                    IEnumerable<RegexOutputRecord> matches;
-                    try
+                    matchCachePreLookupBypasses++;
+                    for (var patternIndex = 0; patternIndex < compiledPatterns.Count; patternIndex++)
                     {
-                        matches = RegexOutputCore.CreateRecords(
+                        var evaluation = await EvaluatePatternAsync(
+                            compiledPatterns[patternIndex],
+                            patternIndex,
+                            record,
                             parsedHit,
-                            name,
-                            regex,
-                            regexOutput: true,
-                            record.SourceFile,
-                            GetEvidenceClass(record)
+                            writer,
+                            lineMap,
+                            descriptors: null,
+                            captureDescriptors: false,
+                            effectiveCacheOptions.MaximumDescriptorsPerEntry,
+                            cancellationToken
                         );
-                        foreach (var match in matches)
+                        matchRecords += evaluation.Rows;
+                        matchRowsComputed += evaluation.Rows;
+                    }
+                    continue;
+                }
+
+                var cacheProbe = matchCache.Probe(text, out var cachedMatches);
+                if (cacheProbe == MatchCacheProbeResult.Hit)
+                {
+                    matchCacheHits++;
+                    var descriptorIndex = 0;
+                    for (var patternIndex = 0; patternIndex < compiledPatterns.Count; patternIndex++)
+                    {
+                        var compiledPattern = compiledPatterns[patternIndex];
+                        if (compiledPattern.Cacheable)
                         {
-                            var context = CreateContext(
-                                record.Text!,
-                                match.DataStart,
-                                match.DataLength
-                            );
-                            var outputRecord = new EnrichmentRegexMatchRecord
-                            {
-                                PatternName = name,
-                                Pattern = pattern,
-                                PatternDescription = compiledPattern.Description,
-                                PatternSource = compiledPattern.Source,
-                                PatternValidation = compiledPattern.Validation,
-                                Match = match.DataFound,
-                                MatchStart = match.DataStart,
-                                MatchLength = match.DataLength,
-                                MatchLine = GetRecordLine(
-                                    record.Text!,
-                                    match.DataStart,
-                                    ref lineStarts
-                                ),
-                                ContextStart = context.Start,
-                                Context = context.Value,
-                                SourceRecordId = record.RecordId,
-                                SourceFile = record.SourceFile,
-                                Location = record.Location,
-                                Origin = record.Origin,
-                                ParentRecordId = record.ParentRecordId,
-                                Transform = record.Transform,
-                                EvidenceClass = GetEvidenceClass(record),
-                                Attributes = record.Attributes,
-                            };
-                            await writer.WriteLineAsync(
-                                JsonSerializer.Serialize(outputRecord, JsonOptions).AsMemory(),
+                            var replay = await ReplayCachedPatternAsync(
+                                cachedMatches,
+                                descriptorIndex,
+                                patternIndex,
+                                compiledPattern,
+                                record,
+                                writer,
+                                lineMap,
                                 cancellationToken
                             );
-                            matchRecords++;
+                            descriptorIndex = replay.NextDescriptorIndex;
+                            matchRecords += replay.Rows;
+                            matchRowsServedFromCache += replay.Rows;
+                            reusedPatternEvaluations++;
+                        }
+                        else
+                        {
+                            var evaluation = await EvaluatePatternAsync(
+                                compiledPattern,
+                                patternIndex,
+                                record,
+                                parsedHit,
+                                writer,
+                                lineMap,
+                                descriptors: null,
+                                captureDescriptors: false,
+                                effectiveCacheOptions.MaximumDescriptorsPerEntry,
+                                cancellationToken
+                            );
+                            matchRecords += evaluation.Rows;
+                            matchRowsComputed += evaluation.Rows;
                         }
                     }
-                    catch (RegexMatchTimeoutException ex)
+                    if (descriptorIndex != cachedMatches.Count)
                     {
-                        throw new TimeoutException(
-                            $"Regex '{name}' timed out at enrichment record '{record.RecordId}'; output is incomplete.",
-                            ex
+                        throw new InvalidDataException(
+                            "The run-local match cache contains an invalid pattern ordering."
                         );
                     }
+                    continue;
+                }
+
+                matchCacheMisses++;
+                var cacheStoreEligible = cacheProbe == MatchCacheProbeResult.MissEligible;
+                if (!cacheStoreEligible)
+                {
+                    if (cacheProbe == MatchCacheProbeResult.MissObserved)
+                    {
+                        matchCacheProbationObservations++;
+                    }
+                    else
+                    {
+                        matchCacheProbationBypasses++;
+                    }
+                }
+                var descriptors = new List<CachedRegexMatch>(
+                    Math.Min(64, effectiveCacheOptions.MaximumDescriptorsPerEntry)
+                );
+                var descriptorOverflow = false;
+                for (var patternIndex = 0; patternIndex < compiledPatterns.Count; patternIndex++)
+                {
+                    var compiledPattern = compiledPatterns[patternIndex];
+                    var evaluation = await EvaluatePatternAsync(
+                        compiledPattern,
+                        patternIndex,
+                        record,
+                        parsedHit,
+                        writer,
+                        lineMap,
+                        descriptors,
+                        compiledPattern.Cacheable && !descriptorOverflow,
+                        effectiveCacheOptions.MaximumDescriptorsPerEntry,
+                        cancellationToken
+                    );
+                    matchRecords += evaluation.Rows;
+                    matchRowsComputed += evaluation.Rows;
+                    descriptorOverflow |= evaluation.DescriptorOverflow;
+                }
+
+                if (descriptorOverflow || !cacheStoreEligible)
+                {
+                    matchCachePostComputationBypasses++;
+                    continue;
+                }
+
+                var store = matchCache.TryAdd(text, descriptors.ToArray());
+                matchCacheEvictions += store.Evictions;
+                if (store.Stored)
+                {
+                    matchCacheStores++;
+                }
+                else
+                {
+                    matchCachePostComputationBypasses++;
                 }
             }
 
@@ -369,13 +459,34 @@ internal static class EnrichmentRegexPipelineCore
                 temporaryOutputPath = null;
             }
 
-            return new EnrichmentPipelineStats(
+            var stats = new EnrichmentPipelineStats(
                 inputRecords,
                 translatedRecords,
                 matchRecords,
                 preservationFallbackRecords,
-                decodedRecords
+                decodedRecords,
+                matchCacheHits,
+                matchCacheMisses,
+                matchCacheProbationObservations,
+                matchCacheProbationBypasses,
+                matchCachePreLookupBypasses,
+                matchCachePostComputationBypasses,
+                matchCacheStores,
+                matchCacheEvictions,
+                reusedPatternEvaluations,
+                matchRowsServedFromCache,
+                matchRowsComputed,
+                matchCache.CurrentLogicalBytes,
+                matchCache.Count,
+                matchCache.PeakLogicalBytes,
+                matchCache.PeakEntries
             );
+            ValidateMatchReuseStats(
+                stats,
+                compiledPatterns.Count(pattern => pattern.Cacheable),
+                effectiveCacheOptions
+            );
+            return stats;
         }
         finally
         {
@@ -426,6 +537,195 @@ internal static class EnrichmentRegexPipelineCore
         }
     }
 
+    private static void ValidateMatchReuseStats(
+        EnrichmentPipelineStats stats,
+        int cacheablePatternCount,
+        MatchResultCacheOptions options
+    )
+    {
+        if (
+            checked(
+                stats.MatchCacheHits
+                    + stats.MatchCacheMisses
+                    + stats.MatchCachePreLookupBypasses
+            ) != stats.InputRecords
+            || checked(stats.MatchCacheStores + stats.MatchCachePostComputationBypasses)
+                != stats.MatchCacheMisses
+            || stats.MatchCacheProbationObservations
+                > stats.MatchCachePostComputationBypasses
+            || checked(
+                stats.MatchCacheProbationObservations
+                    + stats.MatchCacheProbationBypasses
+            ) > stats.MatchCachePostComputationBypasses
+            || checked(stats.MatchRowsComputed + stats.MatchRowsServedFromCache)
+                != stats.MatchRecords
+            || checked(stats.MatchCacheHits * cacheablePatternCount)
+                != stats.ReusedPatternEvaluations
+            || stats.MatchCacheStores > options.MaximumEntries + stats.MatchCacheEvictions
+            || stats.MatchCacheCurrentEntries > options.MaximumEntries
+            || stats.MatchCacheCurrentLogicalBytes > options.MaximumLogicalBytes
+            || stats.MatchCachePeakEntries > options.MaximumEntries
+            || stats.MatchCachePeakLogicalBytes > options.MaximumLogicalBytes
+        )
+        {
+            throw new InvalidDataException(
+                "The run-local match-cache counters or limits do not reconcile."
+            );
+        }
+    }
+
+    private static async Task<PatternEvaluationResult> EvaluatePatternAsync(
+        CompiledPattern compiledPattern,
+        int patternIndex,
+        EnrichmentStringRecord record,
+        ParsedHit parsedHit,
+        TextWriter writer,
+        RecordLineMap lineMap,
+        List<CachedRegexMatch>? descriptors,
+        bool captureDescriptors,
+        int maximumDescriptors,
+        CancellationToken cancellationToken
+    )
+    {
+        long rows = 0;
+        var descriptorOverflow = false;
+        try
+        {
+            var matches = RegexOutputCore.CreateRecords(
+                parsedHit,
+                compiledPattern.Name,
+                compiledPattern.Regex,
+                regexOutput: true,
+                record.SourceFile,
+                GetEvidenceClass(record)
+            );
+            foreach (var match in matches)
+            {
+                if (captureDescriptors && !descriptorOverflow)
+                {
+                    if (descriptors!.Count >= maximumDescriptors)
+                    {
+                        descriptorOverflow = true;
+                    }
+                    else
+                    {
+                        descriptors.Add(
+                            new CachedRegexMatch(
+                                patternIndex,
+                                match.DataStart,
+                                match.DataLength
+                            )
+                        );
+                    }
+                }
+                await WriteMatchAsync(
+                    writer,
+                    compiledPattern,
+                    record,
+                    match.DataFound,
+                    match.DataStart,
+                    match.DataLength,
+                    lineMap,
+                    cancellationToken
+                );
+                rows++;
+            }
+        }
+        catch (RegexMatchTimeoutException ex)
+        {
+            throw new TimeoutException(
+                $"Regex '{compiledPattern.Name}' timed out at enrichment record '{record.RecordId}'; output is incomplete.",
+                ex
+            );
+        }
+        return new PatternEvaluationResult(rows, descriptorOverflow);
+    }
+
+    private static async Task<CachedReplayResult> ReplayCachedPatternAsync(
+        IReadOnlyList<CachedRegexMatch> descriptors,
+        int descriptorIndex,
+        int patternIndex,
+        CompiledPattern compiledPattern,
+        EnrichmentStringRecord record,
+        TextWriter writer,
+        RecordLineMap lineMap,
+        CancellationToken cancellationToken
+    )
+    {
+        long rows = 0;
+        var text = record.Text!;
+        while (
+            descriptorIndex < descriptors.Count
+            && descriptors[descriptorIndex].PatternIndex == patternIndex
+        )
+        {
+            var descriptor = descriptors[descriptorIndex];
+            if (
+                descriptor.Start < 0
+                || descriptor.Length < 0
+                || descriptor.Start > text.Length - descriptor.Length
+            )
+            {
+                throw new InvalidDataException(
+                    "The run-local match cache contains an invalid match range."
+                );
+            }
+            await WriteMatchAsync(
+                writer,
+                compiledPattern,
+                record,
+                text.Substring(descriptor.Start, descriptor.Length),
+                descriptor.Start,
+                descriptor.Length,
+                lineMap,
+                cancellationToken
+            );
+            descriptorIndex++;
+            rows++;
+        }
+        return new CachedReplayResult(rows, descriptorIndex);
+    }
+
+    private static async Task WriteMatchAsync(
+        TextWriter writer,
+        CompiledPattern compiledPattern,
+        EnrichmentStringRecord record,
+        string match,
+        int matchStart,
+        int matchLength,
+        RecordLineMap lineMap,
+        CancellationToken cancellationToken
+    )
+    {
+        var context = CreateContext(record.Text!, matchStart, matchLength);
+        var outputRecord = new EnrichmentRegexMatchRecord
+        {
+            PatternName = compiledPattern.Name,
+            Pattern = compiledPattern.Pattern,
+            PatternDescription = compiledPattern.Description,
+            PatternSource = compiledPattern.Source,
+            PatternValidation = compiledPattern.Validation,
+            Match = match,
+            MatchStart = matchStart,
+            MatchLength = matchLength,
+            MatchLine = lineMap.GetLine(matchStart),
+            ContextStart = context.Start,
+            Context = context.Value,
+            SourceRecordId = record.RecordId,
+            SourceFile = record.SourceFile,
+            Location = record.Location,
+            Origin = record.Origin,
+            ParentRecordId = record.ParentRecordId,
+            Transform = record.Transform,
+            EvidenceClass = GetEvidenceClass(record),
+            Attributes = record.Attributes,
+        };
+        await writer.WriteLineAsync(
+            JsonSerializer.Serialize(outputRecord, JsonOptions).AsMemory(),
+            cancellationToken
+        );
+    }
+
     private static (int Start, string Value) CreateContext(
         string text,
         int matchStart,
@@ -444,30 +744,6 @@ internal static class EnrichmentRegexPipelineCore
             matchStart + safeLength + MatchContextCharacters
         );
         return (start, text[start..end]);
-    }
-
-    private static int GetRecordLine(string text, int matchStart, ref int[]? lineStarts)
-    {
-        if (matchStart < 0 || matchStart > text.Length)
-        {
-            return 0;
-        }
-
-        if (lineStarts is null)
-        {
-            var starts = new List<int> { 0 };
-            for (var index = 0; index < text.Length; index++)
-            {
-                if (text[index] == '\n')
-                {
-                    starts.Add(index + 1);
-                }
-            }
-            lineStarts = starts.ToArray();
-        }
-
-        var found = Array.BinarySearch(lineStarts, matchStart);
-        return found >= 0 ? found + 1 : ~found;
     }
 
     private static List<CompiledPattern> CompilePatterns(
@@ -491,7 +767,8 @@ internal static class EnrichmentRegexPipelineCore
                         RegexOutputCore.GetOrCreateRegex(name, pattern),
                         definition.Description,
                         definition.Source,
-                        BuiltInPatternCatalog.GetValidationLabel(definition)
+                        BuiltInPatternCatalog.GetValidationLabel(definition),
+                        definition.Validation != BuiltInValidationKind.DateOfBirth
                     )
                 );
             }
@@ -504,7 +781,8 @@ internal static class EnrichmentRegexPipelineCore
                         RegexOutputCore.GetOrCreateRegex(name, pattern),
                         "User-supplied regular expression",
                         "user-supplied",
-                        "custom-regex"
+                        "custom-regex",
+                        true
                     )
                 );
             }
@@ -526,8 +804,46 @@ internal static class EnrichmentRegexPipelineCore
         Regex Regex,
         string Description,
         string Source,
-        string Validation
+        string Validation,
+        bool Cacheable
     );
+
+    private readonly record struct PatternEvaluationResult(
+        long Rows,
+        bool DescriptorOverflow
+    );
+
+    private readonly record struct CachedReplayResult(
+        long Rows,
+        int NextDescriptorIndex
+    );
+
+    private sealed class RecordLineMap(string text)
+    {
+        private int[]? _starts;
+
+        internal int GetLine(int matchStart)
+        {
+            if (matchStart < 0 || matchStart > text.Length)
+            {
+                return 0;
+            }
+            if (_starts is null)
+            {
+                var starts = new List<int> { 0 };
+                for (var index = 0; index < text.Length; index++)
+                {
+                    if (text[index] == '\n')
+                    {
+                        starts.Add(index + 1);
+                    }
+                }
+                _starts = starts.ToArray();
+            }
+            var found = Array.BinarySearch(_starts, matchStart);
+            return found >= 0 ? found + 1 : ~found;
+        }
+    }
 
     internal static void ValidateRecord(EnrichmentStringRecord record, long lineNumber)
     {

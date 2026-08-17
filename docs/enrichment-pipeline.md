@@ -489,6 +489,13 @@ so positional accounting stays stable. Built-in `--lr` groups and custom
 `--fr` patterns use the same validation semantics on each normalized record.
 The matcher does not rewrite or discard parent records.
 
+An experimental run-local cache can reuse match spans for exact repeated record
+text. It rebuilds source, location, lineage, context, and attributes for each
+occurrence. Release-scale tests found large gains on repeated text, but one
+oversized-input pair exceeded the fixed overhead limit. The cache is therefore
+disabled in this release. It writes no artifact and does not change the output
+contract. The benchmark and decision record retain the test evidence.
+
 Each record has a stable SHA-256-based ID. Derived records identify their
 parent, source file, location kind, extractor/model/runtime identity, and
 evidence class. Regex matches copy that lineage. Parents must precede children;

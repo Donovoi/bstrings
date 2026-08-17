@@ -11,7 +11,7 @@ payment data, and personal information.
 - Finds text with native extraction, FLOSS, and OCR.
 - Decodes strict Base64 text when you select this function.
 - Detects languages and translates text on your computer.
-- Finds and validates 77 forensic pattern types.
+- Finds and validates 77 default forensic pattern types.
 - Records the source and location of each result.
 - Creates JSONL evidence, TSV reports, histograms, and an HTML report.
 - Works offline after you install the kit.
@@ -257,6 +257,16 @@ Use `--lr` to select names or groups:
   -o D:\results\focused `
   --lr "pii,credentials,browser,registry,wallets"
 ```
+
+The default `b64` pattern reports canonical Base64 with validated decoded text
+or a recognised binary signature. The broad shape-only pattern is opt-in:
+
+```powershell
+--lr "all,b64_candidate"
+```
+
+`findings.tsv` keeps every occurrence. `feature-histogram.tsv` groups each
+pattern and matched value and gives its occurrence count.
 
 ## Get help
 

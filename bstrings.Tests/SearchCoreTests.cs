@@ -828,12 +828,36 @@ public class SearchCoreTests
     [Fact]
     public void BuiltInPatternCatalog_ContainsExpectedInventory()
     {
-        Assert.Equal(77, BuiltInPatternCatalog.Descriptions.Count);
-        Assert.Equal(77, BuiltInPatternCatalog.Patterns.Count);
+        Assert.Equal(78, BuiltInPatternCatalog.Descriptions.Count);
+        Assert.Equal(78, BuiltInPatternCatalog.Patterns.Count);
+        Assert.Equal(77, BuiltInPatternCatalog.DefaultPatterns.Count);
         Assert.Equal(
             BuiltInPatternCatalog.Descriptions.Keys.OrderBy(key => key),
             BuiltInPatternCatalog.Patterns.Keys.OrderBy(key => key)
         );
+    }
+
+    [Fact]
+    public void ParseRegexPatternsWithNames_ExpandsDefaultAllAndKeepsCandidateOptIn()
+    {
+        var defaults = SearchCore.ParseRegexPatternsWithNames(
+            "all",
+            BuiltInPatternCatalog.Patterns,
+            BuiltInPatternCatalog.Groups,
+            BuiltInPatternCatalog.DefaultPatterns
+        );
+        var withCandidate = SearchCore.ParseRegexPatternsWithNames(
+            "all,b64_candidate",
+            BuiltInPatternCatalog.Patterns,
+            BuiltInPatternCatalog.Groups,
+            BuiltInPatternCatalog.DefaultPatterns
+        );
+
+        Assert.DoesNotContain(defaults, pattern => pattern.name == "b64_candidate");
+        Assert.Contains(defaults, pattern => pattern.name == "b64");
+        Assert.Equal(BuiltInPatternCatalog.DefaultPatterns.Count, defaults.Count);
+        Assert.Equal(BuiltInPatternCatalog.Patterns.Count, withCandidate.Count);
+        Assert.Equal("b64_candidate", withCandidate[^1].name);
     }
 
     [Fact]

@@ -31,7 +31,12 @@ public sealed class EnrichmentRegexPipelineCoreTests
             trustedParentFirstInput: true
         );
 
-        Assert.Equal(new EnrichmentPipelineStats(2, 0, 1, 0, 1), stats);
+        Assert.Equal(2, stats.InputRecords);
+        Assert.Equal(1, stats.MatchRecords);
+        Assert.Equal(0, stats.MatchCacheMisses);
+        Assert.Equal(0, stats.MatchCacheStores);
+        Assert.Equal(0, stats.MatchCacheProbationObservations);
+        Assert.Equal(2, stats.MatchCachePreLookupBypasses);
         using var row = JsonDocument.Parse(await File.ReadAllTextAsync(outputPath, cancellationToken));
         Assert.Equal("derived-decoding", row.RootElement.GetProperty("evidenceClass").GetString());
         Assert.Equal(
@@ -264,7 +269,13 @@ public sealed class EnrichmentRegexPipelineCoreTests
             cancellationToken: cancellationToken
         );
 
-        Assert.Equal(new EnrichmentPipelineStats(2, 1, 2), stats);
+        Assert.Equal(2, stats.InputRecords);
+        Assert.Equal(1, stats.TranslatedRecords);
+        Assert.Equal(2, stats.MatchRecords);
+        Assert.Equal(0, stats.MatchCacheMisses);
+        Assert.Equal(0, stats.MatchCacheStores);
+        Assert.Equal(0, stats.MatchCacheProbationObservations);
+        Assert.Equal(2, stats.MatchCachePreLookupBypasses);
         var rows = (await File.ReadAllLinesAsync(outputPath, cancellationToken))
             .Select(line => JsonDocument.Parse(line))
             .ToArray();
@@ -764,6 +775,253 @@ public sealed class EnrichmentRegexPipelineCoreTests
         Assert.Contains(expectedMessage, error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task ProcessAsync_MatchCachePreservesExactOutputAndRebuildsProvenance()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("duplicates.jsonl");
+        var disabledPath = scope.PathFor("disabled.jsonl");
+        var enabledPath = scope.PathFor("enabled.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                JsonSerializer.Serialize(
+                    new
+                    {
+                        schemaVersion = 1,
+                        recordType = "string",
+                        recordId = "raw-1",
+                        text = "contact analyst@example.test",
+                        sourceFile = "first.bin",
+                        location = new { kind = "file_offset", value = "0x10" },
+                        origin = new { extractor = "bstrings", version = "test", kind = "static" },
+                        attributes = new { marker = "first" },
+                    }
+                ),
+                JsonSerializer.Serialize(
+                    new
+                    {
+                        schemaVersion = 1,
+                        recordType = "string",
+                        recordId = "raw-2",
+                        text = "contact analyst@example.test",
+                        sourceFile = "second.exe",
+                        location = new { kind = "virtual_address", value = "0x402000" },
+                        origin = new { extractor = "floss", version = "test", kind = "decoded" },
+                        attributes = new { marker = "second" },
+                    }
+                ),
+                CreateRecord(
+                    "translated-1",
+                    "contact analyst@example.test",
+                    "raw-1"
+                ),
+            ],
+            cancellationToken
+        );
+
+        var disabled = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            disabledPath,
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            cancellationToken: cancellationToken,
+            matchCacheOptions: MatchResultCacheOptions.Disabled
+        );
+        var enabled = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            enabledPath,
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            cancellationToken: cancellationToken,
+            matchCacheOptions: new MatchResultCacheOptions(8, 4096, 256, 8),
+            matchCacheComparer: new ConstantHashOrdinalComparer()
+        );
+
+        Assert.Equal(
+            await File.ReadAllBytesAsync(disabledPath, cancellationToken),
+            await File.ReadAllBytesAsync(enabledPath, cancellationToken)
+        );
+        Assert.Equal(1, enabled.MatchCacheHits);
+        Assert.Equal(2, enabled.MatchCacheMisses);
+        Assert.Equal(1, enabled.MatchCacheStores);
+        Assert.Equal(1, enabled.MatchCacheProbationObservations);
+        Assert.Equal(1, enabled.ReusedPatternEvaluations);
+        Assert.Equal(1, enabled.MatchRowsServedFromCache);
+        Assert.Equal(2, enabled.MatchRowsComputed);
+        Assert.Equal(3, disabled.MatchCachePreLookupBypasses);
+        var rows = (await File.ReadAllLinesAsync(enabledPath, cancellationToken))
+            .Select(line => JsonDocument.Parse(line))
+            .ToArray();
+        try
+        {
+            Assert.Equal("raw-1", rows[0].RootElement.GetProperty("sourceRecordId").GetString());
+            Assert.Equal("raw-2", rows[1].RootElement.GetProperty("sourceRecordId").GetString());
+            Assert.Equal("first.bin", rows[0].RootElement.GetProperty("sourceFile").GetString());
+            Assert.Equal("second.exe", rows[1].RootElement.GetProperty("sourceFile").GetString());
+            Assert.Equal(
+                "0x402000",
+                rows[1].RootElement.GetProperty("location").GetProperty("value").GetString()
+            );
+            Assert.Equal(
+                "floss",
+                rows[1].RootElement.GetProperty("origin").GetProperty("extractor").GetString()
+            );
+            Assert.Equal(
+                "second",
+                rows[1].RootElement.GetProperty("attributes").GetProperty("marker").GetString()
+            );
+            Assert.Equal(
+                "translated-1",
+                rows[2].RootElement.GetProperty("sourceRecordId").GetString()
+            );
+            Assert.Equal("raw-1", rows[2].RootElement.GetProperty("parentRecordId").GetString());
+            Assert.Equal(
+                "translation",
+                rows[2].RootElement.GetProperty("transform").GetProperty("kind").GetString()
+            );
+        }
+        finally
+        {
+            foreach (var row in rows)
+            {
+                row.Dispose();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ProcessAsync_MatchCacheStoresZeroMatchResults()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("zero-matches.jsonl");
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                RawRecord("raw-1", "ordinary text"),
+                RawRecord("raw-2", "ordinary text"),
+                RawRecord("raw-3", "ordinary text"),
+            ],
+            cancellationToken
+        );
+
+        var stats = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            outputPath: null,
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            new StringWriter(),
+            cancellationToken,
+            matchCacheOptions: new MatchResultCacheOptions(8, 4096, 256, 8)
+        );
+
+        Assert.Equal(0, stats.MatchRecords);
+        Assert.Equal(1, stats.MatchCacheHits);
+        Assert.Equal(2, stats.MatchCacheMisses);
+        Assert.Equal(1, stats.MatchCacheStores);
+        Assert.Equal(1, stats.ReusedPatternEvaluations);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_MatchCacheDoesNotStoreDescriptorOverflow()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("overflow.jsonl");
+        const string text = "first@example.test second@example.test";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                RawRecord("raw-1", text),
+                RawRecord("raw-2", text),
+                RawRecord("raw-3", text),
+            ],
+            cancellationToken
+        );
+
+        var stats = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            outputPath: null,
+            [("email", BuiltInPatternCatalog.Patterns["email"])],
+            new StringWriter(),
+            cancellationToken,
+            matchCacheOptions: new MatchResultCacheOptions(8, 4096, 256, 1)
+        );
+
+        Assert.Equal(6, stats.MatchRecords);
+        Assert.Equal(0, stats.MatchCacheHits);
+        Assert.Equal(3, stats.MatchCacheMisses);
+        Assert.Equal(0, stats.MatchCacheStores);
+        Assert.Equal(3, stats.MatchCachePostComputationBypasses);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_MatchCacheReevaluatesTimeDependentDobPattern()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("mixed-cacheability.jsonl");
+        const string text = "analyst@example.test DOB: 01/01/2000";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                RawRecord("raw-1", text),
+                RawRecord("raw-2", text),
+                RawRecord("raw-3", text),
+            ],
+            cancellationToken
+        );
+
+        var stats = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            outputPath: null,
+            [
+                ("email", BuiltInPatternCatalog.Patterns["email"]),
+                ("dob", BuiltInPatternCatalog.Patterns["dob"]),
+            ],
+            new StringWriter(),
+            cancellationToken,
+            matchCacheOptions: new MatchResultCacheOptions(8, 4096, 256, 8)
+        );
+
+        Assert.Equal(6, stats.MatchRecords);
+        Assert.Equal(1, stats.MatchCacheHits);
+        Assert.Equal(1, stats.ReusedPatternEvaluations);
+        Assert.Equal(1, stats.MatchRowsServedFromCache);
+        Assert.Equal(5, stats.MatchRowsComputed);
+    }
+
+    [Fact]
+    public async Task ProcessAsync_PreCancelledCacheRunPreservesExistingOutput()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("cancelled.jsonl");
+        var outputPath = scope.PathFor("matches.jsonl");
+        await File.WriteAllTextAsync(
+            inputPath,
+            RawRecord("raw-1", "analyst@example.test"),
+            cancellationToken
+        );
+        await File.WriteAllTextAsync(outputPath, "previous-result", cancellationToken);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            EnrichmentRegexPipelineCore.ProcessAsync(
+                inputPath,
+                outputPath,
+                [("email", BuiltInPatternCatalog.Patterns["email"])],
+                cancellationToken: cancelled.Token
+            )
+        );
+
+        Assert.Equal(
+            "previous-result",
+            await File.ReadAllTextAsync(outputPath, cancellationToken)
+        );
+        Assert.Empty(Directory.GetFiles(scope.DirectoryPath, "*.partial.*"));
+    }
+
     private static string CreateRecord(
         string recordId,
         string text,
@@ -808,6 +1066,14 @@ public sealed class EnrichmentRegexPipelineCoreTests
                 },
             }
         );
+    }
+
+    private sealed class ConstantHashOrdinalComparer : IEqualityComparer<string>
+    {
+        public bool Equals(string? left, string? right) =>
+            string.Equals(left, right, StringComparison.Ordinal);
+
+        public int GetHashCode(string value) => 1;
     }
 
     private static string OcrRecord(string recordId, string text, string originRevision) =>

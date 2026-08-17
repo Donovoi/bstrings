@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 [assembly: InternalsVisibleTo("language-triage-benchmark")]
 [assembly: InternalsVisibleTo("engine-exclusion-resolver-benchmark")]
 [assembly: InternalsVisibleTo("decoder-pipeline-benchmark")]
+[assembly: InternalsVisibleTo("match-reuse-benchmark")]
 
 // Setting ComVisible to false makes the types in this assembly not visible 
 // to COM components.  If you need to access a type in this assembly from 

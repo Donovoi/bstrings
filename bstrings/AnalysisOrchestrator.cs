@@ -1972,6 +1972,9 @@ internal static partial class AnalysisOrchestrator
                 enrichedStrings = enrichedMerge.OutputRecords,
                 regexPatterns = patterns.Count,
                 regexMatches = matches.MatchRecords,
+                matchReuse = MatchResultCacheOptions.Default.Enabled
+                    ? CreateMatchReuseSummary(matches)
+                    : null,
                 preservationFallbacks = matches.PreservationFallbackRecords,
                 forensicReports = new
                 {
@@ -3969,6 +3972,9 @@ internal static partial class AnalysisOrchestrator
             translationRouting = CreateTranslationRoutingSummary(options.TranslationMode, triage),
             translationWork,
             decoder = CreateDecoderSummary(options, decoderWork, decoderCompletion),
+            matchReuse = enrichmentStats is null || !MatchResultCacheOptions.Default.Enabled
+                ? null
+                : CreateMatchReuseSummary(enrichmentStats.Value),
             preservationFallbacks = enrichmentStats?.PreservationFallbackRecords,
             resume = resumeSession.CreatePublicEvidence(),
             options,
@@ -3976,6 +3982,33 @@ internal static partial class AnalysisOrchestrator
         };
         await WriteJsonAtomicAsync(path, record, cancellationToken);
     }
+
+    private static object CreateMatchReuseSummary(EnrichmentPipelineStats stats) =>
+        new
+        {
+            policy = "exact-text-probation-lru-v1",
+            maximumEntries = MatchResultCacheOptions.Default.MaximumEntries,
+            maximumLogicalBytes = MatchResultCacheOptions.Default.MaximumLogicalBytes,
+            maximumTextCharacters = MatchResultCacheOptions.Default.MaximumTextCharacters,
+            maximumDescriptorsPerEntry = MatchResultCacheOptions.Default.MaximumDescriptorsPerEntry,
+            maximumProbationEntries = MatchResultCacheOptions.Default.MaximumProbationEntries,
+            probationCooldownRecords = MatchResultCacheOptions.Default.ProbationCooldownRecords,
+            cacheHits = stats.MatchCacheHits,
+            cacheMisses = stats.MatchCacheMisses,
+            probationObservations = stats.MatchCacheProbationObservations,
+            probationBypasses = stats.MatchCacheProbationBypasses,
+            preLookupBypasses = stats.MatchCachePreLookupBypasses,
+            postComputationBypasses = stats.MatchCachePostComputationBypasses,
+            stores = stats.MatchCacheStores,
+            evictions = stats.MatchCacheEvictions,
+            reusedPatternEvaluations = stats.ReusedPatternEvaluations,
+            matchRowsServedFromCache = stats.MatchRowsServedFromCache,
+            matchRowsComputed = stats.MatchRowsComputed,
+            currentLogicalBytes = stats.MatchCacheCurrentLogicalBytes,
+            currentEntries = stats.MatchCacheCurrentEntries,
+            peakLogicalBytes = stats.MatchCachePeakLogicalBytes,
+            peakEntries = stats.MatchCachePeakEntries,
+        };
 
     private static object? CreateDecoderSummary(
         AnalysisOptions options,

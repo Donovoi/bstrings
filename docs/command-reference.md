@@ -224,6 +224,18 @@ Select all patterns:
 --lr all
 ```
 
+`all` selects the 77 default patterns. Its `b64` result requires canonical
+Base64 plus validated decoded text or a recognised binary signature.
+
+Add the broad Base64-shaped candidate pattern when required:
+
+```powershell
+--lr "all,b64_candidate"
+```
+
+`b64_candidate` is disjoint from `b64`. It can include short, hexadecimal,
+opaque, and oversized values that only satisfy the canonical Base64 shape.
+
 Select names or groups:
 
 ```powershell

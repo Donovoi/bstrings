@@ -14,6 +14,7 @@ internal enum BuiltInValidationKind
     Email,
     PaymentCard,
     Base64,
+    Base64Candidate,
     BitLocker,
     BitcoinBase58Check,
     BitcoinSegwitAddress,
@@ -59,7 +60,8 @@ internal sealed record BuiltInPatternDefinition(
     string? OutputGroup = null,
     int? BoundedRetryOverlap = null,
     int? GeneratedShortInputLimit = null,
-    BuiltInValidationKind Validation = BuiltInValidationKind.None
+    BuiltInValidationKind Validation = BuiltInValidationKind.None,
+    bool SelectedByAll = true
 );
 
 internal static class BuiltInPatternCatalog
@@ -374,12 +376,22 @@ internal static class BuiltInPatternCatalog
         ),
         new(
             "b64",
-            "Finds canonical base64 candidates of at least eight encoded characters; very short unpadded values are excluded",
-            @"(?<![A-Za-z0-9+/])(?:(?:[A-Za-z0-9+/]{4}){2,}|(?:[A-Za-z0-9+/]{4})+(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=))(?![A-Za-z0-9+/=])",
+            "Finds high-confidence standard Base64 content with canonical encoding and supported decoded text or binary evidence",
+            @"(?<![A-Za-z0-9+/])(?:(?:[A-Za-z0-9+/]{4}){6,}|(?:[A-Za-z0-9+/]{4}){5,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=))(?![A-Za-z0-9+/=])",
             "https://www.rfc-editor.org/rfc/rfc4648#section-4",
             UseNonBacktracking: false,
             RapidsSupersetPattern: @"(?:[A-Za-z0-9+/]{4}){1,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?",
             Validation: BuiltInValidationKind.Base64
+        ),
+        new(
+            "b64_candidate",
+            "Finds broad canonical Base64-shaped candidates that do not qualify as high-confidence b64 evidence; opt-in and not selected by all",
+            @"(?<![A-Za-z0-9+/])(?:(?:[A-Za-z0-9+/]{4}){2,}|(?:[A-Za-z0-9+/]{4})+(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=))(?![A-Za-z0-9+/=])",
+            "https://www.rfc-editor.org/rfc/rfc4648#section-4",
+            UseNonBacktracking: false,
+            RapidsSupersetPattern: @"(?:[A-Za-z0-9+/]{4}){1,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?",
+            Validation: BuiltInValidationKind.Base64Candidate,
+            SelectedByAll: false
         ),
         new(
             "bitlocker",
@@ -823,6 +835,17 @@ internal static class BuiltInPatternCatalog
             )
         );
 
+    internal static IReadOnlyDictionary<string, string> DefaultPatterns { get; } =
+        new ReadOnlyDictionary<string, string>(
+            Definitions
+                .Where(definition => definition.SelectedByAll)
+                .ToDictionary(
+                    definition => definition.Name,
+                    definition => definition.Pattern,
+                    StringComparer.OrdinalIgnoreCase
+                )
+        );
+
     internal static IReadOnlyDictionary<string, IReadOnlyList<string>> Groups { get; } =
         new ReadOnlyDictionary<string, IReadOnlyList<string>>(
             new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
@@ -862,7 +885,8 @@ internal static class BuiltInPatternCatalog
         {
             BuiltInValidationKind.None => "regex-only",
             BuiltInValidationKind.PaymentCard => "luhn",
-            BuiltInValidationKind.Base64 => "canonical-base64",
+            BuiltInValidationKind.Base64 => "base64-content-v1",
+            BuiltInValidationKind.Base64Candidate => "canonical-base64-candidate",
             BuiltInValidationKind.BitLocker => "bitlocker-arithmetic",
             BuiltInValidationKind.Jwt => "jwt-compact-structure",
             BuiltInValidationKind.Iban => "iban-mod97",

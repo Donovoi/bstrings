@@ -158,7 +158,14 @@ public class BuiltInPatternCatalogTests
                 @"HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
                 @"HKLM\SYSTEM\CurrentControlSet\Control\Power"
             ),
-            ["b64"] = new(["token=SGVsbG8="], ["token=abcd", "token=SGVsbG9="]),
+            ["b64"] = new(
+                ["token=VGhpcyBpcyBhIHRlc3QgbWVzc2FnZS4="],
+                ["token=SoftwareDistribution", "token=0123456789ABCDEF0123456789ABCDEF01234567"]
+            ),
+            ["b64_candidate"] = new(
+                ["token=SGVsbG8=", "token=SoftwareDistribution"],
+                ["token=abcd", "token=SGVsbG9=", "token=VGhpcyBpcyBhIHRlc3QgbWVzc2FnZS4="]
+            ),
             ["bitlocker"] = new(
                 ["key=001155-002310-003465-004620-005775-006930-008085-009240"],
                 [
@@ -586,7 +593,7 @@ public class BuiltInPatternCatalogTests
     public void BacktrackingBuiltIns_HaveBoundedOrLinearLargeInputHandling()
     {
         var specializedLinearMatchers = new HashSet<string>(
-            ["b64", "xml"],
+            ["b64", "b64_candidate", "xml"],
             StringComparer.OrdinalIgnoreCase
         );
 
@@ -1002,15 +1009,17 @@ public class BuiltInPatternCatalogTests
         Assert.Equal(expected, actual);
     }
 
-    [Fact]
-    public void LinearBase64Matcher_PreservesRegexResultsAcrossRandomInputs()
+    [Theory]
+    [InlineData("b64")]
+    [InlineData("b64_candidate")]
+    public void LinearBase64Matcher_PreservesRegexResultsAcrossRandomInputs(string patternName)
     {
         const string alphabet =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=!?.: ";
         var random = new Random(0xB64);
         var regex = RegexOutputCore.GetOrCreateRegex(
-            "b64",
-            BuiltInPatternCatalog.Patterns["b64"]
+            patternName,
+            BuiltInPatternCatalog.Patterns[patternName]
         );
 
         for (var sample = 0; sample < 2_000; sample++)
@@ -1022,7 +1031,7 @@ public class BuiltInPatternCatalogTests
                     .Select(_ => alphabet[random.Next(alphabet.Length)])
                     .ToArray()
             );
-            var definition = BuiltInPatternCatalog.ByName["b64"];
+            var definition = BuiltInPatternCatalog.ByName[patternName];
             var expected = regex
                 .Matches(input)
                 .Where(match => BuiltInSemanticValidator.IsValid(definition, match.Value))
@@ -1031,7 +1040,7 @@ public class BuiltInPatternCatalogTests
             var actual = RegexOutputCore
                 .CreateRecords(
                     new ParsedHit(input, input, string.Empty),
-                    "b64",
+                    patternName,
                     regex,
                     regexOutput: true,
                     sourceFile: "sample.bin",
@@ -1049,14 +1058,14 @@ public class BuiltInPatternCatalogTests
     }
 
     [Fact]
-    public void LinearBase64Matcher_HandlesVeryLargeToken()
+    public void LinearBase64Matcher_BoundsHighConfidenceAndPreservesOptInLargeCandidate()
     {
         var input = new string('A', 20 * 1024 * 1024);
         var regex = RegexOutputCore.GetOrCreateRegex(
             "b64",
             BuiltInPatternCatalog.Patterns["b64"]
         );
-        var record = Assert.Single(
+        Assert.Empty(
             RegexOutputCore.CreateRecords(
                 new ParsedHit(input, input, string.Empty),
                 "b64",
@@ -1067,7 +1076,55 @@ public class BuiltInPatternCatalogTests
             )
         );
 
+        var candidateRegex = RegexOutputCore.GetOrCreateRegex(
+            "b64_candidate",
+            BuiltInPatternCatalog.Patterns["b64_candidate"]
+        );
+        var record = Assert.Single(
+            RegexOutputCore.CreateRecords(
+                new ParsedHit(input, input, string.Empty),
+                "b64_candidate",
+                candidateRegex,
+                regexOutput: true,
+                sourceFile: "sample.bin",
+                patternType: "Regex"
+            )
+        );
         Assert.Equal(input.Length, record.DataFound.Length);
+    }
+
+    [Fact]
+    public void StrictAndCandidateBase64UnionPreservesCanonicalLegacySpans()
+    {
+        const string input =
+            "SoftwareDistribution SGVsbG8= VGhpcyBpcyBhIHRlc3QgbWVzc2FnZS4= "
+            + "0123456789ABCDEF0123456789ABCDEF AAAAAAAAAAAAAAAAAAAAAAAA";
+        var candidateDefinition = BuiltInPatternCatalog.ByName["b64_candidate"];
+        var broadRegex = RegexOutputCore.GetOrCreateRegex(
+            "b64_candidate",
+            candidateDefinition.Pattern
+        );
+        var expected = broadRegex
+            .Matches(input)
+            .Where(match => Base64ContentCore.TryGetExactDecodedLength(match.Value, out _))
+            .Select(match => (match.Index, match.Length))
+            .ToHashSet();
+
+        var actual = new[] { "b64", "b64_candidate" }
+            .SelectMany(name =>
+                RegexOutputCore.CreateRecords(
+                    new ParsedHit(input, input, string.Empty),
+                    name,
+                    RegexOutputCore.GetOrCreateRegex(name, BuiltInPatternCatalog.Patterns[name]),
+                    regexOutput: true,
+                    sourceFile: "sample.bin",
+                    patternType: "Regex"
+                )
+            )
+            .Select(record => (record.DataStart, record.DataLength))
+            .ToHashSet();
+
+        Assert.Equal(expected.OrderBy(value => value.Index), actual.OrderBy(value => value.DataStart));
     }
 
     [Fact]

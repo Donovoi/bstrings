@@ -272,23 +272,14 @@ internal static class SearchCore
     internal static List<(string name, string pattern)> ParseRegexPatternsWithNames(
         string input,
         IReadOnlyDictionary<string, string> builtInPatterns,
-        IReadOnlyDictionary<string, IReadOnlyList<string>> builtInGroups = null
+        IReadOnlyDictionary<string, IReadOnlyList<string>> builtInGroups = null,
+        IReadOnlyDictionary<string, string> defaultPatterns = null
     )
     {
         var patterns = new List<(string name, string pattern)>();
 
         if (string.IsNullOrWhiteSpace(input))
         {
-            return patterns;
-        }
-
-        if (input.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
-        {
-            foreach (var kvp in builtInPatterns)
-            {
-                patterns.Add((kvp.Key, kvp.Value));
-            }
-
             return patterns;
         }
 
@@ -301,6 +292,18 @@ internal static class SearchCore
             var trimmedName = patternName.Trim();
             if (trimmedName.Length == 0)
             {
+                continue;
+            }
+
+            if (trimmedName.Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var pair in defaultPatterns ?? builtInPatterns)
+                {
+                    if (addedBuiltIns.Add(pair.Key))
+                    {
+                        patterns.Add((pair.Key, pair.Value));
+                    }
+                }
                 continue;
             }
 
@@ -397,10 +400,16 @@ internal static class SearchCore
     internal static List<string> ParseRegexPatterns(
         string input,
         IReadOnlyDictionary<string, string> builtInPatterns,
-        IReadOnlyDictionary<string, IReadOnlyList<string>> builtInGroups = null
+        IReadOnlyDictionary<string, IReadOnlyList<string>> builtInGroups = null,
+        IReadOnlyDictionary<string, string> defaultPatterns = null
     )
     {
-        return ParseRegexPatternsWithNames(input, builtInPatterns, builtInGroups)
+        return ParseRegexPatternsWithNames(
+                input,
+                builtInPatterns,
+                builtInGroups,
+                defaultPatterns
+            )
             .Select(pattern => pattern.pattern)
             .ToList();
     }

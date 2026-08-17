@@ -45,7 +45,10 @@ internal static class BuiltInSemanticValidator
             BuiltInValidationKind.None => true,
             BuiltInValidationKind.Email => IsValidEmail(candidate),
             BuiltInValidationKind.PaymentCard => HasValidLuhnChecksum(candidate),
-            BuiltInValidationKind.Base64 => HasCanonicalBase64Padding(candidate),
+            BuiltInValidationKind.Base64 => Base64ContentCore.IsHighConfidence(candidate),
+            BuiltInValidationKind.Base64Candidate =>
+                Base64ContentCore.TryGetExactDecodedLength(candidate, out _)
+                && !Base64ContentCore.IsHighConfidence(candidate),
             BuiltInValidationKind.BitLocker => IsValidBitLockerRecoveryPassword(candidate),
             BuiltInValidationKind.BitcoinBase58Check => IsValidBase58Check(
                 candidate,
@@ -695,50 +698,6 @@ internal static class BuiltInSemanticValidator
         }
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         return date.Year >= 1900 && date <= today;
-    }
-
-    private static bool HasCanonicalBase64Padding(ReadOnlySpan<char> candidate)
-    {
-        if (candidate.Length < 8 || candidate.Length % 4 != 0)
-        {
-            return false;
-        }
-
-        if (candidate[^1] != '=')
-        {
-            return true;
-        }
-
-        if (candidate[^2] == '=')
-        {
-            var value = GetBase64Value(candidate[^3]);
-            return value >= 0 && (value & 0x0F) == 0;
-        }
-
-        var finalValue = GetBase64Value(candidate[^2]);
-        return finalValue >= 0 && (finalValue & 0x03) == 0;
-    }
-
-    private static int GetBase64Value(char value)
-    {
-        if (value is >= 'A' and <= 'Z')
-        {
-            return value - 'A';
-        }
-        if (value is >= 'a' and <= 'z')
-        {
-            return value - 'a' + 26;
-        }
-        if (value is >= '0' and <= '9')
-        {
-            return value - '0' + 52;
-        }
-        return value switch
-        {
-            '+' => 62,
-            '/' => 63,
-            _ => -1,
-        };
     }
 
     private static bool IsValidBitLockerRecoveryPassword(ReadOnlySpan<char> candidate)

@@ -546,7 +546,7 @@ public static partial class Program
         var lrOpt = new Option<string>("--lr")
         {
             Description =
-                "Only return regex matches. Accepts built-in names, groups (pii, credentials, browser, registry, wallets), a custom regex, or 'all'",
+                "Only return regex matches. Accepts built-in names, groups (pii, credentials, browser, registry, wallets), a custom regex, or 'all' default patterns. Add b64_candidate for broad Base64-shaped values",
         };
         var fsOpt = new Option<string>("--fs")
         {
@@ -3934,7 +3934,8 @@ public static partial class Program
         return SearchCore.ParseRegexPatternsWithNames(
             lr,
             RegExPatterns.Count == 0 ? BuiltInPatternCatalog.Patterns : RegExPatterns,
-            BuiltInPatternCatalog.Groups
+            BuiltInPatternCatalog.Groups,
+            BuiltInPatternCatalog.DefaultPatterns
         );
     }
 
@@ -3943,7 +3944,8 @@ public static partial class Program
         return SearchCore.ParseRegexPatterns(
             lr,
             RegExPatterns.Count == 0 ? BuiltInPatternCatalog.Patterns : RegExPatterns,
-            BuiltInPatternCatalog.Groups
+            BuiltInPatternCatalog.Groups,
+            BuiltInPatternCatalog.DefaultPatterns
         );
     }
 

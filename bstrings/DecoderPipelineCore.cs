@@ -111,9 +111,6 @@ internal static class DecoderPipelineCore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
-    private static readonly UnicodeEncoding StrictUtf16Le = new(false, false, true);
-    private static readonly UnicodeEncoding StrictUtf16Be = new(true, false, true);
     internal static readonly string EngineVersion =
         Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
@@ -222,7 +219,7 @@ internal static class DecoderPipelineCore
                     }
                     else
                     {
-                        var hasExactDecodedLength = TryGetExactDecodedLength(candidate.Value, out var expectedDecodedLength);
+                        var hasExactDecodedLength = Base64ContentCore.TryGetExactDecodedLength(candidate.Value, out var expectedDecodedLength);
                         var bufferLength = hasExactDecodedLength
                             ? expectedDecodedLength
                             : GetMaximumDecodedLength(candidate.Length);
@@ -258,7 +255,7 @@ internal static class DecoderPipelineCore
                             try
                             {
                                 if (
-                                    !TryDecodeCanonical(
+                                    !Base64ContentCore.TryDecodeCanonical(
                                         candidate.Value,
                                         buffer,
                                         out var decodedLength
@@ -281,7 +278,7 @@ internal static class DecoderPipelineCore
                                     var decodedSha256 = Convert
                                         .ToHexString(SHA256.HashData(decoded))
                                         .ToLowerInvariant();
-                                    var binaryClass = ClassifyKnownBinary(decoded);
+                                    var binaryClass = Base64ContentCore.ClassifyKnownBinary(decoded);
                                     if (binaryClass is not null)
                                     {
                                         assessment = CreateAssessment(
@@ -297,13 +294,13 @@ internal static class DecoderPipelineCore
                                         decodedBinaryKnown++;
                                     }
                                     else if (
-                                        TryDecodeText(
+                                        Base64ContentCore.TryDecodeText(
                                             decoded,
                                             candidate.Profile == PowerShellProfile,
                                             out var text,
                                             out var charset
                                         )
-                                        && IsPublishableText(text)
+                                        && Base64ContentCore.IsPublishableText(text)
                                     )
                                     {
                                         assessment = CreateAssessment(
@@ -327,7 +324,7 @@ internal static class DecoderPipelineCore
                                         );
                                         publishedTextChildren++;
                                     }
-                                    else if (LooksLikeText(decoded))
+                                    else if (Base64ContentCore.LooksLikeText(decoded))
                                     {
                                         assessment = CreateAssessment(
                                             item.Record,
@@ -475,7 +472,7 @@ internal static class DecoderPipelineCore
             trailingWhitespace.ToString(CultureInfo.InvariantCulture),
             text
         );
-        return $"sha256:{Convert.ToHexString(SHA256.HashData(StrictUtf8.GetBytes(material))).ToLowerInvariant()}";
+        return $"sha256:{Convert.ToHexString(SHA256.HashData(Base64ContentCore.StrictUtf8.GetBytes(material))).ToLowerInvariant()}";
     }
 
     internal static void ValidateOptions(DecoderPipelineOptions options)
@@ -531,7 +528,7 @@ internal static class DecoderPipelineCore
             RequireAssessmentDecision(assessment, "resource-limited", "candidate-too-large", null, null, null, null, assessmentLineNumber);
             return 0;
         }
-        var hasExactDecodedLength = TryGetExactDecodedLength(candidate.Value, out var expectedDecodedLength);
+        var hasExactDecodedLength = Base64ContentCore.TryGetExactDecodedLength(candidate.Value, out var expectedDecodedLength);
         var bufferLength = hasExactDecodedLength
             ? expectedDecodedLength
             : GetMaximumDecodedLength(candidate.Length);
@@ -552,26 +549,31 @@ internal static class DecoderPipelineCore
         var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(1, bufferLength));
         try
         {
-            if (!TryDecodeCanonical(candidate.Value, buffer, out var decodedLength))
+            if (!Base64ContentCore.TryDecodeCanonical(candidate.Value, buffer, out var decodedLength))
             {
                 RequireAssessmentDecision(assessment, "canonical-rejected", "noncanonical-base64", null, null, null, null, assessmentLineNumber);
                 return 0;
             }
             var decoded = buffer.AsSpan(0, decodedLength);
             var sha256 = Convert.ToHexString(SHA256.HashData(decoded)).ToLowerInvariant();
-            var binaryClass = ClassifyKnownBinary(decoded);
+            var binaryClass = Base64ContentCore.ClassifyKnownBinary(decoded);
             if (binaryClass is not null)
             {
                 RequireAssessmentDecision(assessment, "decoded-binary-known", "recognized-binary-signature", decodedLength, sha256, null, binaryClass, assessmentLineNumber);
             }
             else if (
-                TryDecodeText(decoded, candidate.Profile == PowerShellProfile, out var text, out var charset)
-                && IsPublishableText(text)
+                Base64ContentCore.TryDecodeText(
+                    decoded,
+                    candidate.Profile == PowerShellProfile,
+                    out var text,
+                    out var charset
+                )
+                && Base64ContentCore.IsPublishableText(text)
             )
             {
                 RequireAssessmentDecision(assessment, "published-text", "decoded-text", decodedLength, sha256, charset, null, assessmentLineNumber);
             }
-            else if (LooksLikeText(decoded))
+            else if (Base64ContentCore.LooksLikeText(decoded))
             {
                 RequireAssessmentDecision(assessment, "text-rejected", "unsupported-or-disallowed-text", decodedLength, sha256, null, null, assessmentLineNumber);
             }
@@ -907,205 +909,8 @@ internal static class DecoderPipelineCore
         return tokens.Count > 0;
     }
 
-    private static bool TryDecodeCanonical(
-        string candidate,
-        byte[] destination,
-        out int decodedLength
-    )
-    {
-        decodedLength = 0;
-        if (candidate.Length % 4 != 0)
-        {
-            return false;
-        }
-        var padding = candidate.EndsWith("==", StringComparison.Ordinal)
-            ? 2
-            : candidate.EndsWith('=') ? 1 : 0;
-        if (candidate.AsSpan(0, candidate.Length - padding).Contains('='))
-        {
-            return false;
-        }
-        if (!Convert.TryFromBase64String(candidate, destination, out decodedLength))
-        {
-            return false;
-        }
-        return string.Equals(
-            Convert.ToBase64String(destination, 0, decodedLength),
-            candidate,
-            StringComparison.Ordinal
-        );
-    }
-
-    private static bool TryDecodeText(
-        ReadOnlySpan<byte> bytes,
-        bool powerShell,
-        out string text,
-        out string charset
-    )
-    {
-        try
-        {
-            if (powerShell)
-            {
-                if (bytes.Length == 0 || bytes.Length % 2 != 0)
-                {
-                    text = string.Empty;
-                    charset = string.Empty;
-                    return false;
-                }
-                text = StrictUtf16Le.GetString(bytes);
-                charset = "utf-16le-powershell";
-                return bytes.SequenceEqual(StrictUtf16Le.GetBytes(text));
-            }
-            if (StartsWith(bytes, 0xEF, 0xBB, 0xBF))
-            {
-                text = StrictUtf8.GetString(bytes[3..]);
-                charset = "utf-8-bom";
-                return bytes.SequenceEqual(Combine([0xEF, 0xBB, 0xBF], StrictUtf8.GetBytes(text)));
-            }
-            if (StartsWith(bytes, 0xFF, 0xFE))
-            {
-                text = StrictUtf16Le.GetString(bytes[2..]);
-                charset = "utf-16le-bom";
-                return bytes.SequenceEqual(Combine([0xFF, 0xFE], StrictUtf16Le.GetBytes(text)));
-            }
-            if (StartsWith(bytes, 0xFE, 0xFF))
-            {
-                text = StrictUtf16Be.GetString(bytes[2..]);
-                charset = "utf-16be-bom";
-                return bytes.SequenceEqual(Combine([0xFE, 0xFF], StrictUtf16Be.GetBytes(text)));
-            }
-            text = StrictUtf8.GetString(bytes);
-            charset = "utf-8";
-            return bytes.SequenceEqual(StrictUtf8.GetBytes(text));
-        }
-        catch (DecoderFallbackException)
-        {
-            text = string.Empty;
-            charset = string.Empty;
-            return false;
-        }
-    }
-
-    private static bool IsPublishableText(string text)
-    {
-        var visible = 0;
-        foreach (var rune in text.EnumerateRunes())
-        {
-            if (rune.Value == 0)
-            {
-                return false;
-            }
-            var category = Rune.GetUnicodeCategory(rune);
-            if (category == UnicodeCategory.Control)
-            {
-                if (rune.Value is not ('\t' or '\n' or '\r'))
-                {
-                    return false;
-                }
-                continue;
-            }
-            if (
-                category
-                is not UnicodeCategory.Format
-                    and not UnicodeCategory.Surrogate
-                    and not UnicodeCategory.PrivateUse
-                    and not UnicodeCategory.LineSeparator
-                    and not UnicodeCategory.ParagraphSeparator
-                && !Rune.IsWhiteSpace(rune)
-            )
-            {
-                visible++;
-            }
-        }
-        return visible >= 4;
-    }
-
-    private static bool LooksLikeText(ReadOnlySpan<byte> bytes)
-    {
-        if (bytes.Length == 0)
-        {
-            return false;
-        }
-        var textBytes = 0;
-        foreach (var value in bytes)
-        {
-            if (value is 0x09 or 0x0A or 0x0D || value is >= 0x20 and <= 0x7E || value >= 0x80)
-            {
-                textBytes++;
-            }
-        }
-        return textBytes * 4 >= bytes.Length * 3;
-    }
-
-    private static string? ClassifyKnownBinary(ReadOnlySpan<byte> bytes)
-    {
-        if (IsPortableExecutable(bytes)) return "pe";
-        if (StartsWith(bytes, 0x7F, 0x45, 0x4C, 0x46)) return "elf";
-        if (StartsWith(bytes, 0x25, 0x50, 0x44, 0x46, 0x2D)) return "pdf";
-        if (StartsWith(bytes, 0x50, 0x4B, 0x03, 0x04)) return "zip";
-        if (StartsWith(bytes, 0x1F, 0x8B, 0x08) && bytes.Length >= 10 && (bytes[3] & 0xE0) == 0) return "gzip";
-        if (StartsWith(bytes, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)) return "png";
-        if (StartsWith(bytes, 0xFF, 0xD8, 0xFF)) return "jpeg";
-        if (StartsWith(bytes, 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C)) return "7z";
-        if (StartsWith(bytes, 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07)) return "rar";
-        return null;
-    }
-
-    private static bool IsPortableExecutable(ReadOnlySpan<byte> bytes)
-    {
-        if (!StartsWith(bytes, 0x4D, 0x5A) || bytes.Length < 0x40)
-        {
-            return false;
-        }
-        var peOffset = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(bytes[0x3C..0x40]);
-        return peOffset >= 0x40
-            && peOffset <= bytes.Length - 4
-            && StartsWith(bytes[peOffset..], 0x50, 0x45, 0x00, 0x00);
-    }
-
-    private static bool StartsWith(ReadOnlySpan<byte> value, params byte[] prefix) =>
-        value.StartsWith(prefix.AsSpan());
-
     private static int GetMaximumDecodedLength(int encodedLength) =>
         checked((encodedLength / 4) * 3);
-
-    private static bool TryGetExactDecodedLength(string candidate, out int decodedLength)
-    {
-        decodedLength = 0;
-        if (candidate.Length == 0 || candidate.Length % 4 != 0)
-        {
-            return false;
-        }
-        var padding = candidate.EndsWith("==", StringComparison.Ordinal)
-            ? 2
-            : candidate.EndsWith('=') ? 1 : 0;
-        if (candidate.AsSpan(0, candidate.Length - padding).Contains('='))
-        {
-            return false;
-        }
-        if (
-            padding == 2
-            && (GetBase64Value(candidate[^3]) & 0x0F) != 0
-            || padding == 1
-            && (GetBase64Value(candidate[^2]) & 0x03) != 0
-        )
-        {
-            return false;
-        }
-        decodedLength = checked((candidate.Length / 4) * 3 - padding);
-        return true;
-    }
-
-    private static int GetBase64Value(char value) => value switch
-    {
-        >= 'A' and <= 'Z' => value - 'A',
-        >= 'a' and <= 'z' => value - 'a' + 26,
-        >= '0' and <= '9' => value - '0' + 52,
-        '+' => 62,
-        '/' => 63,
-        _ => -1,
-    };
 
     private static bool IsAllowedPowerShellPreambleSwitch(string value) =>
         value.Equals("-NoProfile", StringComparison.OrdinalIgnoreCase)
@@ -1129,14 +934,6 @@ internal static class DecoderPipelineCore
 
     private static bool IsOuterAsciiWhitespace(char value) =>
         value is ' ' or '\t' or '\r' or '\n' or '\v' or '\f';
-
-    private static byte[] Combine(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> content)
-    {
-        var result = new byte[prefix.Length + content.Length];
-        prefix.CopyTo(result);
-        content.CopyTo(result.AsSpan(prefix.Length));
-        return result;
-    }
 
     private static StreamWriter CreateWriter(string path) =>
         new(
