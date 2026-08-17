@@ -107,8 +107,8 @@ internal static class Program
         while (stream.Position < fileSize)
         {
             var record =
-                $"record-{recordCount:D10} contact=user{recordCount:D10}@example.test "
-                + $"url=https://example.test/item/{recordCount:X10}";
+                $"record-{recordCount:D10} contact=user{recordCount:D10}@example.com "
+                + $"url=https://example.com/item/{recordCount:X10}";
             if (denseRecordLength > record.Length)
             {
                 record += " " + new string('x', denseRecordLength - record.Length - 1);

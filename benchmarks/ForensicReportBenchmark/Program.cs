@@ -140,7 +140,7 @@ static async Task WriteFixtureAsync(
     var emailPattern = BuiltInPatternCatalog.ByName["email"];
     for (var index = 0; index < recordCount; index++)
     {
-        var feature = $"user-{index % distinctFeatures:D8}@example.test";
+        var feature = $"user-{index % distinctFeatures:D8}@example.com";
         var record = new
         {
             SchemaVersion = EnrichmentRegexPipelineCore.CurrentSchemaVersion,
@@ -149,7 +149,7 @@ static async Task WriteFixtureAsync(
             Pattern = BuiltInPatternCatalog.Patterns["email"],
             PatternDescription = emailPattern.Description,
             PatternSource = emailPattern.Source,
-            PatternValidation = "Email",
+            PatternValidation = BuiltInPatternCatalog.GetValidationLabel(emailPattern),
             Match = feature,
             MatchStart = 16,
             MatchLength = feature.Length,
