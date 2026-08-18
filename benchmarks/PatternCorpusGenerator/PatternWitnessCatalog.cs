@@ -28,10 +28,12 @@ internal static class PatternWitnessCatalog
                 @"\\.\pipe\svc-control"
             ),
             ["mac"] = new("00:11:22:aa:BB:cc", "00:11-22:33:44:55", "00:11:22:aa:BB:cc"),
+            ["mac_candidate"] = new("001122AABBCC", "00:11:22:aa:BB:cc", "001122AABBCC"),
             ["ssn"] = new("123-45-6789", "666-45-6789", "123-45-6789"),
             ["cc"] = new("4111 1111 1111 1111", "4111 1111 1111 1112", "4111 1111 1111 1111"),
             ["ipv4"] = new("198.51.100.250", "1.2.3.4.5", "198.51.100.250"),
             ["ipv6"] = new("::ffff:192.0.2.128", "2001:::1", "::ffff:192.0.2.128"),
+            ["ipv6_candidate"] = new("::", "::1", "::"),
             ["email"] = new(
                 "string@g.com",
                 new string('a', 65) + "@g.com",
@@ -70,6 +72,7 @@ internal static class PatternWitnessCatalog
                 @"HKEY_LOCAL_MACHINE\NOT_A_HIVE\Microsoft",
                 @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows"
             ),
+            ["reg_path_candidate"] = new("SOFTWARE", @"SOFTWARE\Microsoft", "SOFTWARE"),
             ["intlPhone"] = new(
                 "+61 412 345 678",
                 "+01 234 567 890",

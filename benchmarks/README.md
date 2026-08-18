@@ -406,15 +406,17 @@ witnesses, SHA-256, and every expected value/offset pair. Positive records are
 placed inside segments, across each segment boundary, and next to EOF. Negative
 witnesses are present but must never appear in tool output.
 
-Generator version 6 covers the current 77-pattern catalog, including every
+Generator version 7 covers the current 82-pattern catalog, including every
 member of the `wallets`, `pii`, `credentials`, `browser`, and `registry`
 groups. Older checked-in comparison reports remain explicitly labeled as
 33- or 51-pattern snapshots so their totals are not mistaken for current
 catalog coverage.
 
 The accepted generator-v6 exactness and seven-pair base/candidate measurements
-are recorded in
+remain an immutable 77-pattern historical result recorded in
 [`forensic-pattern-catalog-v6-2026-08.csv`](results/forensic-pattern-catalog-v6-2026-08.csv).
+The current lower-noise preset and the three new candidate partitions are
+measured separately by `CatalogPrecisionBenchmark`.
 
 ```powershell
 dotnet run --project .\benchmarks\PatternCorpusGenerator -c Release -- `

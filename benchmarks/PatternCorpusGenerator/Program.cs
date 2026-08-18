@@ -5,7 +5,7 @@ using System.Text.Json;
 using bstrings;
 using bstrings.Benchmarks;
 
-const int generatorVersion = 6;
+const int generatorVersion = 7;
 const int defaultSegmentMiB = 16;
 const ulong defaultSeed = 0x5041545445524E53;
 

@@ -218,14 +218,28 @@ List built-in patterns:
 .\bstrings-kit\bstrings.exe -p
 ```
 
-Select all patterns:
+Select the lower-noise default preset:
 
 ```powershell
 --lr all
 ```
 
-`all` selects the 77 default patterns. Its `b64` result requires canonical
-Base64 plus validated decoded text or a recognised binary signature.
+`all` selects 74 lower-noise defaults from the 82-pattern catalog. The
+`candidates` group contains the eight wider patterns that are not selected by
+`all`. This selects the complete catalog:
+
+```powershell
+--lr "all,candidates"
+```
+
+The candidate group contains `b64_candidate`, `email_candidate`,
+`mac_candidate`, `ipv6_candidate`, `reg_path_candidate`, `zip`, `solana`, and
+`move_address`. The exact `pii`, `registry`, and `wallets` groups still include
+their broad domain patterns. The `registry` group includes
+`reg_path_candidate` for a standalone bare registry-root word.
+
+The default `b64` result requires canonical Base64 plus validated decoded text
+or a recognised binary signature.
 
 Add the broad Base64-shaped candidate pattern when required:
 

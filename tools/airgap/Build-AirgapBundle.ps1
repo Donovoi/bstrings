@@ -974,6 +974,7 @@ $bundleArchitectureDocumentNames = @(
       'adr-0014-compact-investigator-findings.md',
       'adr-0015-high-confidence-base64-and-bounded-match-reuse.md',
       'adr-0016-high-confidence-email-candidates.md',
+      'adr-0017-high-confidence-pattern-preset.md',
       'decision-review-policy.md'
 )
 $bundleBenchmarkResultNames = @(
@@ -982,7 +983,8 @@ $bundleBenchmarkResultNames = @(
     'forensic-report-compact-schema-2026-08.csv',
     'forensic-report-projection-2026-08.csv',
     'language-triage-routing-shadow-2026-08.csv',
-    'language-triage-reuse-2026-08.csv'
+    'language-triage-reuse-2026-08.csv',
+    'catalog-precision-acceptance-2026-08.csv'
 )
 $bundleReleaseDocumentNames = @(
     'v1.9.17.md',

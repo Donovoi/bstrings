@@ -828,9 +828,9 @@ public class SearchCoreTests
     [Fact]
     public void BuiltInPatternCatalog_ContainsExpectedInventory()
     {
-        Assert.Equal(79, BuiltInPatternCatalog.Descriptions.Count);
-        Assert.Equal(79, BuiltInPatternCatalog.Patterns.Count);
-        Assert.Equal(77, BuiltInPatternCatalog.DefaultPatterns.Count);
+        Assert.Equal(82, BuiltInPatternCatalog.Descriptions.Count);
+        Assert.Equal(82, BuiltInPatternCatalog.Patterns.Count);
+        Assert.Equal(74, BuiltInPatternCatalog.DefaultPatterns.Count);
         Assert.Equal(
             BuiltInPatternCatalog.Descriptions.Keys.OrderBy(key => key),
             BuiltInPatternCatalog.Patterns.Keys.OrderBy(key => key)
@@ -847,7 +847,7 @@ public class SearchCoreTests
             BuiltInPatternCatalog.DefaultPatterns
         );
         var withCandidates = SearchCore.ParseRegexPatternsWithNames(
-            "all,b64_candidate,email_candidate",
+            "all,candidates",
             BuiltInPatternCatalog.Patterns,
             BuiltInPatternCatalog.Groups,
             BuiltInPatternCatalog.DefaultPatterns
@@ -855,11 +855,18 @@ public class SearchCoreTests
 
         Assert.DoesNotContain(defaults, pattern => pattern.name == "b64_candidate");
         Assert.DoesNotContain(defaults, pattern => pattern.name == "email_candidate");
+        Assert.DoesNotContain(defaults, pattern => pattern.name == "mac_candidate");
+        Assert.DoesNotContain(defaults, pattern => pattern.name == "ipv6_candidate");
+        Assert.DoesNotContain(defaults, pattern => pattern.name == "reg_path_candidate");
+        Assert.DoesNotContain(defaults, pattern => pattern.name == "zip");
+        Assert.DoesNotContain(defaults, pattern => pattern.name == "solana");
+        Assert.DoesNotContain(defaults, pattern => pattern.name == "move_address");
         Assert.Contains(defaults, pattern => pattern.name == "b64");
         Assert.Contains(defaults, pattern => pattern.name == "email");
         Assert.Equal(BuiltInPatternCatalog.DefaultPatterns.Count, defaults.Count);
         Assert.Equal(BuiltInPatternCatalog.Patterns.Count, withCandidates.Count);
-        Assert.Equal("email_candidate", withCandidates[^1].name);
+        Assert.Equal(8, BuiltInPatternCatalog.Groups["candidates"].Count);
+        Assert.Equal(withCandidates.Count, withCandidates.Select(pattern => pattern.name).Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
 
     [Fact]

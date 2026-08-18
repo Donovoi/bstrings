@@ -772,9 +772,11 @@ internal static class ForensicReportCore
         }
         return name switch
         {
-            "ipv4" or "ipv6" or "mac" or "url3986" or "unc" or "named_pipe" or "onion_v3" => "network",
+            "email_candidate" => "pii",
+            "reg_path_candidate" => "registry",
+            "ipv4" or "ipv6" or "ipv6_candidate" or "mac" or "mac_candidate" or "url3986" or "unc" or "named_pipe" or "onion_v3" => "network",
             "win_path" => "filesystem",
-            "b64" => "encoded-data",
+            "b64" or "b64_candidate" => "encoded-data",
             "browser_profile_path" => "browser-artifact",
             "cve" or "cpe23" => "security-identifier",
             "sha256" or "md5_labelled" or "sha1_labelled" or "sha384_labelled" or "sha512_labelled" => "hash",

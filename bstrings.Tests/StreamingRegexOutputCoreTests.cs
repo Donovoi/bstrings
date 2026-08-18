@@ -29,6 +29,36 @@ public class StreamingRegexOutputCoreTests
                 "value VGhpcyBpcyBhIHRlc3QgbWVzc2FnZS4="
             },
             {
+                "mac",
+                BuiltInPatternCatalog.Patterns["mac"],
+                "strict 00:11:22:AA:BB:CC broad 001122AABBCC"
+            },
+            {
+                "mac_candidate",
+                BuiltInPatternCatalog.Patterns["mac_candidate"],
+                "strict 00:11:22:AA:BB:CC broad 001122AABBCC"
+            },
+            {
+                "ipv6",
+                BuiltInPatternCatalog.Patterns["ipv6"],
+                "strict 2001:db8::1 broad ::"
+            },
+            {
+                "ipv6_candidate",
+                BuiltInPatternCatalog.Patterns["ipv6_candidate"],
+                "strict 2001:db8::1 broad ::"
+            },
+            {
+                "reg_path",
+                BuiltInPatternCatalog.Patterns["reg_path"],
+                @"strict HKLM\SOFTWARE\Synthetic broad SOFTWARE"
+            },
+            {
+                "reg_path_candidate",
+                BuiltInPatternCatalog.Patterns["reg_path_candidate"],
+                @"strict HKLM\SOFTWARE\Synthetic broad SOFTWARE"
+            },
+            {
                 "cc",
                 BuiltInPatternCatalog.Patterns["cc"],
                 "valid 4111111111111111 invalid 4111111111111112"

@@ -11,7 +11,8 @@ payment data, and personal information.
 - Finds text with native extraction, FLOSS, and OCR.
 - Decodes strict Base64 text when you select this function.
 - Detects languages and translates text on your computer.
-- Finds and validates 77 default forensic pattern types.
+- Finds 74 forensic pattern types by default.
+- Applies syntax, checksum, and content checks where available.
 - Records the source and location of each result.
 - Creates JSONL evidence, TSV reports, histograms, and an HTML report.
 - Works offline after you install the kit.
@@ -243,7 +244,8 @@ You cannot disable all three source engines.
 
 ## Find patterns
 
-The default analysis uses all built-in patterns. Use `-p` to list them:
+The default analysis uses the lower-noise 74-pattern preset. Use `-p` to
+list all 82 patterns and their groups:
 
 ```powershell
 .\bstrings-kit\bstrings.exe -p
@@ -257,6 +259,18 @@ Use `--lr` to select names or groups:
   -o D:\results\focused `
   --lr "pii,credentials,browser,registry,wallets"
 ```
+
+The `candidates` group contains the eight wider patterns that are not in
+`all`. This selects the complete catalog:
+
+```powershell
+--lr "all,candidates"
+```
+
+The wider group includes broad Base64 and email forms, MAC-like values without
+separators, bare registry-root words, bare `::`, ZIP-like values, and two
+wallet-shaped values without checksums. The exact `pii`, `registry`, and
+`wallets` groups still include their broad domain patterns.
 
 The default `b64` pattern reports canonical Base64 with validated decoded text
 or a recognised binary signature. The broad shape-only pattern is opt-in:
