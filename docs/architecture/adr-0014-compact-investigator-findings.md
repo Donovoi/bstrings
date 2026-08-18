@@ -1,12 +1,12 @@
 # ADR-0014: Use a compact investigator findings table
 
-- **Status:** Accepted for the next major release
+- **Status:** Accepted for v3.0.0
 - **Date:** 2026-08-16
 - **Scope:** `findings.tsv`, report documentation, packaged acceptance, and report benchmarks
 - **Decision type:** public report schema and investigator workflow
 - **Review method:** three independent reviews and rotated critiques under the [high-level decision policy](decision-review-policy.md)
 - **Perspectives:** primary-source research; repository and runtime audit; adversarial detractor review of compatibility, provenance, and usability
-- **Implementation state:** implemented and measured in current source; full acceptance in progress; v2.1.2 remains immutable
+- **Implementation state:** implemented and measured; v3.0.0 release validation is in progress; v2.1.2 remains immutable
 
 ## Context
 

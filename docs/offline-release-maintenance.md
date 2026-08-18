@@ -233,7 +233,7 @@ lane explicitly:
 ```powershell
 gh workflow run dotnet-desktop.yml `
   --repo Donovoi/bstrings `
-  --ref v2.1.2 `
+  --ref v3.0.0 `
   -f full_offline=true
 ```
 

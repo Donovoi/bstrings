@@ -7,7 +7,7 @@
 - **Decision type:** forensic coverage and default pattern policy
 - **Review method:** three independent first-round evidence tracks and rotated critiques under the [high-level decision policy](decision-review-policy.md)
 - **Perspectives:** primary-source and external-practice research; repository and runtime audit; adversarial detractor and benchmark design
-- **Implementation state:** implemented and validated; published releases remain unchanged
+- **Implementation state:** implemented and validated for v3.0.0; published v2 releases remain unchanged
 
 ## Context
 
@@ -320,10 +320,10 @@ investigation.
 
 ## Release boundary
 
-The published v2.1.2 release is immutable. This source change is not a v2.1.2
-release. The first public release of this decision must use a later version,
-tag, and asset set. That release must also decide how to retain, port, or retire
-the exact v2.1.1-to-v2.1.2 translation-off resume transition.
+The published v2.1.2 release is immutable. This decision first ships in
+v3.0.0 with a new tag and asset set. Release review retained the exact v2.1.1
+source boundary for translation-off resume and ported only its verified target
+to v3.0.0. ADR-0013 records that bounded compatibility decision.
 
 ## Rollback
 

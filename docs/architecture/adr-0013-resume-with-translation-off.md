@@ -6,7 +6,7 @@
 - **Decision type:** forensic completion, failure recovery, engine policy, command-line behavior, and evidence lineage
 - **Review method:** Robin round under the [high-level decision policy](decision-review-policy.md)
 - **Perspectives:** primary-source workflow research; repository and stopped-run runtime audit; adversarial detractor review of provenance, crash, compatibility, and rollback
-- **Implementation state:** implemented for v2.1.2; code, fault, parity, normal-resume performance, and release gates accepted
+- **Implementation state:** implemented for v2.1.2; the exact target port to v3.0.0 is in release validation
 - **Extends:** [ADR-0012](adr-0012-explicit-whole-stage-resume.md). Normal resume keeps exact saved-plan checks.
 
 ## Context
@@ -180,6 +180,24 @@ claiming that the later importer produced the original bytes.
 The reviewers disagree on whether the complete source kit must remain
 available. The experiment follows the stricter rule: keep and verify the source
 kit during transition. Removing that requirement needs a later decision.
+
+### Version 3 target port
+
+Release preparation on 2026-08-18 reviewed whether version 3 should retain,
+port, or remove this narrow transition. The external review required an unused
+major version for the new findings schema. It also required the v2.1.2 release
+and its command to remain unchanged. The runtime review confirmed that the
+source version and source kit already validate inherited stages separately
+from the target executable and kit. It found that changing only the exact
+target version keeps the stage and provenance rules unchanged. The adversarial
+review rejected accepting arbitrary source versions or an existing v2.1.2
+derived generation.
+
+The rotated critiques agreed on one bounded port. Version 3.0.0 accepts the
+same exact v2.1.1 schema-1 Auto source at stage 7 and creates a new v3.0.0 Off
+generation. It does not adopt a v2.1.2 target generation. Version 2.1.2 keeps
+its immutable v2.1.1-to-v2.1.2 behavior. All distinct executable, kit, pattern,
+input, checkpoint, and artifact identity checks remain mandatory.
 
 ## Non-negotiable invariants
 

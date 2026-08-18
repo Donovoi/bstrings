@@ -13,18 +13,18 @@ There is no second kit to select.
 
 You do not need administrator rights.
 
-## Version 2.1.2
+## Version 3.0.0
 
-Version 2.1.2 uses:
+Version 3.0.0 uses:
 
 - `Install-Bstrings.ps1` for the installer;
 - `bstrings-kit` for the default installation; and
 - `.bstrings-installer-cache` for verified download bytes.
 
-## Install version 2.1.2
+## Install version 3.0.0
 
 Use the authenticated command in the main README. It gets
-`Install-Bstrings.ps1` from the immutable v2.1.2 release.
+`Install-Bstrings.ps1` from the immutable v3.0.0 release.
 
 Run the authenticated installer from the directory that will contain
 `bstrings-kit`:
@@ -85,7 +85,7 @@ only a directory that it identifies as an installed bstrings kit.
 The installer refuses to replace an unrelated `bstrings-kit` directory. This
 rule protects source trees and other user files.
 
-The first version 2 upgrade can migrate the historical default installation.
+The installer can migrate the historical default installation.
 Migration occurs only when all these conditions are true:
 
 - You use the default destination.
@@ -107,7 +107,7 @@ cache can avoid another large model download.
 The cache is not trusted. The installer checks the exact size and SHA-256 of
 each object every time it uses that object.
 
-The version 2 installer can import an unchanged object from the historical
+The installer can import an unchanged object from the historical
 cache. It verifies the source, copies it to the new cache, and verifies the copy.
 
 Version 1.9.17 remains immutable. Use its

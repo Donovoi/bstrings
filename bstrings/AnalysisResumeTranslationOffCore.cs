@@ -1570,11 +1570,11 @@ internal static class AnalysisResumeTranslationOffCore
             || parent.PipelineContractVersion != 1
             || target.PipelineContractVersion != 1
             || !string.Equals(parent.BstringsVersion, "2.1.1", StringComparison.Ordinal)
-            || !string.Equals(target.BstringsVersion, "2.1.2", StringComparison.Ordinal)
+            || !string.Equals(target.BstringsVersion, "3.0.0", StringComparison.Ordinal)
         )
         {
             throw new InvalidDataException(
-                "Translation-off resume requires an exact bstrings 2.1.1 schema-1 source and bstrings 2.1.2 schema-1 target."
+                "Translation-off resume requires an exact bstrings 2.1.1 schema-1 source and bstrings 3.0.0 schema-1 target."
             );
         }
         if (
@@ -1599,7 +1599,7 @@ internal static class AnalysisResumeTranslationOffCore
         )
         {
             throw new InvalidDataException(
-                "Translation-off resume requires distinct verified 2.1.1 source and 2.1.2 target binary identities."
+                "Translation-off resume requires distinct verified 2.1.1 source and 3.0.0 target binary identities."
             );
         }
         if (

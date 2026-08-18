@@ -67,7 +67,7 @@ internal static class AnalysisCli
         };
         var resumeOption = new Option<bool>("--resume", "-r")
         {
-            Description = "Resume a validated incomplete analysis from its last committed stage. Version 2.1.2 also accepts -e translation for an exact stopped 2.1.1 Full plan at stage 7; identify that saved source kit with --bundle-root",
+            Description = "Resume a validated incomplete analysis from its last committed stage. Version 3.0.0 also accepts -e translation for an exact stopped 2.1.1 Full plan at stage 7; identify that saved source kit with --bundle-root",
         };
         var maskOption = new Option<string?>("--mask")
         {
