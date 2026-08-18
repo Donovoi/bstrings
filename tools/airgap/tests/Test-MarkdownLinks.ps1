@@ -101,6 +101,7 @@ try {
           'adr-0014-compact-investigator-findings.md',
           'adr-0015-high-confidence-base64-and-bounded-match-reuse.md',
           'adr-0016-high-confidence-email-candidates.md',
+          'adr-0017-high-confidence-pattern-preset.md',
           'decision-review-policy.md'
     )
     if (($architectureDocuments -join '|') -cne ($expectedArchitectureDocuments -join '|')) {

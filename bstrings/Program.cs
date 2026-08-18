@@ -546,7 +546,7 @@ public static partial class Program
         var lrOpt = new Option<string>("--lr")
         {
             Description =
-                "Only return regex matches. Accepts built-in names, groups (pii, credentials, browser, registry, wallets), a custom regex, or 'all' default patterns. Add b64_candidate or email_candidate for broader shape-only values",
+                "Only return regex matches. Accepts built-in names, groups (pii, credentials, browser, registry, wallets, candidates), a custom regex, or the lower-noise 'all' preset",
         };
         var fsOpt = new Option<string>("--fs")
         {
@@ -1016,7 +1016,7 @@ public static partial class Program
 
             Console.WriteLine();
             Log.Information(
-                "Pass names or groups from this list to --lr, for example: --lr pii,credentials\r\n"
+                "Pass names or groups from this list to --lr. Use --lr all,candidates for the complete catalog.\r\n"
             );
 
             return;

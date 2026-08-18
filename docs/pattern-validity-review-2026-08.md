@@ -10,6 +10,9 @@ and then to 66 in v1.9.4. See the
 additions, validators, research, and test evidence. The source catalogue was
 subsequently expanded to 77 bounded patterns under
 [ADR-0009](architecture/adr-0009-bounded-forensic-pattern-expansion.md); the
+current catalog contains 82 patterns and uses 74 in its lower-noise
+default preset under
+[ADR-0017](architecture/adr-0017-high-confidence-pattern-preset.md). The
 33-pattern measurements below remain a named historical snapshot.
 
 ## Short version
@@ -60,6 +63,24 @@ suffixes from the default findings.
 mailbox punctuation and internal, historic, or undelegated suffixes that do
 not pass `email`. Select `--lr "all,email_candidate"` for that wider surface.
 See [ADR-0016](architecture/adr-0016-high-confidence-email-candidates.md).
+
+## Current lower-noise preset
+
+`--lr all` selects 74 lower-noise defaults. `--lr candidates` selects the
+eight wider definitions that are not in the default preset. Select
+`--lr "all,candidates"` for the complete 82-pattern catalog.
+
+The current `mac` default requires colon or hyphen separators. The unseparated
+12-hex form is `mac_candidate`. The current `reg_path` requires a supported
+HKEY or HK prefix followed by `SAM`, `SECURITY`, `SOFTWARE`, or `SYSTEM`. It
+also accepts one of those four names followed by a subpath. Bare root words
+are `reg_path_candidate`. The exact IPv6 unspecified token `::` is
+`ipv6_candidate`; other valid forms remain under `ipv6`.
+
+`zip`, `solana`, and `move_address` remain available by exact name. `pii`
+still includes `zip`, `registry` includes `reg_path_candidate`, and `wallets`
+still includes both wallet patterns. Their
+broad shapes are not selected by the generic `all` preset.
 
 ## Pattern-by-pattern decision
 

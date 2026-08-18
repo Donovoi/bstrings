@@ -230,6 +230,11 @@ The experimental exact-text match cache is disabled because its release-scale
 overhead gate did not pass. It creates no artifact and adds no field to
 `run.json` or `summary.json`.
 
+`--lr all` is the lower-noise 74-pattern preset. `--lr candidates`
+selects the eight wider patterns outside that preset. `--lr "all,candidates"`
+selects all 82 catalog definitions. `findings.tsv` retains each occurrence;
+`feature-histogram.tsv` is the counted distinct-value view.
+
 The legacy direct form (`bstrings.exe -f ... --lr ... -o <file>`) still writes
 one flat extraction file for scripting compatibility. To obtain the enriched
 report set for the same native-only examination, use a result directory:

@@ -890,6 +890,63 @@ public sealed class EnrichmentRegexPipelineCoreTests
     }
 
     [Fact]
+    public async Task ProcessAsync_PrecisionPartitionsHaveCacheOnOffByteParity()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var inputPath = scope.PathFor("precision-partitions.jsonl");
+        var disabledPath = scope.PathFor("precision-disabled.jsonl");
+        var enabledPath = scope.PathFor("precision-enabled.jsonl");
+        const string text =
+            @"00:11:22:AA:BB:CC 001122AABBCC 2001:db8::1 :: HKLM\SOFTWARE\Synthetic SOFTWARE";
+        await File.WriteAllLinesAsync(
+            inputPath,
+            [
+                RawRecord("raw-1", text),
+                RawRecord("raw-2", text),
+                RawRecord("raw-3", text),
+            ],
+            cancellationToken
+        );
+        string[] names =
+        [
+            "mac",
+            "mac_candidate",
+            "ipv6",
+            "ipv6_candidate",
+            "reg_path",
+            "reg_path_candidate",
+        ];
+        var patterns = names
+            .Select(name => (name, BuiltInPatternCatalog.Patterns[name]))
+            .ToArray();
+
+        var disabled = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            disabledPath,
+            patterns,
+            cancellationToken: cancellationToken,
+            matchCacheOptions: MatchResultCacheOptions.Disabled
+        );
+        var enabled = await EnrichmentRegexPipelineCore.ProcessAsync(
+            inputPath,
+            enabledPath,
+            patterns,
+            cancellationToken: cancellationToken,
+            matchCacheOptions: new MatchResultCacheOptions(8, 4096, 256, 16)
+        );
+
+        Assert.Equal(18, disabled.MatchRecords);
+        Assert.Equal(disabled.MatchRecords, enabled.MatchRecords);
+        Assert.Equal(
+            await File.ReadAllBytesAsync(disabledPath, cancellationToken),
+            await File.ReadAllBytesAsync(enabledPath, cancellationToken)
+        );
+        Assert.Equal(1, enabled.MatchCacheHits);
+        Assert.Equal(6, enabled.MatchRowsServedFromCache);
+    }
+
+    [Fact]
     public async Task ProcessAsync_MatchCacheStoresZeroMatchResults()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

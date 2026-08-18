@@ -186,6 +186,41 @@ public sealed class ForensicReportCoreTests
     }
 
     [Fact]
+    public async Task WriteAsync_MapsCandidatePartitionsToTheirForensicCategories()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var scope = new TemporaryDirectory();
+        var matchesPath = scope.PathFor("empty-matches.jsonl");
+        var histogramPath = scope.PathFor("pattern-histogram.tsv");
+        await File.WriteAllTextAsync(matchesPath, string.Empty, cancellationToken);
+        string[] names =
+        [
+            "email_candidate",
+            "b64_candidate",
+            "mac_candidate",
+            "ipv6_candidate",
+            "reg_path_candidate",
+        ];
+
+        await ForensicReportCore.WriteAsync(
+            matchesPath,
+            scope.PathFor("findings.tsv"),
+            histogramPath,
+            scope.PathFor("feature-histogram.tsv"),
+            scope.PathFor("pattern-histogram.html"),
+            names.Select(name => (name, BuiltInPatternCatalog.Patterns[name])).ToArray(),
+            cancellationToken
+        );
+
+        var histogram = await File.ReadAllTextAsync(histogramPath, cancellationToken);
+        Assert.Contains("email_candidate\tpii", histogram);
+        Assert.Contains("b64_candidate\tencoded-data", histogram);
+        Assert.Contains("mac_candidate\tnetwork", histogram);
+        Assert.Contains("ipv6_candidate\tnetwork", histogram);
+        Assert.Contains("reg_path_candidate\tregistry", histogram);
+    }
+
+    [Fact]
     public async Task WriteAsync_ReportsDerivedDecodingAttributesWhenEnabled()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

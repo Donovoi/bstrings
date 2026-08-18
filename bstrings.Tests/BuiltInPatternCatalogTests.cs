@@ -39,6 +39,7 @@ public class BuiltInPatternCatalogTests
                 ]
             ),
             ["mac"] = new("mac=00:11:22:aa:BB:cc", "00:11-22:33:44:55"),
+            ["mac_candidate"] = new("mac=001122AABBCC", "mac=00:11:22:aa:BB:cc"),
             ["ssn"] = new(
                 ["ssn 123-45-6789", "ssn 123 45 6789"],
                 ["ssn 666-45-6789", "ssn 123-45 6789", "ssn 123 45-6789"]
@@ -52,6 +53,7 @@ public class BuiltInPatternCatalogTests
                 ["peer=1.2.3.4.5"]
             ),
             ["ipv6"] = new("peer ::ffff:192.0.2.128 active", "peer 2001:::1"),
+            ["ipv6_candidate"] = new("peer :: active", "peer ::1 active"),
             ["email"] = new(
                 [
                     "mail user.name+tag@example.technology now",
@@ -120,9 +122,10 @@ public class BuiltInPatternCatalogTests
                 ["=C:\\Windows", "9INVALID=value", "BAD\u0000=value", "BAD=line\r\nnext"]
             ),
             ["reg_path"] = new(
-                @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows",
-                @"HKEY_LOCAL_MACHINE\NOT_A_HIVE\Microsoft"
+                [@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows"],
+                [@"HKEY_LOCAL_MACHINE\NOT_A_HIVE\Microsoft", "SOFTWARE"]
             ),
+            ["reg_path_candidate"] = new("SOFTWARE", @"SOFTWARE\Microsoft"),
             ["intlPhone"] = new("call +61 412 345 678 now", "call +01 234 567 890 now"),
             ["canadian_sin"] = new("SIN: 046 454 286", "SIN: 046 454 287"),
             ["dob"] = new("DOB: 1990-02-28", "DOB: 1990-02-30"),

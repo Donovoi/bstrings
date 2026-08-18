@@ -146,6 +146,70 @@ public class RapidsProcessorTests
     }
 
     [Fact]
+    public async Task RapidsBridgeCpuFallback_AppliesStrictCandidatePartitions()
+    {
+        await WithRapidsAvailabilityAsync(
+            available: false,
+            async () =>
+            {
+                using var stream = new MemoryStream();
+                using var writer = new StreamWriter(stream, leaveOpen: true);
+                string[] names =
+                [
+                    "mac",
+                    "mac_candidate",
+                    "ipv6",
+                    "ipv6_candidate",
+                    "reg_path",
+                    "reg_path_candidate",
+                ];
+                var count = await RapidsProcessor.ProcessRegexPatternsBridgeAsync(
+                    new HashSet<string>
+                    {
+                        "00:11:22:AA:BB:CC",
+                        "001122AABBCC",
+                        "2001:db8::1",
+                        "::",
+                        @"HKLM\SOFTWARE\Synthetic",
+                        "SOFTWARE",
+                    },
+                    names.Select(name => (name, BuiltInPatternCatalog.Patterns[name])).ToList(),
+                    ro: true,
+                    off: false,
+                    s: true,
+                    sw: writer,
+                    q: true,
+                    o: "results.txt",
+                    currentFile: "synthetic.bin",
+                    isCsvOutput: false,
+                    csvHeaderAlreadyWritten: false
+                );
+
+                await writer.FlushAsync(TestContext.Current.CancellationToken);
+                stream.Position = 0;
+                using var reader = new StreamReader(stream);
+                var output = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
+
+                Assert.Equal(6, count);
+                Assert.Equal(
+                    new[]
+                    {
+                        "00:11:22:AA:BB:CC",
+                        "001122AABBCC",
+                        "2001:db8::1",
+                        "::",
+                        @"HKLM\SOFTWARE\Synthetic",
+                        "SOFTWARE",
+                    }.Order(),
+                    output
+                        .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                        .Order()
+                );
+            }
+        );
+    }
+
+    [Fact]
     public async Task BenchmarkPerformanceAsync_WhenRapidsUnavailable_StillBenchmarksStandardProcessing()
     {
         await WithRapidsAvailabilityAsync(

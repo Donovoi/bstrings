@@ -51,6 +51,12 @@ internal static class BuiltInSemanticValidator
             BuiltInValidationKind.Base64Candidate =>
                 Base64ContentCore.TryGetExactDecodedLength(candidate, out _)
                 && !Base64ContentCore.IsHighConfidence(candidate),
+            BuiltInValidationKind.MacAddress => IsSeparatedMacAddress(candidate),
+            BuiltInValidationKind.MacAddressCandidate =>
+                IsUnseparatedMacAddress(candidate),
+            BuiltInValidationKind.Ipv6Address =>
+                IsIpv6Address(candidate) && !candidate.SequenceEqual("::"),
+            BuiltInValidationKind.Ipv6AddressCandidate => candidate.SequenceEqual("::"),
             BuiltInValidationKind.BitLocker => IsValidBitLockerRecoveryPassword(candidate),
             BuiltInValidationKind.BitcoinBase58Check => IsValidBase58Check(
                 candidate,
@@ -106,6 +112,54 @@ internal static class BuiltInSemanticValidator
             _ => false,
         };
     }
+
+    private static bool IsSeparatedMacAddress(ReadOnlySpan<char> candidate)
+    {
+        if (candidate.Length != 17 || candidate[2] is not (':' or '-'))
+        {
+            return false;
+        }
+
+        var separator = candidate[2];
+        for (var index = 0; index < candidate.Length; index++)
+        {
+            if (index % 3 == 2)
+            {
+                if (candidate[index] != separator)
+                {
+                    return false;
+                }
+            }
+            else if (!Uri.IsHexDigit(candidate[index]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsUnseparatedMacAddress(ReadOnlySpan<char> candidate)
+    {
+        if (candidate.Length != 12)
+        {
+            return false;
+        }
+
+        foreach (var character in candidate)
+        {
+            if (!Uri.IsHexDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsIpv6Address(ReadOnlySpan<char> candidate) =>
+        IPAddress.TryParse(candidate, out var address)
+        && address.AddressFamily == AddressFamily.InterNetworkV6;
 
     private static bool IsValidCpe23(ReadOnlySpan<char> candidate)
     {

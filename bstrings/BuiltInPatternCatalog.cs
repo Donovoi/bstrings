@@ -16,6 +16,10 @@ internal enum BuiltInValidationKind
     PaymentCard,
     Base64,
     Base64Candidate,
+    MacAddress,
+    MacAddressCandidate,
+    Ipv6Address,
+    Ipv6AddressCandidate,
     BitLocker,
     BitcoinBase58Check,
     BitcoinSegwitAddress,
@@ -121,12 +125,24 @@ internal static class BuiltInPatternCatalog
         ),
         new(
             "mac",
-            "Finds 48-bit MAC address candidates",
+            "Finds colon-separated or hyphen-separated 48-bit MAC address candidates",
             @"(?<![0-9A-Fa-f])(?<![0-9A-Fa-f]{2}[-:])[0-9A-Fa-f]{2}([-:]?)(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}(?![0-9A-Fa-f])(?![-:][0-9A-Fa-f]{2})",
             "https://standards.ieee.org/products-programs/regauth/",
             UseNonBacktracking: false,
             RapidsSupersetPattern: @"[0-9A-Fa-f]{2}(?:[-:]?[0-9A-Fa-f]{2}){5}",
-            BoundedRetryOverlap: 32
+            BoundedRetryOverlap: 32,
+            Validation: BuiltInValidationKind.MacAddress
+        ),
+        new(
+            "mac_candidate",
+            "Finds unseparated 12-hex-character MAC-shaped candidates; opt-in and not selected by all",
+            @"(?<![0-9A-Fa-f])(?<![0-9A-Fa-f]{2}[-:])[0-9A-Fa-f]{2}([-:]?)(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}(?![0-9A-Fa-f])(?![-:][0-9A-Fa-f]{2})",
+            "https://standards.ieee.org/products-programs/regauth/",
+            UseNonBacktracking: false,
+            RapidsSupersetPattern: @"[0-9A-Fa-f]{2}(?:[-:]?[0-9A-Fa-f]{2}){5}",
+            BoundedRetryOverlap: 32,
+            Validation: BuiltInValidationKind.MacAddressCandidate,
+            SelectedByAll: false
         ),
         new(
             "ssn",
@@ -158,12 +174,24 @@ internal static class BuiltInPatternCatalog
         ),
         new(
             "ipv6",
-            "Finds full and compressed IPv6 address candidates",
+            "Finds full and compressed IPv6 address candidates except the context-free unspecified token ::",
             @"(?<![0-9A-Fa-f:.])(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,7}:|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}|(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}|(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}|(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}|[0-9A-Fa-f]{1,4}:(?:(?::[0-9A-Fa-f]{1,4}){1,6})|:(?:(?::[0-9A-Fa-f]{1,4}){1,7}|:)|(?:(?:[0-9A-Fa-f]{1,4}:){6}|::(?:[Ff]{4}(?::0{1,4})?:)?)(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])|(?:[0-9A-Fa-f]{1,4}:){1,4}:(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9]))(?![0-9A-Fa-f:.])",
             "https://www.rfc-editor.org/rfc/rfc4291#section-2.2",
             UseNonBacktracking: false,
             RapidsSupersetPattern: @"[0-9A-Fa-f:.]{2,45}",
-            BoundedRetryOverlap: 64
+            BoundedRetryOverlap: 64,
+            Validation: BuiltInValidationKind.Ipv6Address
+        ),
+        new(
+            "ipv6_candidate",
+            "Finds the valid but context-free IPv6 unspecified-address token ::; opt-in and not selected by all",
+            @"(?<![0-9A-Fa-f:.])::(?![0-9A-Fa-f:.])",
+            "https://www.rfc-editor.org/rfc/rfc4291#section-2.5.2",
+            UseNonBacktracking: false,
+            RapidsSupersetPattern: @"::",
+            BoundedRetryOverlap: 8,
+            Validation: BuiltInValidationKind.Ipv6AddressCandidate,
+            SelectedByAll: false
         ),
         new(
             "email",
@@ -188,10 +216,11 @@ internal static class BuiltInPatternCatalog
         ),
         new(
             "zip",
-            "Finds US ZIP and ZIP+4 code candidates",
+            "Finds broad US ZIP and ZIP+4 code candidates; opt-in from all and retained in the pii group",
             @"\b[0-9]{5}(?:-[0-9]{4})?\b",
             "https://postalpro.usps.com/ZIP_Locale_Detail",
-            RapidsSupersetPattern: @"[0-9]{5}(?:-[0-9]{4})?"
+            RapidsSupersetPattern: @"[0-9]{5}(?:-[0-9]{4})?",
+            SelectedByAll: false
         ),
         new(
             "urlUser",
@@ -237,17 +266,29 @@ internal static class BuiltInPatternCatalog
         ),
         new(
             "var_set",
-            "Finds environment-variable assignments",
+            "Finds whole-record NAME=value assignment candidates accepted by Windows environment-variable syntax",
             @"^[A-Za-z_][A-Za-z_0-9()]*=[^\x00\r\n]*$",
             "https://learn.microsoft.com/windows/win32/procthread/environment-variables",
             RapidsSupersetPattern: @"[A-Za-z_][A-Za-z_0-9()]*=.*"
         ),
         new(
             "reg_path",
-            "Finds Windows Registry hive path candidates",
-            @"\b(?:(?:HKEY_LOCAL_MACHINE|HKLM|HKEY_CURRENT_USER|HKCU|HKEY_CLASSES_ROOT|HKCR|HKEY_USERS|HKU|HKEY_CURRENT_CONFIG|HKCC)\\)?(?:SAM|SECURITY|SOFTWARE|SYSTEM)(?:\\[A-Za-z0-9_. (){}-]+)*\b",
+            "Finds supported HKEY or HK roots followed by SAM, SECURITY, SOFTWARE, or SYSTEM, plus rootless subpaths under those four hives",
+            @"(?<![A-Za-z0-9_\\])(?:(?:(?:HKEY_LOCAL_MACHINE|HKLM|HKEY_CURRENT_USER|HKCU|HKEY_CLASSES_ROOT|HKCR|HKEY_USERS|HKU|HKEY_CURRENT_CONFIG|HKCC)\\(?:SAM|SECURITY|SOFTWARE|SYSTEM))|(?:(?:SAM|SECURITY|SOFTWARE|SYSTEM)\\[A-Za-z0-9_. (){}-]+))(?:\\[A-Za-z0-9_. (){}-]+)*(?![A-Za-z0-9_\\])",
             "https://learn.microsoft.com/windows/win32/sysinfo/registry-hives",
-            Options: RegexOptions.IgnoreCase
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 32 * 1024
+        ),
+        new(
+            "reg_path_candidate",
+            "Finds bare SAM, SECURITY, SOFTWARE, or SYSTEM registry-root words; opt-in and not selected by all",
+            @"(?<![A-Za-z0-9_\\])(?:SAM|SECURITY|SOFTWARE|SYSTEM)(?![A-Za-z0-9_\\])",
+            "https://learn.microsoft.com/windows/win32/sysinfo/registry-hives",
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 32,
+            SelectedByAll: false
         ),
         new(
             "intlPhone",
@@ -445,13 +486,14 @@ internal static class BuiltInPatternCatalog
         ),
         new(
             "solana",
-            "Finds canonical 32-byte Solana addresses encoded in Base58",
+            "Finds Base58 values that decode to 32-byte Solana address candidates; opt-in from all and retained in the wallets group",
             $@"(?<![{Base58}])[{Base58}]{{32,44}}(?![{Base58}])",
             "https://solana.com/docs/core/accounts",
             UseNonBacktracking: false,
             RapidsSupersetPattern: $@"[{Base58}]{{32,44}}",
             BoundedRetryOverlap: 64,
-            Validation: BuiltInValidationKind.SolanaAddress
+            Validation: BuiltInValidationKind.SolanaAddress,
+            SelectedByAll: false
         ),
         new(
             "xrp",
@@ -545,13 +587,14 @@ internal static class BuiltInPatternCatalog
         ),
         new(
             "move_address",
-            "Finds canonical full-length 32-byte Move-family addresses used by Sui and Aptos",
+            "Finds lowercase full-length 32-byte Move-family address candidates; opt-in from all and retained in the wallets group",
             @"(?<![A-Za-z0-9])0x[0-9a-f]{64}(?![A-Za-z0-9])",
             "https://github.com/MystenLabs/sui/blob/main/crates/sui-types/src/base_types.rs",
             UseNonBacktracking: false,
             RapidsSupersetPattern: @"0x[0-9a-f]{64}",
             BoundedRetryOverlap: 80,
-            Validation: BuiltInValidationKind.SuiAddress
+            Validation: BuiltInValidationKind.SuiAddress,
+            SelectedByAll: false
         ),
         new(
             "near",
@@ -886,9 +929,13 @@ internal static class BuiltInPatternCatalog
                 ],
                 ["registry"] =
                 [
-                    "reg_path", "reg_persistence", "reg_user_activity", "reg_usb",
+                    "reg_path", "reg_path_candidate", "reg_persistence", "reg_user_activity", "reg_usb",
                     "reg_execution", "reg_network", "reg_system_identity",
                 ],
+                ["candidates"] = Definitions
+                    .Where(definition => !definition.SelectedByAll)
+                    .Select(definition => definition.Name)
+                    .ToArray(),
             }
         );
 
@@ -899,6 +946,10 @@ internal static class BuiltInPatternCatalog
             BuiltInValidationKind.PaymentCard => "luhn",
             BuiltInValidationKind.Base64 => "base64-content-v1",
             BuiltInValidationKind.Base64Candidate => "canonical-base64-candidate",
+            BuiltInValidationKind.MacAddress => "separated-mac-address",
+            BuiltInValidationKind.MacAddressCandidate => "unseparated-mac-candidate",
+            BuiltInValidationKind.Ipv6Address => "ipv6-except-unspecified",
+            BuiltInValidationKind.Ipv6AddressCandidate => "ipv6-unspecified-candidate",
             BuiltInValidationKind.Email => "smtp-iana-high-confidence-v1",
             BuiltInValidationKind.EmailCandidate => "rfc5322-dot-atom-candidate",
             BuiltInValidationKind.BitLocker => "bitlocker-arithmetic",

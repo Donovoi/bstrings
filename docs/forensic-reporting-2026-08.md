@@ -27,6 +27,12 @@ All four files are produced before the result transaction is marked complete.
 Matched values above 512 characters use a SHA-256 digest and bounded preview
 in the histogram key.
 
+The default `--lr all` preset selects 74 lower-noise definitions from the
+82-pattern catalog. `--lr candidates` selects the eight wider definitions.
+Use `--lr "all,candidates"` for the complete catalog. Exact domain groups keep
+their documented coverage. `pii` includes `zip`, `registry` includes
+`reg_path_candidate`, and `wallets` includes `solana` and `move_address`.
+
 These projections belong to the integrated `analyze` workflow because that is
 the path that has OCR, PDF, FLOSS, translation, parent/child, and engine
 lineage. The legacy direct `-f/-d -o <file>` interface remains a flat-output
@@ -52,6 +58,11 @@ The default `email` finding uses a common mailbox form and a top-level domain
 in the bundled IANA root-zone snapshot. `--lr "all,email_candidate"` adds the
 broader RFC dot-atom partition for uncommon, internal, historic, or currently
 undelegated suffixes. Neither pattern verifies DNS or mailbox state.
+
+The default MAC, registry-path, and IPv6 patterns have disjoint wider
+partitions named `mac_candidate`, `reg_path_candidate`, and
+`ipv6_candidate`. See the
+[lower-noise pattern preset decision](architecture/adr-0017-high-confidence-pattern-preset.md).
 
 ## Why this shape
 
