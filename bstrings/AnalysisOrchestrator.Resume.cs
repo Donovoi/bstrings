@@ -15,7 +15,7 @@ internal static partial class AnalysisOrchestrator
 {
     private const string LegacyV200Version = "2.0.0";
     private const string TranslationOffSourceVersion = "2.1.1";
-    private const string TranslationOffTargetVersion = "2.1.2";
+    private const string TranslationOffTargetVersion = "3.0.0";
 
     private sealed record LegacyInputIdentity(
         long FileCount,

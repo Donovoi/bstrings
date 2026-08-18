@@ -8,9 +8,9 @@ The project uses `MAJOR.MINOR.PATCH`:
 - Change `MINOR` for a compatible feature.
 - Change `MAJOR` for an incompatible public change.
 
-## Version 2 release contract
+## Current release contract
 
-Version 2 has one complete Windows kit. Version 2.1.2 uses these public names:
+Version 3 has one complete Windows kit. Version 3.0.0 uses these public names:
 
 - `Install-Bstrings.ps1`
 - `bstrings-kit`

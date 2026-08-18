@@ -88,7 +88,7 @@ public sealed class AnalysisResumeTranslationOffAdversarialTests
             .GetProperty("origin")
             .GetProperty("version")
             .GetString()!;
-        Assert.Equal("2.1.2", recordedVersion);
+        Assert.Equal("3.0.0", recordedVersion);
         native = native.Replace(
             $"\"version\":{JsonSerializer.Serialize(recordedVersion)}",
             $"\"version\":{JsonSerializer.Serialize("2.0.0")}",
@@ -1050,7 +1050,7 @@ public sealed class AnalysisResumeTranslationOffAdversarialTests
         }
         var target = parent with
         {
-            BstringsVersion = "2.1.2",
+            BstringsVersion = "3.0.0",
             ExecutableSha256 = new string('d', 64),
             ManagedAssemblySha256 = new string('e', 64),
             Options = parent.Options with { TranslationMode = TranslationWorkflowMode.Off },

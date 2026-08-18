@@ -33,18 +33,18 @@ You do not need administrator rights.
 
 ## Install
 
-Version 2.1.2 uses `Install-Bstrings.ps1`. It installs the complete kit in
+Version 3.0.0 uses `Install-Bstrings.ps1`. It installs the complete kit in
 `bstrings-kit` by default.
 
 Open PowerShell in the directory that will contain `bstrings-kit`. Run this
-command from the v2.1.2 release:
+command from the v3.0.0 release:
 
 ```powershell
 & {
   Set-StrictMode -Version Latest
   $ErrorActionPreference = 'Stop'
 
-  $tag = 'v2.1.2'
+  $tag = 'v3.0.0'
   $repo = 'Donovoi/bstrings'
   $name = 'Install-Bstrings.ps1'
   $headers = @{

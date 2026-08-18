@@ -991,7 +991,8 @@ $bundleReleaseDocumentNames = @(
     'v2.0.0.md',
     'v2.1.0.md',
     'v2.1.1.md',
-    'v2.1.2.md'
+    'v2.1.2.md',
+    'v3.0.0.md'
 )
 $bundleRootDocumentNames = @(
     'BASE_PACK_NOTICE.md',

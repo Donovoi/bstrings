@@ -144,7 +144,7 @@ then starts at the first uncommitted stage and repeats that whole stage.
 Interrupted translation starts again from `translation-candidates.jsonl`;
 partial translated output and the run-local translation cache are not reused.
 
-Version 2.1.2 can derive a translation-off generation from an exact stopped
+Version 3.0.0 can derive a translation-off generation from an exact stopped
 v2.1.1 Full run when stage 8 has not committed:
 
 ```powershell

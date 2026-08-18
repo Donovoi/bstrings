@@ -87,7 +87,7 @@ changes. Resume moves recognized but uncommitted files from the interrupted
 stage to that attempt's diagnostic log. It then reruns the whole stage. An
 unknown file causes refusal. A complete run cannot be resumed or overwritten.
 
-Version 2.1.2 accepts one saved-plan change:
+Version 3.0.0 accepts one saved-plan change:
 
 ```powershell
 .\bstrings-kit\bstrings.exe analyze -r -o D:\results\memory `
@@ -96,7 +96,7 @@ Version 2.1.2 accepts one saved-plan change:
 
 This path requires an exact incomplete v2.1.1 Full run with checkpoints 1
 through 7 and no later checkpoint. The supplied path is the saved source kit.
-The current 2.1.2 kit stays beside the running executable. The command archives
+The current 3.0.0 kit stays beside the running executable. The command archives
 the saved Auto selection as superseded history, commits empty Off stages 7 and
 8, and continues. It does not start language detection or model translation.
 Other resume-time exclusions are rejected.
