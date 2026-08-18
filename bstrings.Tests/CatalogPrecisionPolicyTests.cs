@@ -101,6 +101,8 @@ public sealed class CatalogPrecisionPolicyTests
     [InlineData("SYSTEM", false, true)]
     [InlineData("SYSTEM32", false, false)]
     [InlineData(@"C:\artifact\SOFTWARE", false, false)]
+    [InlineData(@"C:\artifact\SOFTWARE\Vendor", false, false)]
+    [InlineData(@"C:\artifact\HKLM\SOFTWARE\Vendor", false, false)]
     public void RegistryPartitions_AreDisjoint(string value, bool strict, bool candidate)
     {
         Assert.Equal(strict, Matches("reg_path", value));

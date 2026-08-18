@@ -274,9 +274,11 @@ internal static class BuiltInPatternCatalog
         new(
             "reg_path",
             "Finds supported HKEY or HK roots followed by SAM, SECURITY, SOFTWARE, or SYSTEM, plus rootless subpaths under those four hives",
-            @"\b(?:(?:(?:HKEY_LOCAL_MACHINE|HKLM|HKEY_CURRENT_USER|HKCU|HKEY_CLASSES_ROOT|HKCR|HKEY_USERS|HKU|HKEY_CURRENT_CONFIG|HKCC)\\(?:SAM|SECURITY|SOFTWARE|SYSTEM))|(?:(?:SAM|SECURITY|SOFTWARE|SYSTEM)\\[A-Za-z0-9_. (){}-]+))(?:\\[A-Za-z0-9_. (){}-]+)*\b",
+            @"(?<![A-Za-z0-9_\\])(?:(?:(?:HKEY_LOCAL_MACHINE|HKLM|HKEY_CURRENT_USER|HKCU|HKEY_CLASSES_ROOT|HKCR|HKEY_USERS|HKU|HKEY_CURRENT_CONFIG|HKCC)\\(?:SAM|SECURITY|SOFTWARE|SYSTEM))|(?:(?:SAM|SECURITY|SOFTWARE|SYSTEM)\\[A-Za-z0-9_. (){}-]+))(?:\\[A-Za-z0-9_. (){}-]+)*(?![A-Za-z0-9_\\])",
             "https://learn.microsoft.com/windows/win32/sysinfo/registry-hives",
-            Options: RegexOptions.IgnoreCase
+            Options: RegexOptions.IgnoreCase,
+            UseNonBacktracking: false,
+            BoundedRetryOverlap: 32 * 1024
         ),
         new(
             "reg_path_candidate",

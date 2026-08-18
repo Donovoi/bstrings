@@ -169,8 +169,8 @@ Each strict and candidate pair is disjoint. The MAC and IPv6 unions equal
 their former accepted complete-value sets. Registry-root substrings adjacent
 to a backslash in a generic non-registry path are intentionally removed. For
 example, neither partition reports `SOFTWARE` inside
-`C:\artifact\SOFTWARE`. Restoring that prefix/suffix match would restore the
-reported path noise.
+`C:\artifact\SOFTWARE\Vendor`. Restoring that prefix/suffix match would restore
+the reported path noise.
 
 ### Remove broad shapes from the generic preset
 
@@ -262,16 +262,16 @@ and valid-value checksum check passed.
 
 | Workload | Median wall delta | Median peak working-set delta | Default reduction |
 | --- | ---: | ---: | ---: |
-| Valid | +2.98% | +0.77% | 0% |
-| Confusion | +0.50% | -0.77% | 100% |
-| Mixed | -5.84% | -0.88% | 50% |
+| Valid | +3.48% | -3.23% | 0% |
+| Confusion | -2.65% | -5.11% | 100% |
+| Mixed | -6.97% | -4.79% | 50% |
 
 The baseline selected 77 patterns. The candidate selected 74. Median managed
 allocation also fell in every workload. The benchmark gate passed.
 
 Raw rows are in
 `benchmarks/results/catalog-precision-acceptance-2026-08.csv` with SHA-256
-`27273d955cab9c7f4ae3f5cc5c12149afefa90082f9a07b2d52a8ac53d82e5e0`.
+`9bb25ac6e2371a2d88f8d042f4a7a493b171657a317f1aed6b4f623cbde21c04`.
 The harness and immutable authored workload are in
 `benchmarks/CatalogPrecisionBenchmark`.
 
